@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 
-from rail_waitlist.api import router as legacy_router
 from rail_waitlist.domain import ReservationOutcome, ReservationPolicy
 from rail_waitlist.models import ReservationAttempt
 from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
@@ -31,7 +30,6 @@ def _route_contract(router) -> set[tuple[str, str]]:
 
 def test_watch_management_router_owns_exact_existing_routes() -> None:
     assert _route_contract(watch_http.router) == WATCH_ROUTES
-    assert not (_route_contract(legacy_router) & WATCH_ROUTES)
 
 
 async def test_watch_management_routes_require_admin_session(public_client) -> None:

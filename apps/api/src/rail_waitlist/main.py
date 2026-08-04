@@ -15,11 +15,11 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import models  # noqa: F401 - registers metadata
-from .api import router
 from .auth import router as auth_router
 from .config import get_settings
 from .database import SessionFactory, create_schema, get_session
 from .domain import OutboxStatus
+from .event_stream.http import router as event_stream_router
 from .file_logging import configure_service_file_logging
 from .fullstack_srt_fixture import fullstack_srt_client_factory
 from .korail_browser_bridge import (
@@ -36,15 +36,24 @@ from .notification_management.http import router as notification_management_rout
 from .operation_summary.http import router as operation_summary_router
 from .provider_account_management.http import router as provider_account_management_router
 from .provider_login_verification import ProviderLoginVerifier
+from .provider_registry.http import router as provider_registry_router
 from .provider_runtime import ProviderRuntimePrewarmRegistry, run_provider_session_manager
 from .providers import TagoClient
 from .schemas import HealthResponse
 from .seat_status_cooldown import RedisCooldownStore
+from .seat_status_operations.http import router as seat_status_operations_router
 from .srt_provider_adapter import SrtProviderAdapterClient
 from .srt_seat_source import SrtLiveSeatSource
 from .station_catalog_cache import StationCatalogService
 from .station_visibility import KorailStationVisibility
+from .timetable_management.catalog_http import router as station_catalog_router
 from .timetable_management.http import router as timetable_management_router
+from .timetable_management.official_evidence_http import (
+    confirmation_router as official_confirmation_router,
+)
+from .timetable_management.official_evidence_http import (
+    snapshot_router as official_snapshot_router,
+)
 from .timetable_snapshot_cache import TimetableSnapshotCache
 from .ui_preferences.http import router as ui_preferences_router
 from .watch_management.http import router as watch_management_router
@@ -191,7 +200,12 @@ def create_app(
     app.include_router(timetable_management_router)
     app.include_router(ui_preferences_router)
     app.include_router(watch_management_router)
-    app.include_router(router)
+    app.include_router(official_snapshot_router)
+    app.include_router(provider_registry_router)
+    app.include_router(station_catalog_router)
+    app.include_router(seat_status_operations_router)
+    app.include_router(official_confirmation_router)
+    app.include_router(event_stream_router)
 
     @app.middleware("http")
     async def instrument_requests(request, call_next):

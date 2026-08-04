@@ -280,6 +280,33 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: `NewWait` 단계 렌더링·결과 카드, App watch mutation과 나머지 shell 조립,
   legacy JS/JSX와 전역 CSS, API watch transaction/service와 worker·provider 역할 분리입니다.
 
+### 2026-08-04 일곱 번째 구조 슬라이스
+
+- App watch mutation 경계: pause·resume·cancel·delete와 예약정책 변경을 strict
+  `features/app/useWatchMutations.ts`로 이동했습니다. 이 훅은 별도 축약 record를 만들지 않고
+  `api/watches.ts`의 canonical `MappedWatch`를 사용하며, demo의 immutable 상태 전이와 live API 응답
+  교체, 실패 toast, cancel 오류 재전파를 보존합니다. 예약정책 변경은 기존 mutation guard를 먼저
+  열고 성공·실패 모두 guard 종료, 목록 refresh, per-watch updating 상태 정리를 수행합니다.
+  초기 fixture와 마법사 완료 결과도 `fixtures/demoData.ts`의 typed factory가 raw/camel 정책·공식 URL·
+  후보 identity를 함께 채운 canonical 객체로 만듭니다. `App.jsx`에는 API·collection·화면을 연결하는
+  조립만 남았고 현재 1,387줄입니다.
+- API 중앙 router 종료: 기존 `api.py`의 잔여 6개 endpoint를
+  `event_stream/http.py`, `provider_registry/http.py`, `timetable_management/catalog_http.py`,
+  `seat_status_operations/http.py`, `timetable_management/official_evidence_http.py`의 두 router로 옮긴 뒤
+  중앙 `api.py`를 삭제했습니다. `main.py`가 새 owner들을 기존 순서로 직접 등록하며 공개 경로와
+  관리자 인증·`no-store`·멱등 header 계약을 유지합니다.
+- SSE 수명주기 보강: `/events`는 `Last-Event-ID` history lookup과 각 poll에 새 DB session을 사용하고
+  정상·오류 모두 poll session을 닫습니다. wire event·keepalive와 `text/event-stream`,
+  `Cache-Control: no-cache`, `X-Accel-Buffering: no` 응답 header를 focused 계약 테스트로 고정했습니다.
+- 확인된 검증: watch mutation 10건과 demo factory 2건을 포함해 웹 ESLint 오류 0·고정 경고 19,
+  strict typecheck, Vitest 65개 파일·436건, production build와 Sites 4건을 통과했습니다. API 전체
+  pytest 993건, 새 owner·SSE focused 13건, Ruff `E/F/I`와 format ratchet 68개도 통과했습니다.
+  `experimental-rail` 전체 이미지를 재빌드·강제 재생성한 뒤 migration·log-init exit 0, 장기 서비스
+  11개 healthy, API·proxy health 200, 최근 오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: `NewWait` 단계 렌더링·결과 카드, App의 알림·화면 전환 shell, legacy JS/JSX와
+  전역 CSS, API schema·application·services·worker와 provider 역할 분리입니다. SSE 관리자 인증
+  dependency 수명과 `(created_at, id)` cursor의 commit-order 의미도 별도 정책 변경으로 검증합니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

@@ -51,6 +51,7 @@ import { AuthGate } from "./features/auth/AuthGate";
 import { useAuthState } from "./features/auth/useAuthState";
 import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
 import { useWatchCollection } from "./features/app/useWatchCollection";
+import { useWatchMutations } from "./features/app/useWatchMutations";
 import { ActiveWatchList } from "./features/home/ActiveWatchList";
 import { PaymentRequiredSection } from "./features/home/PaymentRequiredSection";
 import { ReservationList } from "./features/reservations/ReservationList";
@@ -107,6 +108,7 @@ import {
 } from "./api/providerAccounts";
 import { fetchProviderRuntimeStatuses } from "./api/providerRuntime";
 import {
+  createDemoWatch,
   demoNodeId,
   demoPaymentWatch,
   demoProviderAccounts,
@@ -979,7 +981,6 @@ export function App() {
   );
   const [providerAccountsLoaded, setProviderAccountsLoaded] = useState(DEMO_MODE);
   const [providerAccountsLoading, setProviderAccountsLoading] = useState(false);
-  const [reservationPolicyUpdatingIds, setReservationPolicyUpdatingIds] = useState(() => new Set());
   const [pendingProviderAccount, setPendingProviderAccount] = useState(null);
   const [uiPreferences, setUiPreferences] = useState({
     timetableRefreshIntervalSeconds: DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
@@ -1033,6 +1034,27 @@ export function App() {
     onAuthenticationExpired: markUnauthenticated,
     onProviderAuthenticationTransition: handleProviderAuthenticationTransition,
     pushNotifications,
+  });
+  const {
+    pauseWatch,
+    resumeWatch,
+    cancelWatch: cancelWatchItem,
+    changeReservationPolicy: changeWatchReservationPolicy,
+    deleteWatchRecord,
+    reservationPolicyUpdatingIds,
+  } = useWatchMutations({
+    demo: auth.demo,
+    watches,
+    commitWatches,
+    pushToast: setToast,
+    beginReservationPolicyMutation,
+    endReservationPolicyMutation,
+    requestWatchesRefresh,
+    pauseWatchRequest,
+    startWatchRequest: startWatch,
+    cancelWatchRequest: cancelWatch,
+    updateWatchRequest: updateWatch,
+    deleteWatchRequest: deleteWatch,
   });
 
   useEffect(() => {
@@ -1132,83 +1154,6 @@ export function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const pauseWatch = async (id) => {
-    try {
-      if (auth.demo) {
-        commitWatches((items) => items.map((watch) => watch.id === id ? { ...watch, status: "paused", statusLabel: "일시정지" } : watch));
-      } else {
-        const updated = await pauseWatchRequest(id);
-        commitWatches((items) => items.map((watch) => watch.id === id ? updated : watch));
-      }
-      setToast("대기를 일시정지했습니다.");
-    } catch (error) {
-      setToast(error.message);
-    }
-  };
-
-  const resumeWatch = async (id) => {
-    try {
-      if (auth.demo) {
-        commitWatches((items) => items.map((watch) => watch.id === id ? { ...watch, status: "watching", statusLabel: "감시 중" } : watch));
-      } else {
-        const updated = await startWatch(id);
-        commitWatches((items) => items.map((watch) => watch.id === id ? updated : watch));
-      }
-      setToast("대기를 재개했습니다.");
-    } catch (error) {
-      setToast(error.message);
-    }
-  };
-
-  const cancelWatchItem = async (id) => {
-    try {
-      let updated;
-      if (auth.demo) {
-        updated = watches.find((watch) => watch.id === id);
-        updated = updated ? { ...updated, status: "expired", statusLabel: "만료" } : { id, status: "expired", statusLabel: "만료" };
-        commitWatches((items) => items.map((watch) => watch.id === id ? updated : watch));
-      } else {
-        updated = await cancelWatch(id);
-        commitWatches((items) => items.map((watch) => watch.id === id ? updated : watch));
-      }
-      setToast("대기를 취소했습니다.");
-      return updated;
-    } catch (error) {
-      setToast(error.message);
-      throw error;
-    }
-  };
-
-  const changeWatchReservationPolicy = async (id, reservationPolicy) => {
-    beginReservationPolicyMutation();
-    setReservationPolicyUpdatingIds((items) => new Set(items).add(id));
-    try {
-      let updated;
-      if (auth.demo) {
-        updated = watches.find((watch) => watch.id === id);
-        updated = updated ? { ...updated, reservationPolicy } : null;
-      } else {
-        updated = await updateWatch(id, { reservation_policy: reservationPolicy });
-      }
-      if (updated) {
-        commitWatches((items) => items.map((watch) => watch.id === id ? updated : watch));
-      }
-      setToast(reservationPolicy === "reserve_once_before_payment"
-        ? "좌석 재발견마다 자동 예매하도록 변경했습니다. 같은 좌석 가용성 에피소드에서는 중복 요청하지 않으며 결제는 직접 진행합니다."
-        : "자동 예매를 끄고 좌석 감시와 알림만 유지합니다.");
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "대기 실행 방식을 변경하지 못했습니다.");
-    } finally {
-      endReservationPolicyMutation();
-      requestWatchesRefresh();
-      setReservationPolicyUpdatingIds((items) => {
-        const next = new Set(items);
-        next.delete(id);
-        return next;
-      });
-    }
-  };
-
   const saveUiPreferences = async (input) => {
     setSavingUiPreferences(true);
     try {
@@ -1273,43 +1218,39 @@ export function App() {
     }
   };
 
-  const deleteWatchRecord = async (id) => {
-    try {
-      if (!auth.demo) await deleteWatch(id);
-      commitWatches((items) => items.filter((watch) => watch.id !== id));
-      setToast("대기 기록을 삭제했습니다.");
-    } catch (error) {
-      setToast(error.message);
-    }
-  };
-
   const completeWizard = async ({ form, selectedTrains }) => {
     let createdWatches;
     if (auth.demo) {
-      createdWatches = selectedTrains.map((item, index) => ({
-        id: `watch-${Date.now()}-${item.id}-${item.selected_seat_class || "any"}-${index}`,
-        provider: item.provider,
-        train: item.name,
-        route: `${form.origin} → ${form.destination}`,
-        origin: form.origin,
-        destination: form.destination,
-        departure: item.departure,
-        arrival: item.arrival,
-        date: dateLabel(form.date),
-        status: "watching",
-        statusLabel: "감시 중",
-        seat_class: item.selected_seat_class || "any",
-        seatClass: item.selected_seat_class || "any",
-        seatClassLabel: seatClassNames[item.selected_seat_class || "any"],
-        seatEvidenceLabel: `${seatClassNames[item.selected_seat_class || "any"]} · 데모 좌석 상태`,
-        official_booking_url: item.official_booking_url,
-        candidates: [{
-          train_number: item.train_number ?? item.name,
-          departure_at: item.departure_at,
-          seat_class: item.selected_seat_class || "any",
-          priority: 1,
-        }],
-      }));
+      createdWatches = selectedTrains.map((item, index) => {
+        const seatClass = item.selected_seat_class || "any";
+        const watchId = `watch-${Date.now()}-${item.id}-${seatClass}-${index}`;
+        return createDemoWatch({
+          id: watchId,
+          provider: item.provider,
+          train: item.name,
+          route: `${form.origin} → ${form.destination}`,
+          origin: form.origin,
+          destination: form.destination,
+          departure: item.departure,
+          arrival: item.arrival,
+          date: dateLabel(form.date),
+          travelDate: form.date,
+          status: "watching",
+          statusLabel: "감시 중",
+          seatClass,
+          seatClassLabel: seatClassNames[seatClass],
+          seatEvidenceLabel: `${seatClassNames[seatClass]} · 데모 좌석 상태`,
+          officialBookingUrl: item.official_booking_url,
+          reservationPolicy: form.reservationPolicy,
+          candidates: [{
+            train_number: item.train_number ?? item.name,
+            departure_at: item.departure_at,
+            arrival_at: item.arrival_at ?? null,
+            seat_class: seatClass,
+            priority: 1,
+          }],
+        });
+      });
     } else {
       const channelIds = channels.filter((channel) => form.channels.includes(channel.kind) && channel.enabled).map((channel) => channel.id);
       const payloads = buildWatchCreatePayloads(form, selectedTrains, channelIds);

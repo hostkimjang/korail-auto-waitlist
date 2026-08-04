@@ -1,3 +1,12 @@
+import type {
+  MappedWatch,
+  MappedWatchCandidate,
+  WatchProvider,
+  WatchSeatClass,
+  WatchStatus,
+} from "../api/watches";
+import type { ReservationPolicy } from "../domain/reservationPolicy";
+
 type DemoRailProvider = "KORAIL" | "SRT";
 type DemoSeatClassId = "standard" | "first";
 type DemoSeatStatus =
@@ -92,6 +101,86 @@ interface DemoStation {
   providerMembershipVerified: false;
 }
 
+interface DemoWatchCandidateInput extends Omit<MappedWatchCandidate, "id"> {
+  id?: string;
+}
+
+export interface DemoWatchInput {
+  id: string;
+  provider: WatchProvider;
+  train: string;
+  route: string;
+  origin: string;
+  destination: string;
+  departure: string;
+  arrival: string;
+  date: string;
+  travelDate: string;
+  status: WatchStatus;
+  statusLabel: string;
+  seatClass: WatchSeatClass;
+  seatClassLabel: string;
+  seatEvidenceLabel: string;
+  officialBookingUrl?: string | null;
+  reservationPolicy?: ReservationPolicy;
+  candidates?: ReadonlyArray<DemoWatchCandidateInput>;
+}
+
+export function createDemoWatch(input: DemoWatchInput): MappedWatch {
+  const reservationPolicy = input.reservationPolicy ?? "notify_only";
+  const candidates = (input.candidates ?? []).map((candidate, index): MappedWatchCandidate => ({
+    ...candidate,
+    id: candidate.id ?? `${input.id}:candidate:${index + 1}`,
+  }));
+  const reservationCandidateContexts = Object.fromEntries(candidates.map((candidate) => [
+    candidate.id,
+    {
+      train: candidate.train_number,
+      seatClassLabel: input.seatClassLabel,
+      date: input.date,
+      departure: candidate.departure_at.slice(11, 16),
+      arrival: candidate.arrival_at?.slice(11, 16) ?? input.arrival,
+    },
+  ]));
+
+  return {
+    id: input.id,
+    provider: input.provider,
+    status: input.status,
+    candidates,
+    payment_deadline: null,
+    created_at: null,
+    updated_at: null,
+    official_booking_url: input.officialBookingUrl ?? null,
+    reservation_policy: reservationPolicy,
+    train: input.train,
+    route: input.route,
+    departure: input.departure,
+    arrival: input.arrival,
+    date: input.date,
+    statusLabel: input.statusLabel,
+    seatClass: input.seatClass,
+    seatClassLabel: input.seatClassLabel,
+    seatEvidenceLabel: input.seatEvidenceLabel,
+    registrationEvidenceLabel: input.seatEvidenceLabel,
+    activityLabel: input.seatEvidenceLabel,
+    lastCheckedAt: null,
+    lastCheckedLabel: "최근 확인 기록 없음",
+    origin: input.origin,
+    destination: input.destination,
+    travelDate: input.travelDate,
+    officialBookingUrl: input.officialBookingUrl ?? null,
+    operational: null,
+    latestReservationAttempt: null,
+    seatFoundObservation: null,
+    reservationCandidateContexts,
+    reservationPolicy,
+    seatObservationMode: "balanced",
+    focusedObservationIntervalSeconds: 25,
+    nextCheckAt: null,
+  };
+}
+
 const demoProviders: DemoRailProvider[] = ["KORAIL", "SRT"];
 
 export const demoProviderAccounts: DemoProviderAccount[] = demoProviders.map((provider) => ({
@@ -117,21 +206,24 @@ export const demoProviderRuntimeStatuses: DemoProviderRuntimeStatus[] = demoProv
   prewarmOutcome: null,
 }));
 
-export const initialWatches = [
-  {
+export const initialWatches: MappedWatch[] = [
+  createDemoWatch({
     id: "watch-ktx-483",
     provider: "KORAIL",
     train: "KTX 483",
     route: "용산 → 광주송정",
+    origin: "용산",
+    destination: "광주송정",
     departure: "15:20",
     arrival: "17:46",
     date: "7월 31일 (금)",
+    travelDate: "2026-07-31",
     status: "watching",
     statusLabel: "감시 중",
     seatClass: "standard",
     seatClassLabel: "일반실",
     seatEvidenceLabel: "일반실 · 예매 가능 · 데모 관측 14:32",
-  },
+  }),
 ];
 
 export const demoPaymentWatch = {

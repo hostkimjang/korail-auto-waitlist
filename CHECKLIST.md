@@ -245,6 +245,10 @@
 - [x] watch 정책 변경·start 뒤 즉시 처리 자격을 FastAPI 비의존 `watch_management/application.py`로 이동하고 provider→계정→capability 순서, commit 뒤 HTTP enqueue, 기존 잠금·outbox·멱등성 보존
 - [x] 여섯 번째 구조 슬라이스에서 compatibility identity 6건·dead API 1건·접근 불가능 패널 1건을 제거하고 실제 runtime·좌석 재조회·barrel 부재·등록 hook 계약 9건을 추가. 웹 ESLint 오류 0·고정 경고 19, strict·unused typecheck, Vitest 63개 파일·424건, production build·Sites 4건과 API 전체 pytest 980건·관련 85건·Ruff `E/F/I`·format ratchet 68개·module boundary 통과
 - [x] 여섯 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
+- [x] App의 pause·resume·cancel·delete·예약정책 변경을 strict `features/app/useWatchMutations.ts`로 이동하고 canonical `MappedWatch`, demo/live snapshot, 오류 toast·cancel 재전파, 예약정책 mutation guard 종료·refresh 계약을 focused Vitest 10건으로 확인. 초기 fixture와 마법사 완료 결과도 typed demo factory로 canonical 계약을 고정하고 2건을 추가 검증했으며 `App.jsx`는 1,387줄
+- [x] 중앙 `api.py`의 잔여 6개 endpoint를 `event_stream`, `provider_registry`, `timetable_management` catalog·official evidence, `seat_status_operations`의 기능 router로 이동하고 `api.py` 삭제. 새 owner의 경로·등록 순서·관리자 인증과 SSE의 poll별 fresh session·오류 시 session 종료·`Last-Event-ID`·stream/cache/buffering header 계약 테스트 추가
+- [x] 일곱 번째 구조 슬라이스 전체 웹 ESLint 오류 0·고정 경고 19, strict typecheck, Vitest 65개 파일·436건, production build·Sites 4건과 API 전체 pytest 993건·Ruff `E/F/I`·format ratchet 68개·module boundary 통과
+- [x] 일곱 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 오류 표식 0건 확인
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
 - [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거

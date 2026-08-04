@@ -561,7 +561,7 @@ async def test_mock_station_catalog_endpoint(client):
 
 
 async def test_official_station_catalog_endpoint_maps_missing_key_to_503(client, monkeypatch):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import catalog_http
 
     class MissingKeyAdapter(MockProviderAdapter):
         async def stations(self):
@@ -569,7 +569,11 @@ async def test_official_station_catalog_endpoint_maps_missing_key_to_503(client,
 
             raise ProviderUnavailable("TAGO service key is not configured")
 
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: MissingKeyAdapter())
+    monkeypatch.setattr(
+        catalog_http,
+        "get_timetable_provider",
+        lambda provider: MissingKeyAdapter(),
+    )
     response = await client.get("/api/v1/stations", params={"provider": "korail"})
     assert response.status_code == 503
     assert response.json()["detail"] == "TAGO service key is not configured"

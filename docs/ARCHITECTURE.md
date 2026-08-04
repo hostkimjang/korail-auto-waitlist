@@ -34,9 +34,10 @@ provider별 예약 정책 보정은 `features/new-wait/newWaitForm.ts`가 소유
 기존 `api.js` barrel은 제거했으며 module-boundary 테스트가 같은 중앙 barrel의 재도입을 차단합니다.
 API의 알림 채널 관리 HTTP route와 transport schema는 `notification_management/` 기능 패키지가
 소유하고, 중앙 `schemas.py`는 같은 Pydantic class 객체를 다시 export합니다. 실시간 outbox 이벤트
-stream인 `/events`는 알림 채널 CRUD와 수명주기가 다른 기존 `api.py` 경계에 남겨 두었습니다.
-이 이동은 공개 endpoint·payload·인증·알림 전달 정책을 바꾸지 않는 기계적 분리이며,
-`App.jsx`·`styles.css`와 API `services.py`·`worker.py`·provider 경계의 추가 분리가 남아 있습니다.
+stream인 `/events`는 알림 채널 CRUD와 수명주기가 다르므로 `event_stream/http.py`가 독립적으로
+소유합니다. 중앙 `api.py`는 제거됐으며 아래 기능 router를 `main.py`가 명시적으로 조립합니다. 공개
+endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. `App.jsx`·`styles.css`와 API
+`services.py`·`worker.py`·provider 경계의 추가 분리는 계속 남아 있습니다.
 
 웹의 알림 채널 CRUD·시험 전송과 Web Push 브라우저 수명주기는 `api/notifications.ts`, SSE 연결·
 history cutoff·정리 계약은 `api/events.ts`가 소유하며 `App.jsx`는 이 소유 모듈을 직접 사용합니다. `NewWait`의
@@ -57,24 +58,37 @@ mapping은 `api/timetables.ts`, 좌석 등급과 provenance fail-closed 정규�
 API의 `/timetables`, `/timetable-snapshots`, `/seat-status/refresh` HTTP 경계는
 `timetable_management/http.py`, live→TAGO fallback·공식 confirmation/browser snapshot overlay·등록
 capability·evidence 저장 orchestration은 FastAPI 비의존 `timetable_management/application.py`가
-소유합니다. `/seat-status/status`는 시간표 요청이 아니라 source cooldown 상태 수명주기이므로 기존
-중앙 router에 남겨 두었습니다.
+소유합니다. 역 카탈로그 `/stations`는 `timetable_management/catalog_http.py`, KORAIL snapshot
+revision과 공식 화면 confirmation은 `timetable_management/official_evidence_http.py`가 맡습니다.
+시간표 요청과 수명주기가 다른 `/seat-status/status`는 `seat_status_operations/http.py`가 source
+cooldown 상태만 노출합니다.
 
 웹의 watch 생성 payload·멱등 키·CRUD endpoint와 외부 응답 검증·ViewModel 투영은
 `api/watches.ts`가 소유합니다. provider·status·날짜·후보 identity·선택적 시각·공식 URL을 경계에서
 검증하고, 최신 좌석 관측은 source와 `observed_at < fresh_until` 계약이 모두 확인될 때만 공식 또는
 mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canonical REST snapshot, SSE burst
 병합, 예약정책 변경과 교차한 stale GET 차단, 인증·구독 lifecycle 세대 격리와 상태 전이 알림을
-소유합니다. App shell에는 pause·resume·cancel·policy 변경·등록 같은 사용자 mutation 조립만
-남겨 두었습니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복 차단·만료 evidence
-재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가 소유합니다.
+소유합니다. pause·resume·cancel·delete와 예약정책 변경은 strict
+`features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
+조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
+뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
+조립만 남았으며 현재 1,387줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
+마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복
+차단·만료 evidence 재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가
+소유합니다.
 
 API의 watch CRUD·start·pause·cancel·mock-transition HTTP 경계와 즉시 처리 best-effort enqueue는
 `watch_management/http.py`, 최신 observation·reservation attempt batch 조회와 결제 보류 read
 projection은 `watch_management/read_model.py`가 소유합니다. 공개 endpoint·관리자 인증·트랜잭션과
-commit 뒤 enqueue·멱등성·provider capability·outbox 정책은 이동 전과 같습니다. 중앙 `api.py`에는
-수명주기가 다른 SSE `/events`, 역 카탈로그, provider·source 상태, KORAIL snapshot revision과 공식
-화면 confirmation endpoint가 남습니다.
+commit 뒤 enqueue·멱등성·provider capability·outbox 정책은 이동 전과 같습니다. 이전 중앙
+`api.py`의 잔여 6개 endpoint는 각각 `event_stream/http.py`의 SSE `/events`,
+`provider_registry/http.py`의 `/providers`, `timetable_management/catalog_http.py`의 `/stations`,
+`seat_status_operations/http.py`의 `/seat-status/status`,
+`timetable_management/official_evidence_http.py`의 KORAIL snapshot revision과 공식 화면 confirmation
+경계로 이동했습니다. SSE는 `Last-Event-ID`, `text/event-stream`, `Cache-Control: no-cache`,
+`X-Accel-Buffering: no` 계약을 유지하고 history 조회와 각 poll마다 짧은 새 DB session을 열고 닫습니다.
+관리자 인증 dependency 자체의 streaming response 수명과 outbox cursor의 commit 순서 의미는 이번
+이동에서 바꾸지 않았으며 별도 수명주기·정책 슬라이스에서 검증할 부채로 남아 있습니다.
 
 watch 정책 변경·start 뒤 즉시 처리 자격은 FastAPI 비의존 `watch_management/application.py`가
 요청 정책·영속 상태·provider·인증 계정·reservation capability 순서로 fail-closed 판단합니다.

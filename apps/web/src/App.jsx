@@ -1,13 +1,6 @@
-import { useState } from "react";
-import {
-  Bell,
-  GearSix,
-  House,
-  Plus,
-  ShieldCheck,
-  Ticket,
-} from "@phosphor-icons/react";
 import { logout } from "./api/auth";
+import { AppShell } from "./app/AppShell";
+import { useAppNavigation } from "./app/useAppNavigation";
 import {
   buildWatchCreatePayloads,
   cancelWatch,
@@ -37,7 +30,6 @@ import { useProviderAccountSettings } from "./features/settings/useProviderAccou
 import { useUiPreferencesSettings } from "./features/settings/useUiPreferencesSettings";
 import { formatNewWaitDateLabel } from "./features/new-wait/newWaitForm";
 import { useAppNotifications } from "./features/app/useAppNotifications";
-import { Brand } from "./shared/ui/Brand";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
 import { DEMO_MODE } from "./shared/lib/runtimeConfig";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
@@ -47,58 +39,11 @@ import {
   initialWatches,
 } from "./fixtures/demoData";
 
-const navItems = [
-  { id: "home", label: "홈", icon: House },
-  { id: "new", label: "새 대기", icon: Plus },
-  { id: "reservations", label: "내 예약", icon: Ticket },
-  { id: "settings", label: "설정", icon: GearSix },
-];
-
 const activeWatchStatuses = new Set(["draft", "scheduled", "watching", "official_waitlist", "seat_found", "reserving", "paused", "cooldown", "auth_required"]);
 const initialWatchCollection = DEMO_MODE ? initialWatches : [];
 
 export function isActiveWatch(watch) {
   return activeWatchStatuses.has(watch.status);
-}
-
-function Sidebar({ activeView, onNavigate }) {
-  return (
-    <aside className="sidebar">
-      <Brand />
-      <nav aria-label="주 메뉴" className="side-nav">
-        {navItems.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            className={activeView === id ? "nav-item is-active" : "nav-item"}
-            onClick={() => onNavigate(id)}
-          >
-            <Icon size={24} weight={activeView === id ? "fill" : "regular"} />
-            <span>{label}</span>
-          </button>
-        ))}
-      </nav>
-      <div className="private-badge"><ShieldCheck size={19} weight="fill" /><span>Tailscale 보호됨</span></div>
-    </aside>
-  );
-}
-
-function BottomNav({ activeView, onNavigate }) {
-  return (
-    <nav className="bottom-nav" aria-label="모바일 주 메뉴">
-      {navItems.map(({ id, label, icon: Icon }) => (
-        <button
-          key={id}
-          type="button"
-          className={activeView === id ? "bottom-item is-active" : "bottom-item"}
-          onClick={() => onNavigate(id)}
-        >
-          <Icon size={24} weight={activeView === id ? "fill" : "regular"} />
-          <span>{label}</span>
-        </button>
-      ))}
-    </nav>
-  );
 }
 
 export function PaymentHero({ watch, onOfficialPayment }) {
@@ -188,9 +133,13 @@ export function Reservations({ watches, onNavigate, onDelete = () => undefined }
 export { SettingsPage as Settings };
 
 export function App() {
-  const [activeView, setActiveView] = useState("home");
-  const [settingsInitialSection, setSettingsInitialSection] = useState("notifications");
-  const [settingsActiveSection, setSettingsActiveSection] = useState("notifications");
+  const {
+    activeView,
+    settingsInitialSection,
+    settingsActiveSection,
+    navigate,
+    onSettingsSectionChange,
+  } = useAppNavigation();
   const { auth, markAuthenticated, markUnauthenticated, retryAuthStatus } = useAuthState();
   const {
     state: notificationState,
@@ -282,16 +231,6 @@ export function App() {
     deleteWatchRequest: deleteWatch,
   });
 
-  const navigate = (view, settingsSection) => {
-    setActiveView(view);
-    if (view === "settings") {
-      const nextSettingsSection = settingsSection ?? "notifications";
-      setSettingsInitialSection(nextSettingsSection);
-      setSettingsActiveSection(nextSettingsSection);
-    }
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
   const completeWizard = async ({ form, selectedTrains }) => {
     let createdWatches;
     if (auth.demo) {
@@ -363,22 +302,20 @@ export function App() {
     ? [demoPaymentWatch, ...watches]
     : watches;
   return (
-    <div className="app-shell">
-      <Sidebar activeView={activeView} onNavigate={navigate} />
-      <main className="main-content">
-        <div className="mobile-header"><Brand /><button type="button" className="icon-button" aria-label="알림"><Bell size={23} /></button></div>
-        {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={cancelWatchItem} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
-        {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
-        {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
-        {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={setSettingsActiveSection} onLogout={signOut} initialSection={settingsInitialSection} />}
-      </main>
-      <BottomNav activeView={activeView} onNavigate={navigate} />
-      <AppNotificationCenter
+    <AppShell
+      activeView={activeView}
+      onNavigate={navigate}
+      overlay={<AppNotificationCenter
         state={notificationState}
         onDismiss={dismissNotification}
         onDismissGroup={dismissNotificationGroup}
         onDismissTimed={dismissTimedNotifications}
-      />
-    </div>
+      />}
+    >
+      {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={cancelWatchItem} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
+      {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
+      {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
+      {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={onSettingsSectionChange} onLogout={signOut} initialSection={settingsInitialSection} />}
+    </AppShell>
   );
 }

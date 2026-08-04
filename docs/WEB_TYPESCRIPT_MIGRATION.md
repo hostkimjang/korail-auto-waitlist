@@ -4,7 +4,7 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열여덟 번째 C 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 384줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 알림 채널·철도 계정·provider runtime·UI preference orchestration, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표·철도 계정·runtime도 production ViewModel 계약을 사용합니다. App에는 화면 전환·페이지·등록·logout composition이 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열아홉 번째 A 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 321줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 설정 resource orchestration, app navigation·shell, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표·철도 계정·runtime도 production ViewModel 계약을 사용합니다. App에는 인증 gate, 페이지 props, 등록·logout과 compatibility export 조립이 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict TypeScript와 typecheck gate는 적용되어 있습니다. `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff, reservations, settings의 leaf 컴포넌트·hook·순수 함수가 일부 분리되어 있습니다. `api.js` barrel과 확인된 feature 간 역방향 import는 제거됐지만, 이는 `App.jsx` 제거, 모든 DTO/mapper 경계 완성, 전체 JS/JSX 전환이 끝났다는 뜻은 아닙니다.
 
@@ -120,6 +120,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      typed component prop으로 주입하고 공개 `NewWait` 호환 adapter를 보존
    - 남음: App의 화면 전환·페이지 조립과 Auth page의 최종 feature 경계
 6. shell과 테스트
+   - 완료: top-level `app/useAppNavigation.ts`가 view·settings section state와 smooth scroll을,
+     `app/AppShell.tsx`가 sidebar·mobile header·bottom nav·overlay exact DOM을 strict contract로 소유
    - 마지막에 `App.tsx`로 전환
    - 진행: 새 대기 행동 28건을 `NewWaitPage.test.tsx`로 재소유하고 App 조립·호환 계약은
      `App.test.jsx`에 유지. App caller의 props 정적 검증과 남은 JS/JSX 테스트 전환은 `App.tsx`

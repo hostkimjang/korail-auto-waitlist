@@ -717,6 +717,36 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: typed app navigation과 Auth·OfficialHandoff 조립 경계, App·legacy JS/JSX의 TSX
   전환, provider compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대 경합 검증입니다.
 
+### 2026-08-05 열아홉 번째 구조 슬라이스 A
+
+- typed navigation: `app/useAppNavigation.ts`가 `home|new|reservations|settings` union, settings의 mount
+  초기 section과 runtime polling용 활성 section, stable navigate·section callback을 소유합니다. settings
+  이동은 기본 `notifications` 또는 명시 section을 두 상태에 함께 적용하고, 다른 view 이동은 section을
+  보존하며 모든 navigate가 기존 smooth scroll을 정확히 한 번 수행합니다.
+- app shell: `app/AppShell.tsx`가 desktop sidebar, mobile header, bottom navigation과 overlay slot을
+  strict props로 소유합니다. `.app-shell`의 `aside → main → bottom nav → overlay`, main의
+  `mobile-header → page` 순서와 nav 4개 문구·아이콘·class·ARIA·Tailscale badge를 그대로 유지했습니다.
+  `AppNotificationCenter`는 BottomNav 다음의 shell 내부 direct child로 남아 공식 dialog inert 범위가
+  바뀌지 않습니다.
+- 조립 방향: top-level app은 settings의 `SettingsSection`을 type-only로 참조하며 어떤 feature도 app을
+  역으로 import하지 않습니다. App은 navigation hook을 인증 return보다 위에서 호출해 logout·AuthGate
+  전환 중 view 상태를 보존하고, page 조건부 조립과 기존 공개 compatibility export를 유지합니다.
+- 테스트 소유권: shell DOM·overlay 순서, named navigation 두 곳의 항목·active class·callback·mobile
+  header와 navigation 초기값·settings default/explicit 전이·section 보존·smooth scroll·callback identity의
+  10건을 새 owner 테스트가 소유합니다. 기존 App·Settings·Home·responsive·official inert 회귀도
+  유지했으며 App은 384줄에서 321줄로 줄었습니다.
+- 확인된 검증: ESLint 오류 0개·고정된 기존 경고 12개, strict typecheck, Vitest 75개 파일·551건,
+  production build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다. 독립 재감사에서 도입
+  P0~P3 코드 회귀는 발견되지 않았습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: Settings 화면에서 같은 Settings nav를 다시 누를 때 mount-only UI section과 polling용 active
+  section이 어긋나는 기존 문제, `aria-current`, URL/history routing, mobile 알림 버튼 동작과 reduced-motion
+  scroll은 이번 구조 이동에서 바꾸지 않고 후속 행동·접근성 슬라이스로 남겼습니다.
+- 남은 핵심 부채: Auth·OfficialHandoff 조립과 App.tsx 전환, legacy JS/JSX·allowJs 제거, provider
+  compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대 경합 검증입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

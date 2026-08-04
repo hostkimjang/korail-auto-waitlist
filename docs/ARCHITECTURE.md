@@ -32,6 +32,11 @@ Migration `0026_unified_observation_interval`는 앞선 작업별 속도 실험�
 provider별 예약 정책 보정은 `features/new-wait/newWaitForm.ts`가 소유합니다. 런타임 demo gate는
 `shared/lib/runtimeConfig.ts`가 소유하고 모든 호출자는 실제 API 소유 모듈을 직접 import합니다.
 기존 `api.js` barrel은 제거했으며 module-boundary 테스트가 같은 중앙 barrel의 재도입을 차단합니다.
+strict `app/useAppNavigation.ts`는 `home|new|reservations|settings` view와 settings 초기·활성 section,
+모든 이동의 smooth scroll을 소유합니다. strict `app/AppShell.tsx`는 sidebar·mobile header·bottom nav와
+overlay slot을 소유하며 `.app-shell` 직접 자식 순서를 `sidebar → main → bottom nav → overlay`로
+유지합니다. 따라서 공식 handoff의 inert 범위와 notification overlay 위치, 기존 CSS selector·ARIA가
+바뀌지 않습니다.
 API의 알림 채널 관리 HTTP route와 transport schema는 `notification_management/` 기능 패키지가
 소유하고, 중앙 `schemas.py`는 같은 Pydantic class 객체를 다시 export합니다. 실시간 outbox 이벤트
 stream인 `/events`는 알림 채널 CRUD와 수명주기가 다르므로 `event_stream/http.py`가 독립적으로
@@ -154,7 +159,7 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 Home·새 대기 페이지와 설정 resource orchestration 추출 뒤 현재 384줄입니다. `fixtures/demoData.ts`의 typed
+조립만 남았으며 기능 페이지·설정 resource·app shell/navigation 추출 뒤 현재 321줄입니다. `fixtures/demoData.ts`의 typed
 factory는 초기 demo 작업과 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다.
 
 strict `features/new-wait/NewWaitPage.tsx`는 여정·조건·열차 단계 렌더링, 역 카탈로그·시간표 조회·

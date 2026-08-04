@@ -368,6 +368,34 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   복수 채널을 허용할지에 대한 제품 계약, `NewWait` 나머지 단계와 App shell, legacy JS/JSX·전역 CSS,
   worker observation/reservation pipeline과 provider 역할 분리입니다.
 
+### 2026-08-05 열 번째 구조 슬라이스
+
+- 웹 설정 페이지 경계: 설정 section 상태와 철도 계정·알림·화면 동작·보안·시스템 조립을 strict
+  `features/settings/SettingsPage.tsx`로 이동하고, 반복 사용하던 제목 DOM은
+  `shared/ui/PageHeader.tsx`로 분리했습니다. 기존 class·DOM·section 순서·접근성 이름·모바일 행동
+  영역을 유지하고 `initialSection`의 mount-only 의미, 사용자 선택 때만 발생하는 callback, 비밀 입력
+  비복원과 submission 전달, `App.jsx`의 `Settings` 호환 export를 계약 테스트로 고정했습니다.
+  `App.jsx`는 1,010줄이며 고정 ESLint 경고는 18건입니다.
+- due pipeline application: due SQL, provider별 watch grouping, 신규 관측 우선·예약 정합화 후순위,
+  provider 내부 직렬·provider 간 병렬 fan-out, task-scoped adapter 재사용·정리를 FastAPI·Celery 비의존
+  `observations/due_pipeline_application.py`로 이동했습니다. worker에는 설정 기반 arm 목록, runtime
+  dependency 조립, metric과 기존 Celery task 이름·`rail` route를 남겨 1,470줄로 줄였습니다.
+- 리뷰 보정: provider 입력을 최초 등장 순서로 중복 제거해 adapter 덮어쓰기·누수와 동일 provider
+  병렬 실행을 차단했습니다. 만료 pass는 `Watch.id` 순서로 잠근 뒤 `apply_watch_transition`을 사용해
+  후보 부분 만료·상태·이력·outbox를 한 번에 commit합니다. 이로써 무관한 stale 예약 시도 유무에
+  따라 부분 만료가 commit 또는 rollback되던 기존 UoW 결함을 제거했습니다.
+- 확인된 검증: 독립 웹 리뷰는 P0~P2 회귀 없음, 보정 뒤 API 재리뷰는 P0~P3 지적 없음이었습니다.
+  실제 DB 계약 테스트가 reconciliation outcome·credential·due·external provider와 watch status·
+  `next_check_at`, `finished_at`·`created_at` 순서를 포함·제외 행으로 검증합니다. 웹 ESLint 오류 0·고정
+  경고 18, strict typecheck, Vitest 67개 파일·479건, production build, Sites 4건을 통과했습니다. API
+  전체 pytest 1,034건, Ruff `E/F/I`, format ratchet 65개, module boundary와 `git diff --check`를
+  통과했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: `NewWait` 나머지 단계·App shell과 Home·Reservations·Auth의 strict 경계,
+  legacy JS/JSX, 전역 CSS 분리, worker의 더 깊은 observation/reservation 정책과 provider 역할 분리입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

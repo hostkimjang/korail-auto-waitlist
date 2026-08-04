@@ -7,15 +7,9 @@ import type {
   NotificationChannel,
   NotificationChannelEditorSubmission,
 } from "../src/api/notifications";
-import { Settings } from "../src/App.jsx";
 import { NotificationChannelSettings } from "../src/features/settings/NotificationChannelSettings";
 
 const timestamp = "2026-08-05T00:00:00Z";
-const preferences = {
-  timetableRefreshIntervalSeconds: 5,
-  seatObservationIntervalSeconds: 5,
-  updatedAt: timestamp,
-};
 
 function channel(overrides: Partial<NotificationChannel> = {}): NotificationChannel {
   return {
@@ -356,35 +350,5 @@ describe("notification channel settings", () => {
     expect(screen.getByText(detail)).toBeTruthy();
     expect(within(toggle.closest(".setting-row") as HTMLElement)
       .getByText(/브라우저를 닫아도 운영체제 알림 영역/)).toBeTruthy();
-  });
-
-  it("preserves the Settings-to-feature submission contract", async () => {
-    const user = userEvent.setup();
-    const onSaveChannel = vi.fn().mockResolvedValue(undefined);
-    render(
-      <Settings
-        channels={[]}
-        demo={false}
-        uiPreferences={preferences}
-        savingUiPreferences={false}
-        onSaveUiPreferences={vi.fn()}
-        onSaveChannel={onSaveChannel}
-        onToggleChannel={vi.fn()}
-        onTestChannel={vi.fn()}
-        onConnectWebPush={vi.fn()}
-        onLogout={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole("checkbox", { name: "텔레그램 켜기" }));
-    await user.type(screen.getByLabelText("Bot token"), "token");
-    await user.type(screen.getByLabelText("Chat ID"), "123");
-    await user.click(screen.getByRole("button", { name: "저장" }));
-
-    expect(onSaveChannel).toHaveBeenCalledWith({
-      kind: "telegram",
-      name: "텔레그램",
-      config: { bot_token: "token", chat_id: "123" },
-    });
   });
 });

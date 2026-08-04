@@ -37,7 +37,9 @@ DB dump에는 `.env`가 포함되지 않습니다. `SECRET_ENCRYPTION_KEY`를 �
 ./scripts/ops.ps1 status
 ```
 
-API는 `/healthz`, DB readiness는 `/readyz`, 웹은 Caddy의 `/healthz`로 확인합니다. scheduler는 반드시 한 개만 실행합니다. `worker`는 `rail` 큐만, `notification-worker`는 `notifications` 큐만 소비하며 두 worker의 concurrency는 각각 1로 유지합니다. 알림 채널의 느린 전송·재시도가 좌석 관측과 자동 예매 작업을 점유하지 않도록 두 큐를 같은 프로세스에서 함께 소비하지 않습니다. 한 due sweep의 KORAIL·SRT 파이프라인은 동시에 진행하지만, 같은 provider 안의 watch 그룹과 예약 재확인은 순차 실행합니다. 따라서 서로 다른 운영사는 병렬화하면서도 같은 계정의 브라우저·HTTP 인증 actor 및 provider execution lease는 직렬로 유지합니다. 한 provider가 예기치 않게 실패해도 다른 provider 작업은 완료한 뒤 worker 실패를 기록합니다.
+API는 `/healthz`, DB readiness는 `/readyz`, 웹은 Caddy의 `/healthz`로 확인합니다. scheduler는 반드시 한 개만 실행합니다. `worker`는 `rail` 큐만, `notification-worker`는 `notifications` 큐만 소비하며 두 worker의 concurrency는 각각 1로 유지합니다. 알림 채널의 느린 전송·재시도가 좌석 관측과 자동 예매 작업을 점유하지 않도록 두 큐를 같은 프로세스에서 함께 소비하지 않습니다. 한 due sweep의 KORAIL·SRT 파이프라인은 동시에 진행하지만, 같은 provider 안의 watch 그룹과 예약 재확인은 순차 실행합니다. 따라서 서로 다른 운영사는 병렬화하면서도 같은 계정의 브라우저·HTTP 인증 actor 및 provider execution lease는 직렬로 유지합니다. 중복 provider 입력은 최초 등장 한 건으로 정규화해 adapter 획득·arm·정리를 한 번만 수행합니다. 한 provider가 예기치 않게 실패해도 다른 provider 작업은 완료한 뒤 worker 실패를 기록합니다.
+
+각 due sweep은 provider 작업 전에 만료 대상 watch를 ID 순서로 잠그고, 후보 부분 만료·watch 상태·전이 이력·outbox를 하나의 짧은 transaction으로 commit한 뒤 stale 예약 시도를 복구합니다. 따라서 복구 대상 존재 여부와 관계없이 만료 결과가 동일하게 지속됩니다. 이 선행 transaction에는 외부 철도 호출이 포함되지 않습니다.
 
 ### 기능·이미지 변경 배포
 

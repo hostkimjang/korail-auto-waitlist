@@ -33,6 +33,10 @@ from .models import (
     WatchCandidate,
 )
 from .notification_management.delivery import deliver_pending_notifications
+from .observations.due_pipeline_application import (
+    DuePipelineDependencies,
+    process_due_pipeline,
+)
 from .operational import decide_operational_expiry
 from .provider_accounts import (
     update_provider_auth_status,
@@ -77,7 +81,6 @@ from .services import (
     record_reservation_confirmation,
     record_seat_observation,
     request_hash,
-    transition_watch,
 )
 from .srt_reservation import SRT_RESERVATION_SOURCE
 
@@ -318,13 +321,16 @@ async def _expire_elapsed_watches(session, now: datetime) -> int:
     candidate_ids = list(
         (
             await session.scalars(
-                select(Watch.id).where(
+                select(Watch.id)
+                .where(
                     Watch.status.in_(EXPIRABLE_WATCH_STATUSES),
                 )
+                .order_by(Watch.id)
             )
         ).all()
     )
     expired = 0
+    mutated = False
     for watch_id in candidate_ids:
         watch = await session.scalar(
             select(Watch)
@@ -347,22 +353,27 @@ async def _expire_elapsed_watches(session, now: datetime) -> int:
                 decision = decide_operational_expiry(candidate, now)
                 if decision.expire:
                     candidate.state = "expired"
+                    mutated = True
                 else:
                     active_candidates.append(candidate)
             if active_candidates:
                 continue
-            await transition_watch(
+            await apply_watch_transition(
                 session,
                 watch,
                 WatchStatus.EXPIRED,
                 reason="all_candidates_operationally_terminal_or_horizon_elapsed",
             )
+            mutated = True
             expired += 1
             continue
         if _watch_monitoring_deadline(watch) > now:
             continue
-        await transition_watch(session, watch, WatchStatus.EXPIRED)
+        await apply_watch_transition(session, watch, WatchStatus.EXPIRED)
+        mutated = True
         expired += 1
+    if mutated:
+        await session.commit()
     return expired
 
 
@@ -1360,160 +1371,30 @@ async def _process_watch_group(
                     )
 
 
-async def _process_provider_due_pipeline(
-    provider: Provider,
-    watch_groups: list[list[str]],
-    reconciliation_attempt_ids: list[str],
-    adapter: RailProviderAdapter,
-) -> None:
-    """Process one provider serially while other providers may make progress."""
-
-    for watch_ids in watch_groups:
-        # A busy cycle can process many groups. Lease epochs and next-check scheduling
-        # must use the group's actual start time rather than the stale initial sweep time.
-        await _process_watch_group(
-            watch_ids,
-            datetime.now(timezone.utc),
-            provider=provider,
-            adapter=adapter,
-        )
-    # Historical read-only confirmation remains lower priority than newly due
-    # cancellation-seat observation and its single reservation attempt.
-    for attempt_id in reconciliation_attempt_ids:
-        await _reconcile_reservation_attempt(attempt_id, adapter=adapter)
-
-
-async def _process_provider_due_pipelines(
-    provider_order: list[Provider],
-    watch_groups: dict[Provider, list[list[str]]],
-    reconciliation_attempt_ids: dict[Provider, list[str]],
-    adapters: dict[Provider, RailProviderAdapter],
-) -> None:
-    """Run providers concurrently without weakening each provider/account fence."""
-
-    results = await asyncio.gather(
-        *(
-            _process_provider_due_pipeline(
-                provider,
-                watch_groups.get(provider, []),
-                reconciliation_attempt_ids.get(provider, []),
-                adapters[provider],
-            )
-            for provider in provider_order
-        ),
-        return_exceptions=True,
+def _due_pipeline_dependencies() -> DuePipelineDependencies:
+    return DuePipelineDependencies(
+        session_factory=SessionFactory,
+        get_execution_provider=get_execution_provider,
+        arm_provider_watches=_arm_supported_provider_watches,
+        expire_elapsed_watches=_expire_elapsed_watches,
+        recover_stale_reservation_attempts=_recover_stale_reservation_attempts,
+        process_watch_group=_process_watch_group,
+        reconcile_reservation_attempt=_reconcile_reservation_attempt,
+        close_execution_adapter=_close_execution_adapter,
+        reservation_reconciliation_due_clause=_reservation_reconciliation_due_clause,
     )
-    failures: list[BaseException] = []
-    for provider, result in zip(provider_order, results, strict=True):
-        if isinstance(result, BaseException):
-            LOGGER.error(
-                "provider due pipeline failed provider=%s error=%s",
-                provider.value,
-                type(result).__name__,
-            )
-            failures.append(result)
-    if failures:
-        # gather(return_exceptions=True) lets every provider finish first. Preserve the
-        # task's fail-fast contract only after the independent work has settled.
-        raise failures[0]
 
 
 async def _process_due_watches() -> int:
-    now = datetime.now(timezone.utc)
-    adapters: dict[Provider, RailProviderAdapter] = {}
-    groups: dict[tuple[Provider, str], list[str]] = {}
-    reconciliation_rows: list[tuple[str, Provider]] = []
-    try:
-        # External adapters are task-scoped. Reusing one adapter per provider keeps
-        # Redis/HTTP resources on this Celery task's event loop and shares a service-day
-        # cache across every watch group in the sweep.
-        providers_to_arm = [Provider.SRT]
-        if korail_background_monitoring_enabled(get_settings()):
-            providers_to_arm.append(Provider.KORAIL)
-        for provider in providers_to_arm:
-            execution_adapter = get_execution_provider(provider)
-            adapters[provider] = execution_adapter
-            await _arm_supported_provider_watches(
-                provider,
-                now,
-                adapter=execution_adapter,
-            )
-        async with SessionFactory() as session:
-            await _expire_elapsed_watches(session, now)
-            await _recover_stale_reservation_attempts(session, now)
-            reconciliation_rows = list(
-                (
-                    await session.execute(
-                        select(ReservationAttempt.id, Watch.provider)
-                        .join(
-                            WatchCandidate,
-                            WatchCandidate.id == ReservationAttempt.candidate_id,
-                        )
-                        .join(Watch, Watch.id == WatchCandidate.watch_id)
-                        .where(
-                            ReservationAttempt.outcome.in_(
-                                [
-                                    ReservationOutcome.PAYMENT_REQUIRED,
-                                    ReservationOutcome.UNKNOWN,
-                                ]
-                            ),
-                            ReservationAttempt.credential_version.is_not(None),
-                            _reservation_reconciliation_due_clause(now),
-                            Watch.provider.in_(_EXTERNAL_PROVIDERS),
-                        )
-                        .order_by(ReservationAttempt.finished_at)
-                    )
-                ).all()
-            )
-            rows = list(
-                (
-                    await session.execute(
-                        select(Watch.id, Watch.dedupe_key, Watch.provider)
-                        .where(
-                            Watch.status.in_(OBSERVATION_WATCH_STATUSES),
-                            Watch.next_check_at.is_not(None),
-                            Watch.next_check_at <= now,
-                        )
-                        .order_by(Watch.created_at)
-                    )
-                ).all()
-            )
-        for watch_id, dedupe_key, provider in rows:
-            groups.setdefault((provider, dedupe_key), []).append(watch_id)
-        watch_groups_by_provider: dict[Provider, list[list[str]]] = {}
-        provider_order: list[Provider] = []
-        for (provider, _), watch_ids in groups.items():
-            if provider not in watch_groups_by_provider:
-                watch_groups_by_provider[provider] = []
-                provider_order.append(provider)
-            watch_groups_by_provider[provider].append(watch_ids)
-        reconciliation_by_provider: dict[Provider, list[str]] = {}
-        for attempt_id, provider in reconciliation_rows:
-            if provider not in reconciliation_by_provider:
-                reconciliation_by_provider[provider] = []
-                if provider not in provider_order:
-                    provider_order.append(provider)
-            reconciliation_by_provider[provider].append(attempt_id)
-        for provider in provider_order:
-            adapter = adapters.get(provider)
-            if adapter is None:
-                adapter = get_execution_provider(provider)
-                adapters[provider] = adapter
-        await _process_provider_due_pipelines(
-            provider_order,
-            watch_groups_by_provider,
-            reconciliation_by_provider,
-            adapters,
-        )
-    finally:
-        closed_adapter_ids: set[int] = set()
-        for provider, adapter in adapters.items():
-            if id(adapter) in closed_adapter_ids:
-                continue
-            closed_adapter_ids.add(id(adapter))
-            await _close_execution_adapter(adapter, provider)
-    WATCH_GROUPS.inc(len(groups))
-    return len(groups)
+    providers_to_arm = [Provider.SRT]
+    if korail_background_monitoring_enabled(get_settings()):
+        providers_to_arm.append(Provider.KORAIL)
+    group_count = await process_due_pipeline(
+        providers_to_arm,
+        dependencies=_due_pipeline_dependencies(),
+    )
+    WATCH_GROUPS.inc(group_count)
+    return group_count
 
 
 async def _process_watch_now(watch_id: str) -> int:

@@ -1,0 +1,1 @@
+"""Seat-observation application workflows."""

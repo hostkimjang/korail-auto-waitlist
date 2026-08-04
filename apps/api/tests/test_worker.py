@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -63,8 +62,6 @@ from rail_waitlist.worker import (
     _CandidateTarget,
     _defer_watch_group_observation,
     _process_due_watches,
-    _process_provider_due_pipeline,
-    _process_provider_due_pipelines,
     _process_watch_group,
     _process_watch_now,
     _provider_auth_status_for_reservation_outcome,
@@ -204,68 +201,68 @@ async def test_process_watch_now_uses_normal_single_watch_group_path(monkeypatch
     assert calls[0][1].tzinfo is not None
 
 
-async def test_provider_due_pipeline_keeps_same_provider_work_serial(monkeypatch) -> None:
-    calls: list[tuple[str, object]] = []
-    adapter = object()
+async def test_worker_due_pipeline_delegate_wires_runtime_dependencies(monkeypatch) -> None:
+    captured = {}
 
-    async def fake_process_watch_group(watch_ids, now, *, provider, adapter) -> None:
-        assert now.tzinfo is not None
-        calls.append(("watch", (provider, watch_ids, adapter)))
-        await asyncio.sleep(0)
+    class RecordingMetric:
+        def __init__(self) -> None:
+            self.values: list[int] = []
 
-    async def fake_reconcile(attempt_id, *, adapter) -> int:
-        calls.append(("reconcile", (attempt_id, adapter)))
-        return 1
+        def inc(self, value: int) -> None:
+            self.values.append(value)
 
-    monkeypatch.setattr(worker_module, "_process_watch_group", fake_process_watch_group)
+    metric = RecordingMetric()
+
+    async def fake_due_pipeline(providers_to_arm, *, dependencies) -> int:
+        captured.update(providers_to_arm=providers_to_arm, dependencies=dependencies)
+        return 7
+
+    monkeypatch.setattr(worker_module, "process_due_pipeline", fake_due_pipeline)
+    monkeypatch.setattr(worker_module, "get_settings", lambda: object())
     monkeypatch.setattr(
-        worker_module,
-        "_reconcile_reservation_attempt",
-        fake_reconcile,
+        worker_module, "korail_background_monitoring_enabled", lambda _settings: True
     )
+    monkeypatch.setattr(worker_module, "WATCH_GROUPS", metric)
 
-    await _process_provider_due_pipeline(
-        Provider.SRT,
-        [["watch-1"], ["watch-2"]],
-        ["attempt-1"],
-        adapter,
+    assert await worker_module._process_due_watches() == 7
+    assert captured["providers_to_arm"] == [Provider.SRT, Provider.KORAIL]
+    dependencies = captured["dependencies"]
+    assert dependencies.session_factory is worker_module.SessionFactory
+    assert dependencies.get_execution_provider is worker_module.get_execution_provider
+    assert dependencies.arm_provider_watches is worker_module._arm_supported_provider_watches
+    assert dependencies.expire_elapsed_watches is worker_module._expire_elapsed_watches
+    assert (
+        dependencies.recover_stale_reservation_attempts
+        is worker_module._recover_stale_reservation_attempts
     )
+    assert dependencies.process_watch_group is worker_module._process_watch_group
+    assert (
+        dependencies.reconcile_reservation_attempt is worker_module._reconcile_reservation_attempt
+    )
+    assert dependencies.close_execution_adapter is worker_module._close_execution_adapter
+    assert (
+        dependencies.reservation_reconciliation_due_clause
+        is worker_module._reservation_reconciliation_due_clause
+    )
+    assert metric.values == [7]
 
-    assert calls == [
-        ("watch", (Provider.SRT, ["watch-1"], adapter)),
-        ("watch", (Provider.SRT, ["watch-2"], adapter)),
-        ("reconcile", ("attempt-1", adapter)),
-    ]
 
+def test_due_pipeline_celery_task_preserves_name_route_and_delegate(monkeypatch) -> None:
+    calls = 0
 
-async def test_provider_due_pipelines_overlap_and_isolate_provider_failure(monkeypatch) -> None:
-    srt_started = asyncio.Event()
-    korail_started = asyncio.Event()
-    korail_completed = asyncio.Event()
-    adapters = {Provider.SRT: object(), Provider.KORAIL: object()}
+    async def fake_due_pipeline() -> int:
+        nonlocal calls
+        calls += 1
+        return 9
 
-    async def fake_process_watch_group(watch_ids, now, *, provider, adapter) -> None:
-        assert now.tzinfo is not None
-        assert adapter is adapters[provider]
-        if provider is Provider.SRT:
-            srt_started.set()
-            await asyncio.wait_for(korail_started.wait(), timeout=1)
-            raise RuntimeError("synthetic SRT failure")
-        korail_started.set()
-        await asyncio.wait_for(srt_started.wait(), timeout=1)
-        korail_completed.set()
+    monkeypatch.setattr(worker_module, "_process_due_watches", fake_due_pipeline)
 
-    monkeypatch.setattr(worker_module, "_process_watch_group", fake_process_watch_group)
-
-    with pytest.raises(RuntimeError, match="synthetic SRT failure"):
-        await _process_provider_due_pipelines(
-            [Provider.SRT, Provider.KORAIL],
-            {Provider.SRT: [["srt-watch"]], Provider.KORAIL: [["korail-watch"]]},
-            {},
-            adapters,
-        )
-
-    assert korail_completed.is_set()
+    assert worker_module.process_due_watches.name == "rail_waitlist.worker.process_due_watches"
+    assert worker_module.process_due_watches.run() == 9
+    assert calls == 1
+    assert worker_module.celery_app.conf.task_routes[
+        "rail_waitlist.worker.process_due_watches"
+    ] == {"queue": "rail"}
 
 
 async def test_reconciliation_uses_same_generation_read_only_confirmation_once(
@@ -1515,6 +1512,84 @@ async def test_late_night_seat_found_watch_uses_selected_departure_not_next_day_
         assert watch.status is WatchStatus.WATCHING
         assert watch.next_check_at is not None
     assert adapter.reserve_calls == 0
+
+
+@pytest.mark.parametrize("with_stale_attempt", [False, True])
+async def test_partial_candidate_expiry_commits_independently_from_stale_recovery(
+    app,
+    db_engine,
+    with_stale_attempt: bool,
+) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        watch = Watch(
+            provider=Provider.MOCK,
+            origin="서울",
+            destination="부산",
+            travel_date=now.date(),
+            time_from=time(8),
+            time_to=time(12),
+            status=WatchStatus.WATCHING,
+            mode="mock",
+            dedupe_key=f"partial-expiry-{with_stale_attempt}",
+            next_check_at=now - timedelta(seconds=1),
+        )
+        terminal_candidate = WatchCandidate(
+            train_number="TERMINAL",
+            departure_at=now - timedelta(minutes=16),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="active",
+        )
+        active_candidate = WatchCandidate(
+            train_number="ACTIVE",
+            departure_at=now + timedelta(hours=2),
+            seat_class=SeatClass.STANDARD,
+            priority=2,
+            state="active",
+        )
+        watch.candidates.extend([terminal_candidate, active_candidate])
+        session.add(watch)
+        if with_stale_attempt:
+            session.add(
+                ReservationAttempt(
+                    candidate=terminal_candidate,
+                    attempt_sequence=1,
+                    episode_key="stale-partial-expiry",
+                    idempotency_key="stale-partial-expiry",
+                    started_at=now - timedelta(minutes=6),
+                    outcome=ReservationOutcome.PENDING,
+                )
+            )
+        await session.commit()
+        watch_id = watch.id
+        terminal_id = terminal_candidate.id
+        active_id = active_candidate.id
+
+    async with app.state.test_session_factory() as session:
+        assert await worker_module._expire_elapsed_watches(session, now) == 0
+        assert await worker_module._recover_stale_reservation_attempts(session, now) == int(
+            with_stale_attempt
+        )
+
+    async with factory() as session:
+        persisted_watch = await session.get(Watch, watch_id)
+        persisted_terminal = await session.get(WatchCandidate, terminal_id)
+        persisted_active = await session.get(WatchCandidate, active_id)
+        assert persisted_watch.status is WatchStatus.WATCHING
+        assert persisted_terminal.state == "expired"
+        assert persisted_active.state == "active"
+        recovery_events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "watch.reservation_attempt_recovery_required"
+                    )
+                )
+            ).all()
+        )
+        assert len(recovery_events) == int(with_stale_attempt)
 
 
 async def test_seat_found_watch_expires_after_unknown_operational_horizon(

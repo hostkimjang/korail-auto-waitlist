@@ -51,7 +51,11 @@ Web Push 기기 상태를 소유합니다. 채널별 pending key를 독립적으
 `api/notifications.ts`는 외부 JSON을 `unknown`에서 검증해 raw `config`를 버린 secret-free ViewModel만
 반환하고 시험 전송은 `queued=true`와 비어 있지 않은 `event_id`를 함께 확인합니다. API는 채널 이름과
 필수 설정 문자열을 공백까지 검증·정규화하고, DB가 timezone 정보를 잃어도 읽기 응답 시각을 UTC로
-보정합니다. `App.jsx`에는 네트워크 mutation과 전역 알림 조립만 남았습니다.
+보정합니다. strict `features/settings/SettingsPage.tsx`는 설정 메뉴 union과 철도 계정·알림·화면 동작·
+보안·시스템 section 조립을 소유합니다. 공용 제목 DOM은 `shared/ui/PageHeader.tsx`로 이동했으며 기존
+class·section 순서·접근성 이름·44px 이상 행동 영역을 유지합니다. `initialSection`은 최초 mount에서만
+상태를 정하고 `onSectionChange`는 사용자 선택에만 호출됩니다. `App.jsx`에는 설정 데이터와 mutation을
+연결하는 상위 조립만 남았습니다.
 
 API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정책은
 `notification_management/service.py`가 소유하고 HTTP 계층은 이 service의 오류만 transport 상태로
@@ -59,8 +63,8 @@ API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정
 `notification_management/delivery.py`가 소유합니다. 이 application 경계는 due `PENDING` 알림만
 생성 시각 순으로 최대 50건 `FOR UPDATE SKIP LOCKED`로 선택하고, 누락·비활성 채널의 terminal 처리,
 전달 전 attempt 증가, 최대 5회와 지수 backoff, 안전한 오류 범주, sent·failed·pending metric을 같은
-기존 계약으로 유지합니다. `worker.py`에는 기존 Celery task 이름과 실행·성공·실패 wrapper만 남아
-현재 1,851줄입니다. 여러 기능이 공유하는 outbox idempotency primitive는 `outbox.py`에 두며,
+기존 계약으로 유지합니다. 알림 전달 쪽 `worker.py`에는 기존 Celery task 이름과 실행·성공·실패
+wrapper만 남았습니다. 여러 기능이 공유하는 outbox idempotency primitive는 `outbox.py`에 두며,
 `services.py`의 import는 기존 worker와 테스트를 위한 identity-compatible 전환 경계입니다.
 
 현재 delivery batch는 외부 알림을 전송하는 동안 선택한 outbox row lock과 DB transaction을 유지합니다.
@@ -77,6 +81,15 @@ token·미만료 조건을 다시 확인합니다. 두 번째 확인 직후의 �
 재평가하고 상태와 outbox를 함께 commit합니다. 잠금 대기 중 임대 epoch나 결제기한이 바뀐 늦은
 공식 확인 결과는 저장하지 않으며, commit 뒤에만 adapter drain·소유 adapter close·임대 release를
 수행합니다.
+
+due sweep의 선택·provider별 그룹 구성·task-scoped adapter 수명주기는 FastAPI·Celery 비의존
+`observations/due_pipeline_application.py`가 소유합니다. worker는 설정에서 arm할 provider를 정하고
+runtime dependency와 `WATCH_GROUPS` metric, 기존 Celery task 이름·`rail` route만 조립합니다. 같은
+provider의 관측 그룹과 예약 정합화는 직렬이며 provider 간에는 병렬로 진행하고, 한 provider 실패가
+다른 provider를 취소하지 않은 뒤 최초 실패를 전파합니다. provider 입력은 최초 등장 순서로 중복
+제거해 adapter 획득·arm·close를 한 번만 수행하고, 각 그룹은 실제 시작 시각을 새로 읽습니다. sweep
+전 만료 처리는 `Watch.id` 순서로 잠그고 후보 부분 만료·watch 상태·transition history·outbox를 한
+transaction에서 commit하므로 stale 예약 복구 행의 유무가 만료 지속 여부를 바꾸지 않습니다.
 
 웹 역 카탈로그 DTO 검증·identity 병합은 `api/stations.ts`, 시간표 query·provider 부분 실패·DTO→도메인
 mapping은 `api/timetables.ts`, 좌석 등급과 provenance fail-closed 정규화는 `api/seatClasses.ts`가
@@ -108,7 +121,7 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 알림 설정 추출 뒤 현재 1,056줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
+조립만 남았으며 설정 페이지 추출 뒤 현재 1,010줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복
 차단·만료 evidence 재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가
 소유합니다.

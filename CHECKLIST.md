@@ -261,10 +261,15 @@
 - [x] 알림 API를 secret-free ViewModel로 투영하고 kind·boolean·UTC timestamp, `queued=true + event_id`, Web Push P-256 공개키를 fail-closed 검증. 서버도 채널 이름·필수 config를 trim하고 공백값 거부
 - [x] 아홉 번째 구조 슬라이스 전체 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 66개 파일·475건, production build·Sites 4건과 API 전체 pytest 1,025건·Ruff `E/F/I`·format ratchet 65개·module boundary 통과
 - [x] 아홉 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건과 실제 PostgreSQL 임대 row-lock/takeover/fencing token 증가 확인
+- [x] 설정 section 상태와 철도 계정·알림·화면 동작·보안·시스템 조립을 strict `features/settings/SettingsPage.tsx`, 반복 제목 DOM을 `shared/ui/PageHeader.tsx`로 이동. 기존 class·DOM·순서·접근성 이름·44px 행동 영역, mount-only `initialSection`, 사용자 선택 callback과 `Settings` 호환 export를 회귀 테스트로 고정하고 `App.jsx`를 1,010줄로 축소
+- [x] due 선택·provider grouping·신규 관측 우선·정합화 후순위·provider 내부 직렬/간 병렬·task-scoped adapter 수명주기를 `observations/due_pipeline_application.py`로 이동하고 worker의 설정·dependency·metric·Celery task/route 조립을 보존. provider 입력 최초 등장 순서 dedupe와 실제 DB predicate/order 계약을 추가하고 `worker.py`를 1,470줄로 축소
+- [x] 만료 pass를 `Watch.id` 순서로 잠그고 후보 부분 만료·watch 상태·transition history·outbox를 단일 commit으로 원자화해 stale 예약 복구 행 유무에 따라 지속 여부가 달라지던 UoW 결함을 제거. 양쪽 조건의 실제 DB 회귀 테스트와 독립 재리뷰 P0~P3 없음 확인
+- [x] 열 번째 구조 슬라이스 전체 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 67개 파일·479건, production build·Sites 4건과 API 전체 pytest 1,034건·Ruff `E/F/I`·format ratchet 65개·module boundary·`git diff --check` 통과
+- [x] 열 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
-- [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
+- [ ] `NewWait`·OfficialHandoff·Home·Reservations·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
 - [ ] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
 - [x] API의 operations summary, UI preferences, 철도 계정·runtime 라우트와 schema를 기능 패키지로 이동하고 중앙 schema compatibility export·전체 pytest 949건 검증

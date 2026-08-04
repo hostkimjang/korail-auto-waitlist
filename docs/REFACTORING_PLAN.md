@@ -143,7 +143,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 | 2. 기계적 분리 | 진행 | demo fixture, 공용 API client, 작은 router/schema 이동 | 행동 변화 없는 작은 모듈 |
 | 3. 웹 수직 슬라이스 | 진행 | `NewWait` form·station·timetable·registration 흐름 | feature별 TS/TSX와 회귀 테스트 |
 | 4. 백엔드 정책 | 진행 | watch transition, reservation episode, reconciliation 결정 함수 | 프레임워크 비의존 domain 정책 |
-| 5. 실행 경계 | 계획 | 최소 UoW/repository seam, worker pipeline 분리 | 얇은 route/task와 트랜잭션 테스트 |
+| 5. 실행 경계 | 진행 | 최소 UoW/repository seam, worker pipeline 분리 | 얇은 route/task와 트랜잭션 테스트 |
 | 6. provider 역할 | 계획 | timetable/observe/reserve/confirm/lifecycle 계약 분리 | capability와 adapter 역할별 검증 |
 | 7. 웹 전환 종료 | 계획 | `App.tsx`, `api.js` 제거, `allowJs=false`, CSS 단계 분리 | strict TS와 모듈 경계 완성 |
 | 8. 고위험 sidecar | 계획 | `korail_pydoll_browser.py` 내부 lifecycle·DOM·flow 분리 | 기존 보호·결제 전 중단 계약 보존 |
@@ -174,7 +174,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 자동 품질 gate: 웹은 `src`·`tests`·`e2e`·`scripts`·`worker`를 런타임별 전역으로 검사하고,
   전환 전에 존재한 effect/ref 부채 27건만 파일·규칙·위치·소스 행 해시 지문으로 고정합니다. API는
   전체 `E/F/I` 검사에 더해 현재 미포맷 파일의 경로와 개행 정규화 SHA-256을 고정한 format ratchet을
-  사용합니다. 현재 legacy 미포맷 69개를 격리했으며 새 미포맷 파일, 수정된 legacy 파일, stale 목록은
+  사용합니다. 두 번째 슬라이스 당시 legacy 미포맷 69개를 격리했으며 새 미포맷 파일, 수정된 legacy 파일, stale 목록은
   모두 실패합니다.
 - 확인된 검증: 웹 ESLint 오류 0·고정된 기존 경고 27, strict typecheck, Vitest 54개 파일·377건,
   production build, Sites 4건을 통과했습니다. 통합 작업 트리의 API 전체 pytest 955건도
@@ -223,6 +223,36 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   11개 healthy, API·proxy health 200, 최근 오류 표식 0건을 확인했습니다.
 - 남은 핵심 부채: `NewWait` 등록 상태·열차 선택 UI, watch API와 App shell 작업 orchestration,
   `api.js` compatibility 제거, 전역 CSS, API watch/reservation service와 worker·provider 역할 분리입니다.
+
+### 2026-08-04 다섯 번째 구조 슬라이스
+
+- 웹 watch API 경계: watch 생성 payload·evidence/watch 멱등 키·CRUD endpoint를
+  `api/watches.ts`로 이동했습니다. 외부 JSON은 `unknown`에서 provider·status·날짜·후보 identity·
+  optional timestamp·공식 URL을 검증하고, 명시적으로 정규화한 DTO 호환 필드와 ViewModel만
+  반환합니다. 최신 좌석 관측은 허용 상태·provider에 맞는 source·timezone-aware 시각·
+  `observed_at < fresh_until` 전체 tuple이 확인될 때만 공식 또는 mock 관측으로 투영합니다.
+  `api.js`는 같은 함수 객체 compatibility export만 유지하며 108줄로 줄었습니다.
+- App watch 상태 경계: canonical REST snapshot, SSE burst 병합, visibility polling, 상태 전이 알림,
+  인증 만료, 예약정책 PATCH와 교차한 stale GET 차단을 `features/app/useWatchCollection.ts`로
+  옮겼습니다. 구독 lifecycle epoch으로 이전 GET·SSE·401·refresh timer를 폐기하고 teardown 때
+  대기 reservation event queue를 비웁니다. App shell에는 사용자 watch mutation 조립을 남겼으며
+  `App.jsx`는 1,505줄로 줄었습니다.
+- API watch transport와 read model: watch CRUD·start·pause·cancel·mock-transition 9개 endpoint,
+  관리자 인증·멱등 header와 commit 뒤 best-effort 즉시 처리를 `watch_management/http.py`로,
+  최신 observation·reservation attempt batch 조회와 결제 보류 projection을
+  `watch_management/read_model.py`로 이동했습니다. 중앙 `api.py`는 212줄로 줄었고 공개 endpoint·
+  트랜잭션·provider capability·outbox 계약은 그대로입니다.
+- 교차 리뷰 보강: 폐기된 live-sync lifecycle의 늦은 응답과 SSE queue 세대 누출, 불완전한 최신 관측의
+  공식 provenance 합성, raw DTO·malformed candidate 누출을 발견해 같은 슬라이스에서 회귀 테스트와
+  fail-closed 경계를 추가했습니다. 백엔드 이동은 9개 route AST와 projection 576개 조합을 원본과
+  대조해 동등성을 확인했습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 경고 22, strict·unused typecheck, Vitest 62개 파일·423건,
+  production build와 Sites 4건을 통과했습니다. API 전체 pytest 964건, Ruff `E/F/I`, format ratchet
+  68개와 module boundary를 통과했습니다. `experimental-rail` 전체 이미지를 재빌드·강제 재생성한 뒤
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건을
+  확인했습니다.
+- 남은 핵심 부채: `NewWait` 등록·열차 선택 UI, App watch mutation과 나머지 shell 조립,
+  `api.js` compatibility 제거, 전역 CSS, API watch application/service와 worker·provider 역할 분리입니다.
 
 ## 단계별 완료 기준과 rollback
 

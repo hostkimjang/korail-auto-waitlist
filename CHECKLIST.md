@@ -217,7 +217,7 @@
 - [x] 루트 `output/`·Playwright 도구 상태와 API pytest 임시 디렉터리·cache를 Git 제외 대상으로 고정하고 `check-ignore` 및 `docker compose config --quiet` 확인
 - [x] 생성물·비밀값 제외와 전체 검증 결과를 확인하고 `codex/clean-architecture` 최초 commit `a5ab434`·tag `clean-architecture-phase-1-baseline-20260804` 확보
 - [x] 웹 import-boundary ratchet과 API domain/application framework import gate를 추가하고 기존 허용 예외 11개 제거
-- [x] 웹 `src`·`tests`·`e2e`·`scripts`·`worker`의 런타임별 ESLint와 API 전체 Ruff `E/F/I`·개행 정규화 SHA-256 format ratchet을 루트 verify/CI에 연결. 전환 전 effect/ref 경고 27건은 파일·규칙·위치·소스 행 지문으로, legacy 미포맷은 정확한 69개 경로·해시로 격리하고 신규·변경·stale 부채 차단 반례 확인
+- [x] 웹 `src`·`tests`·`e2e`·`scripts`·`worker`의 런타임별 ESLint와 API 전체 Ruff `E/F/I`·개행 정규화 SHA-256 format ratchet을 루트 verify/CI에 연결. 전환 전 effect/ref 경고 27건은 파일·규칙·위치·소스 행 지문으로, 초기 legacy 미포맷 69개 경로·해시를 격리하고 신규·변경·stale 부채 차단 반례 확인
 - [x] 웹 demo fixture, 공용 API client, settings API mapper, App 알림 UI와 공용 결제기한 정책·hook·UI를 목표 소유 경계로 이동하고 typecheck·Vitest 347건·production build 검증
 - [x] 첫 구조 슬라이스 통합 후 Sites 4건·API 전체 pytest 949건·Ruff 핵심 규칙·module boundary·`git diff --check` 통과, `experimental-rail` 전체 재빌드·강제 재생성 뒤 migration·log-init exit 0·장기 서비스 11개 healthy·새 runtime 오류 표식 0건 확인
 - [x] `NewWait`의 폼·KST 초기 날짜·날짜/요일 동기화·과거 날짜 보정·역명/node ID 원자적 교환·provider 토글과 예약 정책 fail-closed 보정을 strict TS 순수 모델로 분리하고 계약 테스트 추가
@@ -235,6 +235,11 @@
 - [x] API `/timetables`·`/timetable-snapshots`·`/seat-status/refresh`와 snapshot background session을 `timetable_management/http.py`, live→TAGO fallback·overlay·evidence orchestration을 FastAPI 비의존 `application.py`로 이동. `/seat-status/status`는 cooldown 수명주기로 중앙 유지
 - [x] 네 번째 구조 슬라이스 웹 ESLint 오류 0·고정 경고 23, strict·unused typecheck, Vitest 60개 파일·406건, production build·Sites 4건과 API 전체 pytest 960건·관련 37건·Ruff `E/F/I`·format ratchet 68개·module boundary 통과
 - [x] 네 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
+- [x] 웹 watch payload·외부 DTO 검증·명시적 ViewModel mapping·CRUD·멱등 키를 `api/watches.ts`로 이동하고 `api.js` 동일 함수 객체 호환 export 유지. 잘못된 provider·status·날짜·후보·공식 URL·관측 source/시각은 fail-closed
+- [x] App의 canonical watch REST snapshot·SSE burst 병합·polling·상태 전이 알림·인증 만료·예약정책 mutation과 교차한 stale GET 차단을 `features/app/useWatchCollection.ts`로 이동하고 구독 lifecycle 밖의 늦은 응답·대기 SSE event를 폐기
+- [x] API watch CRUD·start·pause·cancel·mock-transition 9개 endpoint와 commit 뒤 best-effort 즉시 처리를 `watch_management/http.py`, 최신 observation·reservation attempt·결제 보류 read projection을 `watch_management/read_model.py`로 이동하고 중앙 `api.py`를 212줄로 축소
+- [x] 다섯 번째 구조 슬라이스 웹 ESLint 오류 0·고정 경고 22, strict·unused typecheck, Vitest 62개 파일·423건, production build·Sites 4건과 API 전체 pytest 964건·Ruff `E/F/I`·format ratchet 68개·module boundary 통과
+- [x] 다섯 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
 - [ ] 웹 도메인 타입·API validator/mapper를 `.ts`로 분리하고 `api.js` 제거
 - [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거

@@ -111,7 +111,7 @@ const OFFICIAL_HOST_ROOTS: Readonly<Record<string, readonly string[]>> = {
   MOCK: ["example.invalid"],
 };
 
-function safeOfficialUrl(value: unknown, provider: unknown): string | null {
+export function safeOfficialUrl(value: unknown, provider: unknown): string | null {
   if (typeof value !== "string") return null;
   try {
     const url = new URL(value);

@@ -21,22 +21,24 @@ import {
 } from "@phosphor-icons/react";
 import {
   DEMO_MODE,
+  fetchStations,
+  fetchTimetables,
+  filterTimetables,
+  refreshSeatStatus,
+  mapTimetable,
+} from "./api.js";
+import { ApiError } from "./api/client";
+import { logout } from "./api/auth";
+import {
   buildWatchCreatePayloads,
   cancelWatch,
   createWatch,
   deleteWatch,
-  fetchStations,
-  fetchTimetables,
   fetchWatches,
-  filterTimetables,
   pauseWatch as pauseWatchRequest,
-  refreshSeatStatus,
-  mapTimetable,
   startWatch,
   updateWatch,
-} from "./api.js";
-import { ApiError } from "./api/client";
-import { logout } from "./api/auth";
+} from "./api/watches";
 import {
   connectBrowserPush,
   createNotificationChannel,
@@ -46,10 +48,10 @@ import {
   testNotificationChannel,
   updateNotificationChannel,
 } from "./api/notifications";
-import { subscribeToEvents } from "./api/events";
 import { AuthGate } from "./features/auth/AuthGate";
 import { useAuthState } from "./features/auth/useAuthState";
 import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
+import { useWatchCollection } from "./features/app/useWatchCollection";
 import { ActiveWatchList } from "./features/home/ActiveWatchList";
 import { PaymentRequiredSection } from "./features/home/PaymentRequiredSection";
 import { ReservationList } from "./features/reservations/ReservationList";
@@ -87,24 +89,9 @@ import {
   swapNewWaitStations,
   toggleNewWaitProvider,
 } from "./features/new-wait/newWaitForm";
-import { createLiveDataReloadCoordinator } from "./features/app/liveDataReloadCoordinator";
-import { createReservationPolicyMutationGuard } from "./features/home/reservationPolicyMutationGuard";
-import {
-  detectSeatAvailabilityLostTransitions,
-  detectSeatFoundTransitions,
-  detectWatchActionTransitions,
-  reconcileWatchSnapshots,
-} from "./features/app/watchSnapshots";
-import {
-  buildAvailabilityLostToast,
-  buildSeatFoundToast,
-  buildWatchActionToast,
-} from "./features/app/reservationToast";
-import { buildLiveReservationNotice } from "./features/app/liveReservationNotice";
 import { useAppNotifications } from "./features/app/useAppNotifications";
 import { Brand } from "./shared/ui/Brand";
 import { StatusPill } from "./shared/ui/StatusPill";
-import { delayUntilRefreshRotationEnds } from "./shared/lib/refreshIndicator";
 import { seatObservationReasonMeta } from "./domain/seatDiagnostics";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
@@ -140,6 +127,7 @@ const navItems = [
 ];
 
 const activeWatchStatuses = new Set(["draft", "scheduled", "watching", "official_waitlist", "seat_found", "reserving", "paused", "cooldown", "auth_required"]);
+const initialWatchCollection = DEMO_MODE ? initialWatches : [];
 
 function currentRailAccountStatus(provider, accounts, loaded) {
   if (!loaded || !["KORAIL", "SRT"].includes(provider)) return null;
@@ -1038,7 +1026,6 @@ export function App() {
   const [settingsInitialSection, setSettingsInitialSection] = useState("notifications");
   const [settingsActiveSection, setSettingsActiveSection] = useState("notifications");
   const { auth, markAuthenticated, markUnauthenticated, retryAuthStatus } = useAuthState();
-  const [watches, setWatches] = useState(DEMO_MODE ? initialWatches : []);
   const [channels, setChannels] = useState([]);
   const [browserPushState, setBrowserPushState] = useState({
     support: "checking",
@@ -1068,31 +1055,6 @@ export function App() {
     dismissTimed: dismissTimedNotifications,
     clear: clearNotifications,
   } = useAppNotifications();
-  const [watchRefreshState, setWatchRefreshState] = useState({
-    isRefreshing: false,
-    lastRefreshedAt: null,
-  });
-  const watchesRef = useRef(watches);
-  const pendingLiveReservationEventsRef = useRef([]);
-  const watchReloadCoordinatorRef = useRef(null);
-  const reservationPolicyMutationGuardRef = useRef(null);
-  if (reservationPolicyMutationGuardRef.current === null) {
-    reservationPolicyMutationGuardRef.current = createReservationPolicyMutationGuard();
-  }
-  const watchRefreshAnimationRef = useRef({
-    generation: 0,
-    startedAt: 0,
-    stopTimerId: null,
-  });
-
-  const commitWatches = (updater) => {
-    setWatches((current) => {
-      const next = typeof updater === "function" ? updater(current) : updater;
-      watchesRef.current = next;
-      return next;
-    });
-  };
-
   const refreshProviderRuntimeStatuses = useCallback(async () => {
     if (auth.demo) {
       setProviderRuntimeStatuses(demoProviderRuntimeStatuses);
@@ -1102,130 +1064,35 @@ export function App() {
     setProviderRuntimeStatuses(statuses);
   }, [auth.demo]);
 
-  const reloadWatches = async () => {
+  const handleProviderAuthenticationTransition = useCallback(() => {
     if (auth.demo) return;
-    const reservationPolicyMutationSnapshot = reservationPolicyMutationGuardRef.current.snapshot();
-    const refreshAnimation = watchRefreshAnimationRef.current;
-    refreshAnimation.generation += 1;
-    const refreshGeneration = refreshAnimation.generation;
-    refreshAnimation.startedAt = performance.now();
-    if (refreshAnimation.stopTimerId !== null) {
-      window.clearTimeout(refreshAnimation.stopTimerId);
-      refreshAnimation.stopTimerId = null;
-    }
-    setWatchRefreshState((current) => ({ ...current, isRefreshing: true }));
-    try {
-      const watchItems = await fetchWatches();
-      if (!reservationPolicyMutationGuardRef.current.isCurrent(
-        reservationPolicyMutationSnapshot,
-      )) {
-        // A policy PATCH crossed this GET. Its older snapshot must not overwrite
-        // the newer ticket-level choice; the mutation schedules a fresh reload.
-        return;
-      }
-      const previous = watchesRef.current;
-      const transitions = detectSeatFoundTransitions(previous, watchItems);
-      const availabilityLosses = detectSeatAvailabilityLostTransitions(previous, watchItems);
-      const actionTransitions = detectWatchActionTransitions(previous, watchItems);
-      const pendingLiveEvents = pendingLiveReservationEventsRef.current;
-      pendingLiveReservationEventsRef.current = [];
-      const liveReservationNotices = pendingLiveEvents.flatMap((event) => {
-        const notice = buildLiveReservationNotice(event, watchItems);
-        return notice ? [notice] : [];
-      });
-      const reconciled = reconcileWatchSnapshots(previous, watchItems);
-      watchesRef.current = reconciled;
-      setWatches(reconciled);
-      setWatchRefreshState((current) => ({ ...current, lastRefreshedAt: new Date() }));
-      const providerAuthTransitions = actionTransitions.filter((item) => (
-        item.status === "auth_required" || item.status === "authentication_recovered"
-      ));
-      if (providerAuthTransitions.length > 0 && !auth.demo) {
-        setProviderAccountsLoaded(false);
-        void fetchProviderAccounts().then((items) => {
-          setProviderAccounts(items);
-          setProviderAccountsLoaded(true);
-          return refreshProviderRuntimeStatuses();
-        }).catch(() => {
-          // Keep the activity row neutral until a no-store account read succeeds.
-        });
-      }
-      const liveNoticeSubjects = new Set(
-        liveReservationNotices.map((notice) => notice.subjectKey),
-      );
-      const lifecycleNotices = actionTransitions
-        .filter((item) => !liveNoticeSubjects.has(`watch:${item.id}`))
-        .map(buildWatchActionToast);
-      pushNotifications([
-        ...transitions.map(buildSeatFoundToast),
-        ...lifecycleNotices,
-        ...availabilityLosses.map(buildAvailabilityLostToast),
-        ...liveReservationNotices,
-      ]);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        markUnauthenticated();
-      }
-      throw error;
-    } finally {
-      const delay = delayUntilRefreshRotationEnds(
-        refreshAnimation.startedAt,
-        performance.now(),
-      );
-      refreshAnimation.stopTimerId = window.setTimeout(() => {
-        if (watchRefreshAnimationRef.current.generation !== refreshGeneration) return;
-        watchRefreshAnimationRef.current.stopTimerId = null;
-        setWatchRefreshState((current) => ({ ...current, isRefreshing: false }));
-      }, delay);
-    }
-  };
-
-  const requestWatchesRefresh = () => {
-    watchReloadCoordinatorRef.current?.request();
-  };
-
-  useEffect(() => {
-    if (!auth.authenticated || auth.demo) return undefined;
-    const coordinator = createLiveDataReloadCoordinator(reloadWatches, 50, {
-      pollIntervalMs: uiPreferences.timetableRefreshIntervalSeconds * 1_000,
+    setProviderAccountsLoaded(false);
+    void fetchProviderAccounts().then((items) => {
+      setProviderAccounts(items);
+      setProviderAccountsLoaded(true);
+      return refreshProviderRuntimeStatuses();
+    }).catch(() => {
+      // Keep the activity row neutral until a no-store account read succeeds.
     });
-    watchReloadCoordinatorRef.current = coordinator;
-    const unsubscribe = subscribeToEvents(
-      (event) => {
-        const liveNotice = buildLiveReservationNotice(event, watchesRef.current);
-        if (liveNotice) {
-          pushNotifications([liveNotice]);
-        } else if ([
-          "watch.reservation_attempted",
-          "watch.reservation_result",
-          "watch.reservation_result_requires_manual_check",
-          "watch.payment_hold_ended_monitoring_resumed",
-          "watch.payment_hold_ended_one_off_expired",
-        ].includes(event?.event_type)) {
-          pendingLiveReservationEventsRef.current.push(event);
-        }
-        coordinator.request();
-      },
-      () => {},
-    );
-    coordinator.start();
-    return () => {
-      if (watchReloadCoordinatorRef.current === coordinator) {
-        watchReloadCoordinatorRef.current = null;
-      }
-      coordinator.dispose();
-      unsubscribe();
-    };
-  }, [auth.authenticated, auth.demo, uiPreferences.timetableRefreshIntervalSeconds, refreshProviderRuntimeStatuses]);
+  }, [auth.demo, refreshProviderRuntimeStatuses]);
 
-  useEffect(() => () => {
-    const refreshAnimation = watchRefreshAnimationRef.current;
-    refreshAnimation.generation += 1;
-    if (refreshAnimation.stopTimerId !== null) {
-      window.clearTimeout(refreshAnimation.stopTimerId);
-      refreshAnimation.stopTimerId = null;
-    }
-  }, []);
+  const {
+    watches,
+    commitWatches,
+    refreshState: watchRefreshState,
+    requestRefresh: requestWatchesRefresh,
+    beginReservationPolicyMutation,
+    endReservationPolicyMutation,
+  } = useWatchCollection({
+    authenticated: auth.authenticated,
+    demo: auth.demo,
+    initialWatches: initialWatchCollection,
+    pollIntervalSeconds: uiPreferences.timetableRefreshIntervalSeconds,
+    loadWatches: fetchWatches,
+    onAuthenticationExpired: markUnauthenticated,
+    onProviderAuthenticationTransition: handleProviderAuthenticationTransition,
+    pushNotifications,
+  });
 
   useEffect(() => {
     if (!auth.authenticated || auth.demo) return undefined;
@@ -1372,7 +1239,7 @@ export function App() {
   };
 
   const changeWatchReservationPolicy = async (id, reservationPolicy) => {
-    reservationPolicyMutationGuardRef.current.begin();
+    beginReservationPolicyMutation();
     setReservationPolicyUpdatingIds((items) => new Set(items).add(id));
     try {
       let updated;
@@ -1391,7 +1258,7 @@ export function App() {
     } catch (error) {
       setToast(error instanceof Error ? error.message : "대기 실행 방식을 변경하지 못했습니다.");
     } finally {
-      reservationPolicyMutationGuardRef.current.end();
+      endReservationPolicyMutation();
       requestWatchesRefresh();
       setReservationPolicyUpdatingIds((items) => {
         const next = new Set(items);

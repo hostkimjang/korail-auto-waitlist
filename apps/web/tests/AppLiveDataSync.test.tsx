@@ -19,8 +19,12 @@ vi.mock("../src/api.js", async (importOriginal) => {
   return {
     ...actual,
     DEMO_MODE: false,
-    fetchWatches: liveApi.fetchWatches,
   };
+});
+
+vi.mock("../src/api/watches", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/api/watches")>();
+  return { ...actual, fetchWatches: liveApi.fetchWatches };
 });
 
 vi.mock("../src/api/auth", async (importOriginal) => {

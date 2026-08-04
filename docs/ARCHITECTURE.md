@@ -60,6 +60,22 @@ capability·evidence 저장 orchestration은 FastAPI 비의존 `timetable_manage
 소유합니다. `/seat-status/status`는 시간표 요청이 아니라 source cooldown 상태 수명주기이므로 기존
 중앙 router에 남겨 두었습니다.
 
+웹의 watch 생성 payload·멱등 키·CRUD endpoint와 외부 응답 검증·ViewModel 투영은
+`api/watches.ts`가 소유합니다. provider·status·날짜·후보 identity·선택적 시각·공식 URL을 경계에서
+검증하고, 최신 좌석 관측은 source와 `observed_at < fresh_until` 계약이 모두 확인될 때만 공식 또는
+mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canonical REST snapshot, SSE burst
+병합, 예약정책 변경과 교차한 stale GET 차단, 인증·구독 lifecycle 세대 격리와 상태 전이 알림을
+소유합니다. App shell에는 pause·resume·cancel·policy 변경·등록 같은 사용자 mutation 조립만
+남겨 두었습니다. 기존 `api.js`는 전환 중 호출자를 위한 동일 함수 객체 compatibility export만
+유지합니다.
+
+API의 watch CRUD·start·pause·cancel·mock-transition HTTP 경계와 즉시 처리 best-effort enqueue는
+`watch_management/http.py`, 최신 observation·reservation attempt batch 조회와 결제 보류 read
+projection은 `watch_management/read_model.py`가 소유합니다. 공개 endpoint·관리자 인증·트랜잭션과
+commit 뒤 enqueue·멱등성·provider capability·outbox 정책은 이동 전과 같습니다. 중앙 `api.py`에는
+수명주기가 다른 SSE `/events`, 역 카탈로그, provider·source 상태, KORAIL snapshot revision과 공식
+화면 confirmation endpoint가 남습니다.
+
 ## 주요 흐름
 
 1. 관리자 계정이 없고 서버 운영자가 `AUTH_INITIAL_REGISTRATION_ENABLED=true`를 명시한 최초 접속에서만 관리자 ID와 비밀번호를 등록합니다. 정규화한 ID, Argon2id 비밀번호 해시, 인증 세션을 DB 트랜잭션으로 저장하고 등록 직후 앱에 진입합니다. 계정이 생기면 설정값과 무관하게 추가 등록은 닫히며, 이후에는 유효 세션이 없을 때만 ID·비밀번호 로그인 화면을 표시합니다.

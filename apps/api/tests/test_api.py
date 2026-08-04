@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from rail_waitlist import api as api_module
 from rail_waitlist import services as services_module
 from rail_waitlist.domain import (
     Provider,
@@ -47,6 +46,7 @@ from rail_waitlist.schemas import (
 from rail_waitlist.services import transition_watch, update_watch
 from rail_waitlist.srt_provider_adapter_contract import SrtTimetableTrain
 from rail_waitlist.timetable_snapshot_cache import TimetableSnapshotCache
+from rail_waitlist.watch_management import http as watch_http_module
 
 
 def watch_payload(**overrides):
@@ -102,11 +102,11 @@ async def test_verified_auto_reservation_start_enqueues_one_immediate_watch_task
 ) -> None:
     adapter = ImmediateReservationCapabilityAdapter()
     monkeypatch.setattr(services_module, "get_execution_provider", lambda _provider: adapter)
-    monkeypatch.setattr(api_module, "get_execution_provider", lambda _provider: adapter)
+    monkeypatch.setattr(watch_http_module, "get_execution_provider", lambda _provider: adapter)
     enqueued: list[str] = []
     monkeypatch.setattr(
-        api_module,
-        "_enqueue_immediate_watch_processing",
+        watch_http_module,
+        "enqueue_immediate_watch_processing",
         lambda watch_id: enqueued.append(watch_id) or True,
     )
     departure_at = datetime.combine(
@@ -241,11 +241,11 @@ async def test_enabling_one_time_policy_arms_seat_found_watch_without_clearing_a
     monkeypatch,
 ):
     adapter = ImmediateReservationCapabilityAdapter()
-    monkeypatch.setattr(api_module, "get_execution_provider", lambda _provider: adapter)
+    monkeypatch.setattr(watch_http_module, "get_execution_provider", lambda _provider: adapter)
     enqueued: list[str] = []
     monkeypatch.setattr(
-        api_module,
-        "_enqueue_immediate_watch_processing",
+        watch_http_module,
+        "enqueue_immediate_watch_processing",
         lambda watch_id: enqueued.append(watch_id) or True,
     )
     departure_at = datetime.combine(

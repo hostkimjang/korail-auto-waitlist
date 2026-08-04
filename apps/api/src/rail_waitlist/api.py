@@ -1,34 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import require_admin
-from .celery_app import celery_app
 from .config import get_settings
 from .database import SessionFactory, get_session
-from .domain import Provider, ReservationOutcome, ReservationPolicy, WatchStatus
-from .models import (
-    KorailBrowserSnapshotBatch,
-    OutboxEvent,
-    ReservationAttempt,
-    SeatObservation,
-    Watch,
-    WatchCandidate,
-)
+from .domain import Provider
+from .models import KorailBrowserSnapshotBatch, OutboxEvent
 from .official_page_confirmations import upsert_official_page_confirmations
-from .provider_accounts import has_authenticated_provider_account
 from .providers import (
     OfficialTimetableAdapter,
     ProviderUnavailable,
-    get_execution_provider,
     get_timetable_provider,
     list_capabilities,
 )
@@ -38,40 +27,14 @@ from .schemas import (
     OfficialPageSeatConfirmationCreate,
     OfficialPageSeatConfirmationRead,
     ProviderCapabilities,
-    ReservationResult,
     SeatStatusSourceStatus,
     StationCatalog,
-    WatchCreate,
-    WatchRead,
-    WatchUpdate,
 )
 from .seat_status_cooldown import ProviderCooldown
-from .services import (
-    begin_reservation_attempt,
-    complete_reservation_attempt,
-    create_watch,
-    find_watch,
-    payment_hold_end_reason,
-    reservation_attempt_result_policy,
-    transition_watch,
-    update_watch,
-)
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
 Session = Annotated[AsyncSession, Depends(get_session)]
 IdempotencyKey = Annotated[str | None, Header(alias="Idempotency-Key", max_length=100)]
-LOGGER = logging.getLogger(__name__)
-_PROCESS_WATCH_NOW_TASK = "rail_waitlist.worker.process_watch_now"
-
-
-def _enqueue_immediate_watch_processing(watch_id: str) -> bool:
-    """Best-effort wake-up; the 30-second scheduler remains the durable fallback."""
-    try:
-        celery_app.send_task(_PROCESS_WATCH_NOW_TASK, args=[watch_id], queue="rail")
-    except Exception:  # noqa: BLE001 -- broker failures must not roll back a committed watch.
-        LOGGER.warning("Immediate watch processing enqueue failed")
-        return False
-    return True
 
 
 @router.get(
@@ -195,340 +158,6 @@ async def official_page_confirmation_create(
         created_count=created_count,
         replayed=replayed,
     )
-
-
-async def _watch_read(
-    session: AsyncSession,
-    watch: Watch,
-    *,
-    last_checked_at: datetime | None = None,
-    latest_observations: dict[str, SeatObservation] | None = None,
-    latest_reservation_attempts: dict[str, ReservationAttempt] | None = None,
-) -> WatchRead:
-    if latest_observations is None:
-        latest_observations, latest_by_watch = await _latest_observations_by_watch(
-            session, [watch.id]
-        )
-        last_checked_at = latest_by_watch.get(watch.id)
-    if latest_reservation_attempts is None:
-        latest_reservation_attempts = await _latest_reservation_attempts_by_watch(
-            session, [watch.id]
-        )
-    payload = WatchRead.model_validate(watch).model_dump()
-    for candidate in payload["candidates"]:
-        latest = latest_observations.get(candidate["id"])
-        if latest is not None:
-            candidate["latest_observation"] = {
-                "status": latest.status,
-                "source": latest.source,
-                "observed_at": latest.observed_at,
-                "fresh_until": latest.fresh_until,
-                "error_category": latest.error_category,
-            }
-        latest_attempt = latest_reservation_attempts.get(candidate["id"])
-        if latest_attempt is not None:
-            result_policy = reservation_attempt_result_policy(latest_attempt.outcome)
-            hold_end_reason = payment_hold_end_reason(latest_attempt)
-            payment_hold_ended = hold_end_reason is not None
-            automatic_hold_retry = (
-                payment_hold_ended
-                and watch.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-            )
-            candidate["latest_reservation_attempt"] = {
-                "outcome": latest_attempt.outcome,
-                "confirmation_outcome": latest_attempt.confirmation_outcome,
-                "started_at": latest_attempt.started_at,
-                "finished_at": latest_attempt.finished_at,
-                "post_deadline_reconciled_at": latest_attempt.post_deadline_reconciled_at,
-                "payment_hold_end_reason": hold_end_reason,
-                "retryable": (
-                    automatic_hold_retry or (not payment_hold_ended and result_policy.retryable)
-                ),
-                "manual_check_required": (
-                    False if payment_hold_ended else result_policy.manual_check_required
-                ),
-                "retry_condition": (
-                    "new_availability_episode"
-                    if automatic_hold_retry
-                    else None
-                    if payment_hold_ended
-                    else result_policy.retry_condition
-                ),
-            }
-    return WatchRead.model_validate(
-        {
-            **payload,
-            "last_checked_at": last_checked_at,
-        }
-    )
-
-
-async def _latest_observations_by_watch(
-    session: AsyncSession, watch_ids: list[str]
-) -> tuple[dict[str, SeatObservation], dict[str, datetime]]:
-    if not watch_ids:
-        return {}, {}
-    ranked_observations = (
-        select(
-            SeatObservation.id.label("observation_id"),
-            func.row_number()
-            .over(
-                partition_by=SeatObservation.candidate_id,
-                order_by=(SeatObservation.observed_at.desc(), SeatObservation.id.desc()),
-            )
-            .label("observation_rank"),
-        )
-        .join(WatchCandidate, WatchCandidate.id == SeatObservation.candidate_id)
-        .where(WatchCandidate.watch_id.in_(watch_ids))
-        .subquery()
-    )
-    rows = (
-        await session.execute(
-            select(WatchCandidate.watch_id, SeatObservation)
-            .join(SeatObservation, SeatObservation.candidate_id == WatchCandidate.id)
-            .join(
-                ranked_observations,
-                ranked_observations.c.observation_id == SeatObservation.id,
-            )
-            .where(ranked_observations.c.observation_rank == 1)
-        )
-    ).all()
-    latest_by_candidate: dict[str, SeatObservation] = {}
-    latest_by_watch: dict[str, datetime] = {}
-    for watch_id, observation in rows:
-        latest_by_candidate[observation.candidate_id] = observation
-        current_latest = latest_by_watch.get(watch_id)
-        if current_latest is None or observation.observed_at > current_latest:
-            latest_by_watch[watch_id] = observation.observed_at
-    return latest_by_candidate, latest_by_watch
-
-
-async def _latest_reservation_attempts_by_watch(
-    session: AsyncSession, watch_ids: list[str]
-) -> dict[str, ReservationAttempt]:
-    if not watch_ids:
-        return {}
-    ranked_attempts = (
-        select(
-            ReservationAttempt.id.label("attempt_id"),
-            func.row_number()
-            .over(
-                partition_by=ReservationAttempt.candidate_id,
-                order_by=(
-                    ReservationAttempt.attempt_sequence.desc(),
-                    ReservationAttempt.started_at.desc(),
-                    ReservationAttempt.id.desc(),
-                ),
-            )
-            .label("attempt_rank"),
-        )
-        .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
-        .where(WatchCandidate.watch_id.in_(watch_ids))
-        .subquery()
-    )
-    attempts = (
-        await session.scalars(
-            select(ReservationAttempt)
-            .join(ranked_attempts, ranked_attempts.c.attempt_id == ReservationAttempt.id)
-            .where(ranked_attempts.c.attempt_rank == 1)
-        )
-    ).all()
-    return {attempt.candidate_id: attempt for attempt in attempts}
-
-
-async def _watch_reads(session: AsyncSession, watches: list[Watch]) -> list[WatchRead]:
-    if not watches:
-        return []
-    latest_observations, latest_by_watch = await _latest_observations_by_watch(
-        session, [watch.id for watch in watches]
-    )
-    latest_reservation_attempts = await _latest_reservation_attempts_by_watch(
-        session, [watch.id for watch in watches]
-    )
-    return [
-        await _watch_read(
-            session,
-            watch,
-            last_checked_at=latest_by_watch.get(watch.id),
-            latest_observations=latest_observations,
-            latest_reservation_attempts=latest_reservation_attempts,
-        )
-        for watch in watches
-    ]
-
-
-@router.post("/watches", response_model=WatchRead, status_code=201)
-async def watches_create(
-    data: WatchCreate, session: Session, idempotency_key: IdempotencyKey = None
-) -> WatchRead:
-    return await _watch_read(session, await create_watch(session, data, idempotency_key))
-
-
-@router.get("/watches", response_model=list[WatchRead])
-async def watches_list(
-    session: Session,
-    watch_status: Annotated[WatchStatus | None, Query(alias="status")] = None,
-) -> list[WatchRead]:
-    query = select(Watch).order_by(Watch.created_at.desc())
-    if watch_status:
-        query = query.where(Watch.status == watch_status)
-    return await _watch_reads(session, list((await session.scalars(query)).all()))
-
-
-@router.get("/watches/{watch_id}", response_model=WatchRead)
-async def watches_get(watch_id: str, session: Session) -> WatchRead:
-    return await _watch_read(session, await find_watch(session, watch_id))
-
-
-@router.patch("/watches/{watch_id}", response_model=WatchRead)
-async def watches_update(watch_id: str, data: WatchUpdate, session: Session) -> WatchRead:
-    watch = await find_watch(session, watch_id)
-    updated = await update_watch(session, watch, data)
-    if (
-        data.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-        and updated.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-        and updated.status is WatchStatus.SEAT_FOUND
-        and updated.provider in {Provider.KORAIL, Provider.SRT}
-        and await has_authenticated_provider_account(session, updated.provider)
-        and get_execution_provider(updated.provider).capabilities().reservation_once
-    ):
-        # 기존 reservation attempt fence는 그대로 둔 채, 이미 좌석을 찾은 작업만
-        # scheduler와 동일한 safe one-time pipeline에 best-effort로 다시 태웁니다.
-        _enqueue_immediate_watch_processing(updated.id)
-    return await _watch_read(session, updated)
-
-
-@router.delete("/watches/{watch_id}", status_code=204)
-async def watches_delete(watch_id: str, session: Session) -> Response:
-    watch = await find_watch(session, watch_id)
-    if watch.status not in {WatchStatus.DRAFT, WatchStatus.EXPIRED, WatchStatus.FAILED}:
-        raise HTTPException(409, "cancel an active watch before deleting it")
-    await session.delete(watch)
-    await session.commit()
-    return Response(status_code=204)
-
-
-@router.post("/watches/{watch_id}/start", response_model=WatchRead)
-async def watches_start(
-    watch_id: str, session: Session, idempotency_key: IdempotencyKey = None
-) -> WatchRead:
-    watch = await find_watch(session, watch_id)
-    previous_status = watch.status
-    started = await transition_watch(
-        session,
-        watch,
-        WatchStatus.SCHEDULED,
-        idempotency_key,
-    )
-    if (
-        previous_status is not WatchStatus.SCHEDULED
-        and started.status is WatchStatus.SCHEDULED
-        and started.next_check_at is not None
-        and started.provider in {Provider.KORAIL, Provider.SRT}
-        and started.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-        and await has_authenticated_provider_account(session, started.provider)
-        and get_execution_provider(started.provider).capabilities().reservation_once
-    ):
-        _enqueue_immediate_watch_processing(started.id)
-    return await _watch_read(session, started)
-
-
-@router.post("/watches/{watch_id}/pause", response_model=WatchRead)
-async def watches_pause(
-    watch_id: str, session: Session, idempotency_key: IdempotencyKey = None
-) -> WatchRead:
-    return await _watch_read(
-        session,
-        await transition_watch(
-            session, await find_watch(session, watch_id), WatchStatus.PAUSED, idempotency_key
-        ),
-    )
-
-
-@router.post("/watches/{watch_id}/cancel", response_model=WatchRead)
-async def watches_cancel(
-    watch_id: str, session: Session, idempotency_key: IdempotencyKey = None
-) -> WatchRead:
-    return await _watch_read(
-        session,
-        await transition_watch(
-            session, await find_watch(session, watch_id), WatchStatus.EXPIRED, idempotency_key
-        ),
-    )
-
-
-@router.post("/watches/{watch_id}/mock-transition", response_model=WatchRead)
-async def watches_mock_transition(
-    watch_id: str,
-    target: WatchStatus,
-    session: Session,
-    payment_deadline: datetime | None = None,
-) -> WatchRead:
-    watch = await find_watch(session, watch_id)
-    if watch.provider != Provider.MOCK:
-        raise HTTPException(403, "mock transition is only available for the mock provider")
-    if target == WatchStatus.RESERVING:
-        candidate = await session.scalar(
-            select(WatchCandidate)
-            .where(WatchCandidate.watch_id == watch.id)
-            .order_by(WatchCandidate.priority)
-            .limit(1)
-        )
-        if candidate is None:
-            raise HTTPException(409, "a persisted candidate is required for reservation")
-        _, created = await begin_reservation_attempt(
-            session,
-            watch,
-            candidate,
-            f"mock-debug:{candidate.id}",
-        )
-        if not created:
-            await session.rollback()
-            raise HTTPException(409, "reservation was already attempted")
-        await session.commit()
-        await session.refresh(watch)
-        return await _watch_read(session, watch)
-    if target == WatchStatus.PAYMENT_REQUIRED:
-        if payment_deadline is not None and (
-            payment_deadline.tzinfo is None or payment_deadline.utcoffset() is None
-        ):
-            raise HTTPException(422, "payment_deadline must include a timezone")
-        candidate = await session.scalar(
-            select(WatchCandidate)
-            .where(WatchCandidate.watch_id == watch.id)
-            .order_by(WatchCandidate.priority)
-            .limit(1)
-        )
-        if candidate is None:
-            raise HTTPException(409, "a persisted candidate is required for reservation")
-        attempt, created = await begin_reservation_attempt(
-            session,
-            watch,
-            candidate,
-            f"mock-debug:{candidate.id}",
-        )
-        if created:
-            await session.commit()
-        normalized_deadline = (
-            payment_deadline.astimezone(timezone.utc) if payment_deadline else None
-        )
-        await complete_reservation_attempt(
-            session,
-            watch,
-            candidate,
-            attempt,
-            ReservationResult(
-                outcome=ReservationOutcome.PAYMENT_REQUIRED,
-                source="mock",
-                observed_at=datetime.now(timezone.utc),
-                payment_deadline=normalized_deadline,
-                official_handoff_url=get_timetable_provider(Provider.MOCK).official_booking_url(),
-            ),
-        )
-        await session.commit()
-        await session.refresh(watch)
-        return await _watch_read(session, watch)
-    return await _watch_read(session, await transition_watch(session, watch, target))
 
 
 def event_wire(event: OutboxEvent) -> str:

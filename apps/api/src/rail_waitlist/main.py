@@ -47,6 +47,7 @@ from .station_visibility import KorailStationVisibility
 from .timetable_management.http import router as timetable_management_router
 from .timetable_snapshot_cache import TimetableSnapshotCache
 from .ui_preferences.http import router as ui_preferences_router
+from .watch_management.http import router as watch_management_router
 
 configure_service_file_logging()
 
@@ -189,6 +190,7 @@ def create_app(
     app.include_router(provider_account_management_router)
     app.include_router(timetable_management_router)
     app.include_router(ui_preferences_router)
+    app.include_router(watch_management_router)
     app.include_router(router)
 
     @app.middleware("http")

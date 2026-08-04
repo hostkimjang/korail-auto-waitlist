@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { App, Home, NewWait, OfficialHandoff, PaymentHero, Reservations, SeatClassPanel, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App.jsx";
+import { App, Home, NewWait, OfficialHandoff, PaymentHero, Reservations, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App.jsx";
 import { ApiError } from "../src/api/client";
 import { normalizeSeatClasses } from "../src/api/seatClasses";
+import { SeatClassPanel } from "../src/features/new-wait/TrainResultCard";
 import {
   AppToast,
   IMPORTANT_TOAST_AUTO_CLOSE_MS,
@@ -1156,6 +1157,36 @@ describe("RailWait responsive core flow", () => {
     render(<SeatClassPanel train={train} seat={seat} registration={{ status: "idle" }} onChooseSeat={vi.fn()} onRetryProvider={vi.fn()} />);
 
     expect(screen.getByText("미운영")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("does not promote an official action without a string URL to the fallback handoff", () => {
+    render(<SeatClassPanel
+      train={{
+        id: "KORAIL:26:2026-08-02T12:00:00+09:00",
+        provider: "KORAIL",
+        name: "KTX 26",
+        origin: "대전",
+        destination: "서울",
+        departure: "12:00",
+        arrival: "13:04",
+      }}
+      seat={{
+        seat_class: "standard",
+        status: "available",
+        provenance: {
+          kind: "official_provider",
+          source: "korail-official-page-browser",
+          observed_at: "2026-08-01T12:53:00Z",
+        },
+        actions: [{ kind: "official_check" }],
+      }}
+      registration={{ status: "idle" }}
+      onChooseSeat={vi.fn()}
+      officialHandoffComponent={OfficialHandoff}
+    />);
+
+    expect(screen.queryByRole("button", { name: /공식 예매 전 안내/ })).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
   });
 

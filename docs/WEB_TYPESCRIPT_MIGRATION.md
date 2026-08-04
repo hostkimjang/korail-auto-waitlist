@@ -4,7 +4,7 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 일곱 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 1,387줄입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록과 evidence 갱신은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과도 typed factory가 canonical `MappedWatch`로 만들지만, `NewWait` 단계 렌더링과 App의 알림·화면 전환 조립은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 여덟 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 1,150줄입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 알림·화면 전환 조립은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict TypeScript와 typecheck gate는 적용되어 있습니다. `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff, reservations, settings의 leaf 컴포넌트·hook·순수 함수가 일부 분리되어 있습니다. `api.js` barrel과 확인된 feature 간 역방향 import는 제거됐지만, 이는 `App.jsx` 제거, 모든 DTO/mapper 경계 완성, 전체 JS/JSX 전환이 끝났다는 뜻은 아닙니다.
 
@@ -39,7 +39,7 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: 새 역방향 import와 feature 간 내부 의존 증가를 막는 module-boundary ratchet test
    - 완료: ESLint를 `src`·`tests`·`e2e`·`scripts`·`worker`에 연결하고 런타임 전역을 분리해 새
      오류를 차단. 전환 전 effect/ref 경고 27건만 위치·소스 행 해시 지문으로 고정해 신규·변경·stale
-     경고를 모두 실패 처리. 구조 슬라이스에서 실제 부채를 제거할 때마다 줄여 현재 19건만 격리
+     경고를 모두 실패 처리. 구조 슬라이스에서 실제 부채를 제거할 때마다 줄여 현재 18건만 격리
    - 전환 기간에만 `allowJs=true`, `checkJs=false` 유지
 2. 도메인 타입과 순수 함수
    - 완료: 결제기한 순수 정책을 `domain/paymentDeadline.ts`로 이동
@@ -55,6 +55,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      cutoff·정리를 `api/events.ts`로 이동하고 `App.jsx` 직접 import와 compatibility re-export 유지
    - 완료: `stations.ts`의 외부 DTO·metadata·identity 검증, `timetables.ts`의 query·부분 실패·mapper,
      `seatClasses.ts`의 provenance·`unknown/not_observed` fail-closed 정규화
+   - 완료: `timetables.ts`의 canonical DTO mapper가 provider·열차번호·구간과 timezone-aware 출도착
+     시각을 필수로 검증하고, 선택 운임·출처·조회 시각·공식 URL은 fail-closed 정규화. demo 시간표도
+     같은 `mapTimetable` 경계를 통과
    - 완료: watch payload builder·DTO 검증·provenance·공식 URL fail-closed mapping과 CRUD를
      `api/watches.ts`로 이동하고 `api.js`에는 동일 함수 객체 compatibility re-export 유지
    - 완료: 좌석 재조회는 `api/timetables.ts`, demo runtime gate는 `shared/lib/runtimeConfig.ts`로
@@ -67,7 +70,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: 공용 결제기한 표시 UI를 `shared/ui`, 공유 clock hook을 `hooks/`로 이동
    - 완료: App 전용 알림 center를 `features/app` 소유로 이동해 `shared -> feature` 역방향 import 제거
    - StationCombobox, CalendarPicker, TimeRangePicker
-   - SeatClassPanel, TrainResultCard, PriorityList
+   - 완료: strict `TrainResultCard.tsx`가 카드·좌석 표현, provenance/freshness, 좌석별 등록 상태 union과
+     typed `OfficialHandoff` component 주입 경계를 소유
+   - PriorityList
    - OfficialHandoff portal·focus·clipboard 흐름
 5. 기능 상태 분리
    - 완료: `App.jsx`의 demo 계정·runtime·watch·시간표·역 카탈로그를 `fixtures/demoData.ts`로 이동
@@ -85,7 +90,7 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      refresh 순서를 계약 테스트로 고정
    - 완료: `NewWait`의 좌석별 즉시 등록·DB hydration·정확한 watch ID 취소·만료 evidence 재조회와
      1회 재시도를 `useSeatWatchRegistration.ts`로 이동
-   - 남음: `NewWait`의 단계 렌더링과 결과 카드 leaf UI 경계
+   - 남음: `NewWait`의 나머지 단계 렌더링과 선택 우선순위 leaf UI 경계
    - 남음: App의 알림·화면 전환 조립과 Home, Reservations, Settings, Auth page의 최종 feature 경계
 6. shell과 테스트
    - 마지막에 `App.tsx`로 전환

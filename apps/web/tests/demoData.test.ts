@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { MappedWatch } from "../src/api/watches";
-import { createDemoWatch, initialWatches } from "../src/fixtures/demoData";
+import {
+  createDemoWatch,
+  demoTimetablesForForm,
+  initialWatches,
+} from "../src/fixtures/demoData";
 
 function canonicalWatch(value: MappedWatch): MappedWatch {
   return value;
@@ -78,5 +82,33 @@ describe("demo watch fixtures", () => {
       departure: "10:42",
       arrival: "13:14",
     });
+  });
+
+  it("maps generated demo timetables through the canonical API boundary", () => {
+    const items = demoTimetablesForForm({
+      providers: ["KORAIL"],
+      origin: "서울",
+      destination: "부산",
+      date: "2026-08-04",
+      time: "12:00",
+      timeEnd: "12:00",
+    });
+    const first = items.at(0);
+    expect(first).toBeDefined();
+    if (!first) throw new Error("생성된 데모 시간표가 필요합니다.");
+
+    expect(first).toMatchObject({
+      provider: "KORAIL",
+      origin: "서울",
+      destination: "부산",
+      timetable_source: "mock",
+      official_search_url: null,
+    });
+    expect(first.seat_classes).toHaveLength(2);
+    expect(first.seat_classes.every((seat) => (
+      seat.provenance.kind === "mock"
+      && seat.registration_evidence_id === null
+      && seat.registration_evidence_error === null
+    ))).toBe(true);
   });
 });

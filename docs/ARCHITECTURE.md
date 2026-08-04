@@ -47,13 +47,32 @@ history cutoff·정리 계약은 `api/events.ts`가 소유하며 `App.jsx`는 �
 
 API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정책은
 `notification_management/service.py`가 소유하고 HTTP 계층은 이 service의 오류만 transport 상태로
-변환합니다. 여러 기능이 공유하는 outbox idempotency primitive는 `outbox.py`에 두며,
+변환합니다. 알림 outbox의 소비와 전달 결과 기록은 FastAPI·Celery 비의존
+`notification_management/delivery.py`가 소유합니다. 이 application 경계는 due `PENDING` 알림만
+생성 시각 순으로 최대 50건 `FOR UPDATE SKIP LOCKED`로 선택하고, 누락·비활성 채널의 terminal 처리,
+전달 전 attempt 증가, 최대 5회와 지수 backoff, 안전한 오류 범주, sent·failed·pending metric을 같은
+기존 계약으로 유지합니다. `worker.py`에는 기존 Celery task 이름과 실행·성공·실패 wrapper만 남아
+현재 1,851줄입니다. 여러 기능이 공유하는 outbox idempotency primitive는 `outbox.py`에 두며,
 `services.py`의 import는 기존 worker와 테스트를 위한 identity-compatible 전환 경계입니다.
+
+현재 delivery batch는 외부 알림을 전송하는 동안 선택한 outbox row lock과 DB transaction을 유지합니다.
+예상하지 못한 예외로 batch가 rollback되면 이미 외부에 전달된 앞선 알림도 DB에서는 `PENDING`으로
+돌아가 다음 주기에 다시 전달될 수 있습니다. 이는 이번 기계적 이동에서 행동을 바꾸지 않고 보존한
+기존 at-least-once 성격이며, claim transaction과 전달 결과 transaction을 분리하려면 crash recovery와
+중복 수신 정책을 함께 설계해야 하는 후속 부채입니다.
 
 웹 역 카탈로그 DTO 검증·identity 병합은 `api/stations.ts`, 시간표 query·provider 부분 실패·DTO→도메인
 mapping은 `api/timetables.ts`, 좌석 등급과 provenance fail-closed 정규화는 `api/seatClasses.ts`가
-소유합니다. `NewWait`의 자동 검색·provider별 재시도·수동 전체 조회·cache-only 동기화는
+소유합니다. canonical 시간표 mapper는 provider·열차번호·출발역·도착역과 timezone-aware 출도착
+시각이 빠지거나 요청 provider와 어긋난 응답을 거부합니다. 선택 필드인 운임·출처·조회 시각·공식 URL은
+검증에 실패하면 임의 값을 만들지 않고 `null|unknown`으로 강등하며 demo 시간표도 같은 mapper를
+통과합니다. `NewWait`의 자동 검색·provider별 재시도·수동 전체 조회·cache-only 동기화는
 `useTimetableSearch.ts`에서 하나의 query key와 stale 응답 차단 계약을 공유합니다.
+
+strict `features/new-wait/TrainResultCard.tsx`는 열차 카드와 좌석 등급별 표현, provenance와 client
+freshness에 따른 관측 유효성, `idle|pending|active|cancelling|error` 등록 상태 union의 표시·행동을
+소유합니다. 공식 예매·예약대기 portal은 직접 import하지 않고 typed `OfficialHandoff` component를
+주입받아 기존 focus·clipboard·공식 URL 경계를 유지합니다.
 
 API의 `/timetables`, `/timetable-snapshots`, `/seat-status/refresh` HTTP 경계는
 `timetable_management/http.py`, live→TAGO fallback·공식 confirmation/browser snapshot overlay·등록
@@ -72,7 +91,7 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 현재 1,387줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
+조립만 남았으며 현재 1,150줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복
 차단·만료 evidence 재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가
 소유합니다.

@@ -1,6 +1,11 @@
 import { ApiError, request } from "./client";
 import type { RailProvider } from "./providerAccounts";
-import { normalizeSeatClasses, type NormalizedSeatClass } from "./seatClasses";
+import {
+  awareTimestamp,
+  normalizeSeatClasses,
+  safeOfficialUrl,
+  type NormalizedSeatClass,
+} from "./seatClasses";
 
 type UnknownRecord = Record<string, unknown>;
 type WeekdayValue = number | string;
@@ -22,21 +27,32 @@ export interface TimetableSearchForm extends UnknownRecord {
 }
 
 export interface TimetableItemDto extends UnknownRecord {
-  provider: string;
+  provider: RailProvider;
   train_number: string;
+  train_type: string | null;
+  origin: string;
+  destination: string;
   departure_at: string;
   arrival_at: string;
+  adult_fare: number | null;
+  fare_currency: "KRW";
+  timetable_source: TimetableSource;
+  timetable_retrieved_at: string | null;
+  seat_classes: unknown[];
+  official_booking_url: string | null;
+  official_search_url: string | null;
 }
 
 export interface Timetable extends TimetableItemDto {
   id: string;
-  provider: RailProvider;
   name: string;
   departure: string;
   arrival: string;
   duration: string;
   seat_classes: NormalizedSeatClass[];
 }
+
+export type TimetableSource = "official_provider" | "TAGO" | "mock" | "unknown";
 
 export type TimetableProviderResult =
   | { status: "success"; count: number }
@@ -47,7 +63,6 @@ export interface TimetableSearchResult {
   providerResults: Partial<Record<RailProvider, TimetableProviderResult>>;
 }
 
-const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set(["KORAIL", "SRT"]);
 const WEEKDAY_ALIASES: readonly (readonly WeekdayValue[])[] = [
   [0, "0", "SUN", "SUNDAY", "일", "일요일"],
   [1, "1", "MON", "MONDAY", "월", "월요일"],
@@ -62,15 +77,51 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function railProvider(value: unknown): RailProvider | null {
+  const provider = typeof value === "string" ? value.toUpperCase() : "";
+  if (provider === "KORAIL") return "KORAIL";
+  if (provider === "SRT") return "SRT";
+  return null;
+}
+
+function optionalText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function normalizedTimetableSource(value: unknown): TimetableSource {
+  if (value === "official_provider" || value === "TAGO" || value === "mock") return value;
+  return "unknown";
+}
+
+function normalizedAdultFare(value: unknown, currency: unknown): number | null {
+  return currency === "KRW"
+    && typeof value === "number"
+    && Number.isInteger(value)
+    && value >= 0
+    ? value
+    : null;
+}
+
+function normalizedOfficialUrl(value: unknown, provider: RailProvider): string | null {
+  if (typeof value !== "string") return null;
+  const candidate = value.trim();
+  return candidate && safeOfficialUrl(candidate, provider) ? candidate : null;
+}
+
 export function formProviders(form: TimetableSearchForm): RailProvider[] {
   const values = Array.isArray(form.providers) ? form.providers : [form.provider];
-  const providers = [...new Set(values
-    .filter((value): value is string => typeof value === "string" && Boolean(value))
-    .map((value) => value.toUpperCase()))];
-  if (!providers.length || providers.some((provider) => !SUPPORTED_PROVIDERS.has(provider))) {
+  const normalized = values.map(railProvider);
+  if (!normalized.length || normalized.some((provider) => provider === null)) {
     throw new ApiError("KORAIL 또는 SRT 운영사를 하나 이상 선택해 주세요.");
   }
-  return providers as RailProvider[];
+  const providers = new Set<RailProvider>();
+  for (const provider of normalized) {
+    if (provider !== null) providers.add(provider);
+  }
+  if (!providers.size) throw new ApiError("KORAIL 또는 SRT 운영사를 하나 이상 선택해 주세요.");
+  return [...providers];
 }
 
 export function formTimeRange(form: TimetableSearchForm): { timeFrom: string; timeTo: string } {
@@ -157,9 +208,9 @@ export function filterTimetables<T extends UnknownRecord>(
   const unique = new Map<string, T>();
 
   for (const item of items ?? []) {
-    const provider = String(item.provider ?? "").toUpperCase();
+    const provider = railProvider(item.provider);
     const departure = seoulDateAndMinutes(item.departure_at);
-    if (!providers.has(provider as RailProvider) || !departure || departure.date !== form.date) continue;
+    if (!provider || !providers.has(provider) || !departure || departure.date !== form.date) continue;
     if (departure.minutes < fromMinutes || departure.minutes > toMinutes) continue;
     const key = `${provider}:${String(item.train_number ?? "")}:${String(item.departure_at)}`;
     if (!unique.has(key)) unique.set(key, item);
@@ -197,30 +248,52 @@ function durationLabel(departureAt: string, arrivalAt: string): string {
   return hours > 0 ? `${hours}시간 ${rest}분` : `${rest}분`;
 }
 
-function timetableDto(value: unknown, requestedProvider: RailProvider): TimetableItemDto {
+function timetableDto(
+  value: unknown,
+  requestedProvider: RailProvider | null = null,
+): TimetableItemDto {
+  const errorProvider = requestedProvider ?? "공식 철도";
   if (!isRecord(value)) {
-    throw new ApiError(`${requestedProvider} 시간표 응답 형식을 확인할 수 없습니다.`);
+    throw new ApiError(`${errorProvider} 시간표 응답 형식을 확인할 수 없습니다.`);
   }
-  const provider = String(value.provider ?? "").toUpperCase();
-  const trainNumber = typeof value.train_number === "string" ? value.train_number.trim() : "";
-  const departureAt = typeof value.departure_at === "string" ? value.departure_at : "";
-  const arrivalAt = typeof value.arrival_at === "string" ? value.arrival_at : "";
+  const provider = railProvider(value.provider);
+  const trainNumber = optionalText(value.train_number);
+  const origin = optionalText(value.origin);
+  const destination = optionalText(value.destination);
+  const departureAt = awareTimestamp(value.departure_at) ? value.departure_at : null;
+  const arrivalAt = awareTimestamp(value.arrival_at) ? value.arrival_at : null;
   if (
-    provider !== requestedProvider
+    provider === null
+    || (requestedProvider !== null && provider !== requestedProvider)
     || !trainNumber
+    || !origin
+    || !destination
     || !departureAt
     || !arrivalAt
-    || Number.isNaN(Date.parse(departureAt))
-    || Number.isNaN(Date.parse(arrivalAt))
   ) {
-    throw new ApiError(`${requestedProvider} 시간표 응답 형식을 확인할 수 없습니다.`);
+    throw new ApiError(`${errorProvider} 시간표 응답 형식을 확인할 수 없습니다.`);
   }
+  const officialBookingUrl = normalizedOfficialUrl(value.official_booking_url, provider);
+  const officialSearchUrl = provider === "KORAIL"
+    ? normalizedOfficialUrl(value.official_search_url, provider)
+    : null;
   return {
-    ...value,
     provider,
     train_number: trainNumber,
+    train_type: optionalText(value.train_type),
+    origin,
+    destination,
     departure_at: departureAt,
     arrival_at: arrivalAt,
+    adult_fare: normalizedAdultFare(value.adult_fare, value.fare_currency),
+    fare_currency: "KRW",
+    timetable_source: normalizedTimetableSource(value.timetable_source),
+    timetable_retrieved_at: awareTimestamp(value.timetable_retrieved_at)
+      ? value.timetable_retrieved_at
+      : null,
+    seat_classes: Array.isArray(value.seat_classes) ? value.seat_classes : [],
+    official_booking_url: officialBookingUrl,
+    official_search_url: officialSearchUrl,
   };
 }
 
@@ -231,18 +304,20 @@ function timetableDtos(payload: unknown, provider: RailProvider): TimetableItemD
   return payload.map((value) => timetableDto(value, provider));
 }
 
-export function mapTimetable(item: TimetableItemDto): Timetable {
-  const provider = item.provider.toUpperCase() as RailProvider;
+function mappedTimetable(item: TimetableItemDto): Timetable {
   return {
     ...item,
-    id: `${provider}:${item.train_number}:${item.departure_at}`,
-    provider,
+    id: `${item.provider}:${item.train_number}:${item.departure_at}`,
     name: item.train_number,
     departure: timetableTimeLabel(item.departure_at),
     arrival: timetableTimeLabel(item.arrival_at),
     duration: durationLabel(item.departure_at, item.arrival_at),
     seat_classes: normalizeSeatClasses(item),
   };
+}
+
+export function mapTimetable(value: unknown): Timetable {
+  return mappedTimetable(timetableDto(value));
 }
 
 function timetableProviderError(
@@ -264,9 +339,9 @@ export async function fetchTimetables(
   providerOverride: RailProvider | string | null = null,
 ): Promise<TimetableSearchResult> {
   const providers = providerOverride
-    ? [String(providerOverride).toUpperCase() as RailProvider]
+    ? [railProvider(providerOverride)]
     : formProviders(form);
-  if (providers.some((provider) => !SUPPORTED_PROVIDERS.has(provider))) {
+  if (providers.some((provider) => provider === null)) {
     throw new ApiError("KORAIL 또는 SRT 운영사를 하나 이상 선택해 주세요.");
   }
   const { timeFrom, timeTo } = formTimeRange(form);
@@ -278,6 +353,7 @@ export async function fetchTimetables(
   }
 
   const responses = await Promise.allSettled(providers.map(async (provider) => {
+    if (provider === null) throw new ApiError("KORAIL 또는 SRT 운영사를 하나 이상 선택해 주세요.");
     const params = new URLSearchParams({
       provider: provider.toLowerCase(),
       origin: String(form.origin ?? ""),
@@ -294,7 +370,7 @@ export async function fetchTimetables(
   const items: TimetableItemDto[] = [];
   responses.forEach((result, index) => {
     const provider = providers[index];
-    if (provider === undefined) return;
+    if (provider === undefined || provider === null) return;
     if (result.status === "fulfilled") {
       providerResults[provider] = { status: "success", count: result.value.length };
       items.push(...result.value);
@@ -303,7 +379,7 @@ export async function fetchTimetables(
     providerResults[provider] = timetableProviderError(provider, result.reason);
   });
   return {
-    trains: filterTimetables(form, items).map(mapTimetable),
+    trains: filterTimetables(form, items).map(mappedTimetable),
     providerResults,
   };
 }
@@ -341,5 +417,5 @@ export async function refreshSeatStatus(
     }),
   });
   const items = timetableDtos(payload, provider);
-  return filterTimetables(form, items).map(mapTimetable);
+  return filterTimetables(form, items).map(mappedTimetable);
 }

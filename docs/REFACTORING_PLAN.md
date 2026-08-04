@@ -307,6 +307,36 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   전역 CSS, API schema·application·services·worker와 provider 역할 분리입니다. SSE 관리자 인증
   dependency 수명과 `(created_at, id)` cursor의 commit-order 의미도 별도 정책 변경으로 검증합니다.
 
+### 2026-08-05 여덟 번째 구조 슬라이스
+
+- 웹 열차 결과 표현: App 안의 열차 카드와 좌석 등급 표현을 strict
+  `features/new-wait/TrainResultCard.tsx`로 이동했습니다. 카드 metadata와 좌석 status·action,
+  provenance/client freshness, `idle|pending|active|cancelling|error` 등록 상태 union을 typed props로
+  고정하고, 공식 예매·예약대기 portal은 typed `OfficialHandoff` component 주입 경계로 연결했습니다.
+  `App.jsx`는 1,150줄로 줄었고 고정 ESLint 경고도 18건으로 감소했습니다.
+- 웹 시간표 경계 보강: `api/timetables.ts`의 canonical DTO mapper가 provider·열차번호·출발역·도착역과
+  timezone-aware 출도착 시각을 필수 journey 계약으로 검증합니다. 선택 필드인 운임·source·조회 시각·
+  공식 URL은 잘못된 값을 표시 계약으로 승격하지 않고 `null|unknown`으로 닫습니다. demo fixture도
+  별도 화면 전용 shape를 만들지 않고 같은 mapper를 통과합니다.
+- 알림 delivery application: worker의 outbox 소비 본문을 FastAPI·Celery 비의존
+  `notification_management/delivery.py`로 옮겼습니다. due `PENDING`·허용 event type filter, 생성 시각
+  순서, 50건 제한, `FOR UPDATE SKIP LOCKED`, 누락·비활성 채널 terminal 처리, 전달 전 attempt 증가,
+  최대 5회·지수 backoff, 80자 안전 오류, decrypt poison 격리, sent·failed·pending metric 계약을
+  보존했습니다. `worker.py`에는 기존 Celery task 이름과 실행·성공·실패 wrapper만 남아 1,851줄이며,
+  직접 수정한 `worker.py`와 `test_worker.py`를 포맷해 legacy format 격리는 66개로 줄었습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 66개 파일·443건, production
+  build와 Sites 4건을 통과했습니다. API 전체 pytest 1,007건과 Ruff `E/F/I`, format ratchet,
+  module boundary를 통과했습니다.
+- 보존한 후속 부채: delivery batch는 외부 전송 중 선택 row lock과 transaction을 유지합니다. 예상하지
+  못한 예외가 batch를 rollback하면 이미 전송된 앞선 알림이 다음 주기에 재전송될 수 있으므로,
+  claim·전달 결과 transaction 분리와 crash recovery·수신자 dedupe를 별도 정책 슬라이스로 설계해야
+  합니다. 이번 단계에서는 기존 동작을 바꾸지 않았습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 재빌드·강제 재생성한 뒤 migration·log-init exit 0,
+  장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: `NewWait`의 나머지 단계·선택 우선순위, App의 알림·화면 전환 shell, legacy
+  JS/JSX와 전역 CSS, API schema·services와 worker observation·reservation pipeline 및 provider 역할
+  분리입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

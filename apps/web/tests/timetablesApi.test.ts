@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchTimetables,
+  mapTimetable,
   refreshSeatStatus,
   type TimetableSearchForm,
 } from "../src/api/timetables";
@@ -29,10 +30,15 @@ function timetable(provider: "korail" | "srt", trainNumber: string, departure: s
   return {
     provider,
     train_number: trainNumber,
+    train_type: provider === "korail" ? "KTX" : "SRT",
     origin: "서울",
     destination: "부산",
     departure_at: `2026-08-04T${departure}:00+09:00`,
     arrival_at: "2026-08-04T15:00:00+09:00",
+    adult_fare: 59_800,
+    fare_currency: "KRW",
+    timetable_source: "official_provider",
+    timetable_retrieved_at: "2026-08-04T00:30:00Z",
     official_booking_url: provider === "korail"
       ? "https://www.korail.com/ticket/search"
       : "https://etk.srail.kr/main.do",
@@ -137,6 +143,51 @@ describe("timetable API boundary", () => {
       httpStatus: 0,
       message: expect.stringContaining("시간표 응답 형식"),
     });
+  });
+
+  it("normalizes every train-card field and fails unsafe optional metadata closed", () => {
+    const mapped = mapTimetable({
+      ...timetable("korail", "  KTX 026  ", "12:00"),
+      train_type: " KTX-산천 ",
+      origin: " 대전 ",
+      destination: " 서울 ",
+      adult_fare: -1,
+      fare_currency: "USD",
+      timetable_source: "untrusted_source",
+      timetable_retrieved_at: "2026-08-04T00:30:00",
+      official_booking_url: "https://attacker.example/ticket",
+      official_search_url: "https://attacker.example/search",
+    });
+
+    expect(mapped).toMatchObject({
+      id: "KORAIL:KTX 026:2026-08-04T12:00:00+09:00",
+      provider: "KORAIL",
+      train_number: "KTX 026",
+      train_type: "KTX-산천",
+      origin: "대전",
+      destination: "서울",
+      adult_fare: null,
+      fare_currency: "KRW",
+      timetable_source: "unknown",
+      timetable_retrieved_at: null,
+      official_booking_url: null,
+      official_search_url: null,
+      departure: "12:00",
+      arrival: "15:00",
+    });
+    expect(mapped.seat_classes).toHaveLength(2);
+    expect(mapped.seat_classes.every((seat) => seat.status === "unknown")).toBe(true);
+  });
+
+  it("rejects missing journey identity and timezone-naive required timestamps", () => {
+    expect(() => mapTimetable({
+      ...timetable("korail", "KTX 027", "12:00"),
+      origin: " ",
+    })).toThrow("시간표 응답 형식");
+    expect(() => mapTimetable({
+      ...timetable("korail", "KTX 028", "12:00"),
+      departure_at: "2026-08-04T12:00:00",
+    })).toThrow("시간표 응답 형식");
   });
 
   it("refreshes one provider with the exact journey payload and fails seat evidence closed", async () => {

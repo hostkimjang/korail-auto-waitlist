@@ -850,13 +850,13 @@ describe("API integration contract", () => {
   it("queries each selected provider once and merges, filters, sorts and deduplicates the result", async () => {
     const trains = {
       korail: [
-        { provider: "korail", train_number: "KTX 002", departure_at: "2026-08-01T12:30:00+09:00", arrival_at: "2026-08-01T15:00:00+09:00", official_booking_url: "https://www.letskorail.com" },
-        { provider: "korail", train_number: "KTX 001", departure_at: "2026-08-01T10:30:00+09:00", arrival_at: "2026-08-01T13:00:00+09:00", official_booking_url: "https://www.letskorail.com" },
+        { provider: "korail", train_number: "KTX 002", origin: "서울", destination: "부산", departure_at: "2026-08-01T12:30:00+09:00", arrival_at: "2026-08-01T15:00:00+09:00", official_booking_url: "https://www.letskorail.com" },
+        { provider: "korail", train_number: "KTX 001", origin: "서울", destination: "부산", departure_at: "2026-08-01T10:30:00+09:00", arrival_at: "2026-08-01T13:00:00+09:00", official_booking_url: "https://www.letskorail.com" },
       ],
       srt: [
-        { provider: "srt", train_number: "SRT 100", departure_at: "2026-08-01T11:00:00+09:00", arrival_at: "2026-08-01T13:20:00+09:00", official_booking_url: "https://etk.srail.kr" },
-        { provider: "srt", train_number: "SRT 100", departure_at: "2026-08-01T11:00:00+09:00", arrival_at: "2026-08-01T13:20:00+09:00", official_booking_url: "https://etk.srail.kr" },
-        { provider: "srt", train_number: "SRT 200", departure_at: "2026-08-01T13:01:00+09:00", arrival_at: "2026-08-01T15:20:00+09:00", official_booking_url: "https://etk.srail.kr" },
+        { provider: "srt", train_number: "SRT 100", origin: "서울", destination: "부산", departure_at: "2026-08-01T11:00:00+09:00", arrival_at: "2026-08-01T13:20:00+09:00", official_booking_url: "https://etk.srail.kr" },
+        { provider: "srt", train_number: "SRT 100", origin: "서울", destination: "부산", departure_at: "2026-08-01T11:00:00+09:00", arrival_at: "2026-08-01T13:20:00+09:00", official_booking_url: "https://etk.srail.kr" },
+        { provider: "srt", train_number: "SRT 200", origin: "서울", destination: "부산", departure_at: "2026-08-01T13:01:00+09:00", arrival_at: "2026-08-01T15:20:00+09:00", official_booking_url: "https://etk.srail.kr" },
       ],
     };
     const fetchMock = vi.fn(async (url) => {

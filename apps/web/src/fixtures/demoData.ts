@@ -5,6 +5,7 @@ import type {
   WatchSeatClass,
   WatchStatus,
 } from "../api/watches";
+import { mapTimetable, type Timetable } from "../api/timetables";
 import type { ReservationPolicy } from "../domain/reservationPolicy";
 
 type DemoRailProvider = "KORAIL" | "SRT";
@@ -287,14 +288,14 @@ function demoIsoAt(date: string, minutes: number): string {
 export function demoTimetablesForForm(
   form: DemoTimetableForm,
   provider: DemoRailProvider | null = null,
-): DemoTimetable[] {
+): Timetable[] {
   const providersToGenerate = provider ? [provider] : form.providers;
   const startParts = form.time.split(":").map(Number);
   const endParts = form.timeEnd.split(":").map(Number);
   const start = (startParts[0] ?? Number.NaN) * 60 + (startParts[1] ?? Number.NaN);
   const end = (endParts[0] ?? Number.NaN) * 60 + (endParts[1] ?? Number.NaN);
 
-  return providersToGenerate.flatMap((providerName) => {
+  const rawItems = providersToGenerate.flatMap((providerName) => {
     const templates = demoAvailableTrains.filter((train) => train.provider === providerName);
     const firstTemplate = templates[0];
     if (!firstTemplate) return [];
@@ -325,6 +326,7 @@ export function demoTimetablesForForm(
       };
     });
   });
+  return rawItems.map(mapTimetable);
 }
 
 const demoStationsByProvider: Record<

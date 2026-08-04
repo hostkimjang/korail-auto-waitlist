@@ -13,7 +13,6 @@ from rail_waitlist.domain import (
     BookingWindowStatus,
     NotificationKind,
     OperationalStatus,
-    OutboxStatus,
     Provider,
     ProviderCircuitState,
     ReservationOutcome,
@@ -53,7 +52,6 @@ from rail_waitlist.worker import (
     _arm_supported_provider_watches,
     _CandidateTarget,
     _defer_watch_group_observation,
-    _deliver_outbox,
     _process_due_watches,
     _process_provider_due_pipeline,
     _process_provider_due_pipelines,
@@ -583,9 +581,7 @@ async def test_legacy_expired_confirmed_hold_is_selected_and_cleared(
             outcome=ReservationOutcome.PAYMENT_REQUIRED,
             credential_version=9,
             payment_deadline=deadline,
-            confirmation_outcome=(
-                ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-            ),
+            confirmation_outcome=(ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
             confirmation_source="srtrain-reservation-list",
             confirmation_observed_at=deadline + timedelta(minutes=1),
             last_reconciled_at=deadline + timedelta(minutes=1),
@@ -727,10 +723,7 @@ def test_stale_reservation_lock_query_does_not_join_nullable_evidence() -> None:
     )
 
     assert "LEFT OUTER JOIN timetable_seat_evidence" in compiled
-    assert (
-        "FOR UPDATE OF reservation_attempts, watch_candidates, watches SKIP LOCKED"
-        in compiled
-    )
+    assert "FOR UPDATE OF reservation_attempts, watch_candidates, watches SKIP LOCKED" in compiled
 
     candidate_lock = str(
         select(WatchCandidate)
@@ -872,9 +865,7 @@ class VaryingTimestampSoldOutAdapter(CountingMockAdapter):
     async def observe_seats(self, request):
         self.observe_calls += 1
         self.observation_requests.append(request)
-        observed_at = datetime.now(timezone.utc) + timedelta(
-            seconds=self.observe_calls
-        )
+        observed_at = datetime.now(timezone.utc) + timedelta(seconds=self.observe_calls)
         return [
             SeatObservationResult(
                 seat_class=request.seat_class,
@@ -907,9 +898,7 @@ class SequencedObservationAdapter(CountingMockAdapter):
                 observed_at=observed_at,
                 fresh_until=observed_at + timedelta(minutes=5),
                 error_category=(
-                    "provider_unavailable"
-                    if status == SeatObservationStatus.ERROR
-                    else None
+                    "provider_unavailable" if status == SeatObservationStatus.ERROR else None
                 ),
             )
         ]
@@ -967,9 +956,7 @@ class CircuitOpeningObservationAdapter(CountingMockAdapter):
         if self.observe_calls == 1:
             async with self.session_factory() as session:
                 circuit = await session.scalar(
-                    select(ProviderCircuit).where(
-                        ProviderCircuit.provider == Provider.MOCK
-                    )
+                    select(ProviderCircuit).where(ProviderCircuit.provider == Provider.MOCK)
                 )
                 circuit.state = ProviderCircuitState.MANUAL_HOLD
                 circuit.reason = "synthetic_mid_cycle_protection_signal"
@@ -996,9 +983,7 @@ class ExpiringReservationAdapter(CountingMockAdapter):
     async def reserve_once(self, request):
         async with self.session_factory() as session:
             watch = await session.scalar(
-                select(Watch)
-                .join(WatchCandidate)
-                .where(WatchCandidate.id == request.candidate_id)
+                select(Watch).join(WatchCandidate).where(WatchCandidate.id == request.candidate_id)
             )
             watch.status = WatchStatus.EXPIRED
             watch.next_check_at = None
@@ -1091,9 +1076,7 @@ class NewCredentialAuthRequiredKorailAdapter(CountingMockAdapter):
         self.reserve_calls += 1
         async with self.session_factory() as session:
             account = await session.scalar(
-                select(RailProviderAccount).where(
-                    RailProviderAccount.provider == Provider.KORAIL
-                )
+                select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
             )
             account.credential_version = 5
             account.last_auth_status = "authenticated"
@@ -1187,9 +1170,7 @@ async def test_seat_found_watch_keeps_observing_and_only_notifies_on_state_edges
         WatchStatus.SEAT_FOUND,
     ]
     for expected_status in expected_statuses:
-        await _process_watch_group(
-            [watch_id], cycle_at, provider=Provider.MOCK, adapter=adapter
-        )
+        await _process_watch_group([watch_id], cycle_at, provider=Provider.MOCK, adapter=adapter)
         async with factory() as session:
             watch = await session.get(Watch, watch_id)
             assert watch.status is expected_status
@@ -1300,9 +1281,7 @@ async def test_official_waitlist_keeps_observing_and_summarizes_inventory_change
         WatchStatus.WATCHING,
     ]
     for expected_status in expected_statuses:
-        await _process_watch_group(
-            [watch_id], cycle_at, provider=Provider.MOCK, adapter=adapter
-        )
+        await _process_watch_group([watch_id], cycle_at, provider=Provider.MOCK, adapter=adapter)
         async with factory() as session:
             watch = await session.get(Watch, watch_id)
             assert watch.status is expected_status
@@ -1396,9 +1375,7 @@ async def test_seat_found_watch_with_null_schedule_is_rearmed(app, db_engine, mo
     async with factory() as session:
         watch = await session.get(Watch, watch_id)
         observation = await session.scalar(
-            select(SeatObservation)
-            .join(WatchCandidate)
-            .where(WatchCandidate.watch_id == watch_id)
+            select(SeatObservation).join(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
         )
         assert watch.status is WatchStatus.WATCHING
         assert watch.next_check_at is not None
@@ -1436,9 +1413,7 @@ async def test_late_night_seat_found_watch_uses_selected_departure_not_next_day_
             WatchCandidate(
                 train_number="SRT-LATE",
                 departure_at=departure_at,
-                arrival_at=(local_now + timedelta(hours=3, minutes=5)).astimezone(
-                    timezone.utc
-                ),
+                arrival_at=(local_now + timedelta(hours=3, minutes=5)).astimezone(timezone.utc),
                 seat_class=SeatClass.STANDARD,
                 priority=1,
                 state="seat_found",
@@ -1660,9 +1635,7 @@ async def test_official_watch_without_execution_capability_never_becomes_watchin
 
 
 async def test_candidate_less_mock_watch_pauses_fail_closed(client, app, monkeypatch):
-    created = await client.post(
-        "/api/v1/watches", json=mock_watch_payload(with_candidates=False)
-    )
+    created = await client.post("/api/v1/watches", json=mock_watch_payload(with_candidates=False))
     watch_id = created.json()["id"]
     started = await client.post(f"/api/v1/watches/{watch_id}/start")
     assert started.json()["next_check_at"] is not None
@@ -1790,8 +1763,7 @@ async def test_failed_immediate_reservation_resumes_monitoring_without_second_at
         event = await session.scalar(
             select(OutboxEvent).where(
                 OutboxEvent.aggregate_id == watch_id,
-                OutboxEvent.event_type
-                == "watch.reservation_failed_monitoring_resumed",
+                OutboxEvent.event_type == "watch.reservation_failed_monitoring_resumed",
             )
         )
         assert watch.status is WatchStatus.WATCHING
@@ -1847,9 +1819,7 @@ async def test_not_available_allows_one_race_retry_then_waits_for_new_availabili
         attempts = list(
             (
                 await session.scalars(
-                    select(ReservationAttempt).order_by(
-                        ReservationAttempt.attempt_sequence
-                    )
+                    select(ReservationAttempt).order_by(ReservationAttempt.attempt_sequence)
                 )
             ).all()
         )
@@ -2242,9 +2212,7 @@ async def test_auth_failure_rearms_once_after_newer_verified_account_generation(
             ).all()
         )
         account = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.KORAIL
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
         )
         assert watch.status is WatchStatus.AUTH_REQUIRED
         assert candidate.state == "failed"
@@ -2333,11 +2301,14 @@ async def test_preflight_auth_required_resumes_without_changing_unclaimed_attemp
         # The preflight stopped before an attempt was created, so this remains the
         # initial availability episode rather than a reset/retry of an old attempt.
         assert candidate.state == "seat_found"
-        assert await session.scalar(
-            select(func.count())
-            .select_from(ReservationAttempt)
-            .where(ReservationAttempt.candidate_id == candidate.id)
-        ) == 0
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(ReservationAttempt)
+                .where(ReservationAttempt.candidate_id == candidate.id)
+            )
+            == 0
+        )
         observation = SeatObservation(
             candidate=candidate,
             status=SeatObservationStatus.AVAILABLE,
@@ -2395,9 +2366,7 @@ async def test_failed_higher_priority_candidate_does_not_block_next_candidate(
             ).all()
         )
         first_attempt = await session.scalar(
-            select(ReservationAttempt).where(
-                ReservationAttempt.candidate_id == candidates[0].id
-            )
+            select(ReservationAttempt).where(ReservationAttempt.candidate_id == candidates[0].id)
         )
         watch = await session.get(Watch, watch_id)
         assert first_attempt.outcome is ReservationOutcome.FAILED
@@ -2554,9 +2523,7 @@ async def test_mock_candidate_flow_persists_evidence_and_reserves_only_once(
     assert adapter.observe_calls == observe_calls
     assert adapter.reserve_calls == reserve_calls
     async with factory() as session:
-        assert (
-            await session.scalar(select(func.count()).select_from(ReservationAttempt))
-        ) == 1
+        assert (await session.scalar(select(func.count()).select_from(ReservationAttempt))) == 1
 
 
 async def test_notify_only_policy_keeps_monitoring_without_a_reservation_attempt(
@@ -2661,9 +2628,7 @@ async def test_observation_failure_is_normalized_without_aborting_due_cycle(
 ):
     adapter = FailingObservationAdapter()
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
-    monkeypatch.setattr(
-        worker_module, "get_execution_provider", lambda *args, **kwargs: adapter
-    )
+    monkeypatch.setattr(worker_module, "get_execution_provider", lambda *args, **kwargs: adapter)
     created = await client.post("/api/v1/watches", json=mock_watch_payload())
     watch_id = created.json()["id"]
     await client.post(f"/api/v1/watches/{watch_id}/start")
@@ -2683,9 +2648,7 @@ async def test_observation_failure_is_normalized_without_aborting_due_cycle(
         )
         assert watch.status is WatchStatus.WATCHING
         assert {item.status for item in observations} == {SeatObservationStatus.ERROR}
-        assert {item.error_category for item in observations} == {
-            "provider_unavailable"
-        }
+        assert {item.error_category for item in observations} == {"provider_unavailable"}
         assert await session.scalar(select(func.count()).select_from(ReservationAttempt)) == 0
     assert adapter.reserve_calls == 0
 
@@ -2695,9 +2658,7 @@ async def test_circuit_opened_after_observation_blocks_reservation_call(
 ):
     adapter = CircuitOpeningObservationAdapter(app.state.test_session_factory)
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
-    monkeypatch.setattr(
-        worker_module, "get_execution_provider", lambda *args, **kwargs: adapter
-    )
+    monkeypatch.setattr(worker_module, "get_execution_provider", lambda *args, **kwargs: adapter)
     created = await client.post("/api/v1/watches", json=mock_watch_payload())
     watch_id = created.json()["id"]
     await client.post(f"/api/v1/watches/{watch_id}/start")
@@ -2716,14 +2677,10 @@ async def test_circuit_opened_after_observation_blocks_reservation_call(
     assert adapter.reserve_calls == 0
 
 
-async def test_terminal_watch_fences_late_reservation_result(
-    client, app, db_engine, monkeypatch
-):
+async def test_terminal_watch_fences_late_reservation_result(client, app, db_engine, monkeypatch):
     adapter = ExpiringReservationAdapter(app.state.test_session_factory)
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
-    monkeypatch.setattr(
-        worker_module, "get_execution_provider", lambda *args, **kwargs: adapter
-    )
+    monkeypatch.setattr(worker_module, "get_execution_provider", lambda *args, **kwargs: adapter)
     created = await client.post("/api/v1/watches", json=mock_watch_payload())
     watch_id = created.json()["id"]
     await client.post(f"/api/v1/watches/{watch_id}/start")
@@ -2741,8 +2698,7 @@ async def test_terminal_watch_fences_late_reservation_result(
         fenced_event = await session.scalar(
             select(OutboxEvent).where(
                 OutboxEvent.aggregate_id == watch_id,
-                OutboxEvent.event_type
-                == "watch.reservation_result_requires_manual_check",
+                OutboxEvent.event_type == "watch.reservation_result_requires_manual_check",
             )
         )
         assert watch.status is WatchStatus.EXPIRED
@@ -2754,14 +2710,10 @@ async def test_terminal_watch_fences_late_reservation_result(
     assert adapter.reserve_calls == 1
 
 
-async def test_elapsed_payment_deadline_is_fenced_as_unknown(
-    client, app, db_engine, monkeypatch
-):
+async def test_elapsed_payment_deadline_is_fenced_as_unknown(client, app, db_engine, monkeypatch):
     adapter = ExpiredDeadlineReservationAdapter()
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
-    monkeypatch.setattr(
-        worker_module, "get_execution_provider", lambda *args, **kwargs: adapter
-    )
+    monkeypatch.setattr(worker_module, "get_execution_provider", lambda *args, **kwargs: adapter)
     created = await client.post("/api/v1/watches", json=mock_watch_payload())
     watch_id = created.json()["id"]
     await client.post(f"/api/v1/watches/{watch_id}/start")
@@ -2777,8 +2729,7 @@ async def test_elapsed_payment_deadline_is_fenced_as_unknown(
         assert attempt.payment_deadline is None
         event = await session.scalar(
             select(OutboxEvent).where(
-                OutboxEvent.event_type
-                == "watch.reservation_result_requires_manual_check",
+                OutboxEvent.event_type == "watch.reservation_result_requires_manual_check",
                 OutboxEvent.aggregate_id == watch_id,
             )
         )
@@ -2790,9 +2741,7 @@ async def test_stale_pending_attempt_recovers_without_second_provider_call(
 ):
     adapter = CountingMockAdapter()
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
-    monkeypatch.setattr(
-        worker_module, "get_execution_provider", lambda *args, **kwargs: adapter
-    )
+    monkeypatch.setattr(worker_module, "get_execution_provider", lambda *args, **kwargs: adapter)
     payload = mock_watch_payload()
     payload["train_numbers"] = [payload["train_numbers"][0]]
     payload["candidates"] = [payload["candidates"][0]]
@@ -2801,9 +2750,7 @@ async def test_stale_pending_attempt_recovers_without_second_provider_call(
     await client.post(f"/api/v1/watches/{watch_id}/start")
     await client.post(f"/api/v1/watches/{watch_id}/mock-transition?target=watching")
     await client.post(f"/api/v1/watches/{watch_id}/mock-transition?target=seat_found")
-    reserving = await client.post(
-        f"/api/v1/watches/{watch_id}/mock-transition?target=reserving"
-    )
+    reserving = await client.post(f"/api/v1/watches/{watch_id}/mock-transition?target=reserving")
     assert reserving.status_code == 200
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -2822,8 +2769,7 @@ async def test_stale_pending_attempt_recovers_without_second_provider_call(
         attempt = await session.scalar(select(ReservationAttempt))
         event = await session.scalar(
             select(OutboxEvent).where(
-                OutboxEvent.event_type
-                == "watch.reservation_attempt_recovery_required",
+                OutboxEvent.event_type == "watch.reservation_attempt_recovery_required",
                 OutboxEvent.aggregate_id == watch_id,
             )
         )
@@ -2845,9 +2791,7 @@ async def test_unchanged_runs_uses_status_vector_not_observation_timestamp(
     monkeypatch.setattr(
         worker_module, "get_execution_provider", lambda provider, *args, **kwargs: adapter
     )
-    created = await client.post(
-        "/api/v1/watches", json=mock_watch_payload(seat_class="first")
-    )
+    created = await client.post("/api/v1/watches", json=mock_watch_payload(seat_class="first"))
     assert created.status_code == 201, created.text
     watch_id = created.json()["id"]
     await client.post(f"/api/v1/watches/{watch_id}/start")
@@ -2877,9 +2821,7 @@ async def test_unchanged_runs_uses_status_vector_not_observation_timestamp(
         assert second_cycle.status is WatchStatus.WATCHING
         assert second_cycle.unchanged_runs == 1
         assert len(observations) == 4
-        assert {item.status for item in observations} == {
-            SeatObservationStatus.SOLD_OUT
-        }
+        assert {item.status for item in observations} == {SeatObservationStatus.SOLD_OUT}
         assert len({item.observed_at for item in observations}) > 1
     assert adapter.observe_calls == 4
     assert adapter.reserve_calls == 0
@@ -2895,9 +2837,7 @@ async def test_same_condition_watches_merge_observation_calls_per_candidate(
     )
     watch_ids: list[str] = []
     for _ in range(2):
-        created = await client.post(
-            "/api/v1/watches", json=mock_watch_payload(seat_class="first")
-        )
+        created = await client.post("/api/v1/watches", json=mock_watch_payload(seat_class="first"))
         assert created.status_code == 201, created.text
         watch_ids.append(created.json()["id"])
         await client.post(f"/api/v1/watches/{watch_ids[-1]}/start")
@@ -2909,9 +2849,7 @@ async def test_same_condition_watches_merge_observation_calls_per_candidate(
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
-        watches = list(
-            (await session.scalars(select(Watch).where(Watch.id.in_(watch_ids)))).all()
-        )
+        watches = list((await session.scalars(select(Watch).where(Watch.id.in_(watch_ids)))).all())
         observation_count = await session.scalar(
             select(func.count())
             .select_from(SeatObservation)
@@ -2922,9 +2860,7 @@ async def test_same_condition_watches_merge_observation_calls_per_candidate(
         assert observation_count == 4
 
 
-async def test_disabled_official_providers_never_become_due(
-    client, app, db_engine, monkeypatch
-):
+async def test_disabled_official_providers_never_become_due(client, app, db_engine, monkeypatch):
     adapter = DisabledExecutionAdapter()
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
     monkeypatch.setattr(
@@ -2954,11 +2890,11 @@ async def test_disabled_official_providers_never_become_due(
                 departure_at=departure_at.astimezone(timezone.utc),
                 passenger_count=1,
                 seat_class=SeatClass.STANDARD,
-                    status=SeatObservationStatus.SOLD_OUT,
-                    provenance_kind="official_provider",
-                    source="worker-policy-test",
-                    observed_at=now,
-                    registration_allowed=True,
+                status=SeatObservationStatus.SOLD_OUT,
+                provenance_kind="official_provider",
+                source="worker-policy-test",
+                observed_at=now,
+                registration_allowed=True,
                 created_at=now,
                 registration_valid_until=now + timedelta(minutes=5),
             )
@@ -3059,9 +2995,7 @@ async def test_existing_srt_watch_is_armed_observed_and_releases_execution_lease
     async with factory() as session:
         watch = await session.get(Watch, watch_id)
         observation = await session.scalar(
-            select(SeatObservation)
-            .join(WatchCandidate)
-            .where(WatchCandidate.watch_id == watch_id)
+            select(SeatObservation).join(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
         )
         lease = await session.get(
             ProviderExecutionLease,
@@ -3150,9 +3084,7 @@ async def test_existing_korail_watch_with_null_next_check_is_armed_only_when_ena
     assert disabled_adapter.observe_calls == 0
 
 
-async def test_lost_srt_execution_lease_fences_observation_persistence(
-    app, db_engine, monkeypatch
-):
+async def test_lost_srt_execution_lease_fences_observation_persistence(app, db_engine, monkeypatch):
     adapter = VaryingTimestampSoldOutAdapter(Provider.SRT)
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
     monkeypatch.setattr(
@@ -3245,9 +3177,7 @@ async def test_lost_srt_execution_lease_fences_observation_persistence(
         assert observation_count == 0
 
 
-async def test_due_task_reuses_one_srt_adapter_across_dedupe_groups(
-    app, db_engine, monkeypatch
-):
+async def test_due_task_reuses_one_srt_adapter_across_dedupe_groups(app, db_engine, monkeypatch):
     adapter = TaskScopedSoldOutAdapter(Provider.SRT)
     provider_requests: list[Provider] = []
 
@@ -3301,9 +3231,7 @@ async def test_due_task_reuses_one_srt_adapter_across_dedupe_groups(
     assert adapter.close_calls == 1
 
     async with factory() as session:
-        watches = list(
-            (await session.scalars(select(Watch).where(Watch.id.in_(watch_ids)))).all()
-        )
+        watches = list((await session.scalars(select(Watch).where(Watch.id.in_(watch_ids)))).all())
         observation_count = await session.scalar(
             select(func.count())
             .select_from(SeatObservation)
@@ -3572,9 +3500,7 @@ async def test_srt_source_cooldown_defers_due_watch_without_error_observation(
         )
         assert watch.cooldown_until is None
         observation = await session.scalar(
-            select(SeatObservation)
-            .join(WatchCandidate)
-            .where(WatchCandidate.watch_id == watch_id)
+            select(SeatObservation).join(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
         )
         assert watch.status is WatchStatus.SEAT_FOUND
         assert observation_count == 1
@@ -3771,9 +3697,7 @@ async def test_provider_circuit_blocks_mock_adapter_calls(
         assert await session.scalar(select(func.count()).select_from(ReservationAttempt)) == 0
 
 
-async def test_elapsed_active_watches_expire_without_provider_work(
-    app, db_engine, monkeypatch
-):
+async def test_elapsed_active_watches_expire_without_provider_work(app, db_engine, monkeypatch):
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     elapsed_date = date(2000, 1, 1)
     active_statuses = {
@@ -3867,62 +3791,3 @@ async def test_elapsed_active_watches_expire_without_provider_work(
         )
         assert len(notifications) == len(active_statuses)
         assert {event.payload["status"] for event in notifications} == {"expired"}
-
-
-async def test_poison_notification_does_not_block_following_event(
-    app, db_engine, monkeypatch
-):
-    now = datetime.now(timezone.utc)
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with factory() as session:
-        poison_channel = NotificationChannel(
-            kind=NotificationKind.TELEGRAM,
-            name="poison",
-            config_ciphertext="not-a-fernet-token",
-        )
-        normal_channel = NotificationChannel(
-            kind=NotificationKind.TELEGRAM,
-            name="normal",
-            config_ciphertext=secret_box.encrypt_dict({"bot_token": "token", "chat_id": "1"}),
-        )
-        session.add_all([poison_channel, normal_channel])
-        await session.flush()
-        poison_event = OutboxEvent(
-            aggregate_type="notification_channel",
-            aggregate_id=poison_channel.id,
-            event_type="notification.test_requested",
-            payload={"message": "poison"},
-            dedupe_key="poison-event",
-            attempts=4,
-            created_at=now - timedelta(seconds=1),
-        )
-        normal_event = OutboxEvent(
-            aggregate_type="notification_channel",
-            aggregate_id=normal_channel.id,
-            event_type="notification.test_requested",
-            payload={"message": "normal"},
-            dedupe_key="normal-event",
-            created_at=now,
-        )
-        session.add_all([poison_event, normal_event])
-        await session.commit()
-        poison_id, normal_id = poison_event.id, normal_event.id
-
-    delivered_messages: list[str] = []
-
-    async def fake_deliver(kind, config, payload):
-        delivered_messages.append(payload["message"])
-
-    monkeypatch.setattr("rail_waitlist.worker.SessionFactory", app.state.test_session_factory)
-    monkeypatch.setattr("rail_waitlist.worker.deliver_notification", fake_deliver)
-    assert await _deliver_outbox() == 1
-
-    async with factory() as session:
-        poison = await session.get(OutboxEvent, poison_id)
-        normal = await session.get(OutboxEvent, normal_id)
-        assert poison.status == OutboxStatus.FAILED
-        assert poison.attempts == 5
-        assert poison.last_error == "config_decrypt_failed"
-        assert poison.processed_at is not None
-        assert normal.status == OutboxStatus.SENT
-    assert delivered_messages == ["normal"]

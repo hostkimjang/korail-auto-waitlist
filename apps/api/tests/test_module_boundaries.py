@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
 
 
@@ -44,6 +46,10 @@ def _is_application_module(relative_path: Path) -> bool:
     )
 
 
+def _is_notification_delivery_module(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/notification_management/delivery.py"
+
+
 BOUNDARY_RULES = (
     BoundaryRule(
         name="domain modules are framework and provider independent",
@@ -55,18 +61,44 @@ BOUNDARY_RULES = (
         matches=_is_application_module,
         forbidden_import_roots=frozenset({"fastapi"}),
     ),
+    BoundaryRule(
+        name="notification delivery application is independent from worker frameworks",
+        matches=_is_notification_delivery_module,
+        forbidden_import_roots=frozenset({"celery", "fastapi", "worker"}),
+    ),
 )
 
 
-def _import_roots(module_path: Path) -> list[tuple[int, str]]:
+def _import_components(module_path: Path) -> list[tuple[int, str]]:
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     imports: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imports.extend((node.lineno, alias.name.partition(".")[0]) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.append((node.lineno, node.module.partition(".")[0]))
+            for alias in node.names:
+                imports.extend((node.lineno, part) for part in alias.name.split(".") if part)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imports.extend((node.lineno, part) for part in node.module.split(".") if part)
+            for alias in node.names:
+                imports.extend((node.lineno, part) for part in alias.name.split(".") if part)
     return imports
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import rail_waitlist.worker\n",
+        "from rail_waitlist.worker import deliver_outbox\n",
+        "from rail_waitlist import worker\n",
+        "from .. import worker\n",
+        "from ..worker import deliver_outbox\n",
+    ],
+)
+def test_import_components_detect_worker_package_imports(tmp_path: Path, source: str) -> None:
+    module_path = tmp_path / "delivery.py"
+    module_path.write_text(source, encoding="utf-8")
+
+    assert "worker" in {component for _line, component in _import_components(module_path)}
 
 
 def test_module_dependency_boundaries() -> None:
@@ -75,7 +107,7 @@ def test_module_dependency_boundaries() -> None:
 
     for module_path in python_modules:
         relative_path = module_path.relative_to(SOURCE_ROOT)
-        imports = _import_roots(module_path)
+        imports = _import_components(module_path)
         for rule in BOUNDARY_RULES:
             if not rule.matches(relative_path):
                 continue

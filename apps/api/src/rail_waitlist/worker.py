@@ -8,13 +8,12 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 
 from .celery_app import celery_app
 from .config import get_settings
 from .database import SessionFactory, engine
 from .domain import (
-    OutboxStatus,
     Provider,
     ProviderCircuitState,
     ReservationOutcome,
@@ -24,10 +23,8 @@ from .domain import (
     WatchStatus,
 )
 from .korail_execution import korail_background_monitoring_enabled
-from .metrics import OUTBOX_DELIVERIES, OUTBOX_PENDING, WATCH_GROUPS, WORKER_RUNS
+from .metrics import WATCH_GROUPS, WORKER_RUNS
 from .models import (
-    NotificationChannel,
-    OutboxEvent,
     ProviderExecutionLease,
     RailProviderAccount,
     ReservationAttempt,
@@ -35,7 +32,7 @@ from .models import (
     Watch,
     WatchCandidate,
 )
-from .notifications import NotificationDeliveryError, deliver_notification
+from .notification_management.delivery import deliver_pending_notifications
 from .operational import decide_operational_expiry
 from .provider_accounts import (
     update_provider_auth_status,
@@ -58,7 +55,6 @@ from .schemas import (
     SeatObservationRequest,
     SeatObservationResult,
 )
-from .security import secret_box
 from .services import (
     ACTIONABLE_SEAT_STATUSES,
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
@@ -147,12 +143,10 @@ def _reservation_reconciliation_due_clause(now: datetime):
         ),
         and_(
             ReservationAttempt.outcome == ReservationOutcome.UNKNOWN,
-            ReservationAttempt.confirmation_outcome
-            == ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationAttempt.confirmation_outcome == ReservationConfirmationOutcome.INCONCLUSIVE,
             ReservationAttempt.reconciliation_attempt_count
             >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
-            ReservationAttempt.reconciliation_attempt_count
-            < UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
+            ReservationAttempt.reconciliation_attempt_count < UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
             or_(
                 ReservationAttempt.next_reconcile_at <= now,
                 and_(
@@ -161,18 +155,15 @@ def _reservation_reconciliation_due_clause(now: datetime):
                     or_(
                         and_(
                             ReservationAttempt.reconciliation_attempt_count == 3,
-                            ReservationAttempt.last_reconciled_at
-                            <= now - timedelta(minutes=5),
+                            ReservationAttempt.last_reconciled_at <= now - timedelta(minutes=5),
                         ),
                         and_(
                             ReservationAttempt.reconciliation_attempt_count == 4,
-                            ReservationAttempt.last_reconciled_at
-                            <= now - timedelta(minutes=15),
+                            ReservationAttempt.last_reconciled_at <= now - timedelta(minutes=15),
                         ),
                         and_(
                             ReservationAttempt.reconciliation_attempt_count == 5,
-                            ReservationAttempt.last_reconciled_at
-                            <= now - timedelta(minutes=60),
+                            ReservationAttempt.last_reconciled_at <= now - timedelta(minutes=60),
                         ),
                     ),
                 ),
@@ -218,12 +209,9 @@ def _reservation_reconciliation_is_due(
             return True
         if attempt.next_reconcile_at is not None:
             return _as_utc(attempt.next_reconcile_at) <= now
-        retry_interval = unknown_reconciliation_retry_interval(
-            attempt.reconciliation_attempt_count
-        )
+        retry_interval = unknown_reconciliation_retry_interval(attempt.reconciliation_attempt_count)
         return (
-            attempt.confirmation_outcome
-            is ReservationConfirmationOutcome.INCONCLUSIVE
+            attempt.confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
             and retry_interval is not None
             and attempt.last_reconciled_at is not None
             and _as_utc(attempt.last_reconciled_at) + retry_interval <= now
@@ -235,22 +223,15 @@ def _reservation_reconciliation_is_due(
             and attempt.confirmation_outcome
             is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
             and attempt.payment_deadline is not None
-            and _as_utc(attempt.payment_deadline)
-            <= _as_utc(attempt.post_deadline_reconciled_at)
+            and _as_utc(attempt.payment_deadline) <= _as_utc(attempt.post_deadline_reconciled_at)
         )
         return (
             watch.status is WatchStatus.PAYMENT_REQUIRED
             and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-            and (
-                attempt.post_deadline_reconciled_at is None
-                or legacy_expired_hold_cleanup_due
-            )
+            and (attempt.post_deadline_reconciled_at is None or legacy_expired_hold_cleanup_due)
             and watch.payment_deadline is not None
             and _as_utc(watch.payment_deadline) <= now
-            and (
-                attempt.next_reconcile_at is None
-                or _as_utc(attempt.next_reconcile_at) <= now
-            )
+            and (attempt.next_reconcile_at is None or _as_utc(attempt.next_reconcile_at) <= now)
         )
     if attempt.reconciliation_attempt_count == 0 and attempt.next_reconcile_at is None:
         return True
@@ -258,12 +239,8 @@ def _reservation_reconciliation_is_due(
         return _as_utc(attempt.next_reconcile_at) <= now
     return (
         watch.status is WatchStatus.PAYMENT_REQUIRED
-        and 0 < attempt.reconciliation_attempt_count
-        < RESERVATION_RECONCILIATION_MAX_ATTEMPTS
-        and (
-            watch.payment_deadline is None
-            or _as_utc(watch.payment_deadline) <= now
-        )
+        and 0 < attempt.reconciliation_attempt_count < RESERVATION_RECONCILIATION_MAX_ATTEMPTS
+        and (watch.payment_deadline is None or _as_utc(watch.payment_deadline) <= now)
     )
 
 
@@ -379,10 +356,7 @@ async def _confirm_provider_reservation_result(
             ),
             None,
         )
-    if (
-        confirmation.outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-    ):
+    if confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED:
         return _ReservationConfirmationEvaluation(
             ReservationResult(
                 outcome=ReservationOutcome.PAYMENT_REQUIRED,
@@ -396,9 +370,7 @@ async def _confirm_provider_reservation_result(
         )
     mapped_outcome = {
         ReservationConfirmationOutcome.AUTH_REQUIRED: ReservationOutcome.AUTH_REQUIRED,
-        ReservationConfirmationOutcome.PROVIDER_BLOCKED: (
-            ReservationOutcome.PROVIDER_BLOCKED
-        ),
+        ReservationConfirmationOutcome.PROVIDER_BLOCKED: (ReservationOutcome.PROVIDER_BLOCKED),
     }.get(confirmation.outcome, ReservationOutcome.UNKNOWN)
     return _ReservationConfirmationEvaluation(
         ReservationResult(
@@ -531,8 +503,7 @@ async def _recover_stale_reservation_attempts(session, now: datetime) -> int:
                 .join(Watch, Watch.id == WatchCandidate.watch_id)
                 .where(
                     ReservationAttempt.outcome == ReservationOutcome.PENDING,
-                    ReservationAttempt.started_at
-                    <= now - RESERVATION_ATTEMPT_STALE_AFTER,
+                    ReservationAttempt.started_at <= now - RESERVATION_ATTEMPT_STALE_AFTER,
                 )
                 # registration_evidence is a nullable joined relationship. Lock
                 # only the required rows so PostgreSQL does not try to lock the
@@ -680,11 +651,10 @@ async def _retryable_reservation_episode_key(
         )
         if unavailable_observation is not None:
             return f"availability-after:{unavailable_observation.id}"
-        if (
-            _as_utc(current_observation.observed_at) <= finished_at
-            or latest_attempt.episode_key.startswith(
-                NOT_AVAILABLE_RETRY_EPISODE_PREFIX
-            )
+        if _as_utc(
+            current_observation.observed_at
+        ) <= finished_at or latest_attempt.episode_key.startswith(
+            NOT_AVAILABLE_RETRY_EPISODE_PREFIX
         ):
             return None
         return f"{NOT_AVAILABLE_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
@@ -702,9 +672,7 @@ async def _retryable_reservation_episode_key(
         if account is None or account.last_authenticated_at is None:
             return None
         authenticated_at = _as_utc(account.last_authenticated_at)
-        attempt_finished_at = _as_utc(
-            latest_attempt.finished_at or latest_attempt.started_at
-        )
+        attempt_finished_at = _as_utc(latest_attempt.finished_at or latest_attempt.started_at)
         if authenticated_at <= attempt_finished_at:
             return None
         generation = int(authenticated_at.timestamp() * 1_000_000)
@@ -716,8 +684,7 @@ async def _retryable_reservation_episode_key(
         return f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
     if (
         latest_attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and latest_attempt.confirmation_outcome
-        is ReservationConfirmationOutcome.NOT_FOUND
+        and latest_attempt.confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
         and latest_attempt.post_deadline_reconciled_at is not None
     ):
         hold_ended_at = _as_utc(latest_attempt.post_deadline_reconciled_at)
@@ -781,9 +748,7 @@ async def _prepare_watch(
     adapter: RailProviderAdapter | None = None,
 ) -> list[_CandidateTarget]:
     async with SessionFactory() as session:
-        watch = await session.scalar(
-            select(Watch).where(Watch.id == watch_id).with_for_update()
-        )
+        watch = await session.scalar(select(Watch).where(Watch.id == watch_id).with_for_update())
         if watch is None or watch.status not in OBSERVATION_WATCH_STATUSES:
             return []
         if watch.next_check_at is not None:
@@ -1082,9 +1047,7 @@ async def _persist_observation_cycle(
     now: datetime,
 ) -> _CandidateTarget | None:
     async with SessionFactory() as session:
-        watch = await session.scalar(
-            select(Watch).where(Watch.id == watch_id).with_for_update()
-        )
+        watch = await session.scalar(select(Watch).where(Watch.id == watch_id).with_for_update())
         if watch is None or watch.status not in {
             WatchStatus.WATCHING,
             WatchStatus.OFFICIAL_WAITLIST,
@@ -1109,10 +1072,7 @@ async def _persist_observation_cycle(
             )
             observed_results.append(result)
             observed_candidates.append((candidate, result))
-            if (
-                winner is None
-                and result.status in ACTIONABLE_SEAT_STATUSES
-            ):
+            if winner is None and result.status in ACTIONABLE_SEAT_STATUSES:
                 episode_key = await _retryable_reservation_episode_key(
                     session,
                     candidate,
@@ -1122,15 +1082,13 @@ async def _persist_observation_cycle(
                 if episode_key is not None:
                     winner = replace(target, reservation_episode_key=episode_key)
         all_candidates_conclusively_unavailable = len(observed_results) == len(targets) and all(
-            result.status in CONCLUSIVE_UNAVAILABLE_SEAT_STATUSES
-            for result in observed_results
+            result.status in CONCLUSIVE_UNAVAILABLE_SEAT_STATUSES for result in observed_results
         )
         observed_statuses = {result.status for result in observed_results}
         actionable_observed = bool(observed_statuses.intersection(SEAT_FOUND_STATUSES))
         automatic_retry_fenced = (
             actionable_observed
-            and watch.reservation_policy
-            is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
+            and watch.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
             and winner is None
         )
         if automatic_retry_fenced:
@@ -1171,9 +1129,7 @@ async def _provider_circuit_is_closed(provider: Provider) -> bool:
 
 async def _apply_current_circuit_to_watch(watch_id: str) -> None:
     async with SessionFactory() as session:
-        watch = await session.scalar(
-            select(Watch).where(Watch.id == watch_id).with_for_update()
-        )
+        watch = await session.scalar(select(Watch).where(Watch.id == watch_id).with_for_update())
         if watch is None or watch.status not in {
             WatchStatus.SCHEDULED,
             WatchStatus.WATCHING,
@@ -1238,8 +1194,7 @@ async def _reserve_winner(adapter, target: _CandidateTarget) -> None:
             watch is None
             or candidate is None
             or watch.status != WatchStatus.SEAT_FOUND
-            or watch.reservation_policy
-            != ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
+            or watch.reservation_policy != ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
         ):
             return
         circuit = await get_or_create_provider_circuit(session, watch.provider, lock=True)
@@ -1282,8 +1237,7 @@ async def _reserve_winner(adapter, target: _CandidateTarget) -> None:
         if target.reservation_episode_key is None:
             return
         idempotency_key = (
-            f"reserve:{target.candidate_id}:"
-            f"{request_hash(target.reservation_episode_key)[:32]}"
+            f"reserve:{target.candidate_id}:{request_hash(target.reservation_episode_key)[:32]}"
         )
         attempt, created = await begin_reservation_attempt(
             session,
@@ -1341,9 +1295,7 @@ async def _reserve_winner(adapter, target: _CandidateTarget) -> None:
             .with_for_update(of=WatchCandidate)
         )
         attempt = await session.scalar(
-            select(ReservationAttempt)
-            .where(ReservationAttempt.id == attempt_id)
-            .with_for_update()
+            select(ReservationAttempt).where(ReservationAttempt.id == attempt_id).with_for_update()
         )
         if watch is None or candidate is None or attempt is None:
             return
@@ -1427,9 +1379,7 @@ async def _process_watch_group(
                     lease_grant, now=datetime.now(timezone.utc)
                 ):
                     return
-                await _defer_watch_group_observation(
-                    watch_ids, deferred_until, now, lease_grant
-                )
+                await _defer_watch_group_observation(watch_ids, deferred_until, now, lease_grant)
                 return
 
         prepared: dict[str, list[_CandidateTarget]] = {}
@@ -1477,9 +1427,7 @@ async def _process_watch_group(
                         seat_class=target.seat_class,
                         status=SeatObservationStatus.ERROR,
                         source=(
-                            "mock"
-                            if target.provider == Provider.MOCK
-                            else "authorized-provider"
+                            "mock" if target.provider == Provider.MOCK else "authorized-provider"
                         ),
                         observed_at=observed_at,
                         fresh_until=observed_at,
@@ -1748,9 +1696,7 @@ async def _reconcile_reservation_attempt(
             destination=watch.destination,
             departure_at=_as_utc(candidate.departure_at),
             arrival_at=(
-                _as_utc(candidate.arrival_at)
-                if candidate.arrival_at is not None
-                else None
+                _as_utc(candidate.arrival_at) if candidate.arrival_at is not None else None
             ),
             seat_class=SeatClass(candidate.seat_class),
             passenger_count=watch.passenger_count,
@@ -1861,72 +1807,6 @@ async def _reconcile_reservation_attempt(
                 )
 
 
-async def _deliver_outbox() -> int:
-    now = datetime.now(timezone.utc)
-    async with SessionFactory() as session:
-        events = list(
-            (
-                await session.scalars(
-                    select(OutboxEvent)
-                    .where(
-                        OutboxEvent.status == OutboxStatus.PENDING,
-                        OutboxEvent.available_at <= now,
-                        OutboxEvent.event_type.in_([
-                            "notification.test_requested",
-                            "notification.dispatch_requested",
-                        ]),
-                    )
-                    .order_by(OutboxEvent.created_at)
-                    .limit(50)
-                    .with_for_update(skip_locked=True)
-                )
-            ).all()
-        )
-        delivered = 0
-        for event in events:
-            channel = await session.get(NotificationChannel, event.aggregate_id)
-            if channel is None or not channel.enabled:
-                event.status = OutboxStatus.FAILED
-                event.processed_at = now
-                event.last_error = "channel_missing_or_disabled"
-                OUTBOX_DELIVERIES.labels("failed").inc()
-                continue
-            event.attempts += 1
-            try:
-                try:
-                    channel_config = secret_box.decrypt_dict(channel.config_ciphertext)
-                except RuntimeError as error:
-                    raise NotificationDeliveryError("config_decrypt_failed") from error
-                await deliver_notification(
-                    channel.kind, channel_config, event.payload
-                )
-            except NotificationDeliveryError as error:
-                # Never persist provider responses, URLs, tokens, or message bodies.
-                event.last_error = str(error)[:80]
-                if event.attempts >= 5:
-                    event.status = OutboxStatus.FAILED
-                    event.processed_at = now
-                    OUTBOX_DELIVERIES.labels("failed").inc()
-                else:
-                    event.available_at = now + timedelta(
-                        seconds=min(30 * (2 ** (event.attempts - 1)), 1800)
-                    )
-            else:
-                event.status = OutboxStatus.SENT
-                event.processed_at = now
-                event.last_error = None
-                delivered += 1
-                OUTBOX_DELIVERIES.labels("sent").inc()
-        await session.commit()
-        pending = await session.scalar(
-            select(func.count())
-            .select_from(OutboxEvent)
-            .where(OutboxEvent.status == OutboxStatus.PENDING)
-        )
-        OUTBOX_PENDING.set(int(pending or 0))
-        return delivered
-
-
 @celery_app.task(name="rail_waitlist.worker.process_due_watches")
 def process_due_watches() -> int:
     try:
@@ -1963,7 +1843,7 @@ def reconcile_reservation_attempt(attempt_id: str) -> int:
 @celery_app.task(name="rail_waitlist.worker.deliver_outbox")
 def deliver_outbox() -> int:
     try:
-        result = asyncio.run(_run_isolated(_deliver_outbox()))
+        result = asyncio.run(_run_isolated(deliver_pending_notifications()))
     except Exception:
         WORKER_RUNS.labels("deliver_outbox", "failed").inc()
         raise

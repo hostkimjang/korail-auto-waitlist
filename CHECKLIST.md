@@ -288,6 +288,11 @@
 - [x] 관찰 application의 외부 호출 전·저장·예약 위임 전 임대 재검사와 lease → watch/candidate/circuit 잠금 순서를 고정하고, stale locked lease의 prepare mutation 0건·관찰 transaction rollback·다중 watch `ORDER BY watches.id FOR UPDATE` PostgreSQL compile 계약을 직접 검증
 - [x] 열여섯 번째 구조 슬라이스 focused pytest 74건, API 전체 pytest 1,048건, Ruff `E/F/I`, format ratchet 64개, module boundary·독립 재감사 P0/P1 없음과 `git diff --check` 통과. 테스트 파일 83개·기존 Starlette/httpx deprecation 경고 1건
 - [x] 열여섯 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] `provider_contracts.py`에 timetable·observation·reservation·confirmation·lifecycle 역할 Protocol과 composition 계약을 정의하고, canonical provider 예외를 기존 `providers.py`가 같은 객체로 다시 export하도록 해 공개 import·class·registry·capability 동작을 보존
+- [x] due pipeline·관찰 그룹·예약 실행·정합화 application과 worker가 fat `RailProviderAdapter` 대신 최소 역할 계약을 사용하도록 의존 방향을 전환하고, 동일 task-scoped execution adapter를 arm→여러 group→reconciliation에서 공유하는 identity와 drain·lease release·close 수명주기 보존
+- [x] provider contract import allowlist, due·정합화 application의 concrete runtime 역의존 차단, KORAIL·SRT 기본→관찰 3중 gate→예약 4중 gate 공개 capability 6조합 golden matrix와 canonical 예외 identity 검증
+- [x] 열일곱 번째 구조 슬라이스 A의 focused pytest 166건, API 전체 pytest 1,056건, Ruff `E/F/I`, format ratchet 63개, module boundary·독립 재감사 P0/P1 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
+- [x] 열일곱 번째 구조 슬라이스 A의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -303,7 +308,8 @@
 - [ ] watch transition·reservation episode·reconciliation 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
 - [x] worker의 reservation execution을 application으로 분리하고 얇은 runtime 조립, claim/result UoW·잠금 순서·outbox 원자성·credential CAS 회귀 테스트 완성
 - [x] worker의 watch-group observation을 application으로 분리하고 얇은 Celery/runtime 조립, lease fencing·동일 조회 병합·상태 요약·rollback·PostgreSQL lock SQL 회귀 테스트 완성
-- [ ] provider 계약을 timetable·observe·reserve·confirm·lifecycle 역할로 점진 분리하고 capability 교집합·부분 실패 fail-closed 검증
+- [ ] 역할 계약 위의 provider execution base와 timetable·execution concrete 구현·registry를 물리 분리하고, 가짜 timetable/station stub 제거와 capability 교집합·부분 실패 fail-closed를 호환 단계별로 검증
+- [ ] API Python Protocol signature drift를 자동 검출할 mypy 또는 pyright 정적 타입 gate의 도입 범위와 legacy 격리 기준 확정
 - [ ] 웹·API의 저위험 수직 슬라이스가 안정된 뒤 KORAIL browser sidecar의 lifecycle·DOM·검색·인증·예약 책임 분리
 - [x] KORAIL Pydoll·SRT 로그인 세션 재사용형 에피소드당 1회 자동 예약 adapter, exact 열차·시각·좌석 등급 판정, 결제 직전 중단, credential version invalidation과 결과 정규화 구현
 - [x] startup prewarm이 활성 `auth_required` 계정도 현재 credential generation으로 재검증하고 성공만 영속 인증 복구·관련 작업 재무장에 반영하며, 실패·차단·동시 credential 교체는 기존 성공 상태를 오염시키지 않는 회귀 계약

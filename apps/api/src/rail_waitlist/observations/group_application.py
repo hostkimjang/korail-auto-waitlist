@@ -24,8 +24,9 @@ from ..models import (
     WatchCandidate,
 )
 from ..operational import decide_operational_expiry
+from ..provider_contracts import ObservationProvider
 from ..reservation_confirmation import ReservationConfirmationOutcome
-from ..schemas import ProviderCapabilities, SeatObservationRequest, SeatObservationResult
+from ..schemas import SeatObservationRequest, SeatObservationResult
 
 OBSERVATION_WATCH_STATUSES = frozenset(
     {
@@ -60,18 +61,6 @@ CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
 
 class AsyncSessionFactory(Protocol):
     def __call__(self) -> AsyncSession: ...
-
-
-class ObservationAdapter(Protocol):
-    provider: Provider
-
-    def capabilities(self) -> ProviderCapabilities: ...
-
-    async def observation_deferred_until(self) -> datetime | None: ...
-
-    async def observe_seats(
-        self, request: SeatObservationRequest
-    ) -> list[SeatObservationResult]: ...
 
 
 @dataclass(frozen=True)
@@ -400,7 +389,7 @@ async def prepare_watch(
     watch_id: str,
     now: datetime,
     *,
-    adapter: ObservationAdapter,
+    adapter: ObservationProvider,
     lease_grant: object | None,
     dependencies: ObservationGroupDependencies,
 ) -> list[ObservationTarget]:
@@ -774,7 +763,7 @@ async def process_watch_group_observation(
     now: datetime,
     *,
     provider: Provider,
-    adapter: ObservationAdapter,
+    adapter: ObservationProvider,
     lease_grant: object | None,
     dependencies: ObservationGroupDependencies,
 ) -> None:

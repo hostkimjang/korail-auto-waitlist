@@ -25,6 +25,7 @@ from ..models import (
     Watch,
     WatchCandidate,
 )
+from ..provider_contracts import ReservationExecutionProvider
 from ..reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -37,14 +38,6 @@ EXTERNAL_RESERVATION_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
 
 class AsyncSessionFactory(Protocol):
     def __call__(self) -> AsyncSession: ...
-
-
-class ReservationProvider(Protocol):
-    async def reserve_once(self, request: ReservationRequest) -> ReservationResult: ...
-
-    async def confirm_reservation(
-        self, target: ReservationConfirmationTarget
-    ) -> ReservationConfirmationResult: ...
 
 
 @dataclass(frozen=True)
@@ -274,7 +267,7 @@ def _locked_attempt_query(attempt_id: str):
 
 
 async def confirm_provider_reservation_result(
-    adapter: ReservationProvider,
+    adapter: ReservationExecutionProvider,
     target: ReservationExecutionTarget,
     attempt_id: str,
     result: ReservationResult,
@@ -366,7 +359,7 @@ async def confirm_provider_reservation_result(
 
 
 async def execute_reservation(
-    adapter: ReservationProvider,
+    adapter: ReservationExecutionProvider,
     target: ReservationExecutionTarget,
     *,
     dependencies: ReservationExecutionDependencies,

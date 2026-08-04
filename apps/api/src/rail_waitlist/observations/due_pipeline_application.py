@@ -13,7 +13,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from ..domain import Provider, ReservationOutcome, WatchStatus
 from ..models import ReservationAttempt, Watch, WatchCandidate
-from ..providers import RailProviderAdapter
+from ..provider_contracts import ExecutionProvider, ProviderLifecycle
 
 LOGGER = logging.getLogger(__name__)
 EXTERNAL_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
@@ -32,7 +32,7 @@ class AsyncSessionFactory(Protocol):
 
 
 class ProviderGetter(Protocol):
-    def __call__(self, provider: Provider) -> RailProviderAdapter: ...
+    def __call__(self, provider: Provider) -> ExecutionProvider: ...
 
 
 class ArmProviderWatches(Protocol):
@@ -41,7 +41,7 @@ class ArmProviderWatches(Protocol):
         provider: Provider,
         now: datetime,
         *,
-        adapter: RailProviderAdapter | None = None,
+        adapter: ExecutionProvider | None = None,
     ) -> int: ...
 
 
@@ -56,7 +56,7 @@ class ProcessWatchGroup(Protocol):
         now: datetime,
         *,
         provider: Provider | None = None,
-        adapter: RailProviderAdapter | None = None,
+        adapter: ExecutionProvider | None = None,
     ) -> None: ...
 
 
@@ -65,14 +65,14 @@ class ReconcileReservationAttempt(Protocol):
         self,
         attempt_id: str,
         *,
-        adapter: RailProviderAdapter | None = None,
+        adapter: ExecutionProvider | None = None,
     ) -> int: ...
 
 
 class CloseAdapter(Protocol):
     async def __call__(
         self,
-        adapter: RailProviderAdapter,
+        adapter: ProviderLifecycle,
         provider: Provider,
     ) -> None: ...
 
@@ -107,7 +107,7 @@ async def process_provider_due_pipeline(
     provider: Provider,
     watch_groups: list[list[str]],
     reconciliation_attempt_ids: list[str],
-    adapter: RailProviderAdapter,
+    adapter: ExecutionProvider,
     *,
     dependencies: DuePipelineDependencies,
 ) -> None:
@@ -132,7 +132,7 @@ async def process_provider_due_pipelines(
     provider_order: list[Provider],
     watch_groups: dict[Provider, list[list[str]]],
     reconciliation_attempt_ids: dict[Provider, list[str]],
-    adapters: dict[Provider, RailProviderAdapter],
+    adapters: dict[Provider, ExecutionProvider],
     *,
     dependencies: DuePipelineDependencies,
 ) -> None:
@@ -175,7 +175,7 @@ async def process_due_pipeline(
     """Select and process one due sweep while keeping provider resources task-scoped."""
 
     now = dependencies.now()
-    adapters: dict[Provider, RailProviderAdapter] = {}
+    adapters: dict[Provider, ExecutionProvider] = {}
     groups: dict[tuple[Provider, str], list[str]] = {}
     reconciliation_rows: list[tuple[str, Provider]] = []
     try:

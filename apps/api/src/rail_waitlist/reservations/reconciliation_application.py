@@ -10,8 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import Provider, ReservationOutcome, SeatClass, WatchStatus
 from ..models import RailProviderAccount, ReservationAttempt, Watch, WatchCandidate
+from ..provider_contracts import (
+    ProviderLifecycle,
+    ProviderUnavailable,
+    ReconciliationExecutionProvider,
+)
 from ..provider_execution_lease import ExecutionLeaseGrant, lock_execution_lease_current
-from ..providers import ProviderUnavailable, RailProviderAdapter
 from ..reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -41,8 +45,8 @@ AcquireExecutionLease = Callable[
     [Provider, datetime],
     Awaitable[tuple[ReconciliationLeaseService, ExecutionLeaseGrant | None]],
 ]
-ProviderGetter = Callable[[Provider], RailProviderAdapter]
-AdapterLifecycle = Callable[[RailProviderAdapter, Provider], Awaitable[None]]
+ProviderGetter = Callable[[Provider], ReconciliationExecutionProvider]
+AdapterLifecycle = Callable[[ProviderLifecycle, Provider], Awaitable[None]]
 ProviderCircuitCheck = Callable[[Provider], Awaitable[bool]]
 ApplyReconciliation = Callable[..., Awaitable[None]]
 
@@ -211,7 +215,7 @@ async def reconcile_reservation_attempt(
     attempt_id: str,
     *,
     dependencies: ReconciliationDependencies,
-    adapter: RailProviderAdapter | None = None,
+    adapter: ReconciliationExecutionProvider | None = None,
 ) -> int:
     """Run one due read-only confirmation without ever replaying reservation."""
 

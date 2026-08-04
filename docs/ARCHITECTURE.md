@@ -285,6 +285,16 @@ KORAIL Chromium·SRT live source를 주 시간표 경로로 사용하고, 주 �
 성공 하나만으로 worker capability가 승격되지는 않습니다. 기존 `get_provider()`는 시간표 registry의
 호환 별칭일 뿐 실행 권한을 뜻하지 않습니다.
 
+`provider_contracts.py`는 capability source, timetable, observation, reservation, confirmation,
+lifecycle 역할을 구조적 Protocol로 정의합니다. request application은 `TimetableProvider`, worker와
+각 application은 필요한 역할 또는 composition 계약만 의존하며 concrete registry·KORAIL/SRT 실행
+모듈을 역참조하지 않습니다. `ProviderUnavailable`과 `RouteValidationError`는 이 계약 모듈의 단일
+객체이고 `providers.py`는 기존 호출자를 위해 같은 객체를 다시 export합니다. 역할 view를 나눠도
+runtime 객체를 역할별로 새로 만들지 않습니다. 하나의 task-scoped `ExecutionProvider` 인스턴스가
+재무장·관찰·예약·정합화와 drain·close를 함께 수행해 인증 actor·cache·event loop 수명주기를
+보존합니다. `RailProviderAdapter`와 concrete 구현·registry의 물리 분리는 호환성을 고정한 후의
+별도 단계입니다.
+
 외부 provider 관측 그룹은 `provider_execution_leases`의 `provider + account_scope` 복합 키로
 직렬화합니다. 획득할 때마다 fencing token을 증가시키고, worker는 공식 호출 직전과 관측 결과
 기록 직전에 현재 소유자·token·만료 시각을 다시 검증합니다. 임대가 만료되거나 다른 worker가

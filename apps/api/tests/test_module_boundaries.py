@@ -30,6 +30,31 @@ DOMAIN_FORBIDDEN_IMPORT_ROOTS = frozenset(
         "sqlalchemy",
     }
 )
+PROVIDER_CONTRACT_ALLOWED_IMPORT_ROOTS = frozenset(
+    {
+        "__future__",
+        "datetime",
+        "domain",
+        "reservation_confirmation",
+        "schemas",
+        "typing",
+    }
+)
+PROVIDER_APPLICATION_FORBIDDEN_IMPORT_ROOTS = frozenset(
+    {
+        "celery_app",
+        "config",
+        "database",
+        "korail_execution",
+        "metrics",
+        "provider_accounts",
+        "providers",
+        "srt_execution",
+        "srt_provider_adapter",
+        "srt_reservation",
+        "worker",
+    }
+)
 
 
 def _is_domain_module(relative_path: Path) -> bool:
@@ -73,6 +98,14 @@ def _is_observation_group_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/observations/group_application.py")
 
 
+def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
+
+
+def _is_provider_contract(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/provider_contracts.py"
+
+
 BOUNDARY_RULES = (
     BoundaryRule(
         name="domain modules are framework and provider independent",
@@ -92,7 +125,7 @@ BOUNDARY_RULES = (
     BoundaryRule(
         name="due pipeline application does not own runtime configuration or metrics",
         matches=_is_due_pipeline_application,
-        forbidden_import_roots=frozenset({"config", "metrics"}),
+        forbidden_import_roots=PROVIDER_APPLICATION_FORBIDDEN_IMPORT_ROOTS,
     ),
     BoundaryRule(
         name="watch expiry application does not own provider runtime concerns",
@@ -134,6 +167,33 @@ BOUNDARY_RULES = (
                 "provider_execution_lease",
                 "providers",
                 "reservations",
+                "services",
+                "srt_execution",
+                "srt_provider_adapter",
+                "srt_reservation",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="reservation reconciliation application depends on provider roles",
+        matches=_is_reservation_reconciliation_application,
+        forbidden_import_roots=PROVIDER_APPLICATION_FORBIDDEN_IMPORT_ROOTS,
+    ),
+    BoundaryRule(
+        name="provider contracts are independent from runtime integrations",
+        matches=_is_provider_contract,
+        forbidden_import_roots=frozenset(
+            {
+                "celery_app",
+                "config",
+                "database",
+                "fastapi",
+                "korail_execution",
+                "metrics",
+                "provider_accounts",
+                "provider_execution_lease",
+                "providers",
                 "services",
                 "srt_execution",
                 "srt_provider_adapter",
@@ -195,3 +255,16 @@ def test_module_dependency_boundaries() -> None:
                     )
 
     assert violations == [], "\n".join(violations)
+
+
+def test_provider_contract_imports_are_allowlisted() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "provider_contracts.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    import_roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            import_roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            import_roots.add(node.module.split(".")[0])
+
+    assert import_roots <= PROVIDER_CONTRACT_ALLOWED_IMPORT_ROOTS

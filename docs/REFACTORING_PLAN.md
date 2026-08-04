@@ -565,6 +565,37 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: provider 역할별 계약, 실제 PostgreSQL 실행 임대 경합 검증, App shell·Auth와
   `NewWait` 나머지 strict 경계입니다.
 
+### 2026-08-05 열일곱 번째 구조 슬라이스 A
+
+- provider 역할 계약: `provider_contracts.py`에 capability source, timetable, observation,
+  reservation, confirmation, lifecycle의 최소 `Protocol`과 composition 경계용 실행·정합화 계약을
+  추가했습니다. `ProviderUnavailable`과 `RouteValidationError`도 이 모듈의 단일 canonical 객체로
+  이동하고 `providers.py`가 같은 객체를 다시 export해 기존 import와 예외 catch identity를
+  보존합니다.
+- 의존 방향: timetable registry는 `TimetableProvider`, 실행 registry는 `ExecutionProvider`를 반환하며,
+  due pipeline·관찰 그룹·예약 실행·정합화 application과 worker annotation을 실제 소비 역할로
+  좁혔습니다. concrete `RailProviderAdapter` 계층, registry 분기, capability 계산과 같은 task에서
+  운영사별 adapter 객체 하나를 arm→여러 관찰 그룹→정합화까지 공유하는 수명주기는 변경하지
+  않았습니다. drain·close callback은 `ProviderLifecycle`을 받아 역할별 좁은 view와도 타입 방향이
+  맞도록 했습니다.
+- 경계·회귀: provider 계약 모듈은 표준 라이브러리와 domain·schema·confirmation import만 허용하는
+  allowlist를 적용했습니다. due·정합화 application에는 provider registry와 KORAIL/SRT concrete runtime
+  모듈의 역의존을 차단했습니다. 기존 `RailProviderAdapter`·`get_provider()`·concrete class identity는
+  호환 경계로 유지합니다. KORAIL·SRT 각각 기본, 관찰 3중 opt-in, 예약 4중 opt-in의 공개 capability
+  golden matrix에서 timetable/link는 유지하고 seat monitoring·reservation만 기존 교집합으로 열리는지
+  6개 조합을 검증했습니다.
+- 확인된 검증: provider·application·worker focused pytest 166건, 전체 pytest 1,056건, Ruff `E/F/I`,
+  format ratchet 63개, module boundary와 `git diff --check`를 통과했습니다. 전체 pytest에는 기존
+  Starlette/httpx deprecation 경고 1건만 남았습니다. 독립 재감사에서 P0·P1 잔여 지적은 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: Python Protocol의 구조적 대입 가능성은 설계·회귀·AST 경계로 검토했지만 API에
+  mypy/pyright gate는 아직 없습니다. 이번 단계는 역할별 새 runtime 객체를 만들거나 execution adapter의
+  가짜 timetable/station 메서드를 제거한 단계가 아니며, concrete base·구현 파일 분리는 후속입니다.
+- 남은 핵심 부채: provider execution base와 concrete 구현·registry의 물리 분리, Python 정적 타입 gate
+  도입 판단, 실제 PostgreSQL 실행 임대 경합 검증, `NewWaitPage`와 App shell의 strict 경계입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

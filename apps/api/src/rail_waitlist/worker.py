@@ -33,13 +33,14 @@ from .observations.group_application import (
     watch_group_provider,
 )
 from .provider_accounts import update_provider_auth_status
+from .provider_contracts import ExecutionProvider, ProviderLifecycle, ProviderUnavailable
 from .provider_execution_lease import (
     ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
     ExecutionLeaseGrant,
     ProviderExecutionLeaseService,
     lock_execution_lease_current,
 )
-from .providers import ProviderUnavailable, RailProviderAdapter, get_execution_provider
+from .providers import get_execution_provider
 from .reservations.execution_application import (
     ReservationExecutionDependencies,
     ReservationExecutionTarget,
@@ -84,7 +85,7 @@ def _as_utc(value: datetime) -> datetime:
 
 
 async def _close_execution_adapter(
-    adapter: RailProviderAdapter,
+    adapter: ProviderLifecycle,
     provider: Provider,
 ) -> None:
     try:
@@ -96,7 +97,7 @@ async def _close_execution_adapter(
 
 
 async def _drain_execution_adapter(
-    adapter: RailProviderAdapter,
+    adapter: ProviderLifecycle,
     provider: Provider,
 ) -> None:
     try:
@@ -202,7 +203,7 @@ async def _arm_supported_provider_watches(
     provider: Provider,
     now: datetime,
     *,
-    adapter: RailProviderAdapter | None = None,
+    adapter: ExecutionProvider | None = None,
 ) -> int:
     """Activate pre-existing official watches after an execution adapter becomes effective."""
     if provider not in _EXTERNAL_PROVIDERS:
@@ -241,7 +242,7 @@ async def _arm_supported_provider_watches(
 async def _arm_supported_srt_watches(
     now: datetime,
     *,
-    adapter: RailProviderAdapter | None = None,
+    adapter: ExecutionProvider | None = None,
 ) -> int:
     """Compatibility wrapper for focused SRT worker tests."""
     return await _arm_supported_provider_watches(Provider.SRT, now, adapter=adapter)
@@ -298,7 +299,7 @@ def _reservation_execution_dependencies() -> ReservationExecutionDependencies:
     )
 
 
-async def _reserve_winner(adapter: RailProviderAdapter, target: ObservationTarget) -> None:
+async def _reserve_winner(adapter: ExecutionProvider, target: ObservationTarget) -> None:
     """Compatibility wiring for worker and focused integration tests."""
     await execute_reservation(
         adapter,
@@ -323,7 +324,7 @@ async def _reserve_winner(adapter: RailProviderAdapter, target: ObservationTarge
 
 def _observation_group_dependencies(
     lease_service: ProviderExecutionLeaseService | None = None,
-    adapter: RailProviderAdapter | None = None,
+    adapter: ExecutionProvider | None = None,
 ) -> ObservationGroupDependencies:
     async def lease_is_current(grant: object, *, now: datetime) -> bool:
         if lease_service is None:
@@ -356,7 +357,7 @@ async def _process_watch_group(
     now: datetime,
     *,
     provider: Provider | None = None,
-    adapter: RailProviderAdapter | None = None,
+    adapter: ExecutionProvider | None = None,
 ) -> None:
     provider = provider or await watch_group_provider(
         watch_ids,
@@ -445,7 +446,7 @@ def _reconciliation_dependencies() -> ReconciliationDependencies:
 async def _reconcile_reservation_attempt(
     attempt_id: str,
     *,
-    adapter: RailProviderAdapter | None = None,
+    adapter: ExecutionProvider | None = None,
 ) -> int:
     return await run_reservation_reconciliation(
         attempt_id,

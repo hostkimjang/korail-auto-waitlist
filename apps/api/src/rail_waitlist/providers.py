@@ -21,6 +21,12 @@ from .korail_execution import (
     korail_background_monitoring_enabled,
 )
 from .provider_accounts import ProviderCredentials, get_enabled_provider_credentials
+from .provider_contracts import (
+    ExecutionProvider,
+    ProviderUnavailable,
+    RouteValidationError,
+    TimetableProvider,
+)
 from .reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -139,14 +145,6 @@ def mock_seat_classes(index: int, observed_at: datetime) -> list[SeatClassAvaila
             strict=True,
         )
     ]
-
-
-class ProviderUnavailable(RuntimeError):
-    pass
-
-
-class RouteValidationError(ValueError):
-    pass
 
 
 def normalize_station_name(value: str) -> str:
@@ -412,9 +410,7 @@ class TagoClient:
                 if node_id and normalize_station_name(name) == wanted:
                     matches.append((node_id, name))
         if len(matches) != 1:
-            raise RouteValidationError(
-                "station must resolve to exactly one official TAGO node"
-            )
+            raise RouteValidationError("station must resolve to exactly one official TAGO node")
         return matches[0]
 
     async def station_catalog(self, provider: Provider) -> StationCatalog:
@@ -589,9 +585,11 @@ class TagoClient:
                     task = asyncio.create_task(fetch_snapshot())
                     self._inflight[cache_key] = task
                     task.add_done_callback(
-                        lambda completed: self._inflight.pop(cache_key, None)
-                        if self._inflight.get(cache_key) is completed
-                        else None
+                        lambda completed: (
+                            self._inflight.pop(cache_key, None)
+                            if self._inflight.get(cache_key) is completed
+                            else None
+                        )
                     )
             if snapshot is None:
                 assert task is not None
@@ -667,9 +665,7 @@ class RailProviderAdapter(ABC):
     @abstractmethod
     async def stations(self) -> StationCatalog: ...
 
-    async def observe_seats(
-        self, request: SeatObservationRequest
-    ) -> list[SeatObservationResult]:
+    async def observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
         if not self.capabilities().seat_monitoring:
             raise ProviderUnavailable(
                 f"{self.provider.value} provider does not support seat monitoring"
@@ -678,9 +674,7 @@ class RailProviderAdapter(ABC):
             raise ProviderUnavailable("seat observation request provider does not match adapter")
         return await self._observe_seats(request)
 
-    async def _observe_seats(
-        self, request: SeatObservationRequest
-    ) -> list[SeatObservationResult]:
+    async def _observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
         raise ProviderUnavailable(
             f"{self.provider.value} provider has no seat monitoring implementation"
         )
@@ -893,9 +887,7 @@ class MockProviderAdapter(RailProviderAdapter):
             ],
         )
 
-    async def _observe_seats(
-        self, request: SeatObservationRequest
-    ) -> list[SeatObservationResult]:
+    async def _observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
         observed_at = datetime.now(timezone.utc)
         statuses = {
             SeatClass.STANDARD: "available",
@@ -1052,9 +1044,7 @@ class SrtLiveExecutionAdapter(RailProviderAdapter):
     async def stations(self) -> StationCatalog:
         raise ProviderUnavailable("SRT execution provider does not expose stations")
 
-    async def _observe_seats(
-        self, request: SeatObservationRequest
-    ) -> list[SeatObservationResult]:
+    async def _observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
         source = self._source_instance()
         return await source.observe(
             request,
@@ -1096,9 +1086,7 @@ class SrtLiveExecutionAdapter(RailProviderAdapter):
                 raise ProviderUnavailable("SRT provider adapter is unavailable")
             reservation_executor = source
         result = await reservation_executor.reserve_once(request, credentials)
-        return result.model_copy(
-            update={"credential_version": credentials.credential_version}
-        )
+        return result.model_copy(update={"credential_version": credentials.credential_version})
 
     async def _confirm_reservation(
         self,
@@ -1189,9 +1177,7 @@ class KorailBrowserExecutionAdapter(RailProviderAdapter):
     async def stations(self) -> StationCatalog:
         raise ProviderUnavailable("KORAIL execution provider does not expose stations")
 
-    async def _observe_seats(
-        self, request: SeatObservationRequest
-    ) -> list[SeatObservationResult]:
+    async def _observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
         return await self._source_instance().observe(
             request,
             origin=request.origin,
@@ -1225,9 +1211,7 @@ class KorailBrowserExecutionAdapter(RailProviderAdapter):
                 credential_version=request.expected_credential_version,
             )
         result = await self._source_instance().reserve_once(request, credentials)
-        return result.model_copy(
-            update={"credential_version": credentials.credential_version}
-        )
+        return result.model_copy(update={"credential_version": credentials.credential_version})
 
     async def _confirm_reservation(
         self,
@@ -1247,7 +1231,7 @@ class KorailBrowserExecutionAdapter(RailProviderAdapter):
 
 def get_timetable_provider(
     provider: Provider, settings: Settings | None = None
-) -> RailProviderAdapter:
+) -> TimetableProvider:
     """Resolve adapters used only by request-time timetable and station flows."""
 
     settings = settings or get_settings()
@@ -1258,7 +1242,7 @@ def get_timetable_provider(
 
 def get_execution_provider(
     provider: Provider, settings: Settings | None = None
-) -> RailProviderAdapter:
+) -> ExecutionProvider:
     """Resolve adapters allowed to execute background observation or reservation work."""
 
     settings = settings or get_settings()
@@ -1271,7 +1255,7 @@ def get_execution_provider(
     return FailClosedExecutionAdapter(provider)
 
 
-def get_provider(provider: Provider, settings: Settings | None = None) -> RailProviderAdapter:
+def get_provider(provider: Provider, settings: Settings | None = None) -> TimetableProvider:
     """Compatibility alias for the historical request-time provider registry."""
 
     return get_timetable_provider(provider, settings)

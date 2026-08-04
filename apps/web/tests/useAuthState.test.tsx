@@ -2,11 +2,14 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const authApi = vi.hoisted(() => ({
-  DEMO_MODE: false,
   getAuthStatus: vi.fn(),
 }));
 
-vi.mock("../src/api.js", () => authApi);
+vi.mock("../src/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/api.js")>();
+  return { ...actual, DEMO_MODE: false };
+});
+vi.mock("../src/api/auth", () => authApi);
 
 import { useAuthState } from "../src/features/auth/useAuthState";
 

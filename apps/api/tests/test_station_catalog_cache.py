@@ -42,9 +42,7 @@ def upstream_catalog(stations: list[StationItem], retrieved_at: datetime) -> Sta
 
 def visibility_roster(stations: list[StationItem]) -> StationVisibilityRoster:
     return StationVisibilityRoster(
-        names=frozenset(
-            normalize_visibility_station_name(item.name) for item in stations
-        ),
+        names=frozenset(normalize_visibility_station_name(item.name) for item in stations),
         retrieved_at=datetime.now(UTC),
         etag='"test-roster"',
         last_modified="Wed, 29 Jul 2026 00:00:00 GMT",
@@ -111,9 +109,7 @@ async def test_repository_lease_is_portable_and_fences_late_old_owner(db_engine)
     repository = StationCatalogRepository(factory)
     started = datetime(2026, 7, 29, 1, tzinfo=UTC)
 
-    assert await repository.try_acquire_lease(
-        "old-owner", started, started + timedelta(seconds=10)
-    )
+    assert await repository.try_acquire_lease("old-owner", started, started + timedelta(seconds=10))
     assert not await repository.try_acquire_lease(
         "new-owner", started + timedelta(seconds=5), started + timedelta(seconds=20)
     )
@@ -193,9 +189,7 @@ async def test_stale_snapshot_returns_immediately_then_refreshes(db_engine):
         upstream_catalog([station("NEW", "새역")], now),
         gate=gate,
     )
-    service = StationCatalogService(
-        factory, tago, FakeStationVisibility(tago.catalog.stations)
-    )
+    service = StationCatalogService(factory, tago, FakeStationVisibility(tago.catalog.stations))
 
     catalog = await asyncio.wait_for(service.get_catalog(Provider.KORAIL), timeout=0.2)
     assert [item.node_id for item in catalog.stations] == ["OLD"]
@@ -219,9 +213,7 @@ async def test_concurrent_provider_requests_share_one_initial_collection(db_engi
     gate = asyncio.Event()
     shared_stations = [station("N-SEOUL", "서울"), station("N-SUSEO", "수서")]
     tago = FakeTagoClient(upstream_catalog(shared_stations, now), gate=gate)
-    service = StationCatalogService(
-        factory, tago, FakeStationVisibility(shared_stations)
-    )
+    service = StationCatalogService(factory, tago, FakeStationVisibility(shared_stations))
 
     korail_task = asyncio.create_task(service.get_catalog(Provider.KORAIL))
     srt_task = asyncio.create_task(service.get_catalog(Provider.SRT))
@@ -278,9 +270,7 @@ async def test_srt_catalog_shares_the_intercity_station_union_with_korail(db_eng
         (upstream_catalog([], datetime.now(UTC)), None),
     ],
 )
-async def test_failed_or_empty_refresh_preserves_last_known_good(
-    db_engine, catalog, error
-):
+async def test_failed_or_empty_refresh_preserves_last_known_good(db_engine, catalog, error):
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     repository = StationCatalogRepository(factory)
     now = datetime.now(UTC)
@@ -290,7 +280,9 @@ async def test_failed_or_empty_refresh_preserves_last_known_good(
         refresh_after=now - timedelta(days=1),
         stations=[station("GOOD", "정상역")],
     )
-    visibility_stations = catalog.stations if catalog is not None and catalog.stations else [station()]
+    visibility_stations = (
+        catalog.stations if catalog is not None and catalog.stations else [station()]
+    )
     service = StationCatalogService(
         factory,
         FakeTagoClient(catalog, error=error),

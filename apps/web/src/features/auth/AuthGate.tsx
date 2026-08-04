@@ -6,7 +6,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 
-import { ApiError, loginWithPassword, registerAdmin } from "../../api.js";
+import { ApiError, loginWithPassword, registerAdmin } from "../../api/auth";
 import { Brand } from "../../shared/ui/Brand";
 import type { AuthState } from "./useAuthState";
 

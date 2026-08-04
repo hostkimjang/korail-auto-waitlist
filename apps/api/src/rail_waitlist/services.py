@@ -40,6 +40,10 @@ from .models import (
     WatchCandidate,
     WatchTransitionHistory,
 )
+from .notification_management.schemas import (
+    NotificationChannelCreate,
+    NotificationChannelUpdate,
+)
 from .notifications import validate_webhook_url_syntax
 from .policy import build_watch_dedupe_key, next_interval
 from .provider_execution_lease import ANONYMOUS_PUBLIC_ACCOUNT_SCOPE
@@ -51,8 +55,6 @@ from .reservation_confirmation import (
 from .reservations.domain import ReservationAttemptResultPolicy as ReservationAttemptResultPolicy
 from .reservations.domain import reservation_attempt_result_policy
 from .schemas import (
-    NotificationChannelCreate,
-    NotificationChannelUpdate,
     RegistrationEvidenceConflictDetail,
     ReservationResult,
     SeatObservationResult,
@@ -76,9 +78,7 @@ ACTIVE_OBSERVATION_STATUSES = frozenset(
         WatchStatus.SEAT_FOUND,
     }
 )
-OBSERVABLE_OBSERVATION_CANDIDATE_STATES = frozenset(
-    {"active", "observed", "seat_found"}
-)
+OBSERVABLE_OBSERVATION_CANDIDATE_STATES = frozenset({"active", "observed", "seat_found"})
 
 _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS = {
     1: RESERVATION_RECONCILIATION_INTERVAL,
@@ -113,8 +113,7 @@ def payment_hold_end_reason(attempt: ReservationAttempt) -> str | None:
     if attempt.confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND:
         return "confirmed_payment_hold_no_longer_present"
     if (
-        attempt.confirmation_outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+        attempt.confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
         and attempt.payment_deadline is not None
         and _utc_instant(attempt.payment_deadline)
         <= _utc_instant(attempt.post_deadline_reconciled_at)
@@ -181,6 +180,7 @@ def is_confirmed_absent_retry_source(attempt: ReservationAttempt) -> bool:
         and attempt.post_deadline_reconciled_at is None
     )
 
+
 _RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
     {
         SeatObservationStatus.UNAVAILABLE,
@@ -233,8 +233,8 @@ def apply_operational_projection(
     if result.delay_minutes is not None:
         operational_status = OperationalStatus.DELAYED
         candidate.delay_minutes = result.delay_minutes
-        candidate.estimated_departure_at = (
-            candidate.scheduled_departure_at + timedelta(minutes=result.delay_minutes)
+        candidate.estimated_departure_at = candidate.scheduled_departure_at + timedelta(
+            minutes=result.delay_minutes
         )
     if result.status in _BOOKING_OPEN_OBSERVATIONS:
         booking_window_status = BookingWindowStatus.OPEN
@@ -343,8 +343,7 @@ async def add_watch_notifications(
         ("seat_found:watching", "official_waitlist:watching")
     )
     reservation_failed_monitoring_resumed = (
-        target == WatchStatus.WATCHING
-        and reason == "reservation_failed_monitoring_resumed"
+        target == WatchStatus.WATCHING and reason == "reservation_failed_monitoring_resumed"
     )
     payment_hold_ended = reason in {
         "confirmed_payment_hold_no_longer_actionable_monitoring_resumed",
@@ -416,8 +415,7 @@ async def add_watch_notifications(
         )
     elif payment_hold_ended:
         follow_up = (
-            "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 "
-            "예매하지 않습니다."
+            "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 예매하지 않습니다."
             if target == WatchStatus.WATCHING
             else "해당 1회성 작업을 종료합니다."
         )
@@ -517,8 +515,7 @@ async def create_watch(
                 and evidence.destination_node_id == data.destination_node_id
                 and evidence.canonical_train_number
                 == normalize_official_train_number(candidate.train_number)
-                and evidence_departure.astimezone(UTC).replace(microsecond=0)
-                == departure_at
+                and evidence_departure.astimezone(UTC).replace(microsecond=0) == departure_at
                 and evidence.passenger_count == data.passenger_count
                 and evidence.seat_class == candidate.seat_class
             )
@@ -569,9 +566,7 @@ async def create_watch(
     session.add(watch)
     await session.flush()
     try:
-        await remember_idempotency(
-            session, "watch.create", idempotency_key, watch.id, payload_hash
-        )
+        await remember_idempotency(session, "watch.create", idempotency_key, watch.id, payload_hash)
         await add_outbox_event(
             session,
             aggregate_type="watch",
@@ -747,16 +742,11 @@ async def resume_watches_after_verified_provider_login(
             and transition_at <= verified_at
         )
         preflight_auth_reverified = (
-            latest_transition.reason
-            == "provider_account_not_authenticated_before_reservation"
+            latest_transition.reason == "provider_account_not_authenticated_before_reservation"
             and transition_at <= verified_at
         )
         non_auth_unknown = latest_transition.reason == "reservation_unknown"
-        if not (
-            auth_failure_reverified
-            or preflight_auth_reverified
-            or non_auth_unknown
-        ):
+        if not (auth_failure_reverified or preflight_auth_reverified or non_auth_unknown):
             continue
 
         candidates = list(
@@ -821,9 +811,7 @@ SEAT_FOUND_STATUSES = frozenset(
         SeatObservationStatus.STANDING_PLUS_SEAT,
     }
 )
-ACTIONABLE_SEAT_STATUSES = SEAT_FOUND_STATUSES | {
-    SeatObservationStatus.WAITLIST_AVAILABLE
-}
+ACTIONABLE_SEAT_STATUSES = SEAT_FOUND_STATUSES | {SeatObservationStatus.WAITLIST_AVAILABLE}
 
 
 async def get_or_create_provider_circuit(
@@ -853,9 +841,7 @@ async def get_or_create_provider_circuit(
     return circuit
 
 
-async def latest_observation_fingerprint(
-    session: AsyncSession, watch: Watch
-) -> str | None:
+async def latest_observation_fingerprint(session: AsyncSession, watch: Watch) -> str | None:
     state_vector: list[tuple[str, str | None]] = []
     has_observation = False
     candidates = list(
@@ -920,8 +906,10 @@ async def record_seat_observation(
         },
         dedupe_key=f"seat-observation:{observation.id}",
     )
-    if apply_status_transition and result.status == SeatObservationStatus.WAITLIST_AVAILABLE and (
-        watch.status == WatchStatus.WATCHING
+    if (
+        apply_status_transition
+        and result.status == SeatObservationStatus.WAITLIST_AVAILABLE
+        and (watch.status == WatchStatus.WATCHING)
     ):
         await apply_watch_transition(
             session,
@@ -989,9 +977,7 @@ async def finish_observation_cycle(
         select(AdminAccount).where(AdminAccount.singleton_slot == 1)
     )
     observation_interval_seconds = (
-        admin_preferences.observation_interval_seconds
-        if admin_preferences is not None
-        else 5
+        admin_preferences.observation_interval_seconds if admin_preferences is not None else 5
     )
     watch.next_check_at = now + next_interval(
         now,
@@ -1047,8 +1033,7 @@ async def update_admin_ui_preferences(
             (
                 await session.scalars(
                     select(ProviderExecutionLease.provider).where(
-                        ProviderExecutionLease.account_scope
-                        == ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
+                        ProviderExecutionLease.account_scope == ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
                         ProviderExecutionLease.owner_token.is_not(None),
                         ProviderExecutionLease.expires_at.is_not(None),
                         ProviderExecutionLease.expires_at > normalized_now,
@@ -1122,13 +1107,10 @@ async def begin_reservation_attempt(
         .limit(1)
     )
     confirmed_absent_retry_authorized = False
-    if (
-        latest_attempt is not None
-        and normalized_episode_key.startswith(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
+    if latest_attempt is not None and normalized_episode_key.startswith(
+        CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX
     ):
-        expected_episode_key = (
-            f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
-        )
+        expected_episode_key = f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
         actionable_after_confirmation = None
         if (
             retry_authorized
@@ -1139,8 +1121,7 @@ async def begin_reservation_attempt(
                 select(SeatObservation.id)
                 .where(
                     SeatObservation.candidate_id == candidate.id,
-                    SeatObservation.observed_at
-                    > latest_attempt.confirmation_observed_at,
+                    SeatObservation.observed_at > latest_attempt.confirmation_observed_at,
                     SeatObservation.status.in_(ACTIONABLE_SEAT_STATUSES),
                 )
                 .order_by(SeatObservation.observed_at, SeatObservation.id)
@@ -1154,8 +1135,7 @@ async def begin_reservation_attempt(
             select(SeatObservation.id)
             .where(
                 SeatObservation.candidate_id == candidate.id,
-                SeatObservation.observed_at
-                > latest_attempt.post_deadline_reconciled_at,
+                SeatObservation.observed_at > latest_attempt.post_deadline_reconciled_at,
                 SeatObservation.status.in_(_RESERVATION_RETRY_EDGE_OBSERVATIONS),
             )
             .order_by(SeatObservation.observed_at, SeatObservation.id)
@@ -1396,9 +1376,7 @@ async def complete_reservation_attempt(
             ),
             "outcome": result.outcome.value,
             "payment_deadline": (
-                result.payment_deadline.isoformat()
-                if result.payment_deadline is not None
-                else None
+                result.payment_deadline.isoformat() if result.payment_deadline is not None else None
             ),
             "monitoring_resumed": result.outcome
             in {
@@ -1488,12 +1466,8 @@ async def apply_reservation_reconciliation(
         and watch.status is WatchStatus.PAYMENT_REQUIRED
         and payment_deadline is not None
         and payment_deadline <= reconciled_at
-        and attempt.reconciliation_attempt_count
-        >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS
-        and (
-            attempt.post_deadline_reconciled_at is None
-            or legacy_expired_hold_cleanup_read
-        )
+        and attempt.reconciliation_attempt_count >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS
+        and (attempt.post_deadline_reconciled_at is None or legacy_expired_hold_cleanup_read)
     )
     record_reservation_confirmation(
         attempt,
@@ -1501,8 +1475,7 @@ async def apply_reservation_reconciliation(
         reconciled_at=reconciled_at,
     )
     confirmed_hold_has_usable_deadline = (
-        confirmation.outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
         and confirmation.payment_deadline is not None
         and confirmation.payment_deadline > reconciled_at
     )
@@ -1539,13 +1512,9 @@ async def apply_reservation_reconciliation(
         attempt.outcome is ReservationOutcome.UNKNOWN
         and confirmation.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     ):
-        retry_interval = unknown_reconciliation_retry_interval(
-            attempt.reconciliation_attempt_count
-        )
+        retry_interval = unknown_reconciliation_retry_interval(attempt.reconciliation_attempt_count)
         attempt.next_reconcile_at = (
-            attempt.last_reconciled_at + retry_interval
-            if retry_interval is not None
-            else None
+            attempt.last_reconciled_at + retry_interval if retry_interval is not None else None
         )
     elif (
         not terminal_confirmation
@@ -1554,24 +1523,19 @@ async def apply_reservation_reconciliation(
         reconciliation_anchor = attempt.last_reconciled_at
         if reconciliation_anchor is None:
             raise RuntimeError("reconciliation must persist a reconciliation timestamp")
-        attempt.next_reconcile_at = (
-            reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
-        )
+        attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
     elif (
-        confirmation.outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
         and confirmation.payment_deadline is not None
         and confirmation.payment_deadline <= reconciled_at
-        and attempt.reconciliation_attempt_count
-        >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS
+        and attempt.reconciliation_attempt_count >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS
         and attempt.post_deadline_reconciled_at is None
     ):
         attempt.next_reconcile_at = reconciled_at + RESERVATION_RECONCILIATION_INTERVAL
     else:
         attempt.next_reconcile_at = None
     expired_confirmed_hold = (
-        confirmation.outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
         and confirmation.payment_deadline is not None
         and confirmation.payment_deadline <= reconciled_at
     )
@@ -1590,9 +1554,7 @@ async def apply_reservation_reconciliation(
         # The official unpaid hold is either absent or retained only as a row whose
         # own provider deadline has elapsed. Neither is an actionable payment handoff.
         candidate.state = (
-            "expired"
-            if watch.reservation_policy is ReservationPolicy.NOTIFY_ONLY
-            else "observed"
+            "expired" if watch.reservation_policy is ReservationPolicy.NOTIFY_ONLY else "observed"
         )
         candidate.suppressed_by_candidate_id = None
         suppressed_candidates = list(
@@ -1641,15 +1603,11 @@ async def apply_reservation_reconciliation(
                 "candidate_id": candidate.id,
                 "terminal": True,
                 "status": (
-                    WatchStatus.EXPIRED.value
-                    if terminal_one_off
-                    else WatchStatus.WATCHING.value
+                    WatchStatus.EXPIRED.value if terminal_one_off else WatchStatus.WATCHING.value
                 ),
                 "from": WatchStatus.PAYMENT_REQUIRED.value,
                 "to": (
-                    WatchStatus.EXPIRED.value
-                    if terminal_one_off
-                    else WatchStatus.WATCHING.value
+                    WatchStatus.EXPIRED.value if terminal_one_off else WatchStatus.WATCHING.value
                 ),
                 "reason": (
                     "confirmed_payment_deadline_elapsed"
@@ -1663,14 +1621,11 @@ async def apply_reservation_reconciliation(
                 ),
                 "payment_deadline": (
                     confirmation.payment_deadline.isoformat()
-                    if expired_confirmed_hold
-                    and confirmation.payment_deadline is not None
+                    if expired_confirmed_hold and confirmation.payment_deadline is not None
                     else None
                 ),
                 "automatic_reservation_retry": not terminal_one_off,
-                "retry_condition": (
-                    "new_availability_episode" if not terminal_one_off else None
-                ),
+                "retry_condition": ("new_availability_episode" if not terminal_one_off else None),
             },
             dedupe_key=f"payment-hold-ended:{attempt.id}",
         )
@@ -1679,23 +1634,24 @@ async def apply_reservation_reconciliation(
         return
     if confirmation.official_handoff_url is None:
         raise RuntimeError("confirmed reservation requires an official handoff URL")
-    if (
-        confirmation.payment_deadline is not None
-        and confirmation.payment_deadline <= reconciled_at
-    ):
+    if confirmation.payment_deadline is not None and confirmation.payment_deadline <= reconciled_at:
         # Preserve the latest official evidence but do not surface an unusable hold.
         return
 
     attempt.outcome = ReservationOutcome.PAYMENT_REQUIRED
     attempt.payment_deadline = confirmation.payment_deadline
     attempt.official_handoff_url = confirmation.official_handoff_url
-    if watch.status in {
-        WatchStatus.WATCHING,
-        WatchStatus.OFFICIAL_WAITLIST,
-        WatchStatus.SEAT_FOUND,
-        WatchStatus.RESERVING,
-        WatchStatus.PAYMENT_REQUIRED,
-    } and candidate.state != "expired":
+    if (
+        watch.status
+        in {
+            WatchStatus.WATCHING,
+            WatchStatus.OFFICIAL_WAITLIST,
+            WatchStatus.SEAT_FOUND,
+            WatchStatus.RESERVING,
+            WatchStatus.PAYMENT_REQUIRED,
+        }
+        and candidate.state != "expired"
+    ):
         candidate.state = "payment_required"
         watch.payment_deadline = confirmation.payment_deadline
         watch.official_booking_url = confirmation.official_handoff_url
@@ -1738,10 +1694,7 @@ async def apply_reservation_reconciliation(
             ),
             "retryable": False,
         },
-        dedupe_key=(
-            f"reservation-reconciled:{attempt.id}:"
-            f"{confirmation.observed_at.isoformat()}"
-        ),
+        dedupe_key=(f"reservation-reconciled:{attempt.id}:{confirmation.observed_at.isoformat()}"),
     )
 
 
@@ -1788,9 +1741,7 @@ async def update_watch(session: AsyncSession, watch: Watch, data: WatchUpdate) -
         if "seat_class" in values and any(
             candidate.seat_class != values["seat_class"] for candidate in watch.candidates
         ):
-            raise HTTPException(
-                422, "seat_class must remain consistent with persisted candidates"
-            )
+            raise HTTPException(422, "seat_class must remain consistent with persisted candidates")
         if "train_numbers" in values and set(values["train_numbers"]) != {
             candidate.train_number for candidate in watch.candidates
         }:
@@ -1816,9 +1767,7 @@ async def update_watch(session: AsyncSession, watch: Watch, data: WatchUpdate) -
                 raise HTTPException(
                     422, "time window must remain consistent with persisted candidates"
                 )
-    next_observation_mode = values.get(
-        "seat_observation_mode", watch.seat_observation_mode
-    )
+    next_observation_mode = values.get("seat_observation_mode", watch.seat_observation_mode)
     if (
         next_observation_mode is SeatObservationMode.FOCUSED
         and watch.seat_observation_mode is not SeatObservationMode.FOCUSED
@@ -1830,18 +1779,14 @@ async def update_watch(session: AsyncSession, watch: Watch, data: WatchUpdate) -
         )
     for field, value in values.items():
         setattr(watch, field, value)
-    if (
-        set(values).intersection(
-            {"seat_observation_mode", "focused_observation_interval_seconds"}
-        )
-        and watch.status
-        in {
-            WatchStatus.SCHEDULED,
-            WatchStatus.WATCHING,
-            WatchStatus.OFFICIAL_WAITLIST,
-            WatchStatus.SEAT_FOUND,
-        }
-    ):
+    if set(values).intersection(
+        {"seat_observation_mode", "focused_observation_interval_seconds"}
+    ) and watch.status in {
+        WatchStatus.SCHEDULED,
+        WatchStatus.WATCHING,
+        WatchStatus.OFFICIAL_WAITLIST,
+        WatchStatus.SEAT_FOUND,
+    }:
         watch.next_check_at = datetime.now(UTC)
     if (
         previous_reservation_policy is not ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT

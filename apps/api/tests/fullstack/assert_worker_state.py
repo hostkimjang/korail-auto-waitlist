@@ -23,7 +23,6 @@ from rail_waitlist.models import (
     WatchTransitionHistory,
 )
 
-
 EXPECTED = {
     ("9002", "standard"): (WatchStatus.SEAT_FOUND, SeatObservationStatus.AVAILABLE),
     ("9002", "first"): (WatchStatus.WATCHING, SeatObservationStatus.SOLD_OUT),
@@ -181,7 +180,9 @@ async def _snapshot() -> dict[str, object] | None:
             raise AssertionError("notification outbox dedupe keys must be unique")
         if any(item.attempts < 1 for item in notifications):
             return None
-        if any(item.status not in {OutboxStatus.PENDING, OutboxStatus.FAILED} for item in notifications):
+        if any(
+            item.status not in {OutboxStatus.PENDING, OutboxStatus.FAILED} for item in notifications
+        ):
             raise AssertionError("isolated notifications must fail closed without external egress")
 
         seat_events = await session.scalar(
@@ -300,9 +301,7 @@ async def _diagnostic() -> dict[str, object]:
             if korail_lease is None
             else {
                 "fencing_token": korail_lease.fencing_token,
-                "released": (
-                    korail_lease.owner_token is None and korail_lease.expires_at is None
-                ),
+                "released": (korail_lease.owner_token is None and korail_lease.expires_at is None),
             },
         }
 

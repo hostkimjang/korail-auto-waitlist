@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { DEMO_MODE, getAuthStatus } from "../../api.js";
+import { DEMO_MODE } from "../../api.js";
+import { getAuthStatus } from "../../api/auth";
 
 export interface AuthState {
   loading: boolean;

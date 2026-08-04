@@ -14,7 +14,6 @@ from rail_waitlist.models import (
 )
 from rail_waitlist.schemas import KORAIL_BROWSER_COMPANION_SOURCE
 
-
 ENDPOINT = "/api/v1/korail-browser-snapshot-revision"
 
 

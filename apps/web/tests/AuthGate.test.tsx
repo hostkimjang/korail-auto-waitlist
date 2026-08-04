@@ -19,7 +19,7 @@ const authApi = vi.hoisted(() => {
   };
 });
 
-vi.mock("../src/api.js", () => authApi);
+vi.mock("../src/api/auth", () => authApi);
 
 import { AuthGate } from "../src/features/auth/AuthGate";
 import type { AuthState } from "../src/features/auth/useAuthState";

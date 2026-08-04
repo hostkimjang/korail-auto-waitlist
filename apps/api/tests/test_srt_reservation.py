@@ -1,24 +1,23 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-import asyncio
-import threading
-
 import pytest
-from SRT import SRTNotLoggedInError, SeatType
+from SRT import SeatType, SRTNotLoggedInError
 from SRT.errors import SRTNetFunnelError
 from SRT.reservation import SRTReservation
 
 from rail_waitlist.domain import Provider, ReservationOutcome, SeatClass
-from rail_waitlist.schemas import ReservationRequest
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationTarget,
 )
+from rail_waitlist.schemas import ReservationRequest
 from rail_waitlist.srt_reservation import (
     SrtReservationExecutor,
     SrtSessionActorState,
@@ -101,11 +100,7 @@ class FakeClient:
         assert window_seat is None
         return FakeReservation(
             tickets=[
-                FakeTicket(
-                    seat_type_code=(
-                        "2" if special_seat is SeatType.SPECIAL_ONLY else "1"
-                    )
-                )
+                FakeTicket(seat_type_code=("2" if special_seat is SeatType.SPECIAL_ONLY else "1"))
             ]
         )
 
@@ -219,13 +214,8 @@ async def test_read_only_srt_list_confirms_class_passengers_and_deadline() -> No
         Credentials(),
     )
 
-    assert (
-        confirmation.outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-    )
-    assert confirmation.payment_deadline == datetime(
-        2099, 12, 31, 23, 59, tzinfo=KOREA
-    )
+    assert confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    assert confirmation.payment_deadline == datetime(2099, 12, 31, 23, 59, tzinfo=KOREA)
 
 
 async def test_read_only_list_recovers_deadline_from_srtrain_official_fields() -> None:
@@ -261,9 +251,7 @@ async def test_read_only_list_recovers_deadline_from_srtrain_official_fields() -
         def get_reservations(self, paid_only=False):
             return [] if paid_only else [reservation]
 
-    executor = SrtReservationExecutor(
-        lambda _login_id, _password: OfficialRecordClient()
-    )
+    executor = SrtReservationExecutor(lambda _login_id, _password: OfficialRecordClient())
     confirmation = await executor.confirm_reservation(
         ReservationConfirmationTarget(
             attempt_id="attempt-1",
@@ -280,13 +268,8 @@ async def test_read_only_list_recovers_deadline_from_srtrain_official_fields() -
         Credentials(),
     )
 
-    assert (
-        confirmation.outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-    )
-    assert confirmation.payment_deadline == datetime(
-        2026, 8, 1, 13, 48, tzinfo=KOREA
-    )
+    assert confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    assert confirmation.payment_deadline == datetime(2026, 8, 1, 13, 48, tzinfo=KOREA)
 
 
 async def test_expired_session_reinitializes_only_the_read_only_search():

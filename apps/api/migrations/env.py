@@ -11,7 +11,6 @@ from rail_waitlist import models  # noqa: F401
 from rail_waitlist.config import get_settings
 from rail_waitlist.database import Base
 
-
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)

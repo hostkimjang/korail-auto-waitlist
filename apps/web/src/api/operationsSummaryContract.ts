@@ -102,6 +102,7 @@ function safeString(value: unknown): string {
 
 function safeDefinition(value: unknown): string | null {
   if (typeof value !== "string") return null;
+  // eslint-disable-next-line no-control-regex -- Admin summaries intentionally remove control characters.
   const normalized = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
   return normalized ? normalized.slice(0, 240) : null;
 }

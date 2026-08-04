@@ -139,9 +139,9 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 | 단계 | 상태 | 범위 | 산출물 |
 |---|---|---|---|
 | 0. 기준선 | 완료 | 생성물·비밀값 분류, 검증 기준선, 안전한 branch·commit·tag | 재현 가능한 리팩터링 시작점 |
-| 1. 규칙 고정 | 진행 | 컨벤션·계획 문서, formatter/lint/import-boundary 기준 | 이 문서와 자동 품질 gate |
+| 1. 규칙 고정 | 완료 | 컨벤션·계획 문서, formatter/lint/import-boundary 기준 | 이 문서와 자동 품질 gate |
 | 2. 기계적 분리 | 진행 | demo fixture, 공용 API client, 작은 router/schema 이동 | 행동 변화 없는 작은 모듈 |
-| 3. 웹 수직 슬라이스 | 계획 | `NewWait` form·station·timetable·registration 흐름 | feature별 TS/TSX와 회귀 테스트 |
+| 3. 웹 수직 슬라이스 | 진행 | `NewWait` form·station·timetable·registration 흐름 | feature별 TS/TSX와 회귀 테스트 |
 | 4. 백엔드 정책 | 진행 | watch transition, reservation episode, reconciliation 결정 함수 | 프레임워크 비의존 domain 정책 |
 | 5. 실행 경계 | 계획 | 최소 UoW/repository seam, worker pipeline 분리 | 얇은 route/task와 트랜잭션 테스트 |
 | 6. provider 역할 | 계획 | timetable/observe/reserve/confirm/lifecycle 계약 분리 | capability와 adapter 역할별 검증 |
@@ -158,6 +158,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - API transport 분리: 운영 요약, UI preferences, 철도 계정·runtime 라우트와 Pydantic schema를 기능 패키지로 이동하고 중앙 `schemas.py`에는 객체 identity가 같은 compatibility re-export를 유지했습니다.
 - API domain 분리: 예약 결과의 재시도·수동 확인 투영 정책을 `reservations/domain.py`로 이동하고 모든 `ReservationOutcome`을 표 기반 테스트로 고정했습니다. 모든 `domain.py`의 프레임워크·provider SDK import와 향후 application 모듈의 FastAPI import를 차단하는 gate도 추가했습니다.
 - 확인된 검증: 웹 strict typecheck, Vitest 51개 파일·347건, production build와 Sites 4건을 통과했고 API 전체 pytest 949건과 Ruff 핵심 규칙·module boundary를 통과했습니다. `experimental-rail` 프로필 전체 이미지를 재빌드·강제 재생성한 뒤 migration·log-init exit 0, 장기 서비스 11개 healthy, 재생성 뒤 새 runtime 오류 표식 0건을 확인했습니다.
+
+### 2026-08-04 두 번째 구조 슬라이스
+
+- 웹 `NewWait` 모델: 초기 폼, KST 서비스 날짜, 날짜·요일 빠른 선택 동기화, 과거 날짜 보정,
+  역명·node ID 원자적 교환, provider 토글과 `reserve_once_before_payment`의 fail-closed 보정을
+  `features/new-wait/newWaitForm.ts`의 strict TypeScript 순수 함수로 분리했습니다. 역 카탈로그,
+  시간표 검색, stale query 차단, 선택 우선순위와 등록 상태는 후속 슬라이스입니다.
+- 웹 인증 API: 인증 상태·최초 관리자 등록·비밀번호 로그인·로그아웃을 `api/auth.ts`가 소유하고,
+  기존 `api.js`에는 함수 객체 identity가 같은 compatibility re-export를 유지했습니다. `AuthGate`와
+  `useAuthState`는 새 소유 모듈을 직접 사용합니다.
+- API 알림 transport: Web Push 공개키, 알림 채널 CRUD와 시험 전송 route 및 관련 Pydantic schema를
+  `notification_management/http.py`와 `notification_management/schemas.py`로 이동했습니다. 중앙
+  `schemas.py`의 compatibility export identity를 보존했고, SSE `/events`는 기존 `api.py`에 남겼습니다.
+- 자동 품질 gate: 웹은 `src`·`tests`·`e2e`·`scripts`·`worker`를 런타임별 전역으로 검사하고,
+  전환 전에 존재한 effect/ref 부채 27건만 파일·규칙·위치·소스 행 해시 지문으로 고정합니다. API는
+  전체 `E/F/I` 검사에 더해 현재 미포맷 파일의 경로와 개행 정규화 SHA-256을 고정한 format ratchet을
+  사용합니다. 현재 legacy 미포맷 69개를 격리했으며 새 미포맷 파일, 수정된 legacy 파일, stale 목록은
+  모두 실패합니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정된 기존 경고 27, strict typecheck, Vitest 54개 파일·377건,
+  production build, Sites 4건을 통과했습니다. 통합 작업 트리의 API 전체 pytest 955건도
+  통과했습니다. `experimental-rail` 전체 이미지를 재빌드·강제 재생성한 뒤 migration·log-init
+  exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 오류 표식 0건을
+  확인했습니다.
+- 남은 핵심 부채: 웹 `App.jsx`·`api.js`·`styles.css`, API `services.py`·`worker.py`와 provider 역할
+  분리를 후속 수직 슬라이스로 진행합니다. 이번 완료는 전체 클린 구조 전환 완료를 뜻하지 않습니다.
 
 ## 단계별 완료 기준과 rollback
 
@@ -189,6 +214,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 
 ```powershell
 cd apps/web
+npm run lint
 npm run typecheck
 npm test
 npm run build
@@ -196,6 +222,8 @@ npm run test:sites
 
 cd ../api
 python -m pytest
+uvx --from ruff==0.12.12 ruff check --select E,F,I .
+uv run --extra test python scripts/check_ruff_format_ratchet.py
 
 cd ../..
 docker compose config --quiet

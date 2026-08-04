@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App, Home, NewWait, OfficialHandoff, PaymentHero, Reservations, SeatClassPanel, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App.jsx";
-import { ApiError, buildWatchCreatePayload, normalizeSeatClasses } from "../src/api.js";
+import { ApiError, normalizeSeatClasses } from "../src/api.js";
 import {
   AppToast,
   IMPORTANT_TOAST_AUTO_CLOSE_MS,

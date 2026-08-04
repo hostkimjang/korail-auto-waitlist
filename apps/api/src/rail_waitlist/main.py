@@ -32,6 +32,7 @@ from .korail_browser_seat_source import KorailBrowserSeatSource
 from .korail_seat_source import KorailLiveSeatSource
 from .metrics import HTTP_DURATION, HTTP_REQUESTS, OUTBOX_PENDING
 from .models import OutboxEvent
+from .notification_management.http import router as notification_management_router
 from .operation_summary.http import router as operation_summary_router
 from .provider_account_management.http import router as provider_account_management_router
 from .provider_login_verification import ProviderLoginVerifier
@@ -107,9 +108,7 @@ def create_app(
     app.state.station_catalog_service = StationCatalogService(
         session_factory,
         tago_client=tago_client,
-        station_visibility=KorailStationVisibility(
-            url=settings.korail_station_data_url
-        ),
+        station_visibility=KorailStationVisibility(url=settings.korail_station_data_url),
     )
     app.state.seat_status_redis = Redis.from_url(settings.redis_url, decode_responses=True)
     seat_status_cooldown_store = RedisCooldownStore(app.state.seat_status_redis)
@@ -150,9 +149,7 @@ def create_app(
         cooldown_store=seat_status_cooldown_store,
     )
     app.state.korail_browser_seat_source = KorailBrowserSeatSource(
-        enabled=(
-            settings.experimental_rail_enabled and settings.korail_browser_adapter_enabled
-        ),
+        enabled=(settings.experimental_rail_enabled and settings.korail_browser_adapter_enabled),
         adapter_url=settings.korail_browser_adapter_url,
         cache_ttl_seconds=settings.korail_browser_adapter_cache_ttl_seconds,
         timeout_seconds=settings.korail_browser_adapter_timeout_seconds,
@@ -186,6 +183,7 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(browser_bridge_router)
     app.include_router(browser_companion_admin_router)
+    app.include_router(notification_management_router)
     app.include_router(operation_summary_router)
     app.include_router(provider_account_management_router)
     app.include_router(ui_preferences_router)

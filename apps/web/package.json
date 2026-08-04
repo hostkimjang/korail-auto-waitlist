@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "lint": "node scripts/check-eslint-ratchet.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "playwright test e2e/journey.spec.ts e2e/live-authentication.contract.spec.ts",
@@ -15,7 +16,7 @@
     "test:e2e:live:korail": "playwright test e2e/live-provider.smoke.spec.ts --project=desktop-chromium",
     "test:sites": "node --test tests/sites-worker.test.mjs",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm test && npm run test:e2e && npm run test:e2e:fullstack && npm run build && npm run test:sites"
+    "verify": "npm run lint && npm run typecheck && npm test && npm run test:e2e && npm run test:e2e:fullstack && npm run build && npm run test:sites"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -25,12 +26,19 @@
     "vite": "6.4.3"
   },
   "devDependencies": {
+    "@babel/core": "^8.0.1",
+    "@babel/eslint-parser": "^8.0.1",
+    "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.62.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^26.1.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.9.0",
     "jsdom": "^30.0.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

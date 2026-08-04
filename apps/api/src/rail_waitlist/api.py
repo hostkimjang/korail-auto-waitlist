@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import require_admin
@@ -19,7 +19,6 @@ from .korail_browser_bridge import overlay_korail_browser_snapshots
 from .korail_browser_seat_source import KorailBrowserTimetableUnavailable
 from .models import (
     KorailBrowserSnapshotBatch,
-    NotificationChannel,
     OutboxEvent,
     ReservationAttempt,
     SeatObservation,
@@ -42,13 +41,9 @@ from .providers import (
 from .schemas import (
     EventRead,
     KorailBrowserSnapshotRevision,
-    NotificationChannelCreate,
-    NotificationChannelRead,
-    NotificationChannelUpdate,
     OfficialPageSeatConfirmationCreate,
     OfficialPageSeatConfirmationRead,
     ProviderCapabilities,
-    QueuedResponse,
     ReservationResult,
     SeatStatusRefreshRequest,
     SeatStatusSourceStatus,
@@ -60,16 +55,13 @@ from .schemas import (
 )
 from .seat_status_cooldown import ProviderCooldown
 from .services import (
-    add_outbox_event,
     begin_reservation_attempt,
     complete_reservation_attempt,
-    create_notification_channel,
     create_watch,
     find_watch,
     payment_hold_end_reason,
     reservation_attempt_result_policy,
     transition_watch,
-    update_notification_channel,
     update_watch,
 )
 from .srt_live_timetable import map_srt_live_timetable
@@ -589,8 +581,7 @@ async def _watch_read(
             payment_hold_ended = hold_end_reason is not None
             automatic_hold_retry = (
                 payment_hold_ended
-                and watch.reservation_policy
-                is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
+                and watch.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
             )
             candidate["latest_reservation_attempt"] = {
                 "outcome": latest_attempt.outcome,
@@ -600,8 +591,7 @@ async def _watch_read(
                 "post_deadline_reconciled_at": latest_attempt.post_deadline_reconciled_at,
                 "payment_hold_end_reason": hold_end_reason,
                 "retryable": (
-                    automatic_hold_retry
-                    or (not payment_hold_ended and result_policy.retryable)
+                    automatic_hold_retry or (not payment_hold_ended and result_policy.retryable)
                 ),
                 "manual_check_required": (
                     False if payment_hold_ended else result_policy.manual_check_required
@@ -609,7 +599,9 @@ async def _watch_read(
                 "retry_condition": (
                     "new_availability_episode"
                     if automatic_hold_retry
-                    else None if payment_hold_ended else result_policy.retry_condition
+                    else None
+                    if payment_hold_ended
+                    else result_policy.retry_condition
                 ),
             }
     return WatchRead.model_validate(
@@ -782,8 +774,7 @@ async def watches_start(
         and started.status is WatchStatus.SCHEDULED
         and started.next_check_at is not None
         and started.provider in {Provider.KORAIL, Provider.SRT}
-        and started.reservation_policy
-        is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
+        and started.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
         and await has_authenticated_provider_account(session, started.provider)
         and get_execution_provider(started.provider).capabilities().reservation_once
     ):
@@ -868,9 +859,7 @@ async def watches_mock_transition(
         if created:
             await session.commit()
         normalized_deadline = (
-            payment_deadline.astimezone(timezone.utc)
-            if payment_deadline
-            else None
+            payment_deadline.astimezone(timezone.utc) if payment_deadline else None
         )
         await complete_reservation_attempt(
             session,
@@ -889,77 +878,6 @@ async def watches_mock_transition(
         await session.refresh(watch)
         return await _watch_read(session, watch)
     return await _watch_read(session, await transition_watch(session, watch, target))
-
-
-@router.post("/notifications/channels", response_model=NotificationChannelRead, status_code=201)
-async def channels_create(
-    data: NotificationChannelCreate, session: Session
-) -> NotificationChannel:
-    return await create_notification_channel(session, data)
-
-
-@router.get("/notifications/web-push/public-key")
-async def webpush_public_key() -> dict[str, str]:
-    public_key = get_settings().webpush_public_key()
-    if not public_key:
-        raise HTTPException(503, "Web Push VAPID public key is not configured")
-    return {"public_key": public_key}
-
-
-@router.get("/notifications/channels", response_model=list[NotificationChannelRead])
-async def channels_list(session: Session) -> list[NotificationChannel]:
-    rows = await session.scalars(
-        select(NotificationChannel).order_by(NotificationChannel.created_at)
-    )
-    return list(rows.all())
-
-
-async def find_channel(session: AsyncSession, channel_id: str) -> NotificationChannel:
-    channel = await session.get(NotificationChannel, channel_id)
-    if channel is None:
-        raise HTTPException(404, "notification channel not found")
-    return channel
-
-
-@router.get("/notifications/channels/{channel_id}", response_model=NotificationChannelRead)
-async def channels_get(channel_id: str, session: Session) -> NotificationChannel:
-    return await find_channel(session, channel_id)
-
-
-@router.patch("/notifications/channels/{channel_id}", response_model=NotificationChannelRead)
-async def channels_update(
-    channel_id: str, data: NotificationChannelUpdate, session: Session
-) -> NotificationChannel:
-    return await update_notification_channel(session, await find_channel(session, channel_id), data)
-
-
-@router.delete("/notifications/channels/{channel_id}", status_code=204)
-async def channels_delete(channel_id: str, session: Session) -> Response:
-    await find_channel(session, channel_id)
-    await session.execute(delete(NotificationChannel).where(NotificationChannel.id == channel_id))
-    await session.commit()
-    return Response(status_code=204)
-
-
-@router.post(
-    "/notifications/channels/{channel_id}/test-send",
-    response_model=QueuedResponse,
-    status_code=202,
-)
-async def channels_test_send(channel_id: str, session: Session) -> QueuedResponse:
-    channel = await find_channel(session, channel_id)
-    if not channel.enabled:
-        raise HTTPException(409, "notification channel is disabled")
-    event = await add_outbox_event(
-        session,
-        aggregate_type="notification_channel",
-        aggregate_id=channel.id,
-        event_type="notification.test_requested",
-        payload={"channel_id": channel.id, "message": "KORAIL·SRT 알림 테스트입니다."},
-        dedupe_key=f"notification:{channel.id}:test:{datetime.now().isoformat()}",
-    )
-    await session.commit()
-    return QueuedResponse(queued=True, event_id=event.id)
 
 
 def event_wire(event: OutboxEvent) -> str:
@@ -988,9 +906,7 @@ async def events(
         while not await request.is_disconnected():
             async with SessionFactory() as session:
                 query = (
-                    select(OutboxEvent)
-                    .order_by(OutboxEvent.created_at, OutboxEvent.id)
-                    .limit(100)
+                    select(OutboxEvent).order_by(OutboxEvent.created_at, OutboxEvent.id).limit(100)
                 )
                 if cursor_time is not None:
                     query = query.where(

@@ -14,13 +14,13 @@ from zoneinfo import ZoneInfo
 
 from requests import RequestException
 from SRT import (
-    Adult,
     SRT,
+    Adult,
+    SeatType,
     SRTError,
     SRTLoginError,
     SRTNotLoggedInError,
     SRTResponseError,
-    SeatType,
 )
 from SRT.errors import SRTNetFunnelError
 
@@ -192,9 +192,7 @@ def _payment_deadline(reservation: _SrtReservation) -> datetime | None:
     if len(raw_date) != 8 or len(raw_time) < 4:
         return None
     try:
-        return datetime.strptime(f"{raw_date}{raw_time[:4]}", "%Y%m%d%H%M").replace(
-            tzinfo=KOREA
-        )
+        return datetime.strptime(f"{raw_date}{raw_time[:4]}", "%Y%m%d%H%M").replace(tzinfo=KOREA)
     except ValueError:
         return None
 

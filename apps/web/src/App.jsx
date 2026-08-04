@@ -77,6 +77,14 @@ import { SystemStatusDashboard } from "./features/settings/SystemStatusDashboard
 import { TimetableRefreshSettings } from "./features/settings/TimetableRefreshSettings";
 import { ProviderAccountSettings } from "./features/settings/ProviderAccountSettings";
 import { buildTimetableQueryKey } from "./features/new-wait/timetableQueryKey";
+import {
+  createInitialNewWaitForm,
+  selectNewWaitWeekday,
+  seoulDateInput,
+  setNewWaitTravelDate,
+  swapNewWaitStations,
+  toggleNewWaitProvider,
+} from "./features/new-wait/newWaitForm";
 import { createLiveDataReloadCoordinator } from "./features/app/liveDataReloadCoordinator";
 import { createReservationPolicyMutationGuard } from "./features/home/reservationPolicyMutationGuard";
 import {
@@ -152,7 +160,6 @@ const providers = [
   { id: "SRT", name: "SRT", helper: "SRT 시간표" },
 ];
 
-const weekdayLabels = ["일", "월", "화", "수", "목", "금", "토"];
 const timePresets = [
   { label: "새벽", start: "05:00", end: "09:00" },
   { label: "오전", start: "09:00", end: "12:00" },
@@ -160,36 +167,13 @@ const timePresets = [
   { label: "저녁", start: "18:00", end: "23:00" },
 ];
 
-function seoulDateInput(dayOffset = 0) {
-  const value = new Date(Date.now() + dayOffset * 24 * 60 * 60 * 1000);
-  const parts = new Intl.DateTimeFormat("en-US", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "Asia/Seoul",
-  }).formatToParts(value);
-  const part = (type) => parts.find((item) => item.type === type)?.value;
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
 function parseDateInput(value) {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day);
 }
 
-function dateInputValue(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
 function dateLabel(value) {
   return new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" }).format(parseDateInput(value));
-}
-
-function nextWeekdayDate(baseValue, weekday) {
-  const base = parseDateInput(baseValue < seoulDateInput() ? seoulDateInput() : baseValue);
-  const distance = (weekday - base.getDay() + 7) % 7;
-  base.setDate(base.getDate() + distance);
-  return dateInputValue(base);
 }
 
 function TimeRangePicker({ start, end, onChange }) {
@@ -212,27 +196,6 @@ function TimeRangePicker({ start, end, onChange }) {
       </div>
     </div>
   );
-}
-
-function useCountdown(initialSeconds) {
-  const [seconds, setSeconds] = useState(initialSeconds);
-
-  useEffect(() => {
-    setSeconds(initialSeconds);
-    if (initialSeconds === null) return undefined;
-    const timer = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000);
-    return () => window.clearInterval(timer);
-  }, [initialSeconds]);
-
-  const formatted = useMemo(() => {
-    if (seconds === null) return "--:--:--";
-    const hours = String(Math.floor(seconds / 3600)).padStart(2, "0");
-    const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
-    const rest = String(seconds % 60).padStart(2, "0");
-    return `${hours}:${minutes}:${rest}`;
-  }, [seconds]);
-
-  return { seconds, formatted, minuteLabel: seconds === null ? "결제 기한 확인 필요" : `${Math.max(1, Math.ceil(seconds / 60))}분 남음` };
 }
 
 function Sidebar({ activeView, onNavigate }) {
@@ -642,31 +605,19 @@ const TrainResultCard = memo(function TrainResultCard({
 ));
 
 export function NewWait({ demo, watches = [], providerAccounts = [], refreshIntervalSeconds = DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS, onComplete, onCancelWatch = async () => undefined, onCancel }) {
-  const initialDate = seoulDateInput(1);
   const [step, setStep] = useState(1);
   const [submitError, setSubmitError] = useState("");
   const [trains, setTrains] = useState([]);
   const [timetableState, setTimetableState] = useState({ loadingProviders: [], providerResults: {} });
   const [stationReloadKey, setStationReloadKey] = useState(0);
   const reservationPolicyManuallySelectedRef = useRef(false);
-  const [form, setForm] = useState({
-    provider: "KORAIL",
-    providers: ["KORAIL"],
-    origin: demo ? "서울" : "",
-    origin_node_id: demo ? demoNodeId("서울") : null,
-    destination: demo ? "부산" : "",
-    destination_node_id: demo ? demoNodeId("부산") : null,
-    date: initialDate,
-    time: "12:00",
-    timeEnd: "18:00",
-    selectedWeekdays: [weekdayLabels[parseDateInput(initialDate).getDay()]],
-    passengers: "1",
-    seat: "일반실",
-    channels: ["web_push", "telegram"],
-    reservationPolicy: demo
-      ? "notify_only"
-      : defaultReservationPolicy(["KORAIL"], providerAccounts),
-  });
+  const [form, setForm] = useState(() => createInitialNewWaitForm({
+    demo,
+    providerAccounts,
+    demoOriginNodeId: demo ? demoNodeId("서울") : null,
+    demoDestinationNodeId: demo ? demoNodeId("부산") : null,
+    now: new Date(),
+  }));
   const { getRegistrationState, register, cancel: cancelRegistration, successCount } = useInstantWatchRegistration();
   const registrationStateForSeat = (train, seatClass) => {
     const local = getRegistrationState(seatRegistrationKey(train.id, seatClass));
@@ -701,31 +652,16 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
     });
   }, [demo, providerAccounts, stationProviderKey]);
 
-  const swapStations = () => setForm((value) => ({
-    ...value,
-    origin: value.destination,
-    origin_node_id: value.destination_node_id,
-    destination: value.origin,
-    destination_node_id: value.origin_node_id,
+  const swapStations = () => setForm(swapNewWaitStations);
+  const setTravelDate = (date) => setForm((value) => setNewWaitTravelDate(value, date));
+  const selectWeekday = (weekday) => setForm((value) => (
+    selectNewWaitWeekday(value, weekday, seoulDateInput(new Date()))
+  ));
+  const toggleProvider = (provider) => setForm((value) => toggleNewWaitProvider(value, provider, {
+    demo,
+    providerAccounts,
+    reservationPolicyManuallySelected: reservationPolicyManuallySelectedRef.current,
   }));
-  const setTravelDate = (date) => setForm((value) => ({ ...value, date, selectedWeekdays: [weekdayLabels[parseDateInput(date).getDay()]] }));
-  const selectWeekday = (weekday) => setTravelDate(nextWeekdayDate(form.date, weekdayLabels.indexOf(weekday)));
-  const toggleProvider = (provider) => setForm((value) => {
-    const selected = value.providers.includes(provider) ? value.providers.filter((item) => item !== provider) : [...value.providers, provider];
-    const defaultPolicy = demo
-      ? "notify_only"
-      : defaultReservationPolicy(selected, providerAccounts);
-    const reservationPolicy = reservationPolicyManuallySelectedRef.current
-      && !(value.reservationPolicy === "reserve_once_before_payment" && defaultPolicy === "notify_only")
-      ? value.reservationPolicy
-      : defaultPolicy;
-    return {
-      ...value,
-      providers: selected,
-      provider: selected[0] ?? "",
-      reservationPolicy,
-    };
-  });
   const chooseTrainSeatImplementation = async (id, seatClass) => {
     const train = trains.find((item) => item.id === id);
     if (!train || !form.providers.includes(train.provider)) return;
@@ -793,7 +729,7 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
   const stepOneErrors = [
     form.providers.length === 0 ? "KTX(KORAIL) 또는 SRT 운영사를 1개 이상 선택해 주세요." : "",
     form.origin_node_id && form.origin_node_id === form.destination_node_id ? "출발역과 도착역은 달라야 합니다." : "",
-    form.date < seoulDateInput() ? "오늘 이후 날짜를 선택해 주세요." : "",
+    form.date < seoulDateInput(new Date()) ? "오늘 이후 날짜를 선택해 주세요." : "",
     form.time >= form.timeEnd ? "출발 종료 시간은 시작 시간보다 늦어야 합니다." : "",
     form.selectedWeekdays.length !== 1 ? "출발 요일을 하나 선택해 주세요." : "",
   ].filter(Boolean);
@@ -857,7 +793,7 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
         destination: stations.some((station) => station.name === value.destination && station.nodeId === value.destination_node_id) ? value.destination : "",
         destination_node_id: stations.some((station) => station.name === value.destination && station.nodeId === value.destination_node_id) ? value.destination_node_id : null,
       }));
-    }).catch((error) => {
+    }).catch(() => {
       if (!active) return;
       setStationState({
         status: "error",
@@ -930,7 +866,7 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
         loadingProviders: value.loadingProviders.filter((item) => item !== provider),
         providerResults: { ...value.providerResults, ...result.providerResults },
       }));
-    } catch (error) {
+    } catch {
       if (timetableQueryKeyRef.current !== requestQueryKey) return;
       setTimetableState((value) => ({
         loadingProviders: value.loadingProviders.filter((item) => item !== provider),
@@ -1734,7 +1670,7 @@ export function App() {
     }
   };
 
-  const completeWizard = async ({ form, train, selectedTrains }) => {
+  const completeWizard = async ({ form, selectedTrains }) => {
     let createdWatches;
     if (auth.demo) {
       createdWatches = selectedTrains.map((item, index) => ({

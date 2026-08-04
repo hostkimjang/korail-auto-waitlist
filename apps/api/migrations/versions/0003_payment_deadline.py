@@ -1,8 +1,7 @@
 """Add optional payment deadline used by payment-required UX."""
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0003_payment_deadline"
 down_revision = "0002_admin_auth"

@@ -75,6 +75,12 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
 ### 경계와 오류
 
 - Python 3.12와 Ruff `line-length=100`을 기준으로 합니다.
+- Ruff의 `E/F/I` 검사는 전체 Python 경로에 적용합니다. formatter 전환 전의 파일은 경로와
+  개행을 LF로 정규화한 SHA-256이 함께 기록된 `apps/api/ruff-format-legacy.txt`에만 한시적으로
+  둘 수 있습니다.
+  목록에 없는 새 미포맷 파일, 수정됐지만 아직 미포맷인 기존 파일, 이미 포맷돼 불필요해진 목록
+  항목은 모두 format ratchet 실패로 처리합니다. 기존 파일을 수정할 때는 목록의 해시를 갱신하지
+  않고 해당 파일을 포맷한 뒤 항목을 제거합니다.
 - FastAPI route는 인증, 요청·응답 검증, 트랜잭션 진입, application 오류의 HTTP 변환만 담당합니다.
 - Pydantic schema는 transport 계약이고 도메인 객체를 대신하지 않습니다. 외부 provider 응답도 경계에서 검증한 뒤 내부 결과로 변환합니다.
 - application service는 도메인 오류를 반환하거나 발생시키며 `HTTPException`에 의존하지 않습니다.
@@ -99,7 +105,11 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
 - 순수 domain 정책은 빠른 단위 테스트로, DTO·route·repository는 경계 테스트로, PostgreSQL 잠금·unique·CAS는 실제 DB 통합 테스트로 검증합니다.
 - provider 테스트는 외부 호출을 기본으로 하지 않습니다. fixture와 fake transport로 timeout, 보호 응답, 부분 실패, 불명확 결과의 fail-closed 동작을 검증합니다.
 - 테스트를 통과시키기 위해 타입검사 범위를 줄이거나 실패 테스트를 삭제하지 않습니다. 테스트 수가 줄면 삭제 근거를 문서와 변경 설명에 남깁니다.
-- 웹 수직 슬라이스는 기본적으로 `npm run typecheck`, `npm test`, `npm run build`를 실행합니다. Sites 경계를 바꾸면 `npm run test:sites`도 실행합니다.
+- 웹 수직 슬라이스는 기본적으로 `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`를 실행합니다. Sites 경계를 바꾸면 `npm run test:sites`도 실행합니다.
+- 웹 ESLint는 `src`·`tests`·`e2e`·`scripts`·`worker`의 JS/JSX/MJS/TS/TSX를 검사하고, 브라우저·
+  테스트·Node script·Worker 전역을 분리합니다. 전환 전에 존재하던 effect/ref 경고 27건만
+  `eslint-warning-baseline.json`의 파일·규칙·위치·소스 행 해시로 고정합니다. 새 경고, 바뀐 경고,
+  해결돼 불필요해진 stale 항목은 모두 실패하며 baseline을 늘려 통과시키지 않습니다.
 - API 변경은 관련 pytest를 먼저 실행하고 가능한 경우 전체 pytest를 실행합니다. Compose 경계 변경은 `docker compose config --quiet`, build, migration, health를 확인합니다.
 - 접근성·반응형 변경은 키보드, 스크린리더 이름, 44px 행동 영역, 320px, 200% 확대, 가로 넘침을 관련 범위에서 확인합니다.
 

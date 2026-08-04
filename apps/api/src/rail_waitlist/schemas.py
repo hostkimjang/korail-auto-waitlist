@@ -14,7 +14,6 @@ from pydantic import (
 
 from .domain import (
     BookingWindowStatus,
-    NotificationKind,
     OperationalStatus,
     Provider,
     ReservationOutcome,
@@ -25,6 +24,7 @@ from .domain import (
     WatchStatus,
 )
 from .korail_search_bootstrap import validate_korail_general_search_url
+from .notification_management import schemas as notification_management_schemas
 from .operation_summary import schemas as operation_summary_schemas
 from .provider_account_management import schemas as provider_account_management_schemas
 from .schema_base import ApiModel
@@ -44,6 +44,10 @@ OperationsSummary = operation_summary_schemas.OperationsSummary
 OperationStatusCount = operation_summary_schemas.OperationStatusCount
 OperationsWindow = operation_summary_schemas.OperationsWindow
 OperationWindowCounts = operation_summary_schemas.OperationWindowCounts
+NotificationChannelCreate = notification_management_schemas.NotificationChannelCreate
+NotificationChannelRead = notification_management_schemas.NotificationChannelRead
+NotificationChannelUpdate = notification_management_schemas.NotificationChannelUpdate
+QueuedResponse = notification_management_schemas.QueuedResponse
 RailLoginMethod = provider_account_management_schemas.RailLoginMethod
 RailProviderAccountRead = provider_account_management_schemas.RailProviderAccountRead
 RailProviderAccountUpsert = provider_account_management_schemas.RailProviderAccountUpsert
@@ -1152,34 +1156,6 @@ class WatchRead(ApiModel):
         if value is not None and value.scheme != "https":
             raise ValueError("official_booking_url must use HTTPS")
         return value
-
-
-class NotificationChannelCreate(ApiModel):
-    kind: NotificationKind
-    name: str = Field(min_length=1, max_length=80)
-    config: dict[str, Any]
-    enabled: bool = True
-
-
-class NotificationChannelUpdate(ApiModel):
-    name: str | None = Field(default=None, min_length=1, max_length=80)
-    config: dict[str, Any] | None = None
-    enabled: bool | None = None
-
-
-class NotificationChannelRead(ApiModel):
-    id: str
-    kind: NotificationKind
-    name: str
-    enabled: bool
-    configured: bool = True
-    created_at: datetime
-    updated_at: datetime
-
-
-class QueuedResponse(ApiModel):
-    queued: bool
-    event_id: str
 
 
 class HealthResponse(ApiModel):

@@ -8,6 +8,12 @@ import { mapOperationalCandidate } from "./domain/watchOperational";
 import { API_ROOT, ApiError, request } from "./api/client";
 
 export { ApiError } from "./api/client";
+export {
+  getAuthStatus,
+  loginWithPassword,
+  logout,
+  registerAdmin,
+} from "./api/auth";
 
 export const DEMO_MODE = import.meta.env.DEV && import.meta.env.VITE_DEMO_MODE !== "false";
 
@@ -697,30 +703,6 @@ export function mapWatch(watch) {
       : 25,
     nextCheckAt: awareTimestamp(watch.next_check_at) ? String(watch.next_check_at) : null,
   };
-}
-
-export async function getAuthStatus() {
-  return request("/auth/status");
-}
-
-export async function registerAdmin(username, password) {
-  return request("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-    skipCsrf: true,
-  });
-}
-
-export async function loginWithPassword(username, password) {
-  return request("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
-    skipCsrf: true,
-  });
-}
-
-export async function logout() {
-  return request("/auth/logout", { method: "POST" });
 }
 
 export async function fetchWatches() {

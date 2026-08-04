@@ -28,6 +28,15 @@ Migration `0026_unified_observation_interval`는 앞선 작업별 속도 실험�
 
 코드 구조는 배포 단위를 유지하는 모듈형 모놀리스를 목표로 합니다. 웹은 `app -> features -> api/domain/shared`, API는 `FastAPI·Celery·bootstrap -> application -> domain` 의존 방향을 사용하고 DB·provider·알림 구현은 application이 정의한 계약을 구현합니다. 빈 계층을 일괄 생성하지 않고 기능별 수직 슬라이스로 이동하며, 상세 디렉터리와 단계별 완료·rollback 기준은 [클린 구조 리팩터링 계획](REFACTORING_PLAN.md), import·트랜잭션·테스트 규칙은 [코드 컨벤션](CODE_CONVENTIONS.md)을 따릅니다.
 
+현재 전환 단계에서 웹의 인증 endpoint는 `api/auth.ts`, 새 대기의 폼·KST 날짜·요일·역 교환과
+provider별 예약 정책 보정은 `features/new-wait/newWaitForm.ts`가 소유합니다. 기존 `api.js`는
+인증 함수 객체 identity가 같은 compatibility re-export를 유지하므로 아직 제거 완료가 아닙니다.
+API의 알림 채널 관리 HTTP route와 transport schema는 `notification_management/` 기능 패키지가
+소유하고, 중앙 `schemas.py`는 같은 Pydantic class 객체를 다시 export합니다. 실시간 outbox 이벤트
+stream인 `/events`는 알림 채널 CRUD와 수명주기가 다른 기존 `api.py` 경계에 남겨 두었습니다.
+이 이동은 공개 endpoint·payload·인증·알림 전달 정책을 바꾸지 않는 기계적 분리이며,
+`App.jsx`·`api.js`·`styles.css`와 API `services.py`·`worker.py`·provider 경계의 추가 분리가 남아 있습니다.
+
 ## 주요 흐름
 
 1. 관리자 계정이 없고 서버 운영자가 `AUTH_INITIAL_REGISTRATION_ENABLED=true`를 명시한 최초 접속에서만 관리자 ID와 비밀번호를 등록합니다. 정규화한 ID, Argon2id 비밀번호 해시, 인증 세션을 DB 트랜잭션으로 저장하고 등록 직후 앱에 진입합니다. 계정이 생기면 설정값과 무관하게 추가 등록은 닫히며, 이후에는 유효 세션이 없을 때만 ID·비밀번호 로그인 화면을 표시합니다.

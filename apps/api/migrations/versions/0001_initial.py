@@ -1,8 +1,7 @@
 """Initial single-admin service schema."""
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0001_initial"
 down_revision = None
@@ -13,13 +12,29 @@ depends_on = None
 def upgrade() -> None:
     provider = sa.Enum("KORAIL", "SRT", "MOCK", name="provider", native_enum=False)
     watch_status = sa.Enum(
-        "DRAFT", "SCHEDULED", "WATCHING", "OFFICIAL_WAITLIST", "SEAT_FOUND",
-        "RESERVING", "PAYMENT_REQUIRED", "COMPLETED", "PAUSED", "COOLDOWN",
-        "AUTH_REQUIRED", "EXPIRED", "FAILED", name="watchstatus", native_enum=False,
+        "DRAFT",
+        "SCHEDULED",
+        "WATCHING",
+        "OFFICIAL_WAITLIST",
+        "SEAT_FOUND",
+        "RESERVING",
+        "PAYMENT_REQUIRED",
+        "COMPLETED",
+        "PAUSED",
+        "COOLDOWN",
+        "AUTH_REQUIRED",
+        "EXPIRED",
+        "FAILED",
+        name="watchstatus",
+        native_enum=False,
     )
     channel_kind = sa.Enum(
-        "WEB_PUSH", "TELEGRAM", "DISCORD_WEBHOOK", "GENERIC_WEBHOOK",
-        name="notificationkind", native_enum=False,
+        "WEB_PUSH",
+        "TELEGRAM",
+        "DISCORD_WEBHOOK",
+        "GENERIC_WEBHOOK",
+        name="notificationkind",
+        native_enum=False,
     )
     outbox_status = sa.Enum("PENDING", "SENT", "FAILED", name="outboxstatus", native_enum=False)
 

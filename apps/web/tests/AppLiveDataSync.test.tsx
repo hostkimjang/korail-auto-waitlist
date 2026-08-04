@@ -21,9 +21,13 @@ vi.mock("../src/api.js", async (importOriginal) => {
     DEMO_MODE: false,
     fetchWatches: liveApi.fetchWatches,
     fetchNotificationChannels: liveApi.fetchNotificationChannels,
-    getAuthStatus: liveApi.getAuthStatus,
     subscribeToEvents: liveApi.subscribeToEvents,
   };
+});
+
+vi.mock("../src/api/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/api/auth")>();
+  return { ...actual, getAuthStatus: liveApi.getAuthStatus };
 });
 
 vi.mock("../src/api/uiPreferences", () => ({

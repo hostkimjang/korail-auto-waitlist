@@ -8,12 +8,16 @@ from redis.asyncio import Redis
 
 from .config import Settings
 from .korail_browser_seat_source import KorailBrowserSeatSource
-from .schemas import SeatObservationRequest, SeatObservationResult
-from .schemas import ReservationRequest, ReservationResult
 from .provider_accounts import ProviderCredentials
 from .reservation_confirmation import (
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
+)
+from .schemas import (
+    ReservationRequest,
+    ReservationResult,
+    SeatObservationRequest,
+    SeatObservationResult,
 )
 from .seat_status_cooldown import RedisCooldownStore
 

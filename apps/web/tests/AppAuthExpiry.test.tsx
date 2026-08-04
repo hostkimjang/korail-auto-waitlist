@@ -14,9 +14,13 @@ vi.mock("../src/api.js", async (importOriginal) => {
     fetchWatches: authApi.fetchWatches,
     fetchNotificationChannels: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
-    getAuthStatus: authApi.getAuthStatus,
     subscribeToEvents: vi.fn(() => () => undefined),
   };
+});
+
+vi.mock("../src/api/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/api/auth")>();
+  return { ...actual, getAuthStatus: authApi.getAuthStatus };
 });
 
 vi.mock("../src/api/providerAccounts", () => ({

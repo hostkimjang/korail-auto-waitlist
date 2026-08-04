@@ -217,9 +217,14 @@
 - [x] 루트 `output/`·Playwright 도구 상태와 API pytest 임시 디렉터리·cache를 Git 제외 대상으로 고정하고 `check-ignore` 및 `docker compose config --quiet` 확인
 - [x] 생성물·비밀값 제외와 전체 검증 결과를 확인하고 `codex/clean-architecture` 최초 commit `a5ab434`·tag `clean-architecture-phase-1-baseline-20260804` 확보
 - [x] 웹 import-boundary ratchet과 API domain/application framework import gate를 추가하고 기존 허용 예외 11개 제거
-- [ ] 신규·변경 코드부터 적용할 웹 ESLint와 API Ruff format ratchet을 CI에 추가
+- [x] 웹 `src`·`tests`·`e2e`·`scripts`·`worker`의 런타임별 ESLint와 API 전체 Ruff `E/F/I`·개행 정규화 SHA-256 format ratchet을 루트 verify/CI에 연결. 전환 전 effect/ref 경고 27건은 파일·규칙·위치·소스 행 지문으로, legacy 미포맷은 정확한 69개 경로·해시로 격리하고 신규·변경·stale 부채 차단 반례 확인
 - [x] 웹 demo fixture, 공용 API client, settings API mapper, App 알림 UI와 공용 결제기한 정책·hook·UI를 목표 소유 경계로 이동하고 typecheck·Vitest 347건·production build 검증
 - [x] 첫 구조 슬라이스 통합 후 Sites 4건·API 전체 pytest 949건·Ruff 핵심 규칙·module boundary·`git diff --check` 통과, `experimental-rail` 전체 재빌드·강제 재생성 뒤 migration·log-init exit 0·장기 서비스 11개 healthy·새 runtime 오류 표식 0건 확인
+- [x] `NewWait`의 폼·KST 초기 날짜·날짜/요일 동기화·과거 날짜 보정·역명/node ID 원자적 교환·provider 토글과 예약 정책 fail-closed 보정을 strict TS 순수 모델로 분리하고 계약 테스트 추가
+- [x] 웹 관리자 인증 API를 `api/auth.ts`로 분리하고 `AuthGate`·`useAuthState`가 직접 사용하도록 전환하되 `api.js` 함수 객체 identity 호환 export와 endpoint·CSRF 계약 유지
+- [x] API의 Web Push 공개키·알림 채널 CRUD·시험 전송 route와 schema를 `notification_management` 기능 패키지로 이동하고 중앙 schema 객체 identity·인증·오류·commit 계약 유지. SSE `/events`는 기존 `api.py`에 유지
+- [x] 두 번째 웹 구조 슬라이스의 ESLint 오류 0·고정된 기존 경고 27, strict·unused typecheck, Vitest 54개 파일·377건, production build, Sites 4건과 통합 작업 트리 API 전체 pytest 955건 확인
+- [x] 두 번째 구조 슬라이스 통합 작업 트리의 API 전체 pytest 955건과 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 오류 표식 0건 확인
 - [ ] 웹 도메인 타입·API validator/mapper를 `.ts`로 분리하고 `api.js` 제거
 - [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거

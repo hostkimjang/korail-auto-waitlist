@@ -16,10 +16,12 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "tests"],
+  "include": ["src", "tests", "e2e"],
   "exclude": ["dist", "node_modules"]
 }

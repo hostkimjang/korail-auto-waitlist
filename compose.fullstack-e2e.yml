@@ -1,0 +1,135 @@
+services:
+  api:
+    environment:
+      ENVIRONMENT: test
+      AUTH_INITIAL_REGISTRATION_ENABLED: "true"
+      AUTH_ALLOWED_ORIGINS: ${E2E_BASE_URL:?E2E_BASE_URL is required}
+      CORS_ORIGINS: ${E2E_BASE_URL:?E2E_BASE_URL is required}
+      AUTH_COOKIE_SECURE: "false"
+      TAGO_SERVICE_KEY: e2e-fixture-key
+      TAGO_BASE_URL: http://e2e-fake-upstream:8001/tago
+      KORAIL_STATION_DATA_URL: http://e2e-fake-upstream:8001/station_data.json
+      SRT_SEAT_STATUS_ENABLED: "true"
+      SRT_SEAT_MONITORING_ENABLED: "true"
+      SRT_FULLSTACK_FIXTURE_URL: http://e2e-fake-upstream:8001/srt/search
+      EXPERIMENTAL_RAIL_ENABLED: "true"
+      KORAIL_BROWSER_ADAPTER_ENABLED: "true"
+      KORAIL_SEAT_MONITORING_ENABLED: "true"
+      KORAIL_BROWSER_ADAPTER_URL: http://korail-browser-adapter:8001
+      KORAIL_BROWSER_ADAPTER_TOKEN: ${E2E_BROWSER_TOKEN:?E2E_BROWSER_TOKEN is required}
+    depends_on:
+      e2e-fake-upstream:
+        condition: service_healthy
+    networks: !override
+      - app
+      - data
+    volumes:
+      - ./apps/api/tests/fullstack:/fullstack:ro
+
+  worker:
+    environment:
+      ENVIRONMENT: test
+      EXPERIMENTAL_RAIL_ENABLED: "true"
+      SRT_SEAT_STATUS_ENABLED: "true"
+      SRT_SEAT_MONITORING_ENABLED: "true"
+      SRT_FULLSTACK_FIXTURE_URL: http://e2e-fake-upstream:8001/srt/search
+      KORAIL_BROWSER_ADAPTER_ENABLED: "true"
+      KORAIL_SEAT_MONITORING_ENABLED: "true"
+      KORAIL_BROWSER_ADAPTER_URL: http://korail-browser-adapter:8001
+      KORAIL_BROWSER_ADAPTER_TOKEN: ${E2E_BROWSER_TOKEN:?E2E_BROWSER_TOKEN is required}
+    depends_on:
+      e2e-fake-upstream:
+        condition: service_healthy
+      korail-browser-adapter:
+        condition: service_healthy
+    networks: !override
+      - app
+      - data
+
+  scheduler:
+    networks: !override
+      - app
+      - data
+
+  korail-browser-adapter:
+    environment:
+      ENVIRONMENT: test
+      KORAIL_BROWSER_PAGE_URL: http://e2e-korail-page:8080/korail_browser_page.html
+      KORAIL_BROWSER_ADAPTER_TOKEN: ${E2E_BROWSER_TOKEN:?E2E_BROWSER_TOKEN is required}
+      KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS: "10"
+      KORAIL_BROWSER_CACHE_TTL_SECONDS: "5"
+    depends_on:
+      e2e-korail-page:
+        condition: service_healthy
+    networks: !override
+      - app
+
+  migration:
+    networks: !override
+      - data
+
+  proxy:
+    networks: !override
+      - e2e-host
+      - app
+
+  e2e-fake-upstream:
+    image: python:3.12-alpine
+    init: true
+    read_only: true
+    command: ["python", "/fixture/fake_upstream.py"]
+    volumes:
+      - ./apps/api/tests/fullstack/fake_upstream.py:/fixture/fake_upstream.py:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=2)
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    networks:
+      - app
+
+  e2e-korail-page:
+    image: python:3.12-alpine
+    init: true
+    read_only: true
+    command:
+      - python
+      - -m
+      - http.server
+      - "8080"
+      - --directory
+      - /fixture
+    volumes:
+      - ./apps/api/tests/fixtures/korail_browser_page.html:/fixture/korail_browser_page.html:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/korail_browser_page.html', timeout=2)
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    networks:
+      - app
+
+networks:
+  e2e-host:

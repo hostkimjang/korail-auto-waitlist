@@ -1,0 +1,36 @@
+FROM mcr.microsoft.com/playwright/python:v1.55.0-noble AS browser-base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome
+
+# The working host-side Pydoll PoC runs against the installed stable Google
+# Chrome. Keep the server sidecar on the same browser family instead of the
+# Playwright image's older bundled Chromium; Pydoll still controls it directly
+# over CDP and no WebDriver layer is introduced.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSLo /tmp/google-chrome-stable.deb \
+        https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && apt-get install -y --no-install-recommends /tmp/google-chrome-stable.deb \
+    && rm -f /tmp/google-chrome-stable.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir ".[browser]"
+
+FROM browser-base AS test
+
+USER root
+COPY tests ./tests
+RUN pip install --no-cache-dir ".[browser,test]"
+USER pwuser
+CMD ["pytest", "tests/test_korail_browser_automation.py", "tests/test_korail_direct_cdp.py", "tests/test_korail_pydoll_browser.py", "-q", "-p", "no:cacheprovider"]
+
+FROM browser-base AS runtime
+
+USER pwuser
+EXPOSE 8001
+CMD ["uvicorn", "rail_waitlist.korail_browser_adapter_service:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]

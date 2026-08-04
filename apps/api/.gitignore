@@ -1,0 +1,9 @@
+.venv/
+.pytest_cache/
+.test-tmp/
+.tmp-pytest-*/
+.uv-cache/
+output/
+__pycache__/
+*.py[cod]
+*.db

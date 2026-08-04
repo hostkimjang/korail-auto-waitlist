@@ -1,0 +1,20 @@
+{
+  "name": "korail-browser-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.332",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^22.15.3",
+    "esbuild": "^0.25.4",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}

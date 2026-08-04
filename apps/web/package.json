@@ -1,0 +1,38 @@
+{
+  "name": "web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test e2e/journey.spec.ts e2e/live-authentication.contract.spec.ts",
+    "test:e2e:fullstack": "node scripts/run-fullstack-e2e.mjs",
+    "test:e2e:live": "npm run test:e2e:live:srt",
+    "test:e2e:live:srt": "playwright test e2e/live-srt-provider.smoke.spec.ts --project=desktop-chromium",
+    "test:e2e:live:korail": "playwright test e2e/live-provider.smoke.spec.ts --project=desktop-chromium",
+    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm test && npm run test:e2e && npm run test:e2e:fullstack && npm run build && npm run test:sites"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@vitejs/plugin-react": "5.0.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "vite": "6.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^30.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

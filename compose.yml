@@ -1,0 +1,659 @@
+name: ${COMPOSE_PROJECT_NAME:-rail-waitlist}
+
+x-rotated-logging: &rotated-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-common: &app-common
+  image: rail-waitlist-api:local
+  build:
+    context: ./apps/api
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  environment: &api-environment
+    TZ: ${TZ:-Asia/Seoul}
+    ENVIRONMENT: production
+    PYTHONDONTWRITEBYTECODE: "1"
+    DATABASE_HOST: postgres
+    DATABASE_PORT: "5432"
+    DATABASE_NAME: ${POSTGRES_DB:-rail_waitlist}
+    DATABASE_USER: ${POSTGRES_USER:-rail_waitlist}
+    DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/1
+    SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:?SECRET_ENCRYPTION_KEY must be set in .env}
+    AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET must be set in .env}
+    AUTH_INITIAL_REGISTRATION_ENABLED: ${AUTH_INITIAL_REGISTRATION_ENABLED:-false}
+    TAGO_SERVICE_KEY: ${TAGO_SERVICE_KEY:-}
+    SRT_SEAT_STATUS_ENABLED: ${SRT_SEAT_STATUS_ENABLED:-false}
+    SRT_SEAT_MONITORING_ENABLED: ${SRT_SEAT_MONITORING_ENABLED:-false}
+    SRT_RESERVATION_ONCE_ENABLED: ${SRT_RESERVATION_ONCE_ENABLED:-false}
+    SRT_SEAT_STATUS_CACHE_TTL_SECONDS: ${SRT_SEAT_STATUS_CACHE_TTL_SECONDS:-1}
+    SRT_SEAT_STATUS_TIMEOUT_SECONDS: ${SRT_SEAT_STATUS_TIMEOUT_SECONDS:-8}
+    SRT_PROVIDER_ADAPTER_ENABLED: ${SRT_PROVIDER_ADAPTER_ENABLED:-false}
+    SRT_PROVIDER_ADAPTER_URL: http://srt-provider-adapter:8002
+    SRT_PROVIDER_ADAPTER_TOKEN: ${SRT_PROVIDER_ADAPTER_TOKEN:-}
+    SRT_PROVIDER_ADAPTER_TIMEOUT_SECONDS: ${SRT_PROVIDER_ADAPTER_TIMEOUT_SECONDS:-30}
+    KORAIL_BROWSER_BRIDGE_ENABLED: ${KORAIL_BROWSER_BRIDGE_ENABLED:-true}
+    KORAIL_BROWSER_ADAPTER_ENABLED: ${KORAIL_BROWSER_ADAPTER_ENABLED:-false}
+    KORAIL_SEAT_MONITORING_ENABLED: ${KORAIL_SEAT_MONITORING_ENABLED:-false}
+    KORAIL_RESERVATION_ONCE_ENABLED: ${KORAIL_RESERVATION_ONCE_ENABLED:-false}
+    KORAIL_BROWSER_ADAPTER_URL: http://korail-browser-adapter:8001
+    KORAIL_BROWSER_ADAPTER_TOKEN: ${KORAIL_BROWSER_ADAPTER_TOKEN:-}
+    KORAIL_BROWSER_ADAPTER_CACHE_TTL_SECONDS: ${KORAIL_BROWSER_ADAPTER_CACHE_TTL_SECONDS:-1}
+    KORAIL_BROWSER_ADAPTER_TIMEOUT_SECONDS: ${KORAIL_BROWSER_ADAPTER_TIMEOUT_SECONDS:-90}
+    SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS: ${SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS:-1800}
+    SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS: ${SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS:-300}
+    APP_LOG_MAX_BYTES: ${APP_LOG_MAX_BYTES:-5242880}
+    APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-4}
+    APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+    WEBPUSH_VAPID_PRIVATE_KEY: ${WEBPUSH_VAPID_PRIVATE_KEY:-}
+    WEBPUSH_VAPID_PUBLIC_KEY: ${WEBPUSH_VAPID_PUBLIC_KEY:-}
+    WEBPUSH_VAPID_SUBJECT: ${WEBPUSH_VAPID_SUBJECT:-mailto:admin@example.invalid}
+    AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-http://localhost,http://localhost:80}
+    CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:80}
+    AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+    EXPERIMENTAL_RAIL_ENABLED: ${EXPERIMENTAL_RAIL_ENABLED:-false}
+  networks:
+    - app
+    - data
+    - edge
+  volumes:
+    - ./logs:/logs
+  logging: *rotated-logging
+
+services:
+  log-init:
+    image: alpine:3.20
+    restart: "no"
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        for service in api worker notification-worker scheduler experimental-rail srt-provider-adapter; do
+          mkdir -p "/logs/$${service}"
+          chown 100:101 "/logs/$${service}"
+          chmod 0750 "/logs/$${service}"
+        done
+        mkdir -p /logs/korail-browser-adapter
+        chown 1001:1001 /logs/korail-browser-adapter
+        chmod 0750 /logs/korail-browser-adapter
+    volumes:
+      - ./logs:/logs
+
+  proxy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      WEB_UPSTREAM: ${WEB_UPSTREAM:-web:8080}
+      API_UPSTREAM: ${API_UPSTREAM:-api:8000}
+    ports:
+      - "${CADDY_HTTP_BIND:-127.0.0.1:80}:80"
+      - "${CADDY_HTTPS_BIND:-127.0.0.1:443}:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - edge
+      - app
+    logging: *rotated-logging
+
+  web:
+    image: rail-waitlist-web:local
+    build:
+      context: ./apps/web
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /var/cache/nginx:size=32m,uid=101,gid=101,mode=0755
+      - /var/run:size=4m,uid=101,gid=101,mode=0755
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - app
+    logging: *rotated-logging
+
+  migration:
+    <<: *app-common
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api:
+    <<: *app-common
+    command: ["uvicorn", "rail_waitlist.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+    environment:
+      <<: *api-environment
+      APP_LOG_FILE: /logs/api/current.log
+      APP_LOG_SERVICE: api
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      korail-browser-adapter:
+        condition: service_healthy
+        required: false
+      srt-provider-adapter:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  scheduler:
+    <<: *app-common
+    command: ["celery", "-A", "rail_waitlist.worker.celery_app", "beat", "--loglevel=INFO", "--pidfile=/tmp/celerybeat.pid", "--schedule=/tmp/celerybeat-schedule"]
+    environment:
+      <<: *api-environment
+      APP_LOG_FILE: /logs/scheduler/current.log
+      APP_LOG_SERVICE: scheduler
+    deploy:
+      replicas: 1
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      srt-provider-adapter:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/celerybeat.pid && kill -0 $$(cat /tmp/celerybeat.pid)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    <<: *app-common
+    command: ["celery", "-A", "rail_waitlist.worker.celery_app", "worker", "--loglevel=INFO", "--queues=rail", "--concurrency=1", "--hostname=rail@%h"]
+    environment:
+      <<: *api-environment
+      APP_LOG_FILE: /logs/worker/current.log
+      APP_LOG_SERVICE: worker
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      korail-browser-adapter:
+        condition: service_healthy
+        required: false
+      srt-provider-adapter:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A rail_waitlist.worker.celery_app inspect ping --destination rail@$${HOSTNAME} --timeout 5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  notification-worker:
+    <<: *app-common
+    command: ["celery", "-A", "rail_waitlist.worker.celery_app", "worker", "--loglevel=INFO", "--queues=notifications", "--concurrency=1", "--hostname=notifications@%h"]
+    environment:
+      <<: *api-environment
+      APP_LOG_FILE: /logs/notification-worker/current.log
+      APP_LOG_SERVICE: notification-worker
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A rail_waitlist.worker.celery_app inspect ping --destination notifications@$${HOSTNAME} --timeout 5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      POSTGRES_DB: ${POSTGRES_DB:-rail_waitlist}
+      POSTGRES_USER: ${POSTGRES_USER:-rail_waitlist}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - data
+    logging: *rotated-logging
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    init: true
+    user: redis
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - data
+    logging: *rotated-logging
+
+  experimental-rail:
+    <<: *app-common
+    profiles: ["experimental-rail"]
+    command: ["celery", "-A", "rail_waitlist.worker.celery_app", "worker", "--loglevel=INFO", "--queues=experimental-rail", "--concurrency=1", "--hostname=experimental-rail@%h"]
+    environment:
+      <<: *api-environment
+      EXPERIMENTAL_RAIL_ENABLED: "true"
+      APP_LOG_FILE: /logs/experimental-rail/current.log
+      APP_LOG_SERVICE: experimental-rail
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      srt-provider-adapter:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A rail_waitlist.worker.celery_app inspect ping --destination experimental-rail@$${HOSTNAME} --timeout 5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  korail-browser-adapter:
+    image: rail-waitlist-korail-browser-adapter:local
+    profiles: ["experimental-rail"]
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.browser
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: pwuser
+    shm_size: 1gb
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      KORAIL_BROWSER_ENGINE: ${KORAIL_BROWSER_ENGINE:-pydoll}
+      KORAIL_BROWSER_PAGE_URL: https://www.korail.com/ticket/search/general
+      KORAIL_BROWSER_ADAPTER_TOKEN: ${KORAIL_BROWSER_ADAPTER_TOKEN:-}
+      KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS: ${KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS:-25}
+      KORAIL_BROWSER_CACHE_TTL_SECONDS: ${KORAIL_BROWSER_ADAPTER_CACHE_TTL_SECONDS:-1}
+      KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS: ${KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS:-1800}
+      KORAIL_BROWSER_SESSION_REUSE_MAX_SEARCHES: ${KORAIL_BROWSER_SESSION_REUSE_MAX_SEARCHES:-100}
+      SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS: ${SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS:-1800}
+      SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS: ${SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS:-300}
+      APP_LOG_FILE: /logs/korail-browser-adapter/current.log
+      APP_LOG_SERVICE: korail-browser-adapter
+      APP_LOG_MAX_BYTES: ${APP_LOG_MAX_BYTES:-5242880}
+      APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-4}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /home/pwuser:size=64m,uid=1001,gid=1001,mode=0700
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./logs:/logs
+    networks:
+      - app
+      - browser-egress
+    logging: *rotated-logging
+
+  srt-provider-adapter:
+    image: rail-waitlist-api:local
+    profiles: ["experimental-rail"]
+    build:
+      context: ./apps/api
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: app
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["uvicorn", "rail_waitlist.srt_provider_adapter_service:app", "--host", "0.0.0.0", "--port", "8002", "--no-access-log"]
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      ENVIRONMENT: production
+      PYTHONDONTWRITEBYTECODE: "1"
+      REDIS_URL: redis://redis:6379/0
+      SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:?SECRET_ENCRYPTION_KEY must be set in .env}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET must be set in .env}
+      SRT_PROVIDER_ADAPTER_TOKEN: ${SRT_PROVIDER_ADAPTER_TOKEN:-}
+      SRT_SEAT_STATUS_CACHE_TTL_SECONDS: ${SRT_SEAT_STATUS_CACHE_TTL_SECONDS:-1}
+      SRT_SEAT_STATUS_TIMEOUT_SECONDS: ${SRT_SEAT_STATUS_TIMEOUT_SECONDS:-8}
+      SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS: ${SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS:-1800}
+      SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS: ${SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS:-300}
+      APP_LOG_FILE: /logs/srt-provider-adapter/current.log
+      APP_LOG_SERVICE: srt-provider-adapter
+      APP_LOG_MAX_BYTES: ${APP_LOG_MAX_BYTES:-5242880}
+      APP_LOG_BACKUP_COUNT: ${APP_LOG_BACKUP_COUNT:-4}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/readyz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/logs
+    networks:
+      - app
+      - data
+      - browser-egress
+    logging: *rotated-logging
+
+  korail-browser-adapter-test:
+    image: rail-waitlist-korail-browser-adapter-test:local
+    profiles: ["test"]
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.browser
+      target: test
+    init: true
+    read_only: true
+    user: pwuser
+    network_mode: none
+    shm_size: 1gb
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /home/pwuser:size=64m,uid=1001,gid=1001,mode=0700
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    init: true
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - app
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    init: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command: [": \"$${GF_SECURITY_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}\"; exec /run.sh"]
+    user: "472:472"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/ops/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - app
+      - monitoring
+
+  ntfy:
+    image: binwiederhier/ntfy:v2.11.0
+    profiles: ["ntfy"]
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["serve"]
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      NTFY_BASE_URL: http://ntfy:80
+      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+      NTFY_ATTACHMENT_CACHE_DIR: /var/cache/ntfy/attachments
+      NTFY_AUTH_FILE: /var/cache/ntfy/user.db
+      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+    volumes:
+      - ntfy_cache:/var/cache/ntfy
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "ntfy", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - app
+
+  backup:
+    image: rail-waitlist-backup:local
+    profiles: ["backup"]
+    build:
+      context: .
+      dockerfile: ./infra/backup/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-rail_waitlist}
+      PGUSER: ${POSTGRES_USER:-rail_waitlist}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:-}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - backups:/backups
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h postgres -U $${PGUSER} -d $${PGDATABASE}"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - data
+
+  restore:
+    image: rail-waitlist-backup:local
+    profiles: ["restore"]
+    build:
+      context: .
+      dockerfile: ./infra/backup/Dockerfile
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/scripts/restore-postgres.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-rail_waitlist}
+      PGUSER: ${POSTGRES_USER:-rail_waitlist}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      BACKUP_AGE_IDENTITY: ${BACKUP_AGE_IDENTITY:-}
+    volumes:
+      - backups:/backups:ro
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  grafana_data:
+  ntfy_cache:
+  backups:
+
+networks:
+  edge:
+  app:
+    internal: true
+  data:
+    internal: true
+  monitoring:
+    internal: true
+  browser-egress:

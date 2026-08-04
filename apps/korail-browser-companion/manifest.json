@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "레일웨잇 KORAIL 결과 가져오기",
+  "version": "0.1.0",
+  "description": "사용자가 직접 연 KORAIL 검색 결과를 한 번만 읽어 로컬 레일웨잇에 전달합니다.",
+  "action": {
+    "default_title": "KORAIL 결과 가져오기",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://[::1]/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.korail.com/ticket/search/list*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "http://[::1]/*"
+      ],
+      "js": ["app-bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'"
+  }
+}

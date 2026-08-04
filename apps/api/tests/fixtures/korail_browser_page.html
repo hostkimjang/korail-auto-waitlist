@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <title>KORAIL fixture</title>
+    <style>
+      .slideWrap .slick-list { width: 600px; height: 72px; overflow: hidden; }
+      .slideWrap .slick-track { white-space: nowrap; }
+      .slideWrap .slick-slide { display: inline-block; width: 72px; height: 56px; }
+    </style>
+  </head>
+  <body>
+    <img src="analytics.png" alt="" hidden>
+    <main id="search-main" hidden>
+      <div class="station-block">
+        <span>출발역</span>
+        <input name="txtGoStart" aria-label="출발역" value="서울">
+        <a href="#" id="origin-trigger" aria-label="출발역 선택">출발역 선택</a>
+      </div>
+      <div class="station-block">
+        <span>도착역</span>
+        <input name="txtGoEnd" aria-label="도착역" value="부산">
+        <a href="#" id="destination-trigger" aria-label="도착역 선택">도착역 선택</a>
+      </div>
+      <span>출발일</span>
+      <a href="#" id="date-trigger" title="출발일">출발일 선택</a>
+      <input id="startDate" aria-label="출발일" value="2026-07-30(목) 14:00" disabled>
+      <span>인원</span>
+      <a href="#" class="data btn_pop">총 1명</a>
+      <button id="search" type="button">열차 조회</button>
+      <ul id="results" hidden>
+        <li class="tckList fixed-result">
+          <div class="tck_inner">
+            <div class="tit_box"><span class="num">무궁화호 1161</span></div>
+            <div class="data_box right">형식이 다른 비 KTX 행</div>
+            <div class="price_box gen">일반실 28,600원</div>
+          </div>
+        </li>
+        <li class="tckList fixed-result">
+          <div class="tck_inner">
+            <div class="tit_box"><span class="num">KTX 043</span></div>
+            <div class="data_box right">서울 → 부산(15:45 ~ 18:30)<span>소요시간: 2시간 45분</span></div>
+            <div class="price_box yms">입석 + 좌석</div>
+            <div class="price_box sold_out">매진</div>
+          </div>
+        </li>
+        <li class="tckList fixed-result">
+          <div class="tck_inner">
+            <div class="tit_box"><span class="num">KTX 047</span></div>
+            <div class="data_box right">서울 → 부산(16:28 ~ 19:05)<span>소요시간: 2시간 37분</span></div>
+            <div class="price_box sold_out_soon">일반실(매진임박) 59,800원</div>
+            <div class="price_box sold_out">매진</div>
+          </div>
+        </li>
+        <li class="tckList fullstack-result" hidden>
+          <div class="tck_inner">
+            <div class="tit_box"><span class="num">KTX 9001</span></div>
+            <div class="data_box right">서울 → 부산(13:00 ~ 15:30)<span>소요시간: 2시간 30분</span></div>
+            <div class="price_box gen">일반실 59,800원</div>
+            <div class="price_box spe sold_out">매진</div>
+          </div>
+        </li>
+        <li class="tckList pagination-result" hidden>
+          <div class="tck_inner">
+            <div class="tit_box"><span class="num">KTX 049</span></div>
+            <div class="data_box right">서울 → 부산(17:00 ~ 19:42)<span>소요시간: 2시간 42분</span></div>
+            <div class="price_box gen">일반실 59,800원</div>
+            <div class="price_box sold_out">매진</div>
+          </div>
+        </li>
+      </ul>
+      <a href="#" id="more-results" hidden>더보기</a>
+      <p id="policy-notice" hidden>매크로 등 미허가 도구 사용 시 이용 제한</p>
+      <div id="protection-alert" role="alert" hidden>비정상 접근입니다</div>
+    </main>
+    <dialog id="station-dialog" role="dialog" aria-labelledby="station-heading">
+      <h2 id="station-heading">기차역 조회</h2>
+      <div class="sch_form">
+        <div class="sch_box">
+          <input aria-label="역명을 입력해주세요" title="역명을 입력해주세요" placeholder="역 이름 또는 초성 검색(서울 : ㅅㅇ)">
+          <button type="button">검색</button>
+        </div>
+        <div class="sch_wrap"><ul><li><a href="#" id="station-result"></a></li></ul></div>
+      </div>
+      <div class="tab-content"><a href="#" class="popular-station">서울</a></div>
+    </dialog>
+    <dialog id="date-dialog" role="dialog" aria-labelledby="date-heading">
+      <h2 id="date-heading">날짜 선택</h2>
+      <button type="button" id="calendar-next" aria-label="Next">Next</button>
+      <div class="datepk_wrap">
+        <div class="slick-slide slick-active slick-current">
+          <div class="datepicker">
+            <p class="date">2026. 07.</p>
+            <table><tbody><tr>
+              <td><a href="#" data-date="2026-07-30">30</a></td>
+              <td><a href="#" data-date="2026-07-31">31</a></td>
+            </tr></tbody></table>
+          </div>
+        </div>
+        <div class="slick-slide slick-active">
+          <div class="datepicker">
+            <p class="date">2026. 08.</p>
+            <table><tbody><tr><td id="day-3-cell" class="disabled"><a href="#" id="day-3" data-date="2026-08-03" aria-disabled="true">3</a></td></tr></tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="time-carousel">
+        <div class="slideWrap">
+          <div class="slick-list">
+            <div class="slick-track">
+              <div class="slick-slide slick-active slick-current">
+                <li><a href="#" data-hour="12" aria-disabled="false">12시</a></li>
+                <li><a href="#" data-hour="13" aria-disabled="false">13시</a></li>
+                <li><a href="#" id="hour-14" aria-disabled="true">14시</a></li>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="slick-next slick-disabled" disabled>Next</button>
+        </div>
+        <button type="button" id="time-next" class="slick-next" aria-label="Next">Next</button>
+      </div>
+      <button type="button" id="date-apply">적용</button>
+    </dialog>
+    <script>
+      window.setTimeout(() => {
+        document.querySelector("#search-main").hidden = false;
+      }, 150);
+      const dialog = document.querySelector("#station-dialog");
+      const input = dialog.querySelector("input");
+      const result = dialog.querySelector("#station-result");
+      const query = new URLSearchParams(window.location.search);
+      const scenario = query.get("scenario");
+      const trackClick = query.has("track_click");
+      if (scenario === "more_results") {
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        document.querySelector("#hour-14").setAttribute("aria-disabled", "false");
+        document.querySelector("#hour-14").dataset.hour = "14";
+      }
+      if (scenario === "duplicate_hour_control") {
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        document.querySelector(".slideWrap .slick-slide").insertAdjacentHTML(
+          "afterbegin",
+          '<li><a href="#" data-hour="05" aria-disabled="true">05시</a></li>'
+            + '<li><a href="#" data-hour="05" aria-disabled="false">05시</a></li>',
+        );
+        document.querySelector(".fullstack-result .data_box.right").innerHTML =
+          "서울 → 부산(05:30 ~ 08:00)<span>소요시간: 2시간 30분</span>";
+      }
+      if (scenario === "same_day_morning") {
+        document.querySelector("#startDate").value = "2026-08-02(일) 02:00";
+        document.querySelector(".slideWrap .slick-slide").innerHTML = [2, 3, 4, 5, 6]
+          .map((hour) => `<li class="${hour === 2 ? "current" : ""}">`
+            + `<a href="#" data-hour="${String(hour).padStart(2, "0")}" aria-disabled="false">`
+            + `${String(hour).padStart(2, "0")}시</a></li>`)
+          .join("");
+        document.querySelector(".fullstack-result .data_box.right").innerHTML =
+          "서울 → 부산(05:30 ~ 08:00)<span>소요시간: 2시간 30분</span>";
+      }
+      if ([
+        "selected_disabled_hour_control",
+        "disabled_hour_preselection_mismatch",
+        "multiple_disabled_hours",
+      ].includes(scenario)) {
+        document.querySelector("#startDate").value =
+          scenario === "disabled_hour_preselection_mismatch"
+            ? "2026-08-02(일) 04:00"
+            : "2026-08-02(일) 05:00";
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        document.querySelector(".slideWrap .slick-slide").innerHTML = scenario === "multiple_disabled_hours"
+          ? '<li><a href="#" data-hour="04" aria-disabled="true">04시</a></li>'
+            + '<li><a href="#" data-hour="05" aria-disabled="true">05시</a></li>'
+            + '<li><a href="#" data-hour="06" aria-disabled="false">06시</a></li>'
+          : '<li><a href="#" data-hour="04" aria-disabled="false">04시</a></li>'
+            + '<li><a href="#" data-hour="05" aria-disabled="true">05시</a></li>'
+            + '<li><a href="#" data-hour="06" aria-disabled="false">06시</a></li>';
+        document.querySelector(".fullstack-result .data_box.right").innerHTML =
+          "서울 → 부산(05:30 ~ 08:00)<span>소요시간: 2시간 30분</span>";
+      }
+      if (scenario === "date_change_stale_disabled_hour") {
+        document.querySelector("#startDate").value = "2026-08-02(일) 20:00";
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        document.querySelector(".slideWrap .slick-slide").innerHTML =
+          '<li><a href="#" data-hour="17" aria-disabled="false">17시</a></li>'
+            + '<li><a href="#" id="stale-hour-18" data-hour="18" '
+            + 'aria-disabled="true">18시</a></li>'
+            + '<li><a href="#" data-hour="19" aria-disabled="false">19시</a></li>';
+        document.querySelector(".fullstack-result .data_box.right").innerHTML =
+          "서울 → 부산(18:30 ~ 21:00)<span>소요시간: 2시간 30분</span>";
+      }
+      const adjacentHourScenarios = [
+        "adjacent_hour_window",
+        "adjacent_hour_window_no_progress",
+        "adjacent_selected_hour",
+        "soft_aria_hour_click",
+      ];
+      if (adjacentHourScenarios.includes(scenario)) {
+        if (scenario === "adjacent_selected_hour") {
+          document.querySelector("#startDate").value = "2026-08-02(일) 05:00";
+        }
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        const adjacentSlides = [
+          ...Array.from({ length: 5 }, (_, hour) =>
+            `<div class="slick-slide slick-active${hour === 0 ? " slick-current" : ""}">`
+              + `<li class="${hour === 0 ? "current" : ""}">`
+              + `<a href="#" data-hour="${String(hour).padStart(2, "0")}" aria-disabled="false">`
+              + `${String(hour).padStart(2, "0")}시</a></li></div>`),
+          ...Array.from({ length: 5 }, (_, offset) => {
+            const hour = offset + 5;
+            return `<div class="slick-slide slick-active"><li>`
+              + `<a href="#" data-hour="${String(hour).padStart(2, "0")}" aria-disabled="true">`
+              + `${String(hour).padStart(2, "0")}시</a></li></div>`;
+          }),
+        ].join("");
+        document.querySelector(".slideWrap").innerHTML =
+          `<div class="slick-list"><div class="slick-track">${adjacentSlides}</div></div>`;
+        document.querySelector(".fullstack-result .data_box.right").innerHTML =
+          "서울 → 부산(05:30 ~ 08:00)<span>소요시간: 2시간 30분</span>";
+        const hourWrap = document.querySelector(".slideWrap .slick-list");
+        let hourDragStart = null;
+        hourWrap.addEventListener("mousedown", (event) => {
+          if (event.isTrusted) hourDragStart = event.clientX;
+        });
+        hourWrap.addEventListener("mouseup", (event) => {
+          if (hourDragStart === null || hourDragStart - event.clientX < 30) return;
+          hourDragStart = null;
+          if (scenario === "adjacent_hour_window_no_progress") return;
+          const slides = Array.from(document.querySelectorAll(".slideWrap .slick-slide"));
+          slides.forEach((slide) => slide.classList.remove("slick-current"));
+          slides[5].classList.add("slick-current");
+          slides.slice(5).forEach((slide, offset) => {
+            slide.querySelector("a").setAttribute(
+              "aria-disabled",
+              scenario === "adjacent_selected_hour" && offset === 0 ? "true" : "false",
+            );
+          });
+        });
+      }
+      const previousHourScenarios = [
+        "previous_hour_window_mouse",
+        "previous_hour_window_anchor_arrow",
+      ];
+      if (previousHourScenarios.includes(scenario)) {
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        const slides = Array.from({ length: 24 }, (_, hour) => {
+          const active = hour >= 12 && hour <= 18 ? " slick-active" : "";
+          const current = hour === 18 ? " slick-current" : "";
+          const enabled = hour >= 12 && hour <= 18 ? "false" : "true";
+          return `<div class="slick-slide${active}${current}"><li class="${hour === 18 ? "current" : ""}">`
+            + `<a href="#" data-hour="${String(hour).padStart(2, "0")}" aria-disabled="${enabled}">`
+            + `${String(hour).padStart(2, "0")}시</a></li></div>`;
+        }).join("");
+        document.querySelector(".slideWrap").innerHTML =
+          `<div class="slick-list"><div class="slick-track">${slides}</div></div>`;
+        document.querySelector(".fullstack-result .data_box.right").innerHTML =
+          "서울 → 부산(12:30 ~ 15:00)<span>소요시간: 2시간 30분</span>";
+        const shiftPreviousWindow = () => {
+          const hourSlides = Array.from(document.querySelectorAll(".slideWrap .slick-slide"));
+          hourSlides.forEach((slide, hour) => {
+            slide.classList.toggle("slick-active", hour >= 7 && hour <= 17);
+            slide.classList.toggle("slick-current", hour === 12);
+            slide.querySelector("li").classList.toggle("current", hour === 12);
+            slide.querySelector("a").setAttribute(
+              "aria-disabled",
+              hour >= 7 && hour <= 17 ? "false" : "true",
+            );
+          });
+        };
+        if (scenario === "previous_hour_window_anchor_arrow") {
+          document.querySelector(".slideWrap").insertAdjacentHTML(
+            "afterbegin",
+            '<a href="#" class="slick-prev" aria-label="Previous hour">Previous</a>',
+          );
+          document.querySelector(".slideWrap .slick-prev").addEventListener("click", (event) => {
+            event.preventDefault();
+            shiftPreviousWindow();
+          });
+        } else {
+          const hourWrap = document.querySelector(".slideWrap .slick-list");
+          let mouseStart = null;
+          hourWrap.addEventListener("mousedown", (event) => {
+            if (event.isTrusted) mouseStart = event.clientX;
+          });
+          hourWrap.addEventListener("mouseup", (event) => {
+            if (mouseStart === null || event.clientX - mouseStart < 30) return;
+            mouseStart = null;
+            shiftPreviousWindow();
+          });
+        }
+      }
+      if (scenario === "keyboard_previous_hour_window") {
+        document.querySelector("#startDate").value = "2026-08-02(일) 20:00";
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        const renderHours = (hours, currentHour) => hours.map((hour) =>
+          `<div class="slick-slide slick-active${hour === currentHour ? " slick-current" : ""}">`
+            + `<li class="${hour === currentHour ? "current" : ""}">`
+            + `<a href="#" data-hour="${String(hour).padStart(2, "0")}" aria-disabled="false">`
+            + `${String(hour).padStart(2, "0")}시</a></li></div>`
+        ).join("");
+        document.querySelector(".slideWrap").innerHTML =
+          `<div class="slick-list" tabindex="0"><div class="slick-track">`
+            + renderHours([20, 21, 22, 23], 20)
+            + "</div></div>";
+        document.querySelector(".fullstack-result .data_box.right").innerHTML =
+          "서울 → 부산(18:30 ~ 21:00)<span>소요시간: 2시간 30분</span>";
+        document.querySelector(".slideWrap .slick-list").addEventListener("keydown", (event) => {
+          if (!event.isTrusted || event.key !== "ArrowLeft") return;
+          event.preventDefault();
+          event.currentTarget.querySelector(".slick-track").innerHTML =
+            renderHours([18, 19, 20, 21, 22], 18);
+        });
+      }
+      if ([
+        "all_hour_dom_click",
+        "all_hour_dom_click_ignored",
+        "all_hour_dom_minute_mismatch",
+      ].includes(scenario)) {
+        document.querySelector("#day-3-cell").classList.remove("disabled");
+        document.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        const allHourSlides = Array.from(
+          { length: 24 },
+          (_, hour) => {
+            const active = hour < 10 ? " slick-active" : "";
+            const current = hour === 0 ? " slick-current" : "";
+            const enabled = hour < 5 ? "false" : "true";
+            return `<div class="slick-slide${active}${current}"><li class="${hour === 0 ? "current" : ""}">`
+              + `<a href="#" data-hour="${String(hour).padStart(2, "0")}" aria-disabled="${enabled}">`
+              + `${String(hour).padStart(2, "0")}시</a></li></div>`;
+          },
+        ).join("");
+        document.querySelector(".slideWrap").innerHTML =
+          `<div class="slick-list"><div class="slick-track">${allHourSlides}</div></div>`;
+        const hourWrap = document.querySelector(".slideWrap .slick-list");
+        let hourDragStart = null;
+        let hourDragMoves = 0;
+        hourWrap.addEventListener("mousedown", (event) => {
+          if (event.isTrusted) {
+            hourDragStart = event.clientX;
+            hourDragMoves = 0;
+          }
+        });
+        hourWrap.addEventListener("mousemove", (event) => {
+          if (hourDragStart !== null && event.isTrusted && event.buttons === 1) {
+            hourDragMoves += 1;
+          }
+        });
+        hourWrap.addEventListener("mouseup", (event) => {
+          if (
+            hourDragStart === null
+            || hourDragStart - event.clientX < 30
+            || hourDragMoves < 3
+          ) return;
+          hourDragStart = null;
+          const slides = Array.from(document.querySelectorAll(".slideWrap .slick-slide"));
+          slides.forEach((slide, hour) => {
+            slide.classList.toggle("slick-active", hour >= 5 && hour < 15);
+            slide.classList.toggle("slick-current", hour === 5);
+            slide.querySelector("a").setAttribute(
+              "aria-disabled",
+              hour >= 5 && hour < 15 ? "false" : "true",
+            );
+          });
+        });
+      }
+      let target = null;
+      for (const id of ["origin", "destination"]) {
+        document.querySelector(`#${id}-trigger`).addEventListener("click", (event) => {
+          event.preventDefault();
+          target = document.querySelector(
+            id === "origin" ? "input[name='txtGoStart']" : "input[name='txtGoEnd']",
+          );
+          input.value = "";
+          result.textContent = "";
+          dialog.querySelectorAll(".station-result-duplicate").forEach((item) => item.remove());
+          dialog.showModal();
+        });
+      }
+      input.addEventListener("input", () => {
+        const value = input.value;
+        const renderResult = () => {
+          result.textContent = value;
+          if (scenario === "duplicate_station_result") {
+            result.closest("li").insertAdjacentHTML(
+              "afterend",
+              `<li class="station-result-duplicate"><a href="#">${value}</a></li>`,
+            );
+          }
+        };
+        if (["delayed_station_result", "duplicate_station_result"].includes(scenario)) {
+          window.setTimeout(renderResult, 150);
+        } else {
+          renderResult();
+        }
+      });
+      result.addEventListener("click", (event) => {
+        event.preventDefault();
+        target.value = result.textContent;
+        dialog.close();
+      });
+      for (const station of dialog.querySelectorAll(".popular-station")) {
+        station.addEventListener("click", (event) => {
+          event.preventDefault();
+          target.value = station.textContent;
+          dialog.close();
+        });
+      }
+      if (scenario === "duplicate_station_trigger") {
+        document.querySelector("#origin-trigger").insertAdjacentHTML(
+          "afterend",
+          '<a href="#" aria-label="출발역 선택">서울</a>',
+        );
+      }
+      document.querySelector("#search").addEventListener("click", (event) => {
+        if (!event.isTrusted) return;
+        if (trackClick) {
+          void fetch("/search-clicked", { method: "POST" });
+        }
+        history.pushState({}, "", "/ticket/search/list");
+        window.setTimeout(() => {
+          if (scenario === "protection") {
+            document.querySelector("#results").hidden = false;
+            document.querySelector("#protection-alert").hidden = false;
+            return;
+          }
+          document.querySelector("#results").hidden = false;
+          document.querySelector("#policy-notice").hidden = scenario !== "benign_policy";
+        }, 150);
+      });
+      const dateDialog = document.querySelector("#date-dialog");
+      if (scenario === "delayed_departure_dialog") {
+        dateDialog.remove();
+      }
+      let selectedDate = null;
+      let selectedHour = null;
+      const today = query.has("today")
+        ? new Date(`${query.get("today")}T12:00:00`)
+        : new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowDate = [
+        tomorrow.getFullYear(),
+        String(tomorrow.getMonth() + 1).padStart(2, "0"),
+        String(tomorrow.getDate()).padStart(2, "0"),
+      ].join("-");
+      if (!dateDialog.querySelector(`[data-date="${tomorrowDate}"]`)) {
+        const monthLabel = `${tomorrow.getFullYear()}. ${String(tomorrow.getMonth() + 1).padStart(2, "0")}.`;
+        const dateCell = `<td><a href="#" data-date="${tomorrowDate}">${tomorrow.getDate()}출발일</a></td>`;
+        const existingPicker = Array.from(dateDialog.querySelectorAll(".datepicker"))
+          .find((picker) => picker.querySelector("p")?.textContent.trim() === monthLabel);
+        if (existingPicker) {
+          existingPicker.querySelector("tr").insertAdjacentHTML("beforeend", dateCell);
+        } else {
+          const picker = document.createElement("div");
+          picker.className = "datepicker";
+          picker.innerHTML = `<p>${monthLabel}</p><table><tbody><tr>${dateCell}</tr></tbody></table>`;
+          dateDialog.querySelector("#calendar-next").insertAdjacentElement("afterend", picker);
+        }
+      }
+      document.querySelector("#date-trigger").addEventListener("click", (event) => {
+        event.preventDefault();
+        const showDateDialog = () => {
+          if (!dateDialog.isConnected) {
+            document.body.appendChild(dateDialog);
+          }
+          dateDialog.showModal();
+        };
+        if (scenario === "delayed_departure_dialog") {
+          window.setTimeout(showDateDialog, 150);
+        } else {
+          showDateDialog();
+        }
+      });
+      dateDialog.addEventListener("click", (event) => {
+        const dateLink = event.target.closest("a[data-date]");
+        if (dateLink) {
+          event.preventDefault();
+          if (dateLink.getAttribute("aria-disabled") !== "true") {
+            selectedDate = dateLink.dataset.date;
+          }
+          return;
+        }
+        const hourLink = event.target.closest("a[data-hour]");
+        if (hourLink) {
+          event.preventDefault();
+          if (
+            scenario !== "all_hour_dom_click_ignored"
+            && (
+              hourLink.getAttribute("aria-disabled") !== "true"
+              || scenario === "soft_aria_hour_click"
+              || ["all_hour_dom_click", "all_hour_dom_minute_mismatch"].includes(scenario)
+            )
+          ) {
+            selectedHour = hourLink.dataset.hour;
+            dateDialog.querySelectorAll(".slideWrap li").forEach((item) => {
+              item.classList.remove("current");
+            });
+            hourLink.closest("li")?.classList.add("current");
+          }
+        }
+      });
+      dateDialog.querySelector("#calendar-next").addEventListener("click", () => {
+        window.setTimeout(() => {
+          dateDialog.querySelector("#day-3-cell").classList.remove("disabled");
+          dateDialog.querySelector("#day-3").setAttribute("aria-disabled", "false");
+        }, 150);
+      });
+      dateDialog.querySelector("#time-next").addEventListener("click", () => {
+        window.setTimeout(() => {
+          dateDialog.querySelector("#hour-14").setAttribute("aria-disabled", "false");
+          dateDialog.querySelector("#hour-14").dataset.hour = "14";
+        }, 150);
+      });
+      dateDialog.querySelector("#date-apply").addEventListener("click", () => {
+        const date = selectedDate || document.querySelector("#startDate").value.slice(0, 10);
+        const hour = selectedHour
+          || (["selected_disabled_hour_control", "adjacent_selected_hour"].includes(scenario)
+            ? "05"
+            : scenario === "date_change_stale_disabled_hour"
+              ? document.querySelector("#startDate").value.slice(-5, -3)
+            : [
+                "soft_aria_hour_click",
+                "all_hour_dom_click",
+                "all_hour_dom_click_ignored",
+                "all_hour_dom_minute_mismatch",
+              ].includes(scenario)
+              ? "00"
+              : "14");
+        const [year, month, day] = date.split("-").map(Number);
+        const weekday = ["일", "월", "화", "수", "목", "금", "토"][
+          new Date(year, month - 1, day).getDay()
+        ];
+        document.querySelector("#startDate").value = scenario === "pre_submit_mismatch"
+          ? "2026-08-04(화) 14:00"
+          : scenario === "all_hour_dom_minute_mismatch"
+            ? `${date}(${weekday}) ${hour}:30`
+            : `${date}(${weekday}) ${hour}:00`;
+        if (
+          scenario === "date_change_stale_disabled_hour"
+          && selectedDate === "2026-08-03"
+          && selectedHour === null
+        ) {
+          dateDialog.querySelector("#stale-hour-18").setAttribute("aria-disabled", "false");
+        }
+        dateDialog.close();
+      });
+      document.querySelector("#search").addEventListener("click", () => {
+        if (scenario === "protection") return;
+        if (scenario === "keyboard_previous_hour_window") {
+          const route = selectedHour === "20" ? "20:30 ~ 23:00" : "18:30 ~ 21:00";
+          document.querySelector(".fullstack-result .data_box.right").innerHTML =
+            `서울 → 부산(${route})<span>소요시간: 2시간 30분</span>`;
+        }
+        const fixedUnitScenario = selectedDate === "2026-08-03" && selectedHour === "14";
+        for (const item of document.querySelectorAll(".fixed-result")) {
+          item.hidden = !fixedUnitScenario;
+        }
+        document.querySelector(".fullstack-result").hidden = fixedUnitScenario;
+        document.querySelector(".pagination-result").hidden = true;
+        document.querySelector("#more-results").hidden = scenario !== "more_results";
+      });
+      document.querySelector("#more-results").addEventListener("click", (event) => {
+        event.preventDefault();
+        event.currentTarget.hidden = true;
+        window.setTimeout(() => {
+          document.querySelector(".pagination-result").hidden = false;
+        }, 150);
+      });
+    </script>
+  </body>
+</html>

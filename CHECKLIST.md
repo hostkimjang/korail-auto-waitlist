@@ -1,0 +1,392 @@
+# 구현 및 검증 체크리스트
+
+## 완료
+
+- [x] 모바일 PWA·PC 반응형 소비자 화면과 선택 시안 보존
+- [x] 홈의 `좌석 발견`, `결제 필요`, `결제 완료` 상태 표현 분리
+- [x] 모든 `payment_required` 작업을 홈과 `내 예약` 최상단에 표시하고, timezone-aware 실제 기한이 있을 때만 기한순 분·초 카운트다운, 기한이 없거나 timezone이 빠지면 `결제기한 미제공` 안내와 공식 결제 handoff CTA 표시
+- [x] API의 실제 최신 `auth_required` 작업에만 홈 행의 컴팩트 경고·현재 철도 계정 상태·`철도 계정` CTA를 표시하고, 로그인 재검증 뒤 과거 `AUTH_REQUIRED` toast를 제거해 감시 재개 안내로 교체하며 과거 인증 오류 이력이나 `UNKNOWN` 결과는 인증 경고로 합성하지 않는 회귀 계약
+- [x] 홈 활동 중 대기 고정 표시 제한 제거, 전체 건수 표시와 `내 예약` 전체 내역 이동
+- [x] 3단계 여정 생성에서 기존 공식·실험 자동화 모드 카드/토글과 별도 확인 단계 제거
+- [x] KTX·SRT 복수 선택, 주요 역 검색·교환, 커스텀 달력·요일 빠른 선택·출발 시간 범위 UX
+- [x] TAGO 원본 식별자와 KORAIL 공개 역 안내 교집합을 migration `0007` PostgreSQL 스냅샷으로 24시간 보존
+- [x] 역 카탈로그 DB lease·fencing, 신선한 재시작 상류 0회, stale-while-refresh와 마지막 정상 스냅샷 보존
+- [x] 화면용 교집합 실패 시 원본 TAGO 목록으로 되돌아가지 않는 fail-closed 계약
+- [x] 서울·수서·대전·부산 sentinel 검증과 광운대·노량진·신도림·서빙고·왕십리·옥수 선택 목록 제외
+- [x] 역 `node_id·역명·도시` 검색, 동명이역 보존, 직접 입력 차단, 출도착 node ID 교환과 시간표 전달
+- [x] untouched 역 입력의 조기 오류 노출을 막고 공식 목록 미선택 오류를 입력별 compact inline 검증으로 표시하며, 출도착 교환 버튼을 데스크톱 control 중앙·모바일 독립 48px 영역에 정렬
+- [x] 역 검색의 역명 문자열 완전 일치·접두 일치·포함 우선순위와 지역명 검색·빈 검색 순서 보존
+- [x] 손상·빈 TAGO 역 응답 fail-closed, node ID/역명 쌍 검증, 동일·부분 node ID 거부
+- [x] KORAIL=KTX·SRT=SRT 열차 종류 필터와 서울발 SRT·수서발 KTX 교차운행 회귀 검증
+- [x] PC 팝오버·390px 모바일 바텀시트 반응형 동작과 44px 터치 영역
+- [x] 감시 CRUD, start·pause·cancel, SSE, 상태 전이 계약
+- [x] 홈 활동 중 티켓별 `감시만`·`좌석 재발견마다 자동 예매` 정책 스위치, 로그인 확인 계정 gate, 활성 작업의 정책 외 필드 잠금과 가용성 에피소드당 1회 fence와 기존 episode 시도 이력 보존 회귀 계약. 실제 `.watch-list` 컨테이너 폭의 1080px·760px·520px 경계에서 상태·정책·예매·제어 영역을 단계적으로 reflow하고 320px·200% 확대에서도 문구 줄바꿈, 44px 스위치·pause·cancel, 열차+좌석 등급 접근성 이름 유지
+- [x] Migration `0024_watch_observation_speed` 당시의 작업별 관측 속도 실험과 다음 관측 예정 표시를 회귀 검증했으며, 후속 단일 전역 관측 계약에서 사용자 선택·스케줄 분기를 폐기함
+- [x] Migration `0026_unified_observation_interval`의 관리자 전역 `좌석 관측 간격` 기본 5초·허용 1~600초 영속화, `GET/PATCH /preferences/ui`, 모든 활성 작업 동일 적용, 아직 due/in-flight/cooldown이 아닌 작업의 `next_check_at` 재계산과 실행 중 중복 enqueue 방지 계약을 API·웹·배포 환경에서 통합 검증. API 931건 통과 뒤 Alembic 32자 revision 계약 위반 2건을 수정해 관련 왕복 migration 3건을 재통과하고, 웹 341건·strict typecheck·production build·Sites 4건·변경 범위 Ruff·`git diff --check`를 통과함. `experimental-rail` 전체 프로필 재빌드·강제 재생성 후 DB head `0026_unified_observation`, migration/log-init exit 0, 장기 서비스 11개 healthy, scheduler scan·expires 1초, KORAIL·SRT cache 1초, 단일 DB 기본값·현재값 5초와 `/healthz` 200을 확인함
+- [x] 최종 공식 결제 보류 종료 이벤트가 기존 결제 알림 subject를 terminal 취소 안내로 교체하고 초 단위 timestamp와 `completed|failed` step만 남겨 spinner를 종료하는 웹·SSE·REST fallback 계약. `reserve_once_before_payment`만 새 가용성 에피소드 재시도 가능으로 투영하고 `notify_only`는 terminal `expired`·재시도 불가로 유지하며, marker 없는 단순 기한 경과는 취소 알림으로 합성하지 않음
+- [x] 후보별 최신 예약 시도 결과·종료 시각·재시도/수동 확인 조건을 API snapshot과 홈 행에 지속 표시하고, 최종 exact `NOT_FOUND`와 기한 경과 후 marker가 함께 있는 과거 `PAYMENT_REQUIRED`는 원 outcome을 보존하면서 `결제 보류 종료 확인 · 감시 계속`과 새 가용성 에피소드 대기로 표시하며, marker 누락·불명확 confirmation은 보류 종료로 승격하지 않는 회귀 계약. 만료된 운행·예매창 관측은 현재형 `예매창 열림` 대신 재확인 상태로 강등
+- [x] 일시정지 작업 재개, 취소 내역 보존, 만료·실패 기록 삭제 UI
+- [x] 단일 관리자 세션·CSRF 보호
+- [x] 최초 관리자 ID·Argon2id 비밀번호 등록과 이후 ID/PW 로그인 UX·API 검증
+- [x] KORAIL·SRT 철도 계정의 회원번호·이메일·휴대전화 방식 선택, KORAIL의 기존 인증 세션을 폐기한 로그인 전용 1회 확인, 성공한 credential만 암호화 저장하고 실패 시 기존 값 보존, validation 응답·브라우저 자동완성의 비밀번호 비노출
+- [x] KORAIL Chromium sidecar와 SRT provider sidecar를 별도 상주 프로세스로 구성하고, 운영사별 read-only 검색 actor와 인증·예약·공식 예약 확인 actor를 분리하며 검색 실패가 인증 세션을 소비·교체하지 않고 startup prewarm 성공만 credential generation CAS로 영속 인증 복구·작업 재무장에 반영하는 구현·로컬 계약 테스트
+- [x] credential generation과 프로세스 메모리 세션만 연결하고 원문 credential·cookie·storage state·fingerprint를 비영속으로 유지하며, 공개 고정 TTL을 가정하지 않는 age·local reuse·prewarm outcome `no-store` telemetry 구현·로컬 계약 테스트
+- [x] KORAIL 공식 로그인 DOM의 ID·비밀번호 분리 form과 form 밖 로그인 버튼을 활성 tab panel 경계로 처리하고, Pydoll list·async iterator 다중 조회와 비동기 텍스트 판정을 정규화하며, sidecar 실패는 민감정보 없이 허용된 stage만 운영 로그에 남기는 회귀 계약
+- [x] KORAIL 관측의 `.price_box`와 예약 control 판정을 같은 좌석등급·가격·상태 classifier로 정렬하고, 가격만 가진 내부 anchor를 부모 좌석 identity에 결박하며 `매진임박/sold_out_soon`은 limited로 허용하되 매진·예약대기·다른 등급·가격 없는 보조 링크·disabled control은 차단하는 회귀 계약
+- [x] 최신 KORAIL sidecar 재빌드·재시작 뒤 존재하지 않는 합성 회원 식별자의 로그인 전용 단발 smoke가 예약·시간표 호출 없이 `auth_required`로 끝나 `failed/503` 회귀가 해소됨을 확인
+- [x] KORAIL 로그인 성공 푸시 뒤 API 422가 된 2026-08-01 21:07 KST 운영 표본을 확인하고, 검색 화면의 비동기 `loginCheck` boolean과 지연 수화되는 공식 `로그아웃` header를 함께 확인해 sanitized `authenticated|auth_required` 완료 로그만 남기는 회귀 계약
+- [x] 2026-08-01 21:29 KST 재현에서 로그인 페이지 header를 25초 기다리는 동안 공식 session check에 도달하지 못한 제어 흐름을 확인하고, header와 무관한 로그인 화면 `loginCheck` 최대 2회와 검색 화면 재확인을 연결한 회귀 테스트
+- [x] `experimental` 배포에서 두 내부 adapter token을 비밀값 출력 없이 준비하고 profile 전체를 build·force-recreate해 migration `0020`, API·web·proxy·두 sidecar·worker·scheduler를 같은 revision으로 맞추며 새 route만 404인 혼합 버전 방지. 2026-08-02 전체 12개 서비스 재생성, migration/log-init 정상 종료, 장기 서비스 health와 두 worker queue 확인
+- [x] 알림 채널 암호화 저장, outbox, 재시도, 중복 방지
+- [x] `reserving`·`payment_required`·`auth_required`·수동 확인·좌석 소실·예매 실패 후 감시 복귀 전이의 채널 알림과 접속 중 상단 토스트 회귀 계약. `NOT_AVAILABLE`은 새 재출현 에피소드 재시도 가능, 모호 결과는 자동 재시도 금지 문구로 구분
+- [x] App 전역 일반 toast 30초, 완료된 단계형 정보 toast 60초, 진행 중 예매·결제·인증 행동 알림과 상세 좌석 발견 dialog의 수동 닫기 계약. 예약 진행 카드는 최종 결과가 교체하거나 사용자가 닫기 전에는 자동 종료하지 않으며, 운영사·열차·요일·구간·실제 출도착·좌석 등급 및 확인 가능한 진행 단계를 표시
+- [x] 단일 `실시간 알림` surface의 결제·수동 확인·인증·좌석 발견 우선순위, 종류별 grouping·건수·펼치기·그룹 닫기, watch subject별 최신 단계 교체, 동일·stale revision의 카드/live-region 중복 차단과 접힘 중 정보 toast 타이머 지속 회귀 계약. 예약 시작·결과·수동 확인 SSE를 REST transient 상태와 독립적으로 직접 소비하고 카드 상단 결과 시각과 단계별 좌석 발견·예매 시작·로그인 세션 확인·열차/좌석 재확인·좌석 선택·예약 요청·공식 결과의 실제 KST `HH:mm:ss`, 발견→시작 대기시간과 단계별 처리시간을 표시·보존. 근거가 없는 provider 단계는 완료로 합성하지 않음
+- [x] 일반 예약 `FAILED` 결과의 실패 알림·`watching` 복귀, 로그인 상태 보존, 모호한 결과 자체로 예약을 반복하지 않는 episode fence 회귀 계약
+- [x] 환경변수로 주입한 PKCS8 PEM VAPID private key를 파일 경로로 오인하지 않고 P-256 확인 뒤 base64url DER로 정규화하며, 기존 base64url 값 보존·잘못된 키·구독 HTTPS/P-256/auth 형식·만료/거부·VAPID 인증/설정·provider 장애를 비밀값 없는 범주로 분리하는 Web Push 회귀 계약
+- [x] `FAILED` 상위 우선순위 후보의 모호 결과 fence를 유지하면서 이후 관측에서 해당 후보를 winner에서 제외하고 다음 미시도 후보로 넘어가는 다중 후보 회귀 계약
+- [x] 관리자 전용 `로그·진행 상태`에서 24시간 영속 집계·현재 작업 상태·provider circuit·비식별 최근 진행 기록 확인
+- [x] 인증된 `GET /api/v1/seat-status/status`의 KORAIL browser·SRT live `ready|cooldown`, 허용 원인·남은 초·`no-store` 계약과 worker `ProviderCircuit` 분리
+- [x] `설정 > 로그·진행 상태`의 별도 `좌석 조회 제공원 상태` 섹션과 cooldown 원인·남은 시간 표시
+- [x] 좌석 관측 오류율과 알림 최종 실패율의 분모·정의를 구분하고 분모 0은 `기록 없음`으로 표시
+- [x] HTTP 오류율과 worker·scheduler heartbeat 미수집을 `확인 불가`로 표시하며 원문 오류·payload·내부 ID 비노출 검증
+- [x] API·worker·scheduler·experimental worker·KORAIL browser sidecar의 서비스별 JSONL 파일 handler, stdout/stderr 병행과 Docker `local` 10 MiB·3파일 회전 설정
+- [x] `log-init`의 `logs/` 하위 directory 생성, app UID:GID `100:101`·sidecar `1001:1001` 소유권과 `0750` 권한, read-only root filesystem 유지
+- [x] 파일 JSONL의 환경 token·Bearer·민감 assignment·URL query redaction과 5 MiB·backup 4 fixed rotation을 단위 테스트로 검증하고, Windows Docker Desktop에서 다섯 서비스의 `current.log` 생성·stdout 유지·권한 오류 없음을 확인
+- [x] Webhook의 HTTPS·사설 주소 차단 경계
+- [x] PostgreSQL·Redis·Celery·Caddy Docker Compose
+- [x] Tailscale 우선 접속, 공개 도메인 선택 설정
+- [x] 컨테이너 non-root·read-only·capability 최소화
+- [x] 배포 비밀값을 Docker secret 파일에서 Git·build context 제외 `.env` 환경변수로 통합하고 형식·이전·백업 지침 문서화
+- [x] 암호화 백업·복원 스크립트와 복원 확인 guard
+- [x] 복원 중 proxy·API·worker·scheduler 정지와 복원 후 migration 적용
+- [x] 프런트 단위 테스트·빌드·Sites worker 테스트
+- [x] 로컬 고정 API 기반 Playwright 데스크톱·모바일 E2E 8건: 정상 여정의 달력·시간 범위·상태별 CTA·만료 근거 1회 복구·복수 좌석 등록·홈 반영, KORAIL 조회 제한의 좌석 미관측·예매/대기/재조회 숨김, process-only 관리자 로그인 1회·초기 등록 자동 생성 차단
+- [x] 루트 `verify`와 GitHub Actions `repository-verify`에서 Compose config·API 전체 pytest·Ruff·웹 typecheck·Vitest·Playwright E2E·production build를 외부 철도사 호출 없이 실행
+- [x] 프런트 production dependency audit 취약점 0건
+- [x] 루트 클린 코드·TypeScript·모듈 분리 작업 지침과 웹 단계별 마이그레이션 문서 작성
+- [x] strict TypeScript 도구 체계, `main.tsx`, `typecheck`와 TS/TSX 테스트 탐색 기반 적용
+- [x] API 단위 테스트·Alembic migration·Docker build
+- [x] 실제 Compose 기동, migration 완료, 서비스 health, 인증 전 API 401 경계
+- [x] Caddy access log의 인증·CSRF 민감 header 제거
+- [x] 작업 생성 직후 `startWatch` 시작 API 자동 호출과 공식 시간표·좌석 확인 인계 경로의 분리
+- [x] 로그인 확인 계정·`reserve_once_before_payment`·운영사 에피소드당 1회 자동 예약 capability를 갖춘 start를 `process_watch_now`로 한 번 best-effort 즉시 enqueue하고, enqueue 실패에는 시작 commit을 보존하며 5초 beat·5초 expiry를 backlog 없는 영속 fallback으로 유지하는 API·worker 회귀 계약
+- [x] Compose에서 `rail`과 `notifications` 큐를 concurrency 1인 별도 worker로 분리하고, 알림 outbox 전달 지연이 좌석 관측·자동 예매 실행을 점유하지 않도록 전용 healthcheck·로그 디렉터리·복원 maintenance 정지 대상을 동기화
+- [x] 한 due sweep의 KORAIL·SRT provider 파이프라인은 서로 병렬로 진행하고, 동일 provider의 watch 그룹·자동예매·예약 재확인은 provider/account lease 안에서 순차 실행하며 한 provider 실패가 다른 provider를 취소하지 않는 회귀 계약
+- [x] 결제기한·post-deadline marker가 모두 없는 레거시 `PAYMENT_REQUIRED`도 공식 exact `NOT_FOUND` 확인 뒤의 행동 가능 관측에서 한 번만 재무장하고, begin 단계 DB 근거 재검증과 재연쇄 차단을 유지하는 회귀 계약
+- [x] 기본 KORAIL·SRT `seat_monitoring=false`, `reservation_once=false`, 운영사별 3중 관측 gate와 별도 자동 예매 gate의 교집합 및 미관측 좌석 `unknown` 회귀 계약
+- [x] KORAIL·SRT 복수 시간표 조회의 병합·시간창 필터·정렬·중복 제거와 운영사별 대기 생성 계약
+- [x] 시간표 API의 필수 `departure_to`, 동일 KST 서비스 날짜·정방향 시간창 검증과 양 끝 포함 서버 필터
+- [x] 새 대기 3단계 종료 선택의 `다음 날 00:00` 표시를 같은 서비스일 `23:59` API 경계로 정규화해 23:30 이후 출발·자정 이후 도착 열차를 포함하고, 다음 날 00시 이후 출발은 날짜 변경으로 분리하는 웹 회귀 계약
+- [x] mock·개발 데모의 선택 시간창 전체 열차 생성, 화면 표시 제한 제거와 46건 병합·정렬 회귀 검증
+- [x] 12:00–18:00 양 운영사 선택 시 20개 카드(KORAIL 10·SRT 10), 12:00·18:00 경계 포함 브라우저 검증
+- [x] 미래 서비스일의 KORAIL 좌석 조회를 00:00부터 수행해 동일 시각 병결 KTX-청룡 `032`·`9032` identity를 보존하고, 당일은 KST 현재 hour와 요청 시작 중 늦은 시각부터 조회하며 전부 지난 시간창은 browser 호출 없이 닫는 회귀 계약
+- [x] 2026-08-02 02:47 KST의 05:00–09:00 조회에서 이미 선택된 당일이 picker 링크에 없어도 날짜를 유지하고 05시를 선택하며, 일반 DOM 실패 backoff가 다른 서비스일을 막지 않는 로컬 Pydoll·source 회귀 테스트
+- [x] 실제 TAGO 무페이지 도시코드 응답을 해당 operation에만 허용하고 다른 pagination 누락은 fail-closed 유지
+- [x] 실제 TAGO 키로 전국 343역과 서울→부산 12:00–18:00 KORAIL 17편·SRT 1편 실호출 검증
+- [x] 열차 결과 카드 고밀도 레이아웃: 1440px에서 카드 182px 기준, 320px·44px CTA·가로 넘침 없음
+- [x] native 날짜·시간 picker 제거와 날짜-요일 일치·시간 범위·열차 선택 접근성 계약
+- [x] Celery 반복 작업의 event loop 격리와 poison outbox 이벤트 독립 처리
+- [x] 티캣·레일픽 공식 스토어 화면과 로그인·예약 없는 정식 설치 앱 사용자 화면, KORAIL·SRT 공식 조회 흐름 UX 감사
+- [x] TAGO 시간표와 잔여석·매진 정보의 공식 데이터 경계 재검증
+- [x] TAGO·KORAIL/SR 공개데이터와 디지털서비스 개방 제휴 경로를 비교해 실시간 좌석 데이터의 공개·계약 경계 재검증
+- [x] 티캣·레일픽 공개 정책 기반 구현 위치·저장소·알림·동기화 구조 조사
+- [x] 공개 근거와 구조 추정, 바이너리 분석 필요 항목을 분리한 연구 문서 작성
+- [x] 공식 Play 설치본의 Manifest·SDK·background component·저장소·WebView와 좌석 등급·상태 리소스/모델 정적 검증
+- [x] Google Play 설치본 티캣 11.35.60·레일픽 5.29.02의 base·hdpi·ko·x86_64 split 구성·버전·전체 APK SHA-256 재검증
+- [x] JADX 1.5.6 현재 버전 산출물과 dex2jar 2.4 교차검증 결과·부분 실패·이전 5.25.29 산출물 오표기를 구분한 근거 명세 작성
+- [x] 레일픽 5.29.02 APK·JADX와 티캣 JADX의 실제 로컬 조사 자산, APK SHA-256, 레일픽 `n6.java`·`y00.java` parser 필드, 공개 소스 비교 commit 및 단발 검색·제한 결과를 증거 수준별로 정정 기록
+- [x] 리버싱 근거를 현재 provider·worker·watch·outbox에 연결한 clean-room 데이터 모델·단계별 접목 계획 문서화
+- [x] BlueStacks Pie64 복구 후 티캣·레일픽 KORAIL·SRT 화면과 process·service·JobScheduler·alarm·notification 런타임 재검증
+- [x] 레일픽 비로그인 감시 생성 직후 단발 WorkManager 실행, 출발 경계 one-shot alarm, 지속 service·job·foreground notification 부재 구분
+- [x] API `SeatClass`와 좌석 등급별 status·provenance·action 계약, 관측 근거 없는 상태의 `unknown` fail-closed 검증
+- [x] 미관측 좌석 사유를 출처 미설정·접근 제한·미지원 구간·다인원 미지원·출발 시간 경과·일치 열차 없음·상류 장애로 구분하고 근거 있는 `official_provider`만 실제 상태로 표시
+- [x] 지난 출발 시간창만 미관측인 3단계 요약은 `선택한 출발 시간대가 지났습니다`로 구분하고 서버 재조회 버튼을 숨기며, 다른 오류가 섞이면 실제 미확인 운영사만 재조회 대상으로 남기는 웹 회귀 계약
+- [x] 시간표 조회 시각·운임·소요시간과 일반실·특실별 `unknown` 상태를 분리하고 내부 수집원 이름을 숨기는 열차 결과 카드
+- [x] mock provider의 일반실·특실별 예약 가능·매진 임박·입석+좌석·매진·예약대기·지연·오류 벤치마크 상태
+- [x] 웹 일반실·특실 2열 좌석 패널, 좌석별 대기 선택과 접근성 이름·의미 색상·`aria-pressed` 선택 상태
+- [x] 430px 이하 모바일 티켓 카드를 열차 요약→출도착 시각→등록 상태→일반실·특실 1열 순서로 재배치하고 320·360·390·430px에서 가로 넘침 없음, 두 좌석 패널 유지와 44px 행동 영역 검증
+- [x] 활성 열차의 흰색 `대기 등록 N건` 배지, 등록 좌석의 `대기 등록됨`·`좌석 변화를 감시 중`, 진한 위험색 좌석별 `대기 취소` 행동을 텍스트·아이콘·색상으로 함께 구분하고 320px DOM·접근성 회귀 검증
+- [x] 좌석별 `official_check`·`official_waitlist`·`add_to_watch`·`retry_provider`를 공식 예매·예약대기·대기 추가·재조회 CTA로 연결하고 대기 행동은 실행 `seat_monitoring` capability로 추가 제한
+- [x] 관측 상태·provenance는 유지하되 실행 `seat_monitoring=false`이면 API가 `add_to_watch`와 `registration_evidence_id`를 제거하는 fail-closed 계약. KORAIL·SRT는 각각 3중 opt-in이 모두 켜졌을 때만 관측된 허용 좌석의 작업 근거를 발급하며, 예약 호출은 별도 1회 gate·로그인 확인된 계정·작업 정책까지 충족할 때만 활성화
+- [x] KORAIL·SRT `official_*` 행동 URL을 운영사 소유 도메인으로 제한하고 임의 HTTPS·빈 actions·혼합 좌석 provenance 회귀 방지
+- [x] 열차별 공식 좌석 확인 링크와 비밀값이 없는 여정 요약 복사
+- [x] KORAIL 공식 281개 역 코드·역명과 SRTrain 2.6.7 고유 32개 코드의 포함관계, SRT→KORAIL `/ticket/search/list`의 새 세션 조건 복원, 현재 SPA가 읽는 29개 query 키·무시하는 16개 레거시 키·차종/시간/승객/좌석 범위를 재검증. token 없는 목록 진입은 특정 열차 deep link나 공개 좌석 API가 아니며 별도 격리 단발의 `CODE -8003` 뒤 추가 live matrix를 중단한 근거를 연구 문서·전체 역 CSV에 보존
+- [x] KORAIL 공식 4자리 역 코드·역명 identity resolver와 편도·직통·성인 1명·일반석·KTX·KORAIL-only 고정 25키 builder, Pydoll read-only cold 조회의 navigation 전 capture·역/날짜/submit 생략, direct 업무 요청 뒤 UI 재제출 금지, 기존 HTTP replay와 결과 exact match 유지 회귀 계약
+- [x] KORAIL 인증 예약 actor가 로그인 확인 뒤 strict 결과 navigation으로 최초 역·날짜·시각 입력을 줄이되 읽기 전용 actor의 DOM·cookie·replay를 재사용하지 않고 기존 계정·후보·가용성 에피소드 1회 fence와 결제 전 중단을 유지하는 회귀 계약
+- [x] 시간표 DTO의 조건 선입력 `official_search_url`과 일반 진입·결제 `official_booking_url` 분리, API 공식 host 및 웹 exact 25키 이중 검증, 추가·중복·예약 연계 키·비공식 host·잘못된 날짜/시각/코드의 고정 진입점 강등과 특정 열차 자동 선택 비보장 안내
+- [x] 같은 열차의 일반실·특실 독립 등록과 `train_id + seat_class` 복합 identity 중복 방지
+- [x] 좌석 행동 즉시 `train + seat_class`별 대기 생성·시작, pending·success·error 피드백과 홈 활동 목록 실시간 반영
+- [x] 새 대기 3단계의 별도 선택 트레이·`등록 완료` 제거, 생성된 watch ID를 보존한 같은 좌석 버튼의 즉시 cancel 및 일반실·특실 독립 상태 전이 회귀 검증
+- [x] Home→새 대기 재진입 뒤 활성 DB watch의 `provider + train_number + departure_at` instant + `seat_class` hydrate, 실제 watch ID 취소 및 불일치·종료 상태 차단 단위 회귀 검증. 실브라우저에서도 즉시 등록 → 붉은 계열 `대기 취소`·`aria-pressed=true` → Home → 동일 조건 재조회 복원 → 실제 ID 취소 흐름과 44px 행동 영역을 확인
+- [x] 상단 원형 수동 새로고침과 관리자 DB 기본 5초·5~300초 화면 동작 설정, 마지막 정상 snapshot 즉시 반환과 60초 경과 hit의 background revalidation, 동일 query singleflight, 실패 30초→최대 5분 backoff 및 cache miss 상류 무호출 계약
+- [x] `GET/PATCH /preferences/ui`의 `preferences_updated_at` 응답 계약을 웹 DTO 경계에서 검증해 정상 설정 응답이 오류 알림으로 잘못 표시되지 않는 회귀 테스트
+- [x] 동일한 열차 snapshot·배열 참조 보존과 memo 카드 경계로 자동 동기화 시 변경된 열차·좌석 등록 상태만 다시 렌더링하는 TypeScript 회귀 검증
+- [x] 새 대기 3단계 자동 동기화를 컴팩트 상태 헤더로 표시하고, 빠른 응답도 최소 한 바퀴(800ms)·느린 응답은 다음 회전 경계까지 회전 후 정지, `최근 갱신 HH:mm:ss` 고정 폭과 모션 감소 설정으로 반복 갱신 깜빡임 완화
+- [x] visible 탭의 설정 주기 `/watches` 자동 갱신, hidden 중지·복귀 즉시 갱신, SSE burst 병합과 notification channel 반복 조회 방지
+- [x] 홈 활동 목록 헤더의 같은 `/watches` coordinator 수동 새로고침, 빠른 응답도 최소 한 바퀴(800ms)·느린 응답은 다음 회전 경계까지 회전 후 정지, 마지막 성공 갱신 시각 고정폭 표시와 44px·모션 감소 접근성
+- [x] 실제 최신 `SeatObservation.observed_at` 기반 `last_checked_at`, 상태색 원형+텍스트, 최초 snapshot 제외 `seat_found` 전환의 큐형 웹 알림 회귀 계약
+- [x] 홈 `seat_found` 행의 44px `예매` CTA, 좌석 등급·최근 관측 시각 기반 공식 예매 안내, 여정 복사·현재 고정 공식 진입점과 정확한 열차 자동 선택 딥링크 미지원 계약
+- [x] watch 후보별 최신 `SeatObservation`의 status·source·`observed_at`·`fresh_until`을 `latest_observation`으로 반환하고 불변 `registration_evidence`와 분리하는 API 회귀 검증
+- [x] 홈 `예매` CTA를 신선한 현재 행동 가능 관측으로 이중 제한하고 `watch.seat_observed` 갱신·좌석 소실 시 CTA 제거·감시 계속·상단 1회 알림을 검증하는 웹 회귀 테스트
+- [x] 미설정 알림 채널 스위치의 설정 흐름 시작, 설정 채널 활성·비활성, 모바일 연결 행동 노출, `OS 알림`의 secure-context·권한·현재 기기 subscription 판정과 Web Push service worker readiness timeout 웹 회귀 테스트. 접속 중 `실시간 알림` surface와 OS 알림은 독립 채널로 구분
+- [x] migration `0016` 적용 Compose에서 인증된 대전→부산 2026-08-01 12:00–18:00 KORAIL 22개 열차·44개 좌석 등급 로드, 5초 cache-only GET 연속 200, 수동 새로고침 busy→완료, 특실 작업 즉시 생성→같은 버튼 취소→원래 CTA 복원과 320px 가로 넘침·콘솔 오류 없음 확인
+- [x] 출발·도착 node ID 영속화와 node identity를 포함한 dedupe key
+- [x] `watch_candidates`의 열차번호·출도착 시각·좌석 등급·우선순위 영속화, 고유 제약과 수정 불일치 차단
+- [x] 운영사와 관계없는 활성 감시 시간창 만료 sweep과 상태·알림 outbox 기록
+- [x] 역 교환·운영사·날짜·시간 변경 뒤 새 등록에 최신 조회 조건만 사용
+- [x] 3단계 커스텀 달력의 실제 출발일·시간 범위 변경 즉시 재조회와 이미 시작된 등록 snapshot 보존
+- [x] 역 선택·열차 결과 사용자 화면에서 내부 수집원 이름 `TAGO` 비노출
+- [x] KORAIL·SRT 운영사별 부분 성공 보존과 실패한 운영사만 개별 재조회
+- [x] KORAIL Chromium·SRT live source를 사용자 시간표의 주 경로로 사용하고, live 성공 시 TAGO를 호출하지 않으며 live 사용 불가 시에만 TAGO 시간표로 fallback하는 구현 계약
+- [x] TAGO fallback 시간표의 좌석 등급을 `unknown/not_observed`로 유지하고 `official_provider` 좌석 상태로 추정하지 않는 fail-closed 계약
+- [x] TAGO 출도착 node ID 없이도 KORAIL·SRT 공식 live 시간표·좌석 상태를 반환하되 node-bound confirmation overlay와 `registration_evidence_id`를 발급하지 않아 대기 등록을 fail-closed하는 계약
+- [x] 공식 자료 기반 반복 조회·동일 패턴·IP·프로그램 입력 행동 탐지 방식 조사와 미확인 신호 분리
+- [x] KORAIL·SRT 공개 진입점과 명시된 정적 자산의 단발 수동 관찰로 NetFUNNEL·동적 경로 로더 배포 확인
+- [x] 클라이언트 단독 자동화 게이트의 직접 API 접근 취약성과 서버 측 세션·일회성 challenge·replay·요청 예산 비교 로컬 PoC
+- [x] 로컬 PoC 단위 테스트와 수동 Chrome의 취약 경로·서버 검증형 정상 경로 재현
+- [x] KORAIL·SRT 공개 웹 부트스트랩·탐지 계층·서버 집행·로컬 PoC 상태 전이 기술 보고서 작성
+- [x] KORAIL·SRT `/dynaPath.do`와 SRT NetFUNNEL JavaScript 함수군·실행 sink·상태기계 주석형 정적 분석
+- [x] CDP 제어 격리 Chrome에서 KORAIL·SRT 비로그인 공개 UI 조회 버튼 각 1회 실행과 원시 query·token 없는 path·status 정규화(KORAIL 개별 method·initiator는 미확인)
+- [x] 수동 Chrome CDP 성공 캡처와 자동화 실패 캡처의 HTTP 200 내부 애플리케이션 결과 차이, 세션·브라우저 context 차이, raw replay 비접목 판정을 원문 보호값 없이 문서화하고 redacted 비교 도구·테스트 추가
+- [x] KORAIL 프론트 `/dynaPath.do -> child JS -> 업무 요청 -> HTTP 200 내부 애플리케이션 판정` 흐름을 Mermaid 시각화와 함께 문서화
+- [x] 수동 성공과 자동화 실패 분기점을 브라우저 context·입력 이벤트·업무 body·서버 게이트 계층으로 나누고 공개 라이브러리별 구현 가능성·한계를 심층 문서화
+- [x] KORAIL 수동·자동 분기점 심층 연구 문서에 연구 흐름 flowchart와 파이프라인 접목 구현 경계 추가
+- [x] `-8002`·`-8003`·403·CAPTCHA·NetFunnel·비정상 접근의 수동 인계 분류 계약과 공식 provider 무호출 테스트
+- [x] KORAIL·SRT 공식 HTTPS allowlist만 여는 Official Handoff 안내와 새 탭(`noopener,noreferrer`) 명시
+- [x] PC modal·모바일 bottom sheet의 여정 요약·복사, mock·허가 관측값·미확인 provenance 구분
+- [x] 인계 dialog의 `inert`·`aria-hidden` 배경 차단, Escape·Tab/Shift+Tab 포커스 트랩과 트리거 초점 복귀
+- [x] Official Handoff의 1440×1000·390×844·320×844·200% 확대 등가 720×500 브라우저 reflow와 가로 넘침 없음
+- [x] 임의·비공식 action URL의 운영사 고정 진입점 대체, 선택 좌석별 provenance, 복사 거부·예외의 읽을 수 있는 실패 요약
+- [x] 복사 처리 중 중복 실행 차단과 `aria-busy`, 닫기·재열기 사이 오래된 완료 무시, 포커스 불가능한 배경 scrim
+- [x] `seat_observations`의 status·source·observed/fresh time·오류 분류 이력과 원문 응답·쿠키·토큰 비저장 모델
+- [x] migration `0018_reservation_episodes`의 후보별 `attempt_sequence`, 후보 범위 고유 `episode_key`, 같은 가용성 에피소드 중복 시도 방지와 전역 idempotency 고유 제약, 결과·결제 기한·공식 handoff 분리
+- [x] `0017`의 KORAIL·SRT 단일 관리자 계정 암호화 저장, 원문 없는 목록·upsert·삭제 API, credential version·마스킹 ID·최근 인증 metadata 계약
+- [x] 설정의 KORAIL·SRT 계정 저장·변경·해제 UI와 계정 미연결·비활성·미인증 시 작업별 자동 예매 정책 비활성·`notify_only` 기본값 강등
+- [x] 로그인 확인된 선택 운영사 계정이 있는 새 작업의 `reserve_once_before_payment` 기본값, 계정 목록 갱신에도 유지되는 사용자의 `notify_only` 명시 선택, 생성·수정·조회 영속화, Home→새 대기 재진입 시 watch ID와 작업별 정책 표시 복원, 성공 결과의 공식 handoff URL 반영 회귀 계약
+- [x] `watch_transition_history`와 상태 이벤트·알림 outbox의 commit-free 전이 helper 및 원자 기록
+- [x] provider-wide `closed/open/half_open/manual_hold` circuit 영속 모델과 worker 사전 차단
+- [x] 엄격한 좌석 관측·에피소드당 1회 자동 예약 provider 계약과 KORAIL·기본 SRT capability 무호출, 3중 opt-in SRT 관측·예약 무호출 회귀 검증
+- [x] 승인 provider transport seam의 별도 grant capability 교집합, exact request fingerprint·단일 좌석 등급·고정 source 검증과 오류 원문 redaction
+- [x] 2026-07-30 KORAIL 열차운행정보·승차권 진위확인과 SR 발권통계·진위확인 공개 API를 재감사해 실시간 좌석·예약대기 필드 부재 및 디지털서비스개방의 선정·검증·운영키 절차 확인
+- [x] mock worker의 동일 조건 조회 병합, 후보 우선순위, 에피소드당 1회 예약 선점, `payment_required`, 하위 후보 억제
+- [x] 상태 벡터 기반 `unchanged_runs` backoff와 관측 시각이 변화 판정에 영향을 주지 않는 회귀 검증. 출발 2~24시간 전은 평균 60초, 2시간 이내는 평균 30초 고정 profile로 unchanged 확대를 끄고 24시간 초과 작업에만 기존 최대 3배 backoff 유지
+- [x] 관측 예외의 허용된 오류 분류 정규화와 worker cycle 중단 방지
+- [x] 관측 뒤 예약 직전 circuit 재검사와 mid-cycle `manual_hold` 예약 호출 차단
+- [x] 예약 호출 중 취소·만료된 terminal 작업의 늦은 성공 결과 fencing과 수동 확인 이벤트
+- [x] stale session 상태 전 row lock 재조회와 동일 전이 idempotency 이력 중복 방지
+- [x] concurrent watch 생성의 idempotency unique 충돌 rollback·기존 resource 재조회
+- [x] concurrent 수정 전 row lock 재조회와 최신 필드 기준 dedupe key 재계산
+- [x] 후보별 관측 직전 circuit 재검사와 첫 `manual_hold` 뒤 후속 후보 호출 중단
+- [x] `NOT_AVAILABLE` 자체를 예약 시점의 확정 비가용 근거로 삼아 다음 행동 가능 관측에 `not-available-retry:<attempt-id>` 경쟁 소실 보정 시도를 한 번 허용하고, 보정도 `NOT_AVAILABLE`이면 연속 관측으로 반복하지 않으며 이후 확정 비가용 observation→새 행동 가능 관측 에피소드에서만 다시 재무장하는 DB·worker 회귀 계약
+- [x] 예약 결과 `FAILED`·`UNKNOWN`·`PROVIDER_BLOCKED`, 이미 지난 결제기한, 5분 초과 stale `PENDING → UNKNOWN`, `PAYMENT_REQUIRED`·`RESERVED`를 그 사실만으로 자동 재시도하지 않고 attempt fence·수동 확인 outbox를 유지하는 회귀 계약. 결제기한 후 보류 소실이 확인된 자동 예매 작업도 같은 episode에서는 다시 호출하지 않고 marker 뒤 확정 비가용→새 행동 가능 관측에만 새 episode를 허용
+- [x] migration `0020`의 credential version·confirmation outcome/source/observed/reconciled time, migration `0021`의 일반 확인 횟수·다음 확인 시각, migration `0022`의 nullable `post_deadline_reconciled_at`·조회 index, migration `0023`의 확인 횟수 최대 6회 DB 제약을 적용하고 KORAIL 동일 인증 세션의 현재 상세 우선·공식 예약목록 exact fallback 및 SRT 공식 예약목록의 읽기 전용 reconciliation을 검증하는 로컬 계약 테스트
+- [x] `PAYMENT_REQUIRED`는 기존 빠른 확인 최대 3회와 결제기한 경과 후 marker 없는 최종 read-only 확인 1회를 유지하고, `UNKNOWN + INCONCLUSIVE`만 빠른 3회 뒤 5분·15분·60분 지연 확인을 이어 총 6회로 확장하며 기존 count 3 legacy 시도를 첫 지연 확인으로 복구하는 회귀 검증. 최초 `UNKNOWN`의 exact `NOT_FOUND`에서만 같은 연속 `AVAILABLE` 구간을 `confirmed-absent-retry:<attempt.id>`로 딱 한 번 재무장하고, 재무장 시도가 다시 `UNKNOWN`이면 추가 예약 호출을 금지하며 인증·차단·끝까지 불확실한 결과는 fail-closed. 관련 pytest 95건, Ruff `E/F/I`, migration 포맷, Alembic head `0023_extend_unknown_reconcile`, `git diff --check` 통과
+- [x] 2026-08-03 운영 KORAIL 9248의 2.5초 `RESERVING` 누락과 후속 `LIMITED` 알림만 남은 사례를 재현해, 실제 attempt SSE 진행 표시·결과 교체·초 단위 시각과 `NOT_AVAILABLE` 1회 경쟁 재시도를 추가하고 focused API·web 회귀 테스트로 검증
+- [x] SRT 자동 예매가 반환한 미결제 예약을 실제 열차·구간·시각·ticket 좌석 등급·seat count exact match 뒤에만 즉시 `payment_required`로 보존하고, 불명확한 직접 결과는 결제 대기로 승격하지 않는 회귀 계약
+- [x] KORAIL 점 구분 결제기한과 SRT 결제일·결제시각의 KST 정규화, 신규 due 감시·에피소드당 1회 자동 예매의 reconciliation backlog 우선 처리, KORAIL exact 최초 결과의 불필요한 확장 생략 회귀 계약
+- [x] 후보별 `scheduled_departure_at`·`estimated_departure_at`·`actual_departure_at`·`delay_minutes`와 운행 provenance를 분리하고, KORAIL DOM의 `N분 지연 예상`·replay `h_expn_dpt_dlay_tnum`을 지연 분으로 투영하되 scheduled identity를 유지하며, fresh terminal evidence 또는 unknown 예정 출발 15분 horizon으로만 만료하는 구현·로컬 계약 테스트
+- [x] KORAIL exact 열차·좌석 등급 안의 동일 라벨·가격 반응형 좌석 control 중복은 한 행동으로 접고, 서로 다른 가격·문구의 복수 control은 계속 클릭하지 않는 예약 회귀 계약
+- [x] provider 로그인 재검증 성공 시 이전 `AUTH_REQUIRED`·`PROVIDER_BLOCKED` 시도보다 새로운 `credential_version + last_authenticated_at` 세대에서만 한 번 재무장하고, 예약 attempt 전 계정 preflight `AUTH_REQUIRED`는 attempt·후보 상태를 바꾸지 않은 채 감시만 재개하며 같은 검증 세대에서는 다시 시도하지 않는 회귀 계약
+- [x] 현재 시각 기반 mock 관측·결제기한, 과거 결제기한 fencing, timezone 없는 기한 거부
+- [x] `0004`의 legacy `reservation_attempted=true` 후보를 `UNKNOWN` attempt로 fail-closed 이관
+
+## 운영 환경에서 확인 필요
+
+- [x] 실제 관리자 계정 생성 후 `AUTH_INITIAL_REGISTRATION_ENABLED=false` 재기동
+- [ ] 기능·코드 또는 이미지 계약 변경 배포마다 `config --quiet` → 전체 `build` → `up -d --force-recreate`를 현재 사용 프로필에 적용하고, migration 성공 종료·장기 서비스 health·비밀값 없는 관련 로그를 확인 (단순 CSS·문서 변경 제외, `down -v`·volume 삭제 금지)
+- [ ] 실제 배포 FQDN에서 최초 관리자 등록·로그인·로그아웃과 세션 만료 확인
+- [x] 실제 TAGO 서비스 키로 KORAIL·SRT 시간표 응답 확인
+- [x] 실제 TAGO 서비스 키로 전국 역 카탈로그 수집량 확인
+- [ ] 실제 TAGO 서비스 키로 시간표·역 카탈로그의 장시간 TTL 만료와 재수집 확인
+- [x] 최신 전체 Compose 재배포 뒤 TAGO 시간표와 무관한 KORAIL·SRT 공식 live 주 경로가 각각 시간표·좌석을 반환하는 운영 스모크 확인 (`2026-08-03`, 대전→부산 12:00–18:00, KORAIL 16·SRT 11, 오류 배너 없음)
+- [ ] 실제 Telegram·Discord·Web Push·범용 Webhook 각각의 시험 알림
+- [ ] iOS 홈 화면 설치와 Web Push, Android PWA 알림 확인
+- [ ] Tailscale Serve와 선택적 공개 도메인에서 HTTPS·쿠키·CSRF 확인
+- [ ] 암호화 백업 생성 후 별도 테스트 DB로 실제 복원
+- [ ] 장시간 실행에서 scheduler 1개, worker concurrency 1, outbox 재시도 관찰
+- [ ] worker·scheduler 영속 heartbeat와 서버·HTTP 오류의 보존 기간을 정한 뒤 관리자 관제에 연결
+- [ ] API replica를 2개 이상 운영할 경우 TAGO 시간표 캐시의 공유 또는 단일 fetch coordinator 도입
+- [ ] 실제 iOS Safari·Android PWA에서 Official Handoff, 새 탭 복귀, safe-area와 화면 키보드 조합 확인
+- [ ] KORAIL·SR 또는 디지털서비스 개방 제휴 시 일반실·특실 상태 필드, 예약대기 필드, 백그라운드 조회 목적·호출량·캐시·재배포 조건의 서면 승인 확인
+- [ ] 승인 명세의 인증 종류·scope·회전·폐기·sandbox/운영 분리 확인 뒤 실제 credential 환경변수 형식 추가
+- [ ] 운영사 승인 스테이징에서 NetFUNNEL·동적 경로의 서버 측 토큰 검증, 만료·replay·업무 경로별 일관성 계약 확인
+
+## 남은 구현 및 운영 검증
+
+- [x] [코드 컨벤션](docs/CODE_CONVENTIONS.md)과 [클린 구조 리팩터링 계획](docs/REFACTORING_PLAN.md)에 웹·API 목표 구조, 의존 방향, 보존 계약, 단계별 완료·rollback 기준 기록
+- [x] 루트 `output/`·Playwright 도구 상태와 API pytest 임시 디렉터리·cache를 Git 제외 대상으로 고정하고 `check-ignore` 및 `docker compose config --quiet` 확인
+- [ ] 리팩터링 전 생성물·비밀값 제외와 전체 검증 결과를 확인하고 안전한 기준 commit·tag 확보
+- [x] 웹 import-boundary ratchet과 API domain/application framework import gate를 추가하고 기존 허용 예외 11개 제거
+- [ ] 신규·변경 코드부터 적용할 웹 ESLint와 API Ruff format ratchet을 CI에 추가
+- [x] 웹 demo fixture, 공용 API client, settings API mapper, App 알림 UI와 공용 결제기한 정책·hook·UI를 목표 소유 경계로 이동하고 typecheck·Vitest 347건·production build 검증
+- [x] 첫 구조 슬라이스 통합 후 Sites 4건·API 전체 pytest 949건·Ruff 핵심 규칙·module boundary·`git diff --check` 통과, `experimental-rail` 전체 재빌드·강제 재생성 뒤 migration·log-init exit 0·장기 서비스 11개 healthy·새 runtime 오류 표식 0건 확인
+- [ ] 웹 도메인 타입·API validator/mapper를 `.ts`로 분리하고 `api.js` 제거
+- [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
+- [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
+- [ ] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
+- [x] API의 operations summary, UI preferences, 철도 계정·runtime 라우트와 schema를 기능 패키지로 이동하고 중앙 schema compatibility export·전체 pytest 949건 검증
+- [ ] API의 나머지 router·schema·application 경계를 분리하고 application의 HTTP 오류 의존 제거
+- [x] 예약 결과의 재시도·수동 확인 투영을 `reservations/domain.py` 순수 정책과 전체 outcome 표 테스트로 분리
+- [ ] watch transition·reservation episode·reconciliation 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
+- [ ] worker를 얇은 Celery entrypoint와 provider별 pipeline으로 분리하고 UoW·잠금 순서·outbox 원자성·lease fencing 통합 테스트
+- [ ] provider 계약을 timetable·observe·reserve·confirm·lifecycle 역할로 점진 분리하고 capability 교집합·부분 실패 fail-closed 검증
+- [ ] 웹·API의 저위험 수직 슬라이스가 안정된 뒤 KORAIL browser sidecar의 lifecycle·DOM·검색·인증·예약 책임 분리
+- [x] KORAIL Pydoll·SRT 로그인 세션 재사용형 에피소드당 1회 자동 예약 adapter, exact 열차·시각·좌석 등급 판정, 결제 직전 중단, credential version invalidation과 결과 정규화 구현
+- [x] startup prewarm이 활성 `auth_required` 계정도 현재 credential generation으로 재검증하고 성공만 영속 인증 복구·관련 작업 재무장에 반영하며, 실패·차단·동시 credential 교체는 기존 성공 상태를 오염시키지 않는 회귀 계약
+- [x] KORAIL SPA의 일시적인 `/ticket/login` URL만으로 인증 실패를 확정하지 않고 공식 login check와 인증 헤더가 모두 비인증일 때만 `auth_required`로 판정하는 회귀 계약
+- [x] KORAIL Pydoll sidecar·SRT worker의 provider별 프로세스 단일 인증 세션, lock 직렬화, 같은 credential generation·마지막 사용 기준 bounded TTL 재사용, generation 변경·`auth_required` 폐기와 비밀값 비영속 격리 회귀 계약
+- [x] 철도 계정을 저장할 다음 credential generation으로 로그인을 검증하고 row-lock CAS가 같은 generation을 확인한 경우에만 저장하며, 동시 계정 변경 충돌에서 기존 계정을 보존하는 회귀 계약
+- [x] KORAIL 인증 browser session을 같은 credential generation·마지막 사용 TTL·`login_method + login_id + password` 메모리 SHA-256 fingerprint가 모두 일치할 때만 예약에서 재사용하고, fingerprint 비영속·비노출과 background·read-only 검색의 별도 ephemeral browser/HTTP replay lease 격리로 인증 session을 소비·폐기하지 않는 회귀 계약
+- [x] KORAIL·SRT 예약 adapter가 실제 외부 호출에 사용한 credential version을 내부 `ReservationResult`로 반환하고 worker가 preflight의 과거 값이 아니라 이 실제 version으로 인증 상태를 CAS해, 늦게 도착한 과거 결과가 최신 `authenticated` 상태를 덮지 않는 회귀 계약
+- [x] 로그인 저장과 예약 worker의 preflight·결과 기록이 모두 provider account → watch 순서로 행을 잠가 동시 로그인 검증과 예약 처리의 PostgreSQL 교착을 피하는 회귀 계약
+- [x] `available|limited|standing_plus_seat`를 포함한 허용 선택 좌석의 evidence-bound 감시 등록과 후보·가용성 에피소드별 DB unique fence, `notify_only|reserve_once_before_payment` 정책으로 작업 전체를 한 번으로 제한하지 않고 같은 근거의 예약 호출만 한 번으로 제한하는 회귀 계약. `NOT_AVAILABLE` 직후 첫 행동 가능 관측에는 한 번의 경쟁 소실 보정 재시도를 허용하고, 보정도 좌석 없음이면 이후 비가용→새 재출현 에피소드마다 제한 재무장하며 `AUTH_REQUIRED` 뒤에는 새 로그인 검증 세대에서만 재무장하고 모호 결과는 공식 예약 내역 수동 확인으로 전환
+- [x] 활동 중 티켓의 정책 PATCH와 교차한 오래된 목록 snapshot 폐기·재조회, 예약 attempt 생성 직전 최신 철도 계정 인증 상태 행 잠금 재검증과 미인증 fail-closed 회귀 계약
+- [ ] 승인 transport를 provider registry에 등록하고 승인 철회·만료 시 capability를 즉시 false로 내리는 운영 절차 구현
+- [x] `experimental-rail` SRT 계정 없는 background 좌석 관측 adapter와 3중 관측 opt-in, 별도 `SRT_RESERVATION_ONCE_ENABLED` gate
+- [x] `experimental-rail` KORAIL 표준 Chromium background 좌석 관측 adapter, task별 source·Redis 수명주기, 3중 관측 opt-in과 별도 `KORAIL_RESERVATION_ONCE_ENABLED` gate
+- [ ] 실제 KORAIL background 관측의 보호 cooldown 해제 뒤 반복 주기·재시작 복구·장시간 안정성 운영 확인
+- [x] 2026-08-02 최신 `experimental-rail` 전체 이미지 재빌드·강제 재생성 뒤 migration `0020`, 장기 서비스 전체 healthy, KORAIL 미래 날짜 18:00–23:30 공식 좌석 23개 열차 단발 조회와 worker 후속 200, 새 `departure_hour_disabled`·`seat_control_not_unique`·`auth_required` 0건 확인
+- [ ] 실제 KORAIL·SRT 운영 계정에서 인증 세션 TTL 만료·컨테이너 재시작 뒤 재로그인·보호 응답 후 fail-closed를 장시간 관찰 (credential·cookie·원문 응답을 기록하지 않음)
+- [ ] 실제 KORAIL·SRT 운영 계정의 같은 credential generation 인증 actor에서 공식 예약목록·동일 세션 상세의 exact 보류를 확인하고, `PAYMENT_REQUIRED` 빠른 최대 3회·기한 경과 후 marker 없는 최종 확인 1회·과거 기한 exact 행과 marker가 남은 레거시 건의 호환성 정리 1회, `UNKNOWN + INCONCLUSIVE` 빠른 3회·5분·15분·60분 지연 확인과 legacy count 3 복구, 최초 exact `NOT_FOUND`의 같은 연속 `AVAILABLE` 1회 재무장·재무장 `UNKNOWN` 추가 금지, 결제기한·공식 handoff를 검증 (확인 경로 자체는 예매·취소·결제를 호출하지 않음)
+- [ ] 실제 공개 도메인에서 provider runtime `no-store` telemetry의 비밀값 비노출과 restart 뒤 `cold → prewarm` 상태를 확인하되, age·local reuse 값을 운영사 고정 TTL로 해석하지 않음
+- [ ] 실제 KORAIL·SRT 계정으로 로그인 확인→새 작업의 자동 예매 기본 선택과 `notify_only` 전환→`available|limited|standing_plus_seat` 감시 등록→예매 1회→결제 직전 상태, 실제 결제기한·공식 내역 인계를 운영 환경에서 확인
+- [ ] SRT 2026년 9월 운행분 통합회원 로그인·예약 계약을 공식 통합 플랫폼에서 별도 검증하고 기존 SR credential scope와 분리
+- [ ] 허가된 external adapter 도입 전 provider circuit 조회·감사 가능한 수동 재개·cooldown 복구 sweep
+- [x] provider/account DB 실행 임대·단조 증가 fencing token, 외부 호출 전·결과 기록 전 소유권 확인, stale owner 갱신·해제·기록 차단의 격리 회귀 계약
+- [ ] 실제 장시간 다중 worker·PostgreSQL failover에서 provider/account 실행 임대 경합·복구 관찰
+- [ ] 실제 운영에서 부분 실패와 결제 timeout 뒤 제한 재감시 정책의 장시간 동작 확인
+- [ ] provider별 관측 신선도·circuit·예약 중복 방지·outbox 지연 운영 지표
+- [ ] 40개 초과 장시간표에서 접근성·렌더 성능 측정 후 목록 가상화 도입 여부 결정
+- [x] 사용자 트리거 SRT 1인 좌석 결과를 열차번호·날짜·출발시각 exact match로 카드에 overlay하고 `예매 가능`·`매진`·`예약대기 가능`·`예매 불가`와 관측 시각 표시
+- [x] SRT 좌석 overlay의 provider 동시 요청 1개, singleflight, 기본 20초 TTL cache, 실패 원인별 `unknown` 유지, 원문 응답·세션 로그 금지 검증
+- [x] 당시 KORAIL 계정 없는 서버 좌석 source의 열차번호·날짜·출발시각 exact match와 일반실·특실 `official_provider` overlay 계약 테스트 (보호 응답 확인 뒤 source 제거)
+- [x] KORAIL·SRT 운영사별 동시 요청 1개, 동일 조건 singleflight·TTL cache, timeout·일반 장애 backoff 집중 테스트
+- [x] 429 rate-limit cooldown과 `-8002`·`-8003`·`macro_err1` protection cooldown의 운영사별 무호출·fail-closed 집중 테스트
+- [x] 실제 컨테이너에서 대전→수서 1인 조회로 SRT 12개 좌석 응답과 Step 3 `매진`·관측 시각 표시를 확인하고 1440px·390px·320px에서 가로 넘침·브라우저 오류 없음 검증
+- [x] 승객 수를 시간표 query key에 포함해 인원 변경 전 stale 좌석 응답 차단
+- [x] KORAIL·SRT 모두 공용 일반·고속열차 역 카탈로그를 표시하고, SRT source 미지원 조합만 실행 시점에 `unsupported_route`로 fail-closed 처리
+- [x] SRT 2명 이상 조회를 `passenger_count_not_supported`로 fail-closed 표시
+- [x] KORAIL 대전(`0010`)→서울(`0001`) 2026-07-30 12:00 정상 단발 확인의 `CODE -8003`·`macro_err1`·열차 0건을 접근 제한으로 기록하고 추가 재시도·우회 없이 실제 좌석 상태 미확인 유지
+- [x] MV3 KORAIL Browser Companion의 단발 DOM 정규화 계약과 당시 새 대기 흐름 연결 (현재는 주 UI에서 제거된 레거시 호환 경로)
+- [x] 실제 KORAIL 결과 DOM의 `.gen/.spe`, 좌석명 없는 `매진`, `-`, `매진임박`, `입석+좌석·입석+예매`, 예약대기 우선순위를 정규화하고 알 수 없는 문구를 fail-closed 처리
+- [x] 새 대기 3단계에서 연결 origin·공식 결과 탭 1개·구간·날짜를 검증하고 성공한 snapshot만 현재 열차 카드에 반영
+- [x] 당시 새 대기 3단계의 KORAIL 공식 화면 1회 가져오기 패널 구현 (현재 주 UI에서는 제거)
+- [x] 서버 좌석 보강 완료·일부 미확인·오류 상태를 구분하고 미확인 운영사에만 수동 서버 재조회 fallback 제공
+- [x] 관리자 `POST /seat-status/refresh`가 동일 exact-match·singleflight·cache·Redis cooldown을 재사용하고 미관측 운영사만 갱신하는 계약 테스트
+- [x] 미관측 좌석의 관심 대기 등록을 막고 관측된 예매 가능·매진임박·입석+좌석·매진·예약대기 상태만 해당 CTA로 연결
+- [x] 예매 가능·매진임박·입석+좌석은 공식 예매와 유효 evidence·실행 `seat_monitoring=true`일 때의 감시 등록, 매진은 취소표 대기, 예약대기 가능은 공식 예약대기, 미운영은 비활성 CTA로 구분
+- [x] bridge의 연결 코드·설치별 자격증명·origin/client ID 결박 검증과 Compose·`.env.example` 기본 활성 전달
+- [x] snapshot 본문 SHA-256 결박 30초·1회 challenge, 설치별 분당 6건 수락 예산(X-Forwarded-For 회전과 무관), 동시 같은 본문 제출의 정확히 1건 수락·1건 replay 거부, Caddy 128KB 본문 제한·자격증명/challenge 헤더 redaction 및 `no-store` 응답 검증
+- [x] migration `0011`의 append-only browser snapshot 저장, 2분 freshness와 구간·날짜·인원·열차번호·출발시각·좌석등급 exact-match `official_page_browser_companion` overlay, worker·예약 비연결 검증
+- [ ] 레거시 Companion 호환 범위가 요구될 때만 관리자 전용 snapshot revision endpoint의 3초 polling 연결 (현재 주 UI에는 연결하지 않음)
+- [x] 레거시 snapshot 미설정·만료의 `source_not_configured` fail-closed 계약 검증 (현재 주 화면은 서버 source 사용)
+- [x] stale reservation attempt 복구의 nullable outer join에서 `with_for_update(of=(ReservationAttempt, WatchCandidate, Watch), skip_locked=True)`로 필요한 행만 잠가 PostgreSQL 회귀 방지
+- [x] migration `0010`·`0014`의 불변 `timetable_seat_evidence`, 관측되고 실행 `seat_monitoring=true`이며 `add_to_watch`가 허용된 공식 좌석만의 서버 발급 ID, watch candidate exact identity·만료·등록 허용 검증과 migration 전 비허용 evidence fail-closed 이관
+- [x] 등록 근거 만료의 typed `409 registration_evidence_conflict/expired` 계약과 동일 provider·열차번호·출발시각·좌석등급·상태의 신선한 공식 관측만 허용하는 1회 refresh/retry, 갱신 실패·identity/status 변화·unknown fail-closed 회귀 검증
+- [x] evidence-bound 생성·watch-bound 시작 멱등 키로 시작 응답 유실 뒤 수동 재시도에서도 실제 작업 1개만 유지하는 데스크톱·모바일 E2E 검증
+- [x] 시간표 등록 근거를 홈까지 보존해 좌석 등급·상태·출처·관측 시각 또는 미관측 사유를 표시하고 작업 `updated_at` 기반 가짜 마지막 확인 제거
+- [x] 실제 Compose에서 대전→수서 SRT 330 일반실·특실 `매진`을 각각 즉시 등록해 홈 6건 전체 표시, 두 좌석 등급 분리, 관측 시각 보존과 해당 candidate `seat_observations=0` 확인
+- [x] 등록 근거 홈 행의 1440×1000·390×844·320×844 가로 넘침 없음, 보이는 버튼 최소 44px, 320px 행 viewport 내부, 브라우저 warning/error 0건 검증
+- [x] 사용자 브라우저의 KORAIL 공식 승차권 검색 화면 정상 진입에서 일반실·특실·매진 결과와 `-8003`·`macro_err1` 부재를 읽기 전용 확인하고 자동 검색·로그인·예약 없이 수동 인계 경계 유지
+- [x] 새 headed Playwright 세션의 KORAIL 공식 홈→열차조회 단발 확인이 결과 단계 `CODE -8003`으로 중단됨을 기록하고 저장 상태·UA·header 변경.
+- [ ] 2명 이상 SRT 좌석 상태를 증명하는 정식 조회 계약 확보 (현재 SRTrain 검색은 1명 고정이므로 다인원 카드에는 `passenger_count_not_supported` 유지)
+- [x] 보호 응답을 받는 KORAIL 계정 없는 source를 시간표·좌석 refresh API에서 제거하고 당시 Browser Companion 호환 경로로 전환
+- [x] KORAIL direct source를 호출하면 실패하는 API 회귀 테스트, snapshot 전송 뒤 refresh 실패 시 성공 오표시 금지와 저장된 snapshot만 재조회하는 웹 회귀 테스트
+- [x] 기본 비활성 `experimental-rail` KORAIL Chromium sidecar, 내부 Bearer token, host 무노출·전용 egress, 접근 가능한 공식 폼 동작과 일반실·특실 DOM 정규화 구현
+- [x] 로컬 공식 화면 fixture에서 역 dialog·날짜/시간 dialog·인원 `총 1명`·조회·결과 DOM의 실제 Playwright 클릭 E2E, 동일 query singleflight/cache·동시성 1·route/date/passenger/train/time exact-match 검증
+- [x] 외부 네트워크 없는 `korail-browser-adapter-test` 컨테이너와 `verify-browser`를 전체 verify·CI 필수 gate로 연결해 Chromium DOM E2E skip 방지
+- [x] browser adapter 로컬·격리 컨테이너 fixture 테스트 48건 통과: 메인 화면 역 선택, 비동기 월 전환 달력과 월 경계 병합, 날짜·시간 회전 선택, 적용·raw CDP 실제 마우스 조회, 클릭 전 visible identity 재검증, 보호 trigger·stage redaction, 업무/정적 403·429 구분, 정상 결과·정책 안내 공존 판정, 혼합 목록의 KTX 계열 전용 파싱, mouse release·CDP detach·sidecar inflight drain·direct Chromium lifecycle의 반복 취소와 bounded shutdown 정리, 비밀 환경변수 차단·full-stack fixture URL의 test-only exact gate와 fail-closed 결과 경계
+- [x] KORAIL Chromium sidecar lifespan에서 외부 페이지를 열지 않는 launch/close probe를 1회 실행하고 성공 후에만 `/readyz`를 열며 Compose healthcheck도 readiness 기준으로 전환
+- [x] 운영·테스트 KORAIL sidecar의 HOME tmpfs 소유권을 실제 `pwuser` UID/GID 1001과 일치시켜 read-only root filesystem에서도 Chrome HOME 쓰기 가능 여부 확인
+- [x] Windows `ops.ps1 experimental`에서 KORAIL Chromium·SRT provider 활성화 값과 각 내부 token을 비밀값 출력 없이 자동 생성·보존하고 migration·API·web·proxy·두 sidecar·기본/experimental worker·scheduler를 profile 전체 build·force-recreate
+- [x] Chromium 경로의 403·429·`-8002`·`-8003`·`macro_err1`·CAPTCHA·NetFUNNEL 중단, cooldown 중 무호출, 알 수 없는 좌석 문구·DOM 불일치 fail-closed 계약
+- [x] KORAIL 업무 document 403·보호 marker는 즉시 차단하되 비업무 subresource 403만으로 보호를 오판하지 않고, 혼합 공식 결과 DOM에서 KTX 계열만 엄격히 파싱해 무궁화·ITX 행 구조가 KTX snapshot을 깨지 않는 회귀 계약 (보호 우회 아님)
+- [x] KORAIL 조회 직전 출발역·도착역·날짜·출발 시각·성인 1명을 visible DOM에서 exact read-back하고 불일치 시 click 0회, 정상 결과와 단순 정책 안내 공존·명시 보호 surface 우선·업무/정적 429 분리 회귀 계약
+- [x] KORAIL sidecar의 고정 desktop viewport `1440×1000`, 비동기 역 검색 결과·출발일 dialog의 단일 가시 대상 안정 확인, 시간 slider의 단일 대상·활성 control 검증과 모호·비활성 시 `source_unavailable` fail-closed 계약
+- [x] 공식 DOM의 달력 월 `.slick-next`와 화살표 없는 시간 `.slideWrap`을 분리하고, soft-aria 시간 링크의 실제 pointer click·가로 드래그·창 변화·`#startDate` exact readback 회귀 및 대전→서울 2026-08-01 05:00–09:00 KTX 16행·좌석 32개 공식 관측 웹 스모크 확인
+- [x] 날짜 변경 직후 이전 서비스일의 비활성 시간 상태가 남는 picker를 날짜 적용·exact readback·재개방으로 갱신하고, 시간 전용 화살표·CDP drag·표준 좌우 키의 방향성 있는 창 변화 뒤에만 목표 시간을 선택하는 회귀 계약
+- [x] exact KORAIL 열차 행 안에 같은 좌석 등급의 매진 anchor와 활성 가격 anchor가 함께 남아도 실제 행동 가능한 가격 control만 한 번 선택하고, 실제 행동 control 복수는 계속 fail-closed하는 회귀 계약
+- [x] HTTP 423 `provider_access_restricted`에서 Step 3 일반실·특실 `unknown/not_observed` 유지, 예매·대기 CTA와 재조회 버튼 숨김
+- [x] 별도 세션의 raw-CDP 단발 결과를 KORAIL sidecar에 접목해 새 임시 프로필의 Chromium 직접 실행→loopback CDP attach, 최종 조회 버튼의 `mousePressed → 100ms → mouseReleased` 1회 제출, hold 실패와 반복 취소에도 mouse release·CDP detach·Browser.close·bounded wait/terminate/kill·profile cleanup·sidecar inflight drain, 보호 오류 보존·child 비밀 환경변수 미상속·`-1405` 보호 분류를 외부 철도 호출 없는 로컬·격리 컨테이너 테스트 48건으로 검증
+- [x] 새 대기 주 UI에서 Browser Companion 설치·가져오기 패널을 제거하고 KORAIL 미관측 재조회를 서버 Chromium 어댑터 경로로 단일화 (어댑터는 `experimental-rail`에서만 활성)
+- [x] 기본 설정의 로그·진행 상태에서 레거시 Browser Companion 연결 코드·pairing UI를 제거하고 서버 좌석 조회 제공원 상태만 표시
+- [x] 시간표용 `get_timetable_provider`와 worker 실행용 `get_execution_provider` registry를 분리하고 KORAIL·SRT 각각 3중 opt-in 실행 adapter로 제한
+- [x] SRT `scheduled + next_check_at=null` 재무장, due non-null 선택, DB 임대 선획득·호출/저장 fencing·finally 해제, origin/destination exact request 전달
+- [x] 같은 SRT 출발역·도착역·KST 서비스일·인원을 00:00–23:59 하루 조회로 singleflight/cache 병합하고 서로 다른 관심 열차 2개가 상류 1회만 호출되는 회귀 계약
+- [x] SRT `sold_out → watching`, `available|limited|standing_plus_seat → seat_found`, `waitlist_available → official_waitlist` 상태 전이와 `reservation_once=false` 계약
+- [x] `seat_found|official_waitlist`를 fresh terminal evidence 또는 unknown 예정 출발 15분 horizon까지 계속 관측하고 동일 상태 반복 알림을 억제하며, 상태 간 이동·확정 비행동 시 `watching` 복귀·오류 시 기존 상태 유지·과거 `next_check_at=null` 작업 재무장을 검증하는 회귀 계약
+- [x] KST 자정 경계의 late-night `seat_found`가 다음 날 도착시각으로 조기 만료·연장되지 않고, scheduled/estimated/actual 출발과 fresh terminal provenance를 분리해 판정하는 backend 회귀 검증 (브라우저 실검증은 별도)
+- [x] KST 자정 직전 다음 서비스일 후보를 `travel_date` 선필터로 누락하지 않고 fresh `closed|cancelled|departed`는 만료하되 `delayed|boarding|open|waitlist`와 미래 unknown은 계속 감시하는 worker 회귀 계약
+- [x] SRT shared source cooldown preflight를 external DB 임대·fencing 안에서 적용해 due 작업의 `next_check_at`·`cooldown_until`만 연기하고 upstream·오류 `SeatObservation` 0건, preflight-observe race 재확인, TTL 해제 뒤 stale 표시 제거와 정상 관측 재개 회귀 계약
+- [x] Celery task별 SRT source·Redis 수명주기, provider별 adapter 1개 공유, timeout 뒤 `to_thread` 호출 drain→lease 해제→task close 순서와 close 오류 격리 회귀 계약
+- [x] 실제 Compose migration `0015_execution_lease` 적용 뒤 기존 SRT 작업 2건을 `scheduled → watching`으로 복구하고, 일반실·특실 `sold_out` 관측 2건 저장·다음 조회 예약·임대 해제와 후속 `provider_unavailable` fail-closed 유지 확인
+- [x] 최신 이미지 재배포 뒤 실제 Compose worker의 20:31·20:35 서로 다른 SRT due cycle이 `sold_out` 관측을 저장하고 `Event loop is closed`·다른 loop Future 오류 0건, `anonymous/public` fencing 64·owner/expiry 없음의 임대 해제를 유지한 단기 런타임 확인
+- [ ] 실제 서비스에서 SRT 3중 opt-in worker를 장시간 실행해 감시 주기·cooldown·재시작 복구·알림을 확인
+- [x] 현재 통합 회귀: API 420건·웹 단위 215건·browser adapter 48건, 데스크톱·모바일 E2E 8건과 KORAIL 실제 Chromium DOM·KORAIL·SRT worker를 함께 통과하는 격리 full-stack E2E 시나리오 1회, strict typecheck와 production build 통과
+- [x] PostgreSQL Alembic `version_num` 32자 한계를 넘은 `0014` revision ID를 줄여 실제 migration head 적용 확인
+- [x] 2026-07-30의 별도 인증 로컬 UI smoke에서 실제 SRT 수서→부산 12:00–18:00 14개 열차·28개 좌석 등급의 매진 상태와 취소표 대기 CTA 자동 반영, 브라우저 warning/error 0건 확인
+- [x] 사용자 Chrome의 SRT 공식 동일 세션 UI에서 수서→부산 2026-07-31 12:00 조회 1회로 결과 10행·일반실/특실 좌석 셀 20개까지 접근 제한 없이 도달
+- [x] 현재 API 컨테이너의 `SrtLiveSeatSource` 실제 `search_train()` 1회로 14개 열차·28개 좌석 등급 `sold_out` snapshot 재검증
+- [x] 선택 실행형 SRT live E2E를 결정적 기본 E2E·별도 opt-in KORAIL live E2E와 분리하고 세 환경변수 gate, 수서→부산 내일 12:00–14:00 단발 요청, `official_provider` 상태별 CTA, zero-retry·sanitized 원인 artifact 계약 구현
+- [x] 선택 실행형 KORAIL live positive gate의 저장소 밖 storage-state·로그인 세션 preflight, `/seat-status/status` cooldown 시 시간표 0회 sanitized 실패, ready 시 KORAIL 단독 서울→부산·내일 KST·12:00–18:00·성인 1명 exact query 1회/SRT 0회, `seat_monitoring=true`·`reservation_once=false`, same-train 일반실/특실 source·freshness·상태별 공식 CTA·등록 evidence 계약
+- [x] KORAIL·SRT live smoke 공통 인증 helper: 저장소 밖 storage state 우선, 만료 시 또는 파일 미사용 시 process-only ID/PW UI 로그인 1회, 잘못된 명시 파일 hard failure, 초기 관리자 자동 등록·시간표 호출 0건, secret 비영속·sanitized 진단의 데스크톱·모바일 Chromium 계약
+- [ ] 운영 storage state를 사용한 선택 실행형 SRT 12:00–14:00 live E2E 재실행 (환경변수 미제공 시 skip하며 CI에서는 실행하지 않음)
+- [ ] 레거시 호환이 필요한 경우에만 사용자 Chrome의 KORAIL Browser Companion 실제 1회 전송, 2분 exact-match overlay와 관리자 철회 운영 확인 (주 UI 출시 조건 아님)
+- [x] `experimental-rail` Chromium sidecar 실제 단발에서 서울→부산, 2026-08-01, 09:00–12:00 공식 메인 UI 흐름을 수행하고 보호 신호를 내부 HTTP 423 `provider_access_restricted`로 정규화한 뒤 무재시도·중단·cooldown을 확인 (좌석 snapshot 성공·감시·예약 capability 증거는 아님)
+- [x] 2026-07-31 당시 `playwright_direct_cdp` 이미지의 대전→서울 12:00–18:00 단발에서 비동기 역·날짜·시간 선택과 공식 표시 입력 exact read-back, 최종 조회 1회 제출까지 통과한 뒤 `wait_result/marker_code_8003`을 sidecar HTTP 423·API `provider_access_restricted`로 정규화해 변환 계층 문제가 아님을 확인
+- [x] sidecar 재빌드 뒤 `/ticket/search/general` 시작 URL과 가시 `txtGoStart`·`txtGoEnd`·`총 1명` pre-submit read-back을 대전→서울 09:00–12:00 실제 단발에서 통과하고, 시간표 16개 정상 반환 뒤 `wait_result/marker_code_8003`을 sidecar 423 및 API HTTP 200의 `unknown/not_observed` fail-closed로 확인 (추가 재시도·좌석 성공 주장 없음)
+- [x] KORAIL sidecar 기본 엔진을 WebDriver 없는 Pydoll CDP로 연결하고 `KORAIL_BROWSER_ENGINE=playwright_direct_cdp`를 명시한 경우에만 기존 직접 Chromium·loopback CDP 엔진을 선택하도록 구성 검증
+- [x] Pydoll의 pre-submit 역·날짜·시각·성인 1명 exact readback, 결과 화면에서 역 입력이 사라진 경우 날짜·시각·인원과 결과 행 구간 exact match, KTX 계열 전용 좌석 정규화 계약 구현
+- [x] Slick 시간 picker의 현재 `slick-current` 창과 인접 사전 렌더링 창이 함께 가시·active로 읽혀도 현재 창의 활성 control만 선택하고, 소유가 확인된 fixture 화살표가 있으면 한 번만 누르며 실제 공식 무화살표 `.slideWrap`은 가시 `.slick-list`를 CDP pointer drag한 뒤 창 signature 변경을 확인하고 무진전·반복은 fail-closed하는 외부 호출 없는 Chromium fixture 회귀 검증
+- [x] 공식 UI가 현재 시간 창에서 이미 선택한 `05시`만 soft `aria-disabled=true`로 노출할 때 요청 날짜 day 클릭·picker 전 시각 일치·요청 시각 단일 후보·나머지 현재 창 시각 전부 활성 조건에서만 클릭을 생략하고, 적용 뒤 날짜·시각 exact readback 불일치와 기존 시각 불일치·disabled 속성/class는 거부하는 Chromium fixture 회귀 검증
+- [x] 외부 네트워크 없는 `korail-browser-adapter-test` 이미지를 최신 소스로 재빌드해 Pydoll·direct-CDP fixture, 결과 역 입력 소실, 시간 picker 활성 원본 선택, `더보기` 확장, CDP 403·429 분류, readiness 자가 복구 계약 78건 통과
+- [x] 동일 대전→서울·2026-08-01·03:00 조건의 Windows Pydoll PoC가 전체 10행(KTX 계열 8·ITX 1·무궁화 1)을 반환하고, Linux sidecar Pydoll의 03:00–08:00 조회가 HTTP 200·KTX 계열 8행·`available|limited|sold_out`을 반환함을 확인
+- [x] 같은 대전→서울·2026-08-01·03:00–08:00 조건의 `playwright_direct_cdp` 엔진은 `wait_result/marker_code_8003`과 HTTP 423으로 닫히고, 실행 실패 시 Pydoll↔direct-CDP 자동 fallback·재제출이 없음을 확인
+- [x] 당시 3중 opt-in 직접 Chromium 배포 뒤 기존 Redis cooldown의 자연 만료를 기다려 로컬 새 대기에서 대전→서울, 2026-07-31, 12:00–18:00을 단 한 번 조회하고 `provider_access_restricted` 표시·예매/대기 CTA 숨김·약 6시간 공유 cooldown 재개방을 확인 (stealth·지문 위장·proxy·CAPTCHA 우회·추가 재시도 없음)
+- [x] 인증된 새 대기 웹 UI에서 대전→서울·2026-08-01·03:00–08:00을 조회해 Pydoll sidecar HTTP 200, KTX 계열 8행 exact overlay, `예매 가능`·`매진 임박`·`매진`, 공식 예매·취소표 대기 CTA와 비일치 2행의 fail-closed 표시까지 확인
+- [x] `더보기` 확장 적용·sidecar 재빌드 뒤 같은 조건을 다시 조회해 시간표 10행의 일반실·특실 20개 상태가 모두 공식 관측으로 overlay되고 상태별 CTA가 표시됨을 확인
+- [x] API·웹·Chromium sidecar 컨테이너 재생성 뒤 KORAIL `provider_access_restricted` cooldown과 남은 TTL의 Redis 복구를 추가 상류 요청 없이 확인
+- [x] 보호 응답 기본 cooldown을 5분으로 조정하고 과거 릴리스가 만든 `korail-browser` Redis cooldown 키를 1회 제거한 뒤 API·worker·sidecar 설정 적용 확인
+- [x] 일반 source/DOM 실패의 지수 backoff 상한도 5분으로 제한하고 API→sidecar 전체 대기 90초와 브라우저 개별 UI 대기 25초를 분리해 API가 sidecar보다 먼저 연결을 끊지 않는 계약 검증
+- [x] 오늘의 이미 지난 시간창이 KORAIL `source_unavailable`로 끝난 뒤 다른 서비스일 조회까지 Redis cooldown으로 막던 경계를 재현하고, 일반 실패는 exact query별 로컬 backoff로 격리하며 403·423·429만 provider-wide cooldown을 유지하는 backend 회귀 검증
+- [x] KORAIL 공식 HTTP 응답이 성공하면서 열차가 0개인 심야 서비스일을 상류 장애로 오판하지 않고 정상 빈 snapshot으로 반환하는 회귀 검증
+- [x] worker의 `departure_date_disabled` 일반 실패가 Chromium sidecar의 전역 source backoff를 열어 다른 날짜 웹 조회도 503으로 만들던 경계를 로그로 확인하고, sidecar도 exact query별 30~300초 backoff로 격리하며 같은 key 차단·다른 날짜 허용·보호 응답의 전역 차단 회귀 검증
+- [x] 위 날짜 전환·빈 snapshot 패치가 포함된 API·worker·Chromium sidecar 이미지를 재빌드·재생성한 뒤, 인증된 운영 웹에서 오늘 05:00–09:00을 `출발 시간 경과`로 표시하고 상류 호출 없이 종료한 직후 2026-08-03 15:00–18:00으로 전환해 KORAIL 13개 열차·26개 좌석 등급의 공식 상태가 복구됨을 확인 (장기 서비스 healthy, migration exit 0)
+- [x] Pydoll CDP의 main document 403·document/fetch/xhr 429를 URL·body·header 저장 없이 보호·rate-limit 신호로 정규화하고 `/readyz` startup probe 일시 실패를 5초 단일 재probe로 자가 복구하는 회귀 검증
+- [x] KST 자정 직후 공식 날짜 picker가 날짜 숫자 뒤에 접근성 보조문구 `출발일`을 함께 노출해도, 선택된 월 안에서 정확한 날짜 또는 정확한 `날짜 출발일` 레이블만 허용하고 2026-08-02 경계 fixture로 회귀 검증
+- [x] Pydoll 검색 제출 1회 뒤 결과 `더보기`만 최대 19회 확장하고 버튼 소실·새 identity 없음·403·429·보호 신호에서 즉시 중단하며, Slick 현재/인접 시간 창 이동·무진전·선택 상태·적용 readback을 포함한 관련 API 회귀 101건 통과
+- [x] 첫 정상 Pydoll 조회가 만든 official same-origin 업무 POST template과 공식 cookie를 기본 최대 1800초·100회인 메모리 lease로 전환하고, 같은 구간의 날짜·시각 변경에서는 `txtGoAbrdDt`·`txtGoHour` byte span만 바꾸는 HTTP replay 구현; 대전→서울 2026-08-01 `12:00–18:00 → 10:00–12:00` live 연속 조회가 모두 HTTP 200·KTX 계열 28개/12개이며 첫 검증 18.20초→3.19초, 재빌드 검증 10.36초→3.22초로 단축됨을 확인
+- [x] 단일 route-bound HTTP lease가 대전→서울·대전→부산 활성 대기 사이에서 평균 16.15초의 cold init을 반복하던 원인을 확인하고, 전역 직렬화를 유지한 구간별 최대 4개 bounded LRU pool로 교체해 A→B→A 재사용·LRU 축출·구간별 TTL/횟수/보호 실패 격리·로그인/예매/종료 전체 정리 회귀 검증
+- [x] HTTP lease의 TTL·횟수 만료와 선택 구간 오류는 해당 lease만 POST 전에 폐기해 cold init하고, 401·동일 origin 로그인 redirect·명시적 로그인 HTML의 session 만료만 같은 read-only 요청에서 cold init 한 번으로 복구하며, capture·schema·일반 4xx는 fail-closed하고 403·429·보호 응답은 재초기화하지 않는 회귀 계약 검증
+- [x] multipart template·cookie jar·opaque path/query/header·원문 응답을 repr·DB·Redis·로그·artifact로 내보내지 않고 redirect·userinfo·fragment·다른 origin/port를 거부하며, 취소 중 HTTP client 정리까지 완료하는 회귀 검증
+- [x] `rail_waitlist` logger namespace에만 `APP_LOG_LEVEL`을 적용해 외부 라이브러리 INFO는 억제한 채 HTTP lease의 `lease_created`·`search_succeeded`·`cold_reinit` lifecycle을 파일 JSONL에 기록하고, live 연속 조회에서 검색 순번 2 갱신 로그를 확인
+- [x] bounded Pydoll 세션의 횟수 교체·shutdown close·반복 취소 중 owned cleanup 완료를 검증하고, drain 제한 뒤 검색 lock을 다시 무기한 기다리지 않도록 fail-closed lifecycle 계약 추가
+- [x] 안정판 Google Chrome sidecar에서 숨은 시간 링크 직접 클릭을 제거하고 가시 `.slick-list`의 `buttons=1` CDP drag·release 보장·CSS 전환 완료·활성 12시 click·exact readback을 적용한 뒤 대전→서울 2026-08-01 12:00–18:00 단발이 HTTP 200, KTX 28행·좌석 등급 56개를 반환함을 확인; API·sidecar 재생성 뒤 최신 상태도 `limited` 7·`sold_out` 30·`standing_plus_seat` 19로 재검증 (로그인된 웹 overlay·장시간 background는 별도 확인)
+- [x] Pydoll 시간 picker가 18시 현재 창에서 12시로 뒤로 이동한 뒤 범위 끝값 `18`이 겹쳐도 첫 `slick-current` 시각의 방향 변화를 인식하고, 시간 소유 `<a class="slick-prev">`와 무화살표 CDP drag를 각각 Chromium fixture로 회귀 검증
+- [x] KORAIL 보호 중단을 원문 body·URL·header 없이 허용 목록 trigger와 실행 stage로만 내부 진단하고 외부 API는 `provider_access_restricted`로 유지하는 계약·회귀 테스트
+- [x] 외부 철도 호출 없는 격리 Compose full-stack E2E에서 실제 API·PostgreSQL·Redis·Caddy·웹·worker·scheduler·KORAIL Chromium sidecar를 통과해 관리자·알림 채널 설정, KORAIL 매진 특실 evidence-bound 대기 1건과 SRT 좌석 등급 대기 3건의 생성·시작·홈 전체 반영 검증
+- [x] KORAIL 좌석 snapshot fake stub 없이 명시적 `playwright_direct_cdp` sidecar가 `app` 내부 HTML fixture의 보이는 역·날짜·시간·조회 컨트롤과 가시 요소의 mouse click을 거쳐 DOM을 정규화하고 API exact match `official_provider` 상태·공식 예매 CTA·매진 대기 evidence를 만드는 full-stack 계약
+- [x] full-stack sidecar/page를 `app` 내부망에만 두고 `browser-egress`와 실제 철도 endpoint 호출 0건, fixture URL을 `ENVIRONMENT=test`의 고정 내부 URL로만 허용하며 Playwright route mock도 사용하지 않는 격리 계약
+- [x] full-stack KORAIL `sold_out → watching`과 SRT `watching`·`seat_found`·`official_waitlist` 전이, 좌석 관측과 전이 연결, 운영사별 provider/account 실행 임대 fencing·해제, 예약 시도 0건 검증
+- [x] full-stack `seat_found`·`official_waitlist` 알림 outbox 2건 생성, 고유 dedupe key와 최소 1회 재시도, 외부 egress 없는 `pending|failed` fail-closed 검증
+- [x] 긴 상태 전이 알림의 outbox 중복 방지 키를 128자 고정 길이로 안정 정규화해 PostgreSQL 길이 오류와 좌석 관측 트랜잭션 롤백을 방지하는 회귀 검증
+- [x] 웹 SSE 최초 연결의 과거 outbox replay를 초기 REST snapshot과 중복 처리하지 않고, 현재 이벤트 burst를 단일 watches·알림 채널 재조회로 병합해 시간표 요청 큐 고갈을 방지하는 회귀 검증
+- [x] SRT 직접 예매 결과를 공식 source·열차/서비스일/시각/구간·실제 좌석등급·실제 인원·미결제 상태로 exact 검증하고, 근거 누락·불일치는 결제 필요로 확정하지 않은 채 읽기 전용 공식 예약목록 확인으로 강등하며, 확인된 결제기한과 공식 발권/취소 목록 handoff를 여러 결제 대기 카드에 보존하는 회귀 계약
+- [x] 2026-08-03 최신 `experimental-rail` 전체 이미지 재빌드·강제 재생성 뒤 migration·log-init 정상 종료, 장기 서비스 전체 healthy, 관련 컨테이너 error marker 0건, API 818건과 활성 `.env` gate를 격리한 10건 재검증, 웹 296건·strict typecheck·production build·Sites 4건 통과
+- [x] 재배포된 2560×1409 홈 화면에서 결제 대기 2건을 동시에 렌더링하고 가로 넘침·브라우저 console error 0건을 확인; 기존 기한 미저장 예약은 `결제기한 미제공`으로 fail-closed 표시하고 새 SRT exact 결과의 실운영 결제기한 반영은 아래 운영 확인 항목으로 유지
+- [x] 저장된 활성 철도 계정의 startup prewarm과 기동 뒤 새 `auth_required|provider_blocked` revision별 1회 복구 manager, 같은 credential generation의 상주 actor가 이미 ready·재사용 가능하면 외부 재로그인 없이 DB·작업 상태 동기화, 그렇지 않을 때만 generation CAS 기반 bounded 재검증, 관련 작업 재개·동일 revision 반복 로그인 금지·provider별 bounded revision 메모리·maintenance 오류 후 계속 동작 회귀 계약
+- [x] 기한 없음·기한 경과 `PAYMENT_REQUIRED` legacy 행을 일반 bounded reconciliation에 다시 포함하고, migration `0022` marker가 없는 결제기한 경과 행만 최종 공식 목록 확인 1회로 선택하는 worker·service 로컬 테스트. 정상 로드·exact 대상 0건만 최종 `NOT_FOUND`로 판정해 `notify_only`는 `expired`로 활성 목록에서 내리고 이력을 보존하며, `reserve_once_before_payment`는 `watching`으로 복귀시키되 같은 episode fence를 유지하고 이후 확정 비가용→새 행동 가능 관측에만 1회 재시도 허용; 중복·인증·차단·불확실은 fail-closed
+- [x] 최종 공식 확인에서 exact 미결제 행이 남아 있어도 그 행의 공식 결제기한이 이미 지난 경우 행동 가능한 보류 종료로 정리하고, 이전 버전이 marker만 남긴 행을 같은 인증 actor의 호환성 확인 1회로 복구하는 worker·service·API 회귀 계약. 홈은 기한 경과 즉시 긴급 `결제 대기`·`00:00:00`·결제 CTA에서 제외하고, `내 예약`에는 `기한 경과 · 공식 확인 필요`·실제 기한·공식 확인 CTA로 감사 기록을 보존
+- [x] 결제·예약 정보 확인을 공개 시간표·계정 없는 좌석 source와 분리하고 실제 예매와 동일한 credential generation의 로그인된 KORAIL·SRT 인증 actor에서만 실행하며, 계정 세대 불일치·인증 만료 결과는 상태에 쓰지 않는 회귀 계약
+- [x] 2026-08-03 최신 `experimental-rail` 전체 이미지 재빌드·강제 재생성 뒤 migration·log-init 정상 종료와 장기 서비스 전체 healthy 확인, API 856건·Ruff 핵심 오류 규칙·`git diff --check` 통과, KORAIL generation 3·SRT generation 1 startup 재인증과 legacy KORAIL 결제 대기 2건의 동일 인증 세션 공식 목록 3회 확인·stale CTA 제거·감시 복귀를 실제 DB·sanitized 로그로 검증
+- [x] KORAIL strict 25키 조건 선입력과 read-only·인증 예약 direct navigation 반영 뒤 API 857건, 웹 310건, Sites 4건, 웹 strict typecheck·production build, 변경 Python의 Ruff `E/F/I`를 통과하고 `experimental-rail` 전체 이미지를 재빌드·강제 재생성해 migration·log-init 종료 코드 0, 장기 서비스 전체 healthy, 최근 오류 marker 0건을 확인
+- [x] migration `0022_post_deadline_reconciliation`을 포함한 최신 `experimental-rail` 전체 이미지를 `config --quiet`→전체 build→`up -d --force-recreate`로 배포하고 migration/log-init 종료 코드 0·장기 서비스 10개 healthy·비밀값 없는 관련 로그를 확인. API 867건, 웹 311건·strict typecheck·production build·Sites 4건과 변경 Python의 Ruff `E/F/I`를 통과했으며, 실제 KORAIL 결제기한 경과 보류 2건은 같은 인증 세션의 최종 공식 목록 확인 1회에서 `NOT_FOUND`로 확정되어 활성 결제 대기 0건·자동 예매 작업 감시 복귀·기존 episode의 예약 시도 1회 유지까지 검증. SRT 370 작업도 ready actor의 같은 credential generation을 재사용해 별도 외부 로그인 없이 `provider_login_reverified_after_provider_block`으로 복구
+- [x] migration `0023_extend_unknown_reconcile`을 포함한 `experimental-rail` 전체 이미지를 재빌드·강제 재생성하고 migration/log-init 종료 코드 0·장기 서비스 전체 healthy를 확인. 실제 SRT 335(대전→부산, 2026-08-04 13:59 일반실)의 기존 `UNKNOWN + INCONCLUSIVE + count=3` 시도가 배포 뒤 지연 확인 대상으로 자동 복구되어 21:07:36 공식 목록 `NOT_FOUND`로 확정됐고, 이후 신선한 `AVAILABLE` 관측에서 `confirmed-absent-retry:<attempt.id>` sequence 2를 정확히 한 번 생성해 21:09:55 `PAYMENT_REQUIRED + CONFIRMED_PAYMENT_REQUIRED`와 21:19 결제기한까지 저장하는 운영 표본을 검증. 관련 pytest 95건과 전체 API 892건을 통과했으며 전체 실행의 Argon2 메모리·Chromium CDP 환경성 실패 2건은 각각 단독 재실행에서 통과
+- [x] 2026-08-04 실제 SRT 370(대전→수서, 22:06 일반실)의 00:11 결제기한 뒤 00:12:04 공식 목록이 과거 기한 exact 행을 계속 반환해 `PAYMENT_REQUIRED + marker + count=3`으로 남은 사례를 재현·복구. 배포 뒤 같은 credential generation의 호환성 정리 read가 01:37:57 exact `NOT_FOUND`를 확인해 기존 attempt를 count 4로 보존하면서 watch를 `WATCHING`, 후보를 `observed`, 기한·handoff를 null로 전이하고 hold-ended outbox를 한 번 생성했으며 전체 DB의 `PAYMENT_REQUIRED=0`, 기한 경과 `PAYMENT_REQUIRED=0`을 확인. API 927건·웹 334건·Sites 4건·strict typecheck·production build·Ruff·`git diff --check` 통과, `experimental-rail` 전체 재빌드·강제 재생성 뒤 migration/log-init 종료 코드 0·장기 서비스 전체 healthy·관련 error marker 0건 확인. `notify_only` 실제 운영 표본은 별도 확인 필요
+- [x] 2026-08-04 migration `0024_watch_observation_speed` 당시 작업별 관측 속도와 결제 보류 terminal 알림 완료 상태를 통합 검증. API 936건, 웹 340건, strict typecheck, production build, Sites 4건, 변경 범위 Ruff·`git diff --check`를 통과하고 `experimental-rail` 프로필 전체 이미지를 재빌드·강제 재생성. Alembic head `0024_watch_observation_speed`, migration/log-init 종료 코드 0, 장기 서비스 10개 healthy, API ready·프록시 200·최근 관련 오류 marker 0건과 다음 관측 예정 `HH:mm:ss`, 결제 진행 단계 초 단위 timestamp를 시각 검증. 당시 작업별 속도 선택 계약은 현재 단일 전역 좌석 관측 간격으로 대체함
+
+## 운영 확인 필요
+
+- [ ] 보호 응답이 없는 단발 opt-in 환경에서 KORAIL token 없는 `/ticket/search/list` cold bootstrap의 비SRT 대표 구간 양성 결과와 기존 UI cold path 대비 동일 결과 identity·업무 요청 수·첫 결과 시간·HTTP replay 설치를 비교 (로컬 25키 builder·역 map·중복 fallback 금지 계약은 완료)
+- [ ] 실제 운영 origin에서 Web Push 권한 승인·service worker 구독·테스트 수신 확인
+- [ ] Telegram·Discord·범용 Webhook의 실제 외부 채널별 테스트 전송·수신과 독립 재시도 확인

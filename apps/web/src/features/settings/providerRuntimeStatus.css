@@ -1,0 +1,43 @@
+.provider-runtime-status {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid #dbe4ea;
+  border-radius: 10px;
+  background: #f8fafb;
+}
+
+.provider-runtime-status-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-runtime-status-heading > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.provider-runtime-status-heading > strong {
+  font-size: 14px;
+}
+
+.provider-runtime-status.is-ready .provider-runtime-status-heading > strong {
+  color: #0c6f68;
+}
+
+.provider-runtime-status.is-warning .provider-runtime-status-heading > strong,
+.provider-runtime-status.is-blocked .provider-runtime-status-heading > strong {
+  color: #8c4b1c;
+}
+
+.provider-runtime-status-details {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}

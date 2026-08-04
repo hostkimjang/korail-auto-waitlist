@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+secrets
+backups
+apps
+docs
+node_modules
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/dist
+**/.next

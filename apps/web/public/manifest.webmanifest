@@ -1,0 +1,18 @@
+{
+  "name": "레일웨잇 · 기차 예약 대기",
+  "short_name": "레일웨잇",
+  "description": "KORAIL·SRT 개인용 예약 대기와 결제 알림 도우미",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0b2345",
+  "lang": "ko-KR",
+  "icons": [
+    {
+      "src": "/icons/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

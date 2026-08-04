@@ -1,0 +1,65 @@
+{
+	admin off
+}
+
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	@health path /healthz
+	handle @health {
+		respond "ok" 200
+	}
+
+	@browser_bridge path /api/v1/browser-bridge/*
+	handle @browser_bridge {
+		request_body {
+			max_size 128KB
+		}
+		reverse_proxy {$API_UPSTREAM:api:8000}
+	}
+
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy {$API_UPSTREAM:api:8000}
+	}
+
+	@events path /events /events/*
+	handle @events {
+		reverse_proxy {$API_UPSTREAM:api:8000} {
+			flush_interval -1
+		}
+	}
+
+	@swagger path /docs /docs/* /openapi.json
+	handle @swagger {
+		reverse_proxy {$API_UPSTREAM:api:8000}
+	}
+
+	@grafana path /ops/grafana /ops/grafana/*
+	handle @grafana {
+		reverse_proxy grafana:3000
+	}
+
+	handle {
+		reverse_proxy {$WEB_UPSTREAM:web:8080}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	log {
+		output stdout
+		format filter {
+			request>headers>X-Bootstrap-Token delete
+			request>headers>X-Csrf-Token delete
+			request>headers>X-Rail-Bridge-Token delete
+			request>headers>X-Rail-Bridge-Client-Id delete
+			request>headers>X-Rail-Bridge-Challenge delete
+			wrap json
+		}
+	}
+}

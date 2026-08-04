@@ -128,10 +128,17 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 설정 페이지 추출 뒤 현재 1,010줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
+조립만 남았으며 예약 페이지 추출 뒤 현재 998줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복
 차단·만료 evidence 재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가
 소유합니다.
+
+strict `features/reservations/ReservationsPage.tsx`는 예약 요약·목록·새 대기 행동과 공식 예매/결제
+handoff 조립을 소유합니다. `ReservationListWatch`를 직접 사용하고 App의 화면 이름 대신 구체적인
+`onCreate` callback을 받습니다. 공식 URL이 있을 때만 사용자 클릭으로 `_blank`와
+`noopener,noreferrer`를 사용해 열며, 기한 경과 결제는 결제 대기 집계와 CTA에서 제외하고 감사용
+공식 확인 상태로 보존합니다. App의 production 경로는 이 strict 페이지를 직접 사용하고, 기존 공개
+`Reservations({ onNavigate })` export는 얇은 adapter로 `onNavigate("new")` 계약을 유지합니다.
 
 API의 watch CRUD·start·pause·cancel·mock-transition HTTP 경계와 즉시 처리 best-effort enqueue는
 `watch_management/http.py`, 최신 observation·reservation attempt batch 조회와 결제 보류 read

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { App, Home, NewWait, OfficialHandoff, PaymentHero, Reservations, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App.jsx";
+import { App, Home, NewWait, OfficialHandoff, PaymentHero, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App.jsx";
 import { ApiError } from "../src/api/client";
 import { normalizeSeatClasses } from "../src/api/seatClasses";
 import { SeatClassPanel } from "../src/features/new-wait/TrainResultCard";
@@ -1869,58 +1869,15 @@ describe("RailWait responsive core flow", () => {
     expect(window.open).toHaveBeenCalledWith("https://www.korail.com/ticket/search/general", "_blank", "noopener,noreferrer");
   });
 
-  it("builds reservation counts and official CTAs from the watches", () => {
-    const watches = [
-      { id: "scheduled", status: "scheduled", statusLabel: "대기 등록됨", route: "서울 → 부산", train: "KTX 085", date: "8월 1일", departure: "14:11", official_booking_url: "https://www.letskorail.com" },
-      { id: "payment", status: "payment_required", statusLabel: "결제 필요", route: "수서 → 부산", train: "SRT 327", date: "8월 1일", departure: "14:30", official_booking_url: "https://etk.srail.kr" },
-      { id: "done", status: "completed", statusLabel: "결제 완료", route: "서울 → 대전", train: "KTX 001", date: "7월 30일", departure: "09:00", official_booking_url: null },
-    ];
-    render(<Reservations watches={watches} onNavigate={vi.fn()} />);
-
-    expect(screen.getByText("진행 중").nextElementSibling.textContent).toBe("1");
-    expect(screen.getByText("결제 필요", { selector: ".reservation-summary span" }).nextElementSibling.textContent).toBe("1");
-    expect(screen.getByText("완료").nextElementSibling.textContent).toBe("1");
-    expect(screen.getByRole("button", { name: /공식 예매 열기/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /결제 열기/ })).toBeTruthy();
-    expect(screen.getAllByRole("article")[0].textContent).toContain("수서 → 부산");
-    expect(screen.getByText("결제기한 미제공")).toBeTruthy();
-  });
-
-  it("does not count an elapsed provider deadline as payment waiting", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T00:00:00Z"));
-    try {
-      render(<Reservations watches={[
-        {
-          id: "elapsed-payment",
-          status: "payment_required",
-          statusLabel: "결제 필요",
-          route: "대전 → 수서",
-          train: "SRT 370",
-          date: "8월 4일",
-          departure: "22:06",
-          payment_deadline: "2026-08-01T23:59:59Z",
-          official_booking_url: "https://etk.srail.kr",
-        },
-      ]} onNavigate={vi.fn()} />);
-
-      expect(screen.getByText("결제 필요", { selector: ".reservation-summary span" })
-        .nextElementSibling.textContent).toBe("0");
-      expect(screen.getByText("기한 경과 확인").nextElementSibling.textContent).toBe("1");
-      expect(screen.getByRole("button", { name: /공식 확인 열기/ })).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /결제 열기/ })).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("allows deleting only deletable terminal records", async () => {
+  it("navigates from the app shell to the reservations page", async () => {
     const user = userEvent.setup();
-    const onDelete = vi.fn();
-    render(<Reservations watches={[{ id: "expired", status: "expired", statusLabel: "만료", route: "서울 → 부산", train: "KTX 085", date: "8월 1일", departure: "14:11" }]} onNavigate={vi.fn()} onDelete={onDelete} />);
+    render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /기록 삭제/ }));
-    expect(onDelete).toHaveBeenCalledWith("expired");
+    await user.click(screen.getAllByRole("button", { name: "내 예약" })[0]);
+
+    const reservationsHeading = screen.getByRole("heading", { name: "내 예약", level: 1 });
+    expect(reservationsHeading).toBeTruthy();
+    expect(within(reservationsHeading.closest(".page")).getByRole("button", { name: "새 대기" })).toBeTruthy();
   });
 
   it("keeps system diagnostics outside the consumer home screen", async () => {

@@ -49,8 +49,7 @@ import { useWatchCollection } from "./features/app/useWatchCollection";
 import { useWatchMutations } from "./features/app/useWatchMutations";
 import { ActiveWatchList } from "./features/home/ActiveWatchList";
 import { PaymentRequiredSection } from "./features/home/PaymentRequiredSection";
-import { ReservationList } from "./features/reservations/ReservationList";
-import { ReservationSummary } from "./features/reservations/ReservationSummary";
+import { ReservationsPage } from "./features/reservations/ReservationsPage";
 import { CalendarPicker } from "./features/new-wait/CalendarPicker";
 import { ReservationPolicyControl } from "./features/new-wait/ReservationPolicyControl";
 import {
@@ -568,19 +567,8 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
   );
 }
 
-export function Reservations({ watches, onNavigate, onDelete }) {
-  return (
-    <div className="page">
-      <PageHeader title="내 예약" helper="감시부터 결제 완료까지 상태를 구분해 보여드립니다." action={<button className="button button-primary compact" type="button" onClick={() => onNavigate("new")}><Plus />새 대기</button>} />
-      <ReservationSummary watches={watches} />
-      <ReservationList
-        watches={watches}
-        onCreate={() => onNavigate("new")}
-        onOpenOfficial={(watch) => window.open(watch.official_booking_url, "_blank", "noopener,noreferrer")}
-        onDelete={onDelete}
-      />
-    </div>
-  );
+export function Reservations({ watches, onNavigate, onDelete = () => undefined }) {
+  return <ReservationsPage watches={watches} onCreate={() => onNavigate("new")} onDelete={onDelete} />;
 }
 
 export { SettingsPage as Settings };
@@ -995,7 +983,7 @@ export function App() {
         <div className="mobile-header"><Brand /><button type="button" className="icon-button" aria-label="알림"><Bell size={23} /></button></div>
         {activeView === "home" && <Home watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onNavigate={navigate} onPause={pauseWatch} onResume={resumeWatch} onCancel={cancelWatchItem} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} />}
         {activeView === "new" && <NewWait demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} />}
-        {activeView === "reservations" && <Reservations watches={reservationWatches} onNavigate={navigate} onDelete={deleteWatchRecord} />}
+        {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
         {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={setSettingsActiveSection} onLogout={signOut} initialSection={settingsInitialSection} />}
       </main>
       <BottomNav activeView={activeView} onNavigate={navigate} />

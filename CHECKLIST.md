@@ -270,10 +270,13 @@
 - [x] CSS import·파일 경계와 정확한 selector/container block 계약을 Vitest로 고정하고, 정상 Home mock의 1,440×1,000·320×844·720×500(200% 확대 reflow 등가) Chromium에서 실제 자식 overflow·viewport bounds·watch 영역 비겹침·fixed navigation 가림·booking CTA/switch/icon/bottom item 44×44px·미처리 API/console/page error 0건 검증. 신규 spec을 기본 `test:e2e`·`verify`에 포함
 - [x] 열한 번째 CSS 구조 슬라이스의 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 67개 파일·481건, production build·Sites 4건, 기본 Playwright E2E 14건과 `git diff --check` 통과. CSS·테스트·문서만 변경해 Compose 재배포는 생략
 - [ ] 실제 headed Chrome native 200% zoom과 320px에서 Step 3 열차·좌석 CTA, Official Handoff modal/sheet의 geometry·focus·가로 넘침을 확장 회귀 검증
+- [x] 예약 요약·목록·새 대기·공식 handoff 조립을 strict `features/reservations/ReservationsPage.tsx`로 이동하고 typed `ReservationListWatch`, 구체적 `onCreate`, optional URL fail-closed와 `_blank`·`noopener,noreferrer`, 기한 경과 집계·terminal 삭제를 feature 테스트로 고정. production App 직접 사용과 legacy `Reservations({ onNavigate })` adapter 행동을 함께 보존하고 `App.jsx`를 998줄로 축소
+- [x] 열두 번째 구조 슬라이스의 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 68개 파일·484건, production build·Sites 4건, 기본 Playwright E2E 14건, 독립 보정 재리뷰 P0~P3 없음과 `git diff --check` 통과
+- [x] 열두 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
-- [ ] `NewWait`·OfficialHandoff·Home·Reservations·Auth를 feature별 `.tsx`·hook으로 분리
+- [ ] `NewWait`·OfficialHandoff·Home·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
 - [ ] `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행

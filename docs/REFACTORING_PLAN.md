@@ -425,6 +425,30 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: `features.css`의 기능별 재소유·중복 정리, 실제 native 200%와 Step 3·handoff의
   확장 geometry 회귀, legacy JS/JSX와 App의 화면 조립, API worker/provider의 더 깊은 분리입니다.
 
+### 2026-08-05 열두 번째 구조 슬라이스
+
+- 예약 페이지 경계: App에 있던 예약 화면 조립을 strict
+  `features/reservations/ReservationsPage.tsx`로 이동했습니다. 페이지는 typed
+  `ReservationListWatch` 목록과 구체적인 `onCreate`·`onDelete` callback만 받고, 공용
+  `PageHeader`, `ReservationSummary`, `ReservationList`를 조립합니다. 기존 DOM·class·문구·순서와
+  빈 목록·요약·정렬·기한 경과·terminal 삭제 표현은 그대로 유지했습니다. `App.jsx`는 998줄입니다.
+- 공식 handoff와 호환 경계: optional 공식 URL은 없으면 열지 않고, 있으면 사용자 클릭 뒤
+  `_blank`·`noopener,noreferrer`로만 엽니다. production App은 `ReservationsPage`를 직접 사용하되,
+  기존 공개 `Reservations`의 `{ watches, onNavigate, onDelete }` props는 App의 얇은 adapter에서
+  `onNavigate("new")`로 변환해 유지합니다. 최초 alias 방식이 이 구 props를 깨뜨린다는 독립 리뷰
+  P2를 행동 테스트와 함께 보정한 뒤 재리뷰 지적 사항이 없음을 확인했습니다.
+- 테스트 재소유: App의 예약 집계·공식 CTA, 기한 경과, terminal 삭제 테스트를
+  `ReservationsPage.test.tsx`로 옮기고 strict page `onCreate`, legacy wrapper navigation, 공식 URL
+  보안 옵션을 보강했습니다. App에는 실제 하단 navigation에서 예약 페이지로 진입하는 smoke를
+  남겼고 테스트 선언 수는 줄지 않았습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 68개 파일·484건,
+  production build, Sites 4건, 기본 Playwright E2E 14건과 `git diff --check`를 통과했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: App shell·Home·Auth와 `NewWait` 나머지 단계, legacy JS/JSX, feature CSS 추가
+  재소유, API expiry·reservation·observation pipeline과 provider 역할 분리입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

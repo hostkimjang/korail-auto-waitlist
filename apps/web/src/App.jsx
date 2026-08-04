@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bell,
   GearSix,
@@ -33,6 +33,7 @@ import {
 } from "./features/new-wait/TrainResultCard";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { useNotificationChannelSettings } from "./features/settings/useNotificationChannelSettings";
+import { useProviderAccountSettings } from "./features/settings/useProviderAccountSettings";
 import { formatNewWaitDateLabel } from "./features/new-wait/newWaitForm";
 import { useAppNotifications } from "./features/app/useAppNotifications";
 import { Brand } from "./shared/ui/Brand";
@@ -46,16 +47,8 @@ import {
   updateUiPreferences,
 } from "./api/uiPreferences";
 import {
-  deleteProviderAccount,
-  fetchProviderAccounts,
-  saveProviderAccount,
-} from "./api/providerAccounts";
-import { fetchProviderRuntimeStatuses } from "./api/providerRuntime";
-import {
   createDemoWatch,
   demoPaymentWatch,
-  demoProviderAccounts,
-  demoProviderRuntimeStatuses,
   initialWatches,
 } from "./fixtures/demoData";
 
@@ -68,12 +61,6 @@ const navItems = [
 
 const activeWatchStatuses = new Set(["draft", "scheduled", "watching", "official_waitlist", "seat_found", "reserving", "paused", "cooldown", "auth_required"]);
 const initialWatchCollection = DEMO_MODE ? initialWatches : [];
-
-function currentRailAccountStatus(provider, accounts, loaded) {
-  if (!loaded || !["KORAIL", "SRT"].includes(provider)) return null;
-  const account = accounts.find((item) => item.provider === provider);
-  return account?.configured && account.enabled ? account.lastAuthStatus : "not_checked";
-}
 
 export function isActiveWatch(watch) {
   return activeWatchStatuses.has(watch.status);
@@ -210,13 +197,6 @@ export function App() {
   const [settingsInitialSection, setSettingsInitialSection] = useState("notifications");
   const [settingsActiveSection, setSettingsActiveSection] = useState("notifications");
   const { auth, markAuthenticated, markUnauthenticated, retryAuthStatus } = useAuthState();
-  const [providerAccounts, setProviderAccounts] = useState(DEMO_MODE ? demoProviderAccounts : []);
-  const [providerRuntimeStatuses, setProviderRuntimeStatuses] = useState(
-    DEMO_MODE ? demoProviderRuntimeStatuses : [],
-  );
-  const [providerAccountsLoaded, setProviderAccountsLoaded] = useState(DEMO_MODE);
-  const [providerAccountsLoading, setProviderAccountsLoading] = useState(false);
-  const [pendingProviderAccount, setPendingProviderAccount] = useState(null);
   const [uiPreferences, setUiPreferences] = useState({
     timetableRefreshIntervalSeconds: DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
     seatObservationIntervalSeconds: DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS,
@@ -246,26 +226,23 @@ export function App() {
     onAuthenticationExpired: markUnauthenticated,
     pushToast: setToast,
   });
-  const refreshProviderRuntimeStatuses = useCallback(async () => {
-    if (auth.demo) {
-      setProviderRuntimeStatuses(demoProviderRuntimeStatuses);
-      return;
-    }
-    const statuses = await fetchProviderRuntimeStatuses();
-    setProviderRuntimeStatuses(statuses);
-  }, [auth.demo]);
-
-  const handleProviderAuthenticationTransition = useCallback(() => {
-    if (auth.demo) return;
-    setProviderAccountsLoaded(false);
-    void fetchProviderAccounts().then((items) => {
-      setProviderAccounts(items);
-      setProviderAccountsLoaded(true);
-      return refreshProviderRuntimeStatuses();
-    }).catch(() => {
-      // Keep the activity row neutral until a no-store account read succeeds.
-    });
-  }, [auth.demo, refreshProviderRuntimeStatuses]);
+  const {
+    accounts: providerAccounts,
+    runtimeStatuses: providerRuntimeStatuses,
+    loading: providerAccountsLoading,
+    pendingProvider: pendingProviderAccount,
+    saveAccount: saveRailProviderAccount,
+    deleteAccount: removeRailProviderAccount,
+    onProviderAuthenticationTransition: handleProviderAuthenticationTransition,
+    accountAuthStatusFor,
+    reset: resetProviderAccounts,
+  } = useProviderAccountSettings({
+    authenticated: auth.authenticated,
+    demo: auth.demo,
+    runtimePollingEnabled: activeView === "settings"
+      && settingsActiveSection === "rail-accounts",
+    pushToast: setToast,
+  });
 
   const {
     watches,
@@ -307,53 +284,6 @@ export function App() {
   });
 
   useEffect(() => {
-    if (!auth.authenticated) return undefined;
-    if (auth.demo) {
-      setProviderAccounts(demoProviderAccounts);
-      setProviderRuntimeStatuses(demoProviderRuntimeStatuses);
-      setProviderAccountsLoaded(true);
-      return undefined;
-    }
-    let active = true;
-    setProviderAccountsLoading(true);
-    setProviderAccountsLoaded(false);
-    fetchProviderAccounts().then((items) => {
-      if (active) {
-        setProviderAccounts(items);
-        setProviderAccountsLoaded(true);
-        void refreshProviderRuntimeStatuses().catch(() => {
-          // Preserve the latest known runtime state when this supplemental read fails.
-        });
-      }
-    }).catch((error) => {
-      if (active) setToast(error instanceof Error ? error.message : "철도 계정 상태를 불러오지 못했습니다.");
-    }).finally(() => {
-      if (active) setProviderAccountsLoading(false);
-    });
-    return () => { active = false; };
-  }, [auth.authenticated, auth.demo, refreshProviderRuntimeStatuses]);
-
-  useEffect(() => {
-    if (
-      !auth.authenticated
-      || auth.demo
-      || activeView !== "settings"
-      || settingsActiveSection !== "rail-accounts"
-    ) {
-      return undefined;
-    }
-    void refreshProviderRuntimeStatuses().catch(() => {
-      // A polling failure must not erase a previously confirmed status or interrupt settings.
-    });
-    const timer = window.setInterval(() => {
-      void refreshProviderRuntimeStatuses().catch(() => {
-        // Keep the last successful status visible until the next successful poll.
-      });
-    }, 15_000);
-    return () => window.clearInterval(timer);
-  }, [activeView, auth.authenticated, auth.demo, refreshProviderRuntimeStatuses, settingsActiveSection]);
-
-  useEffect(() => {
     if (!auth.authenticated || auth.demo) return undefined;
     let active = true;
     fetchUiPreferences().then((preferences) => {
@@ -362,7 +292,7 @@ export function App() {
       if (active) setToast(error instanceof Error ? error.message : "화면 갱신 설정을 불러오지 못했습니다.");
     });
     return () => { active = false; };
-  }, [auth.authenticated, auth.demo]);
+  }, [auth.authenticated, auth.demo, setToast]);
 
   const navigate = (view, settingsSection) => {
     setActiveView(view);
@@ -388,53 +318,6 @@ export function App() {
       throw error;
     } finally {
       setSavingUiPreferences(false);
-    }
-  };
-
-  const saveRailProviderAccount = async (provider, input) => {
-    setPendingProviderAccount(provider);
-    try {
-      const saved = auth.demo
-        ? { ...demoProviderAccounts.find((item) => item.provider === provider), maskedLoginId: `${input.loginId.slice(0, 2)}***`, updatedAt: new Date().toISOString() }
-        : await saveProviderAccount(provider, input);
-      setProviderAccounts((items) => [saved, ...items.filter((item) => item.provider !== provider)]);
-      setProviderAccountsLoaded(true);
-      void refreshProviderRuntimeStatuses().catch(() => {
-        // The saved account remains valid even if its supplemental runtime read is unavailable.
-      });
-      setToast(`${provider} 철도 계정을 저장했습니다.`);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "철도 계정을 저장하지 못했습니다.");
-      throw error;
-    } finally {
-      setPendingProviderAccount(null);
-    }
-  };
-
-  const removeRailProviderAccount = async (provider) => {
-    setPendingProviderAccount(provider);
-    try {
-      if (!auth.demo) await deleteProviderAccount(provider);
-      setProviderAccounts((items) => items.map((item) => item.provider === provider ? {
-        ...item,
-        configured: false,
-        enabled: false,
-        maskedLoginId: null,
-        credentialVersion: 0,
-        lastAuthStatus: "not_checked",
-        lastAuthenticatedAt: null,
-        updatedAt: null,
-      } : item));
-      setProviderAccountsLoaded(true);
-      void refreshProviderRuntimeStatuses().catch(() => {
-        // Preserve the prior status instead of replacing it with an unverified value.
-      });
-      setToast(`${provider} 철도 계정 연결을 해제했습니다.`);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "철도 계정 연결을 해제하지 못했습니다.");
-      throw error;
-    } finally {
-      setPendingProviderAccount(null);
     }
   };
 
@@ -489,7 +372,7 @@ export function App() {
     } finally {
       commitWatches([]);
       resetNotificationChannels();
-      setProviderAccounts([]);
+      resetProviderAccounts();
       clearNotifications();
       setUiPreferences({
         timetableRefreshIntervalSeconds: DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
@@ -506,11 +389,7 @@ export function App() {
   const paymentWatches = watches.filter((watch) => watch.status === "payment_required");
   if (auth.demo && paymentWatches.length === 0) paymentWatches.push(demoPaymentWatch);
   const activeWatches = watches.filter(isActiveWatch).map((watch) => {
-    const accountAuthStatus = currentRailAccountStatus(
-      watch.provider,
-      providerAccounts,
-      providerAccountsLoaded,
-    );
+    const accountAuthStatus = accountAuthStatusFor(watch.provider);
     return { ...watch, accountAuthStatus };
   });
   const reservationWatches = auth.demo && !watches.some((watch) => watch.id === demoPaymentWatch.id)

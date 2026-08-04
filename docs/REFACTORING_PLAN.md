@@ -655,6 +655,39 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   App·legacy JS/JSX의 TSX 전환, provider compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대
   경합 검증입니다.
 
+### 2026-08-05 열여덟 번째 구조 슬라이스 B
+
+- 철도 계정 application hook: App의 계정·runtime 상태, 최초 인증/demo 로드, 설정의 runtime polling,
+  저장·삭제, watch 인증 전이 refresh와 Home account status 투영을 strict
+  `features/settings/useProviderAccountSettings.ts`로 이동했습니다. feature는 App view를 import하지 않고
+  `runtimePollingEnabled` boolean과 toast를 주입받으며 API owner를 직접 사용합니다.
+- 상태 계약: `loaded`와 `loading`을 내부에서 분리해 아직 확인하지 못한 계정은 Home에서 `null`로
+  fail-closed하고, 계정 없음·미설정·비활성만 `not_checked`로 표시합니다. polling은 인증된 live 세션의
+  철도 계정 section에서만 즉시 한 번과 15초 주기로 실행하며 cleanup 뒤 멈춥니다. runtime 조회 실패는
+  마지막 성공 상태를 지우지 않습니다.
+- 명령 계약: 저장은 provider별 pending, 성공 계정 맨 앞 이동·동일 provider 제거, runtime best-effort
+  refresh와 오류 rethrow를 유지합니다. 삭제는 행 순서와 login method를 보존하고 configured·enabled·
+  masked ID·credential version·auth status·시각만 기존 값으로 초기화합니다. logout reset은 계정뿐 아니라
+  runtime·loading·pending 화면 상태도 비웁니다.
+- demo 타입 경계: `demoProviderAccounts`와 `demoProviderRuntimeStatuses`를 각각 canonical
+  `ProviderAccount[]`·`ProviderRuntimeStatus[]`로 고정하고 `loginMethod: null`을 명시했습니다. credential
+  원문이나 비밀번호는 fixture·hook state·toast에 저장하지 않습니다.
+- 테스트 소유권: 인증 전 I/O 차단, live 초기 성공·실패·unmount stale 차단, demo, 인증 전이,
+  polling 즉시/15초/cleanup/실패 보존, live·demo 저장/삭제와 pending·오류, selector·reset의 17건을
+  새 hook 테스트가 소유합니다. 기존 App의 인증 복구 재조회와 최신 account status 통합 계약도
+  유지했으며 App은 538줄에서 417줄로 줄었습니다.
+- 확인된 검증: ESLint 오류 0개·고정된 기존 경고 12개, strict typecheck, Vitest 72개 파일·526건,
+  production build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다. 독립 재감사에서 도입
+  P0~P3 잔여 지적은 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: 초기 live effect의 상태 시작만 sync effect warning을 새로 만들지 않도록 한 microtask 뒤
+  수행하며 이후 account→loaded→runtime 순서는 같습니다. session/request epoch, runtime latest-wins,
+  provider별 복수 pending과 mutation 401 전달은 기존 선행 부채로 후속 안전성 슬라이스에 남겼습니다.
+- 남은 핵심 부채: UI preference orchestration, typed app navigation과 Auth 경계, App·legacy JS/JSX의
+  TSX 전환, provider compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대 경합 검증입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

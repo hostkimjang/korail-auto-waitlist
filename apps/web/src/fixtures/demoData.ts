@@ -5,6 +5,8 @@ import type {
   WatchSeatClass,
   WatchStatus,
 } from "../api/watches";
+import type { ProviderAccount } from "../api/providerAccounts";
+import type { ProviderRuntimeStatus } from "../api/providerRuntime";
 import { mapTimetable, type Timetable } from "../api/timetables";
 import type { ReservationPolicy } from "../domain/reservationPolicy";
 
@@ -24,29 +26,6 @@ interface DemoTimetableForm {
   date: string;
   time: string;
   timeEnd: string;
-}
-
-interface DemoProviderAccount {
-  provider: DemoRailProvider;
-  configured: true;
-  enabled: true;
-  maskedLoginId: string;
-  credentialVersion: number;
-  lastAuthStatus: "authenticated";
-  lastAuthenticatedAt: string;
-  updatedAt: string;
-}
-
-interface DemoProviderRuntimeStatus {
-  provider: DemoRailProvider;
-  state: "cold";
-  credentialGeneration: null;
-  createdAgeSeconds: null;
-  lastVerifiedAgeSeconds: null;
-  lastUsedAgeSeconds: null;
-  localReuseRemainingSeconds: null;
-  locallyReusable: false;
-  prewarmOutcome: null;
 }
 
 interface DemoSeatClass {
@@ -184,10 +163,11 @@ export function createDemoWatch(input: DemoWatchInput): MappedWatch {
 
 const demoProviders: DemoRailProvider[] = ["KORAIL", "SRT"];
 
-export const demoProviderAccounts: DemoProviderAccount[] = demoProviders.map((provider) => ({
+export const demoProviderAccounts: ProviderAccount[] = demoProviders.map((provider) => ({
   provider,
   configured: true,
   enabled: true,
+  loginMethod: null,
   maskedLoginId: "de***",
   credentialVersion: 1,
   lastAuthStatus: "authenticated",
@@ -195,7 +175,7 @@ export const demoProviderAccounts: DemoProviderAccount[] = demoProviders.map((pr
   updatedAt: new Date().toISOString(),
 }));
 
-export const demoProviderRuntimeStatuses: DemoProviderRuntimeStatus[] = demoProviders.map((provider) => ({
+export const demoProviderRuntimeStatuses: ProviderRuntimeStatus[] = demoProviders.map((provider) => ({
   provider,
   state: "cold",
   credentialGeneration: null,

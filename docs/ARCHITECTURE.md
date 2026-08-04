@@ -64,8 +64,11 @@ Web Push 기기 상태를 소유합니다. 채널별 pending key를 독립적으
 보정합니다. strict `features/settings/SettingsPage.tsx`는 설정 메뉴 union과 철도 계정·알림·화면 동작·
 보안·시스템 section 조립을 소유합니다. 공용 제목 DOM은 `shared/ui/PageHeader.tsx`로 이동했으며 기존
 class·section 순서·접근성 이름·44px 이상 행동 영역을 유지합니다. `initialSection`은 최초 mount에서만
-상태를 정하고 `onSectionChange`는 사용자 선택에만 호출됩니다. `App.jsx`에는 철도 계정·화면 환경설정
-데이터와 mutation을 연결하는 상위 조립만 남았습니다.
+상태를 정하고 `onSectionChange`는 사용자 선택에만 호출됩니다. strict
+`features/settings/useProviderAccountSettings.ts`는 인증 뒤 철도 계정 로드, secret-free runtime 상태,
+설정 section의 즉시·15초 polling, 계정 저장·삭제, watch 인증 전이 refresh와 fail-closed 계정 상태
+selector를 소유합니다. App은 polling 활성 여부와 watch collection·화면 props를 연결하고 화면 환경설정
+데이터와 mutation만 직접 조립합니다.
 
 API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정책은
 `notification_management/service.py`가 소유하고 HTTP 계층은 이 service의 오류만 transport 상태로
@@ -150,7 +153,7 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 Home·새 대기 페이지와 알림 채널 orchestration 추출 뒤 현재 538줄입니다. `fixtures/demoData.ts`의 typed
+조립만 남았으며 Home·새 대기 페이지와 알림·철도 계정 orchestration 추출 뒤 현재 417줄입니다. `fixtures/demoData.ts`의 typed
 factory는 초기 demo 작업과 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다.
 
 strict `features/new-wait/NewWaitPage.tsx`는 여정·조건·열차 단계 렌더링, 역 카탈로그·시간표 조회·

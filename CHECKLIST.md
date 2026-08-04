@@ -215,7 +215,7 @@
 
 - [x] [코드 컨벤션](docs/CODE_CONVENTIONS.md)과 [클린 구조 리팩터링 계획](docs/REFACTORING_PLAN.md)에 웹·API 목표 구조, 의존 방향, 보존 계약, 단계별 완료·rollback 기준 기록
 - [x] 루트 `output/`·Playwright 도구 상태와 API pytest 임시 디렉터리·cache를 Git 제외 대상으로 고정하고 `check-ignore` 및 `docker compose config --quiet` 확인
-- [ ] 리팩터링 전 생성물·비밀값 제외와 전체 검증 결과를 확인하고 안전한 기준 commit·tag 확보
+- [x] 생성물·비밀값 제외와 전체 검증 결과를 확인하고 `codex/clean-architecture` 최초 commit `a5ab434`·tag `clean-architecture-phase-1-baseline-20260804` 확보
 - [x] 웹 import-boundary ratchet과 API domain/application framework import gate를 추가하고 기존 허용 예외 11개 제거
 - [ ] 신규·변경 코드부터 적용할 웹 ESLint와 API Ruff format ratchet을 CI에 추가
 - [x] 웹 demo fixture, 공용 API client, settings API mapper, App 알림 UI와 공용 결제기한 정책·hook·UI를 목표 소유 경계로 이동하고 typecheck·Vitest 347건·production build 검증

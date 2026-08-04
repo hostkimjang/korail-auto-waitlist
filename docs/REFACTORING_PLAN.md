@@ -138,7 +138,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 
 | 단계 | 상태 | 범위 | 산출물 |
 |---|---|---|---|
-| 0. 기준선 | 진행 | 생성물·비밀값 분류, 검증 기준선, 안전한 branch·commit·tag | 재현 가능한 리팩터링 시작점 |
+| 0. 기준선 | 완료 | 생성물·비밀값 분류, 검증 기준선, 안전한 branch·commit·tag | 재현 가능한 리팩터링 시작점 |
 | 1. 규칙 고정 | 진행 | 컨벤션·계획 문서, formatter/lint/import-boundary 기준 | 이 문서와 자동 품질 gate |
 | 2. 기계적 분리 | 진행 | demo fixture, 공용 API client, 작은 router/schema 이동 | 행동 변화 없는 작은 모듈 |
 | 3. 웹 수직 슬라이스 | 계획 | `NewWait` form·station·timetable·registration 흐름 | feature별 TS/TSX와 회귀 테스트 |
@@ -152,7 +152,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 
 ### 2026-08-04 첫 구조 슬라이스
 
-- 기준선 준비: 루트 `output/`, Playwright 도구 상태, API pytest 임시 디렉터리와 cache를 Git 제외 대상으로 고정하고 `docker compose config --quiet`를 통과했습니다. 안전한 최초 commit과 tag는 전체 통합 검증 뒤 남은 단계입니다.
+- 기준선 완료: 루트 `output/`, Playwright 도구 상태, API pytest 임시 디렉터리와 cache를 Git 제외 대상으로 고정하고 `docker compose config --quiet`를 통과했습니다. 전체 통합 검증 뒤 `codex/clean-architecture`의 최초 commit `a5ab434`와 tag `clean-architecture-phase-1-baseline-20260804`를 만들었습니다.
 - 웹 기계적 분리: `App.jsx`의 demo 데이터 책임을 `fixtures/demoData.ts`로, `api.js`의 공용 HTTP transport를 `api/client.ts`로 이동했습니다. settings API mapper의 `api -> feature` 역방향 의존을 제거하고, 알림 전용 UI와 결제기한 정책·hook·표시 UI를 실제 소유 경계로 옮겼습니다.
 - 웹 경계 gate: `api`, `domain`, `shared`, feature 사이의 새 역방향 의존을 차단하는 ratchet 테스트를 추가했습니다. 착수 때 있던 허용 예외 11개를 위 슬라이스에서 모두 제거해 현재 allowlist는 비어 있습니다.
 - API transport 분리: 운영 요약, UI preferences, 철도 계정·runtime 라우트와 Pydantic schema를 기능 패키지로 이동하고 중앙 `schemas.py`에는 객체 identity가 같은 compatibility re-export를 유지했습니다.

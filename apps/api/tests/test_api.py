@@ -46,6 +46,7 @@ from rail_waitlist.schemas import (
 from rail_waitlist.services import transition_watch, update_watch
 from rail_waitlist.srt_provider_adapter_contract import SrtTimetableTrain
 from rail_waitlist.timetable_snapshot_cache import TimetableSnapshotCache
+from rail_waitlist.watch_management import application as watch_application_module
 from rail_waitlist.watch_management import http as watch_http_module
 
 
@@ -102,7 +103,11 @@ async def test_verified_auto_reservation_start_enqueues_one_immediate_watch_task
 ) -> None:
     adapter = ImmediateReservationCapabilityAdapter()
     monkeypatch.setattr(services_module, "get_execution_provider", lambda _provider: adapter)
-    monkeypatch.setattr(watch_http_module, "get_execution_provider", lambda _provider: adapter)
+    monkeypatch.setattr(
+        watch_application_module,
+        "get_execution_provider",
+        lambda _provider: adapter,
+    )
     enqueued: list[str] = []
     monkeypatch.setattr(
         watch_http_module,
@@ -241,7 +246,11 @@ async def test_enabling_one_time_policy_arms_seat_found_watch_without_clearing_a
     monkeypatch,
 ):
     adapter = ImmediateReservationCapabilityAdapter()
-    monkeypatch.setattr(watch_http_module, "get_execution_provider", lambda _provider: adapter)
+    monkeypatch.setattr(
+        watch_application_module,
+        "get_execution_provider",
+        lambda _provider: adapter,
+    )
     enqueued: list[str] = []
     monkeypatch.setattr(
         watch_http_module,

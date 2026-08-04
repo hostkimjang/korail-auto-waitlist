@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  fetchStations as compatibilityFetchStations,
-  mergeStationCatalogs as compatibilityMergeStationCatalogs,
-} from "../src/api.js";
-import { fetchStations, mergeStationCatalogs } from "../src/api/stations";
+import { fetchStations } from "../src/api/stations";
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -30,11 +26,6 @@ afterEach(() => {
 });
 
 describe("station catalog API boundary", () => {
-  it("keeps api.js compatibility exports identical to the TypeScript owners", () => {
-    expect(compatibilityFetchStations).toBe(fetchStations);
-    expect(compatibilityMergeStationCatalogs).toBe(mergeStationCatalogs);
-  });
-
   it("loads both official catalogs for SRT and merges only identical node identities", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const provider = new URL(String(input), "https://railwait.local").searchParams.get("provider");

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LIVE_EVENT_TYPES, subscribeToEvents } from "../src/api/events";
-import { subscribeToEvents as subscribeToEventsFromCompatibilityEntry } from "../src/api.js";
 
 class FakeEventSource {
   static latest: FakeEventSource | undefined;
@@ -43,10 +42,6 @@ afterEach(() => {
 });
 
 describe("live event transport boundary", () => {
-  it("keeps api.js as an identity-preserving compatibility entry", () => {
-    expect(subscribeToEventsFromCompatibilityEntry).toBe(subscribeToEvents);
-  });
-
   it("opens the credentialed endpoint, binds every durable event, and closes exactly once", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     const onError = vi.fn();

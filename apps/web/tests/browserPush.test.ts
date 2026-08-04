@@ -5,7 +5,7 @@ import {
   disconnectBrowserPush,
   readBrowserPushState,
   waitForServiceWorkerRegistration,
-} from "../src/api.js";
+} from "../src/api/notifications";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {

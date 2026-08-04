@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,8 +86,7 @@ function isReactImport(specifier: string): boolean {
 
 function isNetworkImport(edge: ImportEdge): boolean {
   const networkPackages = new Set(["axios", "cross-fetch", "ky", "node-fetch", "undici"]);
-  return edge.imported === "api.js"
-    || edge.imported.startsWith("api/")
+  return edge.imported.startsWith("api/")
     || networkPackages.has(edge.specifier);
 }
 
@@ -112,6 +111,10 @@ function assertRatchet(rule: string, violations: ImportEdge[]): void {
 
 describe("module dependency boundaries", () => {
   const edges = importEdges();
+
+  it("does not restore the deleted legacy API barrel", () => {
+    expect(existsSync(path.join(SOURCE_DIRECTORY, "api.js"))).toBe(false);
+  });
 
   it("keeps api independent from features", () => {
     assertRatchet(

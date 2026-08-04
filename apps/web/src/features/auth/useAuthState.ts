@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { DEMO_MODE } from "../../api.js";
 import { getAuthStatus } from "../../api/auth";
+import { DEMO_MODE } from "../../shared/lib/runtimeConfig";
 
 export interface AuthState {
   loading: boolean;

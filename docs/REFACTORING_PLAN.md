@@ -28,7 +28,7 @@
 | API | `providers.py` | 1,300 | provider 계약, 구현 선택, capability |
 | API | `api.py` | 1,197 | 여러 기능의 route와 HTTP 변환 |
 
-웹에는 이미 `main.tsx`, strict TypeScript 설정과 `domain/`, `api/`, `features/`, `shared/`의 일부 수직 슬라이스가 존재합니다. `auth`, `home`, `new-wait`, `official-handoff`, `reservations`, `settings`의 leaf 컴포넌트·hook·순수 함수도 일부 분리되어 있습니다. 다만 `App.jsx`, `api.js`, 전역 CSS가 계속 주요 조립과 공용 경계를 소유하며, 일부 `api` 모듈이 feature 표현 타입을 참조하는 경계 역전은 후속 정리가 필요합니다.
+웹에는 이미 `main.tsx`, strict TypeScript 설정과 `domain/`, `api/`, `features/`, `shared/`의 기능별 경계가 존재합니다. `api.js` barrel과 확인된 `api -> feature` 역의존은 제거됐고 `auth`, `home`, `new-wait`, `official-handoff`, `reservations`, `settings`의 leaf 컴포넌트·hook·순수 함수도 점진 분리됐습니다. 다만 `App.jsx`와 전역 CSS가 계속 여러 화면 조립 책임을 소유하며, 남은 JS/JSX와 DTO·도메인·ViewModel 혼용은 후속 정리가 필요합니다.
 
 백엔드는 FastAPI·SQLAlchemy·Pydantic·Celery와 provider별 구현이 단일 Python package의 평면 모듈로 배치되어 있습니다. DB unique, idempotency, outbox, provider lease, credential generation 같은 안전 불변식은 이미 있으므로 구조 이동 중 보존해야 하며, 먼저 model과 migration 전체를 재배치하지 않습니다.
 
@@ -145,7 +145,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 | 4. 백엔드 정책 | 진행 | watch transition, reservation episode, reconciliation 결정 함수 | 프레임워크 비의존 domain 정책 |
 | 5. 실행 경계 | 진행 | 최소 UoW/repository seam, worker pipeline 분리 | 얇은 route/task와 트랜잭션 테스트 |
 | 6. provider 역할 | 계획 | timetable/observe/reserve/confirm/lifecycle 계약 분리 | capability와 adapter 역할별 검증 |
-| 7. 웹 전환 종료 | 계획 | `App.tsx`, `api.js` 제거, `allowJs=false`, CSS 단계 분리 | strict TS와 모듈 경계 완성 |
+| 7. 웹 전환 종료 | 진행 | `App.tsx`, `allowJs=false`, CSS 단계 분리 | strict TS와 모듈 경계 완성 |
 | 8. 고위험 sidecar | 계획 | `korail_pydoll_browser.py` 내부 lifecycle·DOM·flow 분리 | 기존 보호·결제 전 중단 계약 보존 |
 
 단계 상태는 코드·검증 결과와 함께 `CHECKLIST.md`에서 갱신합니다. 문서 작성만으로 구현 단계를 완료 처리하지 않습니다.
@@ -253,6 +253,32 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   확인했습니다.
 - 남은 핵심 부채: `NewWait` 등록·열차 선택 UI, App watch mutation과 나머지 shell 조립,
   `api.js` compatibility 제거, 전역 CSS, API watch application/service와 worker·provider 역할 분리입니다.
+
+### 2026-08-04 여섯 번째 구조 슬라이스
+
+- 웹 API barrel 종료: 좌석 재조회와 unknown DTO·provider 검증을 `api/timetables.ts`, demo runtime
+  gate를 `shared/lib/runtimeConfig.ts`로 옮기고 production·test caller를 실제 owner import로
+  전환했습니다. 사용처 없는 snapshot revision·provider frontend API와 production graph에서 접근할 수
+  없던 Browser Companion 패널을 제거한 뒤 `api.js`를 삭제했고, module-boundary 테스트가 같은 중앙
+  barrel의 재도입을 막습니다.
+- `NewWait` 등록 상태: 좌석별 pending·cancelling·DB hydration, 정확한 watch ID 취소, `add_to_watch`
+  capability, 만료 evidence 재조회 1회와 생성 재시도 1회를 `useSeatWatchRegistration.ts`로
+  옮겼습니다. committed snapshot과 stable callback으로 최신 form·train을 사용하면서 render 중 ref
+  변경을 제거해 App의 legacy hook warning 한 건도 없앴습니다. `App.jsx`는 1,446줄로 줄었습니다.
+- API watch application: 정책 변경·start 뒤 즉시 처리 자격을 FastAPI 비의존
+  `watch_management/application.py`로 이동했습니다. provider gate 뒤 계정, 그 뒤 reservation capability를
+  확인하며 실제 enqueue는 기존 service commit 뒤 HTTP에 남겼습니다. create/update/transition의 잠금·
+  트랜잭션·멱등성·outbox는 이동하지 않았습니다.
+- 테스트 정리: compatibility 객체 identity 6건, dead snapshot API 1건, 접근 불가능 패널 1건을 제거하고
+  좌석 재조회·runtime config·barrel 부재·등록 hook의 실제 계약 9건을 추가했습니다. 따라서 의미 없는
+  테스트 삭제 근거를 남기면서 전체 웹 테스트는 63개 파일·424건으로 증가했습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 경고 19, strict·unused typecheck, Vitest 63개 파일·424건,
+  production build와 Sites 4건을 통과했습니다. API 전체 pytest 980건, 관련 85건, Ruff `E/F/I`,
+  format ratchet 68개와 module boundary를 통과했습니다. `experimental-rail` 전체 이미지를 재빌드·
+  강제 재생성한 뒤 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200,
+  최근 오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: `NewWait` 단계 렌더링·결과 카드, App watch mutation과 나머지 shell 조립,
+  legacy JS/JSX와 전역 CSS, API watch transaction/service와 worker·provider 역할 분리입니다.
 
 ## 단계별 완료 기준과 rollback
 

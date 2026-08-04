@@ -1,14 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  fetchTimetables as compatibilityFetchTimetables,
-  filterTimetables as compatibilityFilterTimetables,
-  mapTimetable as compatibilityMapTimetable,
-} from "../src/api.js";
-import {
   fetchTimetables,
-  filterTimetables,
-  mapTimetable,
+  refreshSeatStatus,
   type TimetableSearchForm,
 } from "../src/api/timetables";
 
@@ -50,12 +44,6 @@ afterEach(() => {
 });
 
 describe("timetable API boundary", () => {
-  it("keeps api.js compatibility exports identical to the TypeScript owners", () => {
-    expect(compatibilityFetchTimetables).toBe(fetchTimetables);
-    expect(compatibilityFilterTimetables).toBe(filterTimetables);
-    expect(compatibilityMapTimetable).toBe(mapTimetable);
-  });
-
   it("queries every selected provider with exact route, range, passenger, and station identities", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => {
       const provider = new URL(String(input), "https://railwait.local").searchParams.get("provider");
@@ -149,5 +137,56 @@ describe("timetable API boundary", () => {
       httpStatus: 0,
       message: expect.stringContaining("시간표 응답 형식"),
     });
+  });
+
+  it("refreshes one provider with the exact journey payload and fails seat evidence closed", async () => {
+    Object.defineProperty(document, "cookie", {
+      configurable: true,
+      writable: true,
+      value: "rail_csrf=seat-refresh-csrf",
+    });
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([{
+      ...timetable("korail", "KTX 009", "12:30"),
+      seat_classes: [{
+        seat_class: "standard",
+        status: "available",
+        provenance: { kind: "official_provider" },
+        actions: [{ kind: "add_to_watch" }],
+      }],
+    }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await refreshSeatStatus(FORM, "KORAIL");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.seat_classes[0]).toMatchObject({
+      status: "unknown",
+      provenance: { kind: "not_observed", reason: "invalid_provider_provenance" },
+    });
+    const [url, options] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("/api/v1/seat-status/refresh");
+    expect(options).toMatchObject({ method: "POST", credentials: "include" });
+    expect(new Headers(options?.headers).get("X-CSRF-Token")).toBe("seat-refresh-csrf");
+    expect(JSON.parse(String(options?.body))).toEqual({
+      provider: "korail",
+      origin: "서울",
+      destination: "부산",
+      departure_from: "2026-08-04T10:00:00+09:00",
+      departure_to: "2026-08-04T14:00:00+09:00",
+      passenger_count: 2,
+      origin_node_id: "N-SEOUL",
+      destination_node_id: "N-BUSAN",
+    });
+  });
+
+  it("rejects malformed seat refresh envelopes and cross-provider rows", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(jsonResponse([timetable("srt", "SRT 100", "12:30")])));
+
+    await expect(refreshSeatStatus(FORM, "KORAIL"))
+      .rejects.toThrow("KORAIL 시간표 응답 형식");
+    await expect(refreshSeatStatus(FORM, "KORAIL"))
+      .rejects.toThrow("KORAIL 시간표 응답 형식");
   });
 });

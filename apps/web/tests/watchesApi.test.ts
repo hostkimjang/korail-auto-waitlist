@@ -1,29 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  buildWatchCreatePayload as compatibilityBuildWatchCreatePayload,
-  buildWatchCreatePayloads as compatibilityBuildWatchCreatePayloads,
-  cancelWatch as compatibilityCancelWatch,
-  createWatch as compatibilityCreateWatch,
-  deleteWatch as compatibilityDeleteWatch,
-  fetchWatches as compatibilityFetchWatches,
-  mapWatch as compatibilityMapWatch,
-  pauseWatch as compatibilityPauseWatch,
-  startWatch as compatibilityStartWatch,
-  updateWatch as compatibilityUpdateWatch,
-} from "../src/api.js";
 import { ApiError } from "../src/api/client";
 import {
-  buildWatchCreatePayload,
   buildWatchCreatePayloads,
   cancelWatch,
   createWatch,
-  deleteWatch,
   fetchWatches,
   mapWatch,
-  pauseWatch,
   startWatch,
-  updateWatch,
 } from "../src/api/watches";
 
 const WATCH_DTO = {
@@ -61,19 +45,6 @@ beforeEach(() => {
 });
 
 describe("watch API boundary", () => {
-  it("keeps api.js compatibility exports identical to the strict TypeScript owners", () => {
-    expect(compatibilityBuildWatchCreatePayload).toBe(buildWatchCreatePayload);
-    expect(compatibilityBuildWatchCreatePayloads).toBe(buildWatchCreatePayloads);
-    expect(compatibilityFetchWatches).toBe(fetchWatches);
-    expect(compatibilityMapWatch).toBe(mapWatch);
-    expect(compatibilityCreateWatch).toBe(createWatch);
-    expect(compatibilityStartWatch).toBe(startWatch);
-    expect(compatibilityUpdateWatch).toBe(updateWatch);
-    expect(compatibilityPauseWatch).toBe(pauseWatch);
-    expect(compatibilityCancelWatch).toBe(cancelWatch);
-    expect(compatibilityDeleteWatch).toBe(deleteWatch);
-  });
-
   it("rejects malformed list envelopes and rows instead of fabricating watch state", async () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(jsonResponse({ items: [] }))

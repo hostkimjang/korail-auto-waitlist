@@ -1,23 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loginWithPassword, registerAdmin } from "../src/api/auth";
+import { ApiError } from "../src/api/client";
+import { subscribeToEvents } from "../src/api/events";
+import { normalizeSeatClasses } from "../src/api/seatClasses";
+import { fetchStations } from "../src/api/stations";
 import {
-  ApiError,
+  fetchTimetables,
+  filterTimetables,
+  mapTimetable,
+} from "../src/api/timetables";
+import {
   buildWatchCreatePayload,
   buildWatchCreatePayloads,
   createWatch,
-  fetchKorailSnapshotRevision,
-  fetchStations,
-  fetchTimetables,
   fetchWatches,
-  filterTimetables,
-  mapTimetable,
   mapWatch,
-  normalizeSeatClasses,
-  loginWithPassword,
-  registerAdmin,
   startWatch,
-  subscribeToEvents,
   updateWatch,
-} from "../src/api.js";
+} from "../src/api/watches";
 
 const apiWatch = {
   id: "watch-1",
@@ -62,21 +62,6 @@ describe("API integration contract", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     Object.defineProperty(document, "cookie", { writable: true, value: "rail_csrf=csrf-token" });
-  });
-
-  it("reads only an aware KORAIL browser snapshot revision", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(response({ revision: "2026-07-30T01:23:45Z" }))
-      .mockResolvedValueOnce(response({ revision: null }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(fetchKorailSnapshotRevision()).resolves.toBe("2026-07-30T01:23:45Z");
-    await expect(fetchKorailSnapshotRevision()).resolves.toBeNull();
-    expect(fetchMock.mock.calls[0][1]).toMatchObject({
-      method: "GET",
-      cache: "no-store",
-      credentials: "include",
-    });
   });
 
   it("normalizes missing or unproven seat data to two explicit unknown classes", () => {

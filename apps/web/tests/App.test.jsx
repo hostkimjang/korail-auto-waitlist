@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App, Home, NewWait, OfficialHandoff, PaymentHero, Reservations, SeatClassPanel, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App.jsx";
-import { ApiError, normalizeSeatClasses } from "../src/api.js";
+import { ApiError } from "../src/api/client";
+import { normalizeSeatClasses } from "../src/api/seatClasses";
 import {
   AppToast,
   IMPORTANT_TOAST_AUTO_CLOSE_MS,
@@ -470,9 +471,6 @@ describe("RailWait responsive core flow", () => {
       if (parsed.pathname.endsWith("/stations")) {
         return response(stationCatalog(parsed.searchParams.get("provider")));
       }
-      if (parsed.pathname.endsWith("/korail-browser-snapshot-revision")) {
-        return response({ revision: null });
-      }
       if (!parsed.pathname.endsWith("/timetables")) return response([]);
       timetableProviders.push(parsed.searchParams.get("provider"));
       return response([{
@@ -528,7 +526,6 @@ describe("RailWait responsive core flow", () => {
     const fetchMock = vi.fn(async (url) => {
       const parsed = new URL(url, "https://railwait.local");
       if (parsed.pathname.endsWith("/stations")) return response(stationCatalog(parsed.searchParams.get("provider")));
-      if (parsed.pathname.endsWith("/korail-browser-snapshot-revision")) return response({ revision: null });
       timetableCalls += 1;
       if (timetableCalls === 1) return response({ detail: "temporary timetable error" }, 503);
       if (timetableCalls === 2) return oldRetry;
@@ -575,7 +572,6 @@ describe("RailWait responsive core flow", () => {
     vi.stubGlobal("fetch", vi.fn(async (url) => {
       const parsed = new URL(url, "https://railwait.local");
       if (parsed.pathname.endsWith("/stations")) return response(stationCatalog(parsed.searchParams.get("provider")));
-      if (parsed.pathname.endsWith("/korail-browser-snapshot-revision")) return response({ revision: null });
       if (!parsed.pathname.endsWith("/timetables")) return response([]);
       const departureFrom = parsed.searchParams.get("departure_from");
       timetableRequests.push(departureFrom);
@@ -623,9 +619,6 @@ describe("RailWait responsive core flow", () => {
       if (parsed.pathname.endsWith("/stations")) {
         stationRequests += 1;
         return response(stationCatalog(parsed.searchParams.get("provider")));
-      }
-      if (parsed.pathname.endsWith("/korail-browser-snapshot-revision")) {
-        return response({ revision: null });
       }
       if (!parsed.pathname.endsWith("/timetables")) return response([]);
       const request = {

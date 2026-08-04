@@ -14,13 +14,7 @@ const providerAccountsApi = vi.hoisted(() => ({
   deleteProviderAccount: vi.fn(),
 }));
 
-vi.mock("../src/api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/api.js")>();
-  return {
-    ...actual,
-    DEMO_MODE: false,
-  };
-});
+vi.mock("../src/shared/lib/runtimeConfig", () => ({ DEMO_MODE: false }));
 
 vi.mock("../src/api/watches", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/api/watches")>();

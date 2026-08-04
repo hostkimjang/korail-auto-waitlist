@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError as CompatibilityApiError } from "../src/api.js";
 import { ApiError, request } from "../src/api/client";
 
 describe("API client transport contract", () => {
@@ -13,7 +12,7 @@ describe("API client transport contract", () => {
     });
   });
 
-  it("keeps the compatibility export and structured error details", async () => {
+  it("keeps structured error details on the shared client boundary", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       detail: {
         code: "registration_evidence_conflict",
@@ -28,8 +27,7 @@ describe("API client transport contract", () => {
     const failure = await request("/watches", { method: "POST", body: "{}" })
       .catch((error: unknown) => error);
 
-    expect(CompatibilityApiError).toBe(ApiError);
-    expect(failure).toBeInstanceOf(CompatibilityApiError);
+    expect(failure).toBeInstanceOf(ApiError);
     expect(failure).toMatchObject({
       status: 409,
       code: "registration_evidence_conflict",

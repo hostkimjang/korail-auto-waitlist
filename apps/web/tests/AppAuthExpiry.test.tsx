@@ -6,14 +6,7 @@ const authApi = vi.hoisted(() => ({
   getAuthStatus: vi.fn(),
 }));
 
-vi.mock("../src/api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/api.js")>();
-  return {
-    ...actual,
-    DEMO_MODE: false,
-    fetchProviders: vi.fn().mockResolvedValue([]),
-  };
-});
+vi.mock("../src/shared/lib/runtimeConfig", () => ({ DEMO_MODE: false }));
 
 vi.mock("../src/api/watches", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/api/watches")>();
@@ -41,7 +34,7 @@ vi.mock("../src/api/providerAccounts", () => ({
   deleteProviderAccount: vi.fn(),
 }));
 
-import { ApiError } from "../src/api.js";
+import { ApiError } from "../src/api/client";
 import { App } from "../src/App.jsx";
 
 describe("App authenticated data expiry", () => {

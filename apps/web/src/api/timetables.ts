@@ -307,3 +307,39 @@ export async function fetchTimetables(
     providerResults,
   };
 }
+
+export async function refreshSeatStatus(
+  form: TimetableSearchForm,
+  providerOverride: RailProvider | string,
+): Promise<Timetable[]> {
+  const provider = String(providerOverride ?? "").toUpperCase();
+  if (provider !== "KORAIL" && provider !== "SRT") {
+    throw new ApiError("좌석 상태를 다시 조회할 운영사를 확인해 주세요.");
+  }
+  const { timeFrom, timeTo } = formTimeRange(form);
+  validateTravelDate(form);
+  const originNodeId = String(form.origin_node_id ?? "").trim();
+  const destinationNodeId = String(form.destination_node_id ?? "").trim();
+  if (!originNodeId || !destinationNodeId || originNodeId === destinationNodeId) {
+    throw new ApiError("출발역과 도착역 식별자를 다시 선택해 주세요.");
+  }
+  const passengerCount = Number(form.passengers ?? form.passenger_count ?? 1);
+  if (!Number.isInteger(passengerCount) || passengerCount < 1) {
+    throw new ApiError("승객 수를 확인해 주세요.");
+  }
+  const payload = await request("/seat-status/refresh", {
+    method: "POST",
+    body: JSON.stringify({
+      provider: provider.toLowerCase(),
+      origin: form.origin,
+      destination: form.destination,
+      departure_from: `${form.date}T${timeFrom}:00+09:00`,
+      departure_to: `${form.date}T${timeTo}:00+09:00`,
+      passenger_count: passengerCount,
+      origin_node_id: originNodeId,
+      destination_node_id: destinationNodeId,
+    }),
+  });
+  const items = timetableDtos(payload, provider);
+  return filterTimetables(form, items).map(mapTimetable);
+}

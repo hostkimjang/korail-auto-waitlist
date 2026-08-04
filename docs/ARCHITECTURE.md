@@ -29,17 +29,17 @@ Migration `0026_unified_observation_interval`는 앞선 작업별 속도 실험�
 코드 구조는 배포 단위를 유지하는 모듈형 모놀리스를 목표로 합니다. 웹은 `app -> features -> api/domain/shared`, API는 `FastAPI·Celery·bootstrap -> application -> domain` 의존 방향을 사용하고 DB·provider·알림 구현은 application이 정의한 계약을 구현합니다. 빈 계층을 일괄 생성하지 않고 기능별 수직 슬라이스로 이동하며, 상세 디렉터리와 단계별 완료·rollback 기준은 [클린 구조 리팩터링 계획](REFACTORING_PLAN.md), import·트랜잭션·테스트 규칙은 [코드 컨벤션](CODE_CONVENTIONS.md)을 따릅니다.
 
 현재 전환 단계에서 웹의 인증 endpoint는 `api/auth.ts`, 새 대기의 폼·KST 날짜·요일·역 교환과
-provider별 예약 정책 보정은 `features/new-wait/newWaitForm.ts`가 소유합니다. 기존 `api.js`는
-인증 함수 객체 identity가 같은 compatibility re-export를 유지하므로 아직 제거 완료가 아닙니다.
+provider별 예약 정책 보정은 `features/new-wait/newWaitForm.ts`가 소유합니다. 런타임 demo gate는
+`shared/lib/runtimeConfig.ts`가 소유하고 모든 호출자는 실제 API 소유 모듈을 직접 import합니다.
+기존 `api.js` barrel은 제거했으며 module-boundary 테스트가 같은 중앙 barrel의 재도입을 차단합니다.
 API의 알림 채널 관리 HTTP route와 transport schema는 `notification_management/` 기능 패키지가
 소유하고, 중앙 `schemas.py`는 같은 Pydantic class 객체를 다시 export합니다. 실시간 outbox 이벤트
 stream인 `/events`는 알림 채널 CRUD와 수명주기가 다른 기존 `api.py` 경계에 남겨 두었습니다.
 이 이동은 공개 endpoint·payload·인증·알림 전달 정책을 바꾸지 않는 기계적 분리이며,
-`App.jsx`·`api.js`·`styles.css`와 API `services.py`·`worker.py`·provider 경계의 추가 분리가 남아 있습니다.
+`App.jsx`·`styles.css`와 API `services.py`·`worker.py`·provider 경계의 추가 분리가 남아 있습니다.
 
 웹의 알림 채널 CRUD·시험 전송과 Web Push 브라우저 수명주기는 `api/notifications.ts`, SSE 연결·
-history cutoff·정리 계약은 `api/events.ts`가 소유합니다. `App.jsx`는 이 소유 모듈을 직접 사용하고
-`api.js`는 전환 중 호출자를 위한 동일 함수 객체 compatibility export만 유지합니다. `NewWait`의
+history cutoff·정리 계약은 `api/events.ts`가 소유하며 `App.jsx`는 이 소유 모듈을 직접 사용합니다. `NewWait`의
 운영사별 역 카탈로그 요청·재시도·stale 응답 차단·선택한 역명/node ID 정합성은
 `features/new-wait/useStationCatalog.ts`가 맡으며, TAGO 역 카탈로그를 운영사별 실제 운행이나 좌석
 재고 근거로 승격하지 않습니다.
@@ -66,8 +66,8 @@ capability·evidence 저장 orchestration은 FastAPI 비의존 `timetable_manage
 mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canonical REST snapshot, SSE burst
 병합, 예약정책 변경과 교차한 stale GET 차단, 인증·구독 lifecycle 세대 격리와 상태 전이 알림을
 소유합니다. App shell에는 pause·resume·cancel·policy 변경·등록 같은 사용자 mutation 조립만
-남겨 두었습니다. 기존 `api.js`는 전환 중 호출자를 위한 동일 함수 객체 compatibility export만
-유지합니다.
+남겨 두었습니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복 차단·만료 evidence
+재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가 소유합니다.
 
 API의 watch CRUD·start·pause·cancel·mock-transition HTTP 경계와 즉시 처리 best-effort enqueue는
 `watch_management/http.py`, 최신 observation·reservation attempt batch 조회와 결제 보류 read
@@ -75,6 +75,11 @@ projection은 `watch_management/read_model.py`가 소유합니다. 공개 endpoi
 commit 뒤 enqueue·멱등성·provider capability·outbox 정책은 이동 전과 같습니다. 중앙 `api.py`에는
 수명주기가 다른 SSE `/events`, 역 카탈로그, provider·source 상태, KORAIL snapshot revision과 공식
 화면 confirmation endpoint가 남습니다.
+
+watch 정책 변경·start 뒤 즉시 처리 자격은 FastAPI 비의존 `watch_management/application.py`가
+요청 정책·영속 상태·provider·인증 계정·reservation capability 순서로 fail-closed 판단합니다.
+실제 broker enqueue는 service의 commit이 끝난 뒤 HTTP 계층이 best-effort로 호출하므로 잠금·outbox·
+멱등성과 broker 실패 비차단 계약은 달라지지 않습니다.
 
 ## 주요 흐름
 

@@ -11,10 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_admin
 from ..celery_app import celery_app
 from ..database import get_session
-from ..domain import Provider, ReservationOutcome, ReservationPolicy, WatchStatus
+from ..domain import Provider, ReservationOutcome, WatchStatus
 from ..models import Watch, WatchCandidate
-from ..provider_accounts import has_authenticated_provider_account
-from ..providers import get_execution_provider, get_timetable_provider
+from ..providers import get_timetable_provider
 from ..schemas import ReservationResult, WatchCreate, WatchRead, WatchUpdate
 from ..services import (
     begin_reservation_attempt,
@@ -24,6 +23,7 @@ from ..services import (
     transition_watch,
     update_watch,
 )
+from .application import should_enqueue_after_policy_update, should_enqueue_after_start
 from .read_model import watch_read, watch_reads
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
@@ -70,14 +70,7 @@ async def watches_get(watch_id: str, session: Session) -> WatchRead:
 async def watches_update(watch_id: str, data: WatchUpdate, session: Session) -> WatchRead:
     watch = await find_watch(session, watch_id)
     updated = await update_watch(session, watch, data)
-    if (
-        data.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-        and updated.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-        and updated.status is WatchStatus.SEAT_FOUND
-        and updated.provider in {Provider.KORAIL, Provider.SRT}
-        and await has_authenticated_provider_account(session, updated.provider)
-        and get_execution_provider(updated.provider).capabilities().reservation_once
-    ):
+    if await should_enqueue_after_policy_update(session, data.reservation_policy, updated):
         # 기존 reservation attempt fence는 그대로 둔 채, 이미 좌석을 찾은 작업만
         # scheduler와 동일한 safe one-time pipeline에 best-effort로 다시 태웁니다.
         enqueue_immediate_watch_processing(updated.id)
@@ -106,15 +99,7 @@ async def watches_start(
         WatchStatus.SCHEDULED,
         idempotency_key,
     )
-    if (
-        previous_status is not WatchStatus.SCHEDULED
-        and started.status is WatchStatus.SCHEDULED
-        and started.next_check_at is not None
-        and started.provider in {Provider.KORAIL, Provider.SRT}
-        and started.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-        and await has_authenticated_provider_account(session, started.provider)
-        and get_execution_provider(started.provider).capabilities().reservation_once
-    ):
+    if await should_enqueue_after_start(session, previous_status, started):
         enqueue_immediate_watch_processing(started.id)
     return await watch_read(session, started)
 

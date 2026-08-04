@@ -240,7 +240,12 @@
 - [x] API watch CRUD·start·pause·cancel·mock-transition 9개 endpoint와 commit 뒤 best-effort 즉시 처리를 `watch_management/http.py`, 최신 observation·reservation attempt·결제 보류 read projection을 `watch_management/read_model.py`로 이동하고 중앙 `api.py`를 212줄로 축소
 - [x] 다섯 번째 구조 슬라이스 웹 ESLint 오류 0·고정 경고 22, strict·unused typecheck, Vitest 62개 파일·423건, production build·Sites 4건과 API 전체 pytest 964건·Ruff `E/F/I`·format ratchet 68개·module boundary 통과
 - [x] 다섯 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
-- [ ] 웹 도메인 타입·API validator/mapper를 `.ts`로 분리하고 `api.js` 제거
+- [x] 좌석 재조회와 demo runtime gate를 strict 소유 모듈로 이동하고 모든 production·test import/mock을 실제 owner로 전환한 뒤 `api.js` 제거. dead snapshot/provider frontend API와 production에서 접근 불가능한 Browser Companion 패널을 삭제하고 중앙 API barrel 재도입 gate 추가
+- [x] `NewWait`의 좌석별 pending·cancelling·DB hydration·정확한 watch ID 취소·만료 evidence 재조회 1회와 생성 재시도 1회를 `useSeatWatchRegistration.ts`로 이동하고 render-time ref mutation 경고 제거
+- [x] watch 정책 변경·start 뒤 즉시 처리 자격을 FastAPI 비의존 `watch_management/application.py`로 이동하고 provider→계정→capability 순서, commit 뒤 HTTP enqueue, 기존 잠금·outbox·멱등성 보존
+- [x] 여섯 번째 구조 슬라이스에서 compatibility identity 6건·dead API 1건·접근 불가능 패널 1건을 제거하고 실제 runtime·좌석 재조회·barrel 부재·등록 hook 계약 9건을 추가. 웹 ESLint 오류 0·고정 경고 19, strict·unused typecheck, Vitest 63개 파일·424건, production build·Sites 4건과 API 전체 pytest 980건·관련 85건·Ruff `E/F/I`·format ratchet 68개·module boundary 통과
+- [x] 여섯 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
+- [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
 - [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
 - [ ] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증

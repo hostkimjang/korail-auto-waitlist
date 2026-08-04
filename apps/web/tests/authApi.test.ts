@@ -7,12 +7,6 @@ import {
   logout,
   registerAdmin,
 } from "../src/api/auth";
-import {
-  getAuthStatus as getAuthStatusFromCompatibilityEntry,
-  loginWithPassword as loginWithPasswordFromCompatibilityEntry,
-  logout as logoutFromCompatibilityEntry,
-  registerAdmin as registerAdminFromCompatibilityEntry,
-} from "../src/api.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -29,13 +23,6 @@ describe("administrator authentication API boundary", () => {
       writable: true,
       value: "rail_csrf=csrf-token",
     });
-  });
-
-  it("keeps api.js as an identity-preserving compatibility entry", () => {
-    expect(getAuthStatusFromCompatibilityEntry).toBe(getAuthStatus);
-    expect(registerAdminFromCompatibilityEntry).toBe(registerAdmin);
-    expect(loginWithPasswordFromCompatibilityEntry).toBe(loginWithPassword);
-    expect(logoutFromCompatibilityEntry).toBe(logout);
   });
 
   it("reads the administrator status with the shared cookie request contract", async () => {

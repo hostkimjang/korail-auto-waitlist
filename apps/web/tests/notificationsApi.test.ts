@@ -4,24 +4,10 @@ import {
   connectBrowserPush,
   createNotificationChannel,
   deleteNotificationChannel,
-  disconnectBrowserPush,
   fetchNotificationChannels,
-  readBrowserPushState,
   testNotificationChannel,
   updateNotificationChannel,
-  waitForServiceWorkerRegistration,
 } from "../src/api/notifications";
-import {
-  connectBrowserPush as connectBrowserPushFromCompatibilityEntry,
-  createNotificationChannel as createNotificationChannelFromCompatibilityEntry,
-  deleteNotificationChannel as deleteNotificationChannelFromCompatibilityEntry,
-  disconnectBrowserPush as disconnectBrowserPushFromCompatibilityEntry,
-  fetchNotificationChannels as fetchNotificationChannelsFromCompatibilityEntry,
-  readBrowserPushState as readBrowserPushStateFromCompatibilityEntry,
-  testNotificationChannel as testNotificationChannelFromCompatibilityEntry,
-  updateNotificationChannel as updateNotificationChannelFromCompatibilityEntry,
-  waitForServiceWorkerRegistration as waitForServiceWorkerRegistrationFromCompatibilityEntry,
-} from "../src/api.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -39,19 +25,6 @@ describe("notification transport boundary", () => {
       writable: true,
       value: "rail_csrf=notification-csrf",
     });
-  });
-
-  it("keeps api.js as an identity-preserving compatibility entry", () => {
-    expect(fetchNotificationChannelsFromCompatibilityEntry).toBe(fetchNotificationChannels);
-    expect(createNotificationChannelFromCompatibilityEntry).toBe(createNotificationChannel);
-    expect(updateNotificationChannelFromCompatibilityEntry).toBe(updateNotificationChannel);
-    expect(deleteNotificationChannelFromCompatibilityEntry).toBe(deleteNotificationChannel);
-    expect(testNotificationChannelFromCompatibilityEntry).toBe(testNotificationChannel);
-    expect(waitForServiceWorkerRegistrationFromCompatibilityEntry)
-      .toBe(waitForServiceWorkerRegistration);
-    expect(readBrowserPushStateFromCompatibilityEntry).toBe(readBrowserPushState);
-    expect(disconnectBrowserPushFromCompatibilityEntry).toBe(disconnectBrowserPush);
-    expect(connectBrowserPushFromCompatibilityEntry).toBe(connectBrowserPush);
   });
 
   it("lists channels with the shared credential contract and no CSRF header", async () => {

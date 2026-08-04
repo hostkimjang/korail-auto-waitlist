@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -19,14 +19,13 @@ import {
   WarningCircle,
   WifiHigh,
 } from "@phosphor-icons/react";
+import { fetchStations } from "./api/stations";
 import {
-  DEMO_MODE,
-  fetchStations,
   fetchTimetables,
   filterTimetables,
-  refreshSeatStatus,
   mapTimetable,
-} from "./api.js";
+  refreshSeatStatus,
+} from "./api/timetables";
 import { ApiError } from "./api/client";
 import { logout } from "./api/auth";
 import {
@@ -70,14 +69,12 @@ import { StepThreeRefreshControl } from "./features/new-wait/StepThreeRefreshCon
 import { StationCombobox } from "./features/new-wait/StationCombobox";
 import { useStationCatalog } from "./features/new-wait/useStationCatalog";
 import { useTimetableSearch } from "./features/new-wait/useTimetableSearch";
-import { recoverRefreshedRegistrationTrain } from "./features/new-wait/registrationEvidenceRecovery";
 import {
   SeatRegistrationCancelButton,
   SeatRegistrationStatus,
   TrainRegistrationBadge,
 } from "./features/new-wait/RegistrationStateVisuals";
-import { seatRegistrationKey, useInstantWatchRegistration } from "./features/new-wait/useInstantWatchRegistration";
-import { resolvedSeatRegistration } from "./features/new-wait/watchRegistrationHydration";
+import { useSeatWatchRegistration } from "./features/new-wait/useSeatWatchRegistration";
 import { SystemStatusDashboard } from "./features/settings/SystemStatusDashboard";
 import { TimetableRefreshSettings } from "./features/settings/TimetableRefreshSettings";
 import { ProviderAccountSettings } from "./features/settings/ProviderAccountSettings";
@@ -94,8 +91,8 @@ import { Brand } from "./shared/ui/Brand";
 import { StatusPill } from "./shared/ui/StatusPill";
 import { seatObservationReasonMeta } from "./domain/seatDiagnostics";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
+import { DEMO_MODE } from "./shared/lib/runtimeConfig";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
-import { isExpiredWatchCreateConflict } from "./domain/apiErrors";
 import {
   DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS,
   DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
@@ -596,7 +593,6 @@ const TrainResultCard = memo(function TrainResultCard({
 
 export function NewWait({ demo, watches = [], providerAccounts = [], refreshIntervalSeconds = DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS, onComplete, onCancelWatch = async () => undefined, onCancel }) {
   const [step, setStep] = useState(1);
-  const [submitError, setSubmitError] = useState("");
   const reservationPolicyManuallySelectedRef = useRef(false);
   const [form, setForm] = useState(() => createInitialNewWaitForm({
     demo,
@@ -605,11 +601,6 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
     demoDestinationNodeId: demo ? demoNodeId("부산") : null,
     now: new Date(),
   }));
-  const { getRegistrationState, register, cancel: cancelRegistration, successCount } = useInstantWatchRegistration();
-  const registrationStateForSeat = (train, seatClass) => {
-    const local = getRegistrationState(seatRegistrationKey(train.id, seatClass));
-    return resolvedSeatRegistration(local, watches, train, seatClass);
-  };
   const {
     trains,
     state: timetableState,
@@ -670,64 +661,19 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
     providerAccounts,
     reservationPolicyManuallySelected: reservationPolicyManuallySelectedRef.current,
   }));
-  const chooseTrainSeatImplementation = async (id, seatClass) => {
-    const train = trains.find((item) => item.id === id);
-    if (!train || !form.providers.includes(train.provider)) return;
-    const key = seatRegistrationKey(train.id, seatClass);
-    const currentRegistration = registrationStateForSeat(train, seatClass);
-    if (currentRegistration.status === "active") {
-      const cancelled = await cancelRegistration(
-        key,
-        onCancelWatch,
-        currentRegistration.watchId,
-      );
-      if (cancelled) setSubmitError("");
-      return;
-    }
-    if (currentRegistration.status === "pending" || currentRegistration.status === "cancelling") return;
-    const seat = train.seat_classes?.find((item) => item.seat_class === seatClass);
-    if (!seat?.actions?.some((action) => action.kind === "add_to_watch")) return;
-    const selectedTrain = { ...train, selected_seat_class: seatClass };
-    const registrationForm = { ...form };
-    let registeredTrain = selectedTrain;
-    const registered = await register(key, async () => {
-      try {
-        const created = await onComplete({ form: registrationForm, train: selectedTrain, selectedTrains: [selectedTrain] });
-        return created;
-      } catch (error) {
-        if (!isExpiredWatchCreateConflict(error)) throw error;
-        let refreshedTrains;
-        try {
-          refreshedTrains = await refreshProviderSeatStatus(train.provider, registrationForm);
-        } catch {
-          const message = "좌석 상태를 다시 확인하지 못해 등록하지 않았습니다. 잠시 후 다시 조회해 주세요.";
-          setSubmitError(message);
-          throw new Error(message);
-        }
-        const recovery = recoverRefreshedRegistrationTrain(train, refreshedTrains, seatClass);
-        if (!recovery.ok) {
-          setSubmitError(recovery.message);
-          throw new Error(recovery.message);
-        }
-        registeredTrain = { ...recovery.train, selected_seat_class: seatClass };
-        const created = await onComplete({
-          form: registrationForm,
-          train: registeredTrain,
-          selectedTrains: [registeredTrain],
-        });
-        return created;
-      }
-    });
-    if (registered) {
-      setSubmitError("");
-    }
-  };
-  const chooseTrainSeatRef = useRef(chooseTrainSeatImplementation);
-  chooseTrainSeatRef.current = chooseTrainSeatImplementation;
-  const chooseTrainSeat = useMemo(
-    () => (id, seatClass) => chooseTrainSeatRef.current(id, seatClass),
-    [],
-  );
+  const {
+    registrationStateForSeat,
+    chooseTrainSeat,
+    hasActiveRegistration,
+    submitError,
+  } = useSeatWatchRegistration({
+    form,
+    trains,
+    watches,
+    onComplete,
+    onCancelWatch,
+    refreshProviderSeatStatus,
+  });
   const originStationError = stationCatalogReady && !hasSelectedStation(form.origin, form.origin_node_id)
     ? "출발역을 제공된 역 목록에서 선택해 주세요."
     : "";
@@ -751,11 +697,6 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
       && stepOneErrors.length === 0
     : true;
   const visibleProviderCounts = trains.reduce((counts, train) => ({ ...counts, [train.provider]: (counts[train.provider] || 0) + 1 }), {});
-  const hasActiveRegistration = successCount > 0 || trains.some((train) => (
-    train.seat_classes.some((seat) => (
-      registrationStateForSeat(train, seat.seat_class).status === "active"
-    ))
-  ));
   const serverSeatStatusSummary = summarizeServerSeatStatus(
     trains,
     form.providers,

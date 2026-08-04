@@ -688,6 +688,35 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: UI preference orchestration, typed app navigation과 Auth 경계, App·legacy JS/JSX의
   TSX 전환, provider compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대 경합 검증입니다.
 
+### 2026-08-05 열여덟 번째 구조 슬라이스 C
+
+- UI preference application hook: App의 기본 환경설정, live 인증 뒤 조회, demo/live 저장, saving 상태와
+  logout reset을 strict `features/settings/useUiPreferencesSettings.ts`로 이동했습니다. hook은 API
+  ViewModel만 사용하고 App·watch·new-wait feature를 import하지 않습니다.
+- 소비 경계: App은 `timetableRefreshIntervalSeconds` 하나를 watch collection polling과 새 대기 시간표
+  refresh에 함께 전달하고, 전체 preferences·saving·save는 Settings에 전달합니다. 서버에 저장하는
+  `seatObservationIntervalSeconds`를 클라이언트 polling 주기로 잘못 사용하지 않습니다.
+- 행동 보존: 기본값은 화면 5초·좌석 관측 5초·epoch 시각이며 인증 전과 demo에서는 GET을 호출하지
+  않습니다. live GET의 늦은 성공·오류는 effect cleanup 뒤 폐기하고, 저장은 live PATCH 또는 demo local
+  timestamp 결과를 상태·반환값으로 사용합니다. 성공 toast, 원본 오류 rethrow와 finally saving 해제를
+  유지하며 reset은 saving도 false로 정리합니다.
+- 테스트 소유권: canonical 기본값, unauth/demo I/O 차단, live load 성공·Error/unknown 실패,
+  unmount·auth lifecycle stale 결과 폐기, live/demo 저장, Error/unknown rethrow, reset과 callback identity의
+  15건을 새 hook 테스트가 소유합니다. 기존 AppLive·TimetableRefreshSettings·Settings 회귀도 유지했으며
+  App은 417줄에서 384줄로 줄었습니다.
+- 확인된 검증: ESLint 오류 0개·고정된 기존 경고 12개, strict typecheck, Vitest 73개 파일·541건,
+  production build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다. 독립 재감사에서 코드 회귀
+  P0~P3는 발견되지 않았습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: App이 아직 `checkJs=false`라 non-default 간격이 두 consumer에 전달되고 logout reset되는
+  조립은 owner·consumer 테스트와 소스 검토로 분리 확인했으며 단일 App 통합 테스트로는 고정하지
+  않았습니다. initial GET/save 교차, concurrent save, logout 뒤 late 결과와 mutation 401은 기존 선행
+  부채로 후속 안전성 슬라이스에 남겼습니다.
+- 남은 핵심 부채: typed app navigation과 Auth·OfficialHandoff 조립 경계, App·legacy JS/JSX의 TSX
+  전환, provider compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대 경합 검증입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

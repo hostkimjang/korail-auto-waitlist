@@ -305,6 +305,10 @@
 - [x] demo 철도 계정·runtime fixture를 canonical API ViewModel 타입으로 고정하고 `loginMethod: null`을 명시. owner 테스트 17건으로 인증 전 I/O 차단·초기 성공/실패/stale·demo·transition·polling/cleanup·live/demo 저장/삭제·pending·selector·reset을 검증하고 App 538→417줄, ESLint 고정 경고 16→12
 - [x] 열여덟 번째 구조 슬라이스 B의 웹 ESLint 오류 0·고정 경고 12, strict typecheck, Vitest 72개 파일·526건, production build·Sites 4건, 기본 Playwright E2E 14건과 독립 재감사 P0~P3 잔여 없음 확인
 - [x] 열여덟 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] App의 UI preference canonical 기본값·live 조회·demo/live 저장·saving·logout reset을 strict `features/settings/useUiPreferencesSettings.ts`로 이동하고, timetable interval은 watch collection polling과 새 대기 refresh에 함께 전달하되 seat observation interval은 서버 설정으로만 유지
+- [x] UI preference owner 테스트 15건으로 unauth/demo I/O 차단·live load 성공/실패·unmount/auth stale 폐기·live/demo 저장·Error/unknown rethrow·reset·callback identity를 검증하고 App 417→384줄 유지. owner·consumer·소스 검토로 App 조립 확인
+- [x] 열여덟 번째 구조 슬라이스 C의 웹 ESLint 오류 0·고정 경고 12, strict typecheck, Vitest 73개 파일·541건, production build·Sites 4건, 기본 Playwright E2E 14건과 독립 재감사 코드 회귀 P0~P3 없음 확인
+- [x] 열여덟 번째 구조 슬라이스 C의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -312,8 +316,9 @@
 - [ ] 개발 demo의 Telegram·Webhook editor 저장을 로컬 metadata simulation으로 제공할지 비활성화할지 확정하고, demo에서 live create/update API를 호출하지 않는 계약을 별도 행동 변경 슬라이스로 구현
 - [ ] 알림 채널 저장·toggle·시험·Web Push 연결 mutation의 401을 인증 만료로 전달하고, logout/reset 뒤 완료되는 늦은 mutation이 채널 상태·toast를 되살리지 않도록 request epoch fence를 별도 행동 변경 슬라이스로 구현
 - [ ] 철도 계정 초기·인증 전이·runtime polling·저장/삭제 요청에 session/request epoch와 runtime latest-wins를 적용하고 mutation 401 인증 만료 전달, provider별 복수 pending 상태를 별도 안전성 슬라이스로 구현
+- [ ] UI preference initial GET·save·logout 교차와 복수 save에 request/session epoch·latest-wins를 적용하고 mutation 401 인증 만료 전달을 별도 안전성 슬라이스로 구현
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
-- [ ] OfficialHandoff·Auth의 남은 책임과 App의 UI preference·화면 전환 조립을 feature별 `.tsx`·hook으로 분리
+- [ ] OfficialHandoff·Auth의 남은 책임과 App의 화면 전환·페이지 조립을 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
 - [ ] `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행

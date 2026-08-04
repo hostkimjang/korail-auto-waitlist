@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Bell,
   GearSix,
@@ -34,18 +34,13 @@ import {
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { useNotificationChannelSettings } from "./features/settings/useNotificationChannelSettings";
 import { useProviderAccountSettings } from "./features/settings/useProviderAccountSettings";
+import { useUiPreferencesSettings } from "./features/settings/useUiPreferencesSettings";
 import { formatNewWaitDateLabel } from "./features/new-wait/newWaitForm";
 import { useAppNotifications } from "./features/app/useAppNotifications";
 import { Brand } from "./shared/ui/Brand";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
 import { DEMO_MODE } from "./shared/lib/runtimeConfig";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
-import {
-  DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS,
-  DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
-  fetchUiPreferences,
-  updateUiPreferences,
-} from "./api/uiPreferences";
 import {
   createDemoWatch,
   demoPaymentWatch,
@@ -197,12 +192,6 @@ export function App() {
   const [settingsInitialSection, setSettingsInitialSection] = useState("notifications");
   const [settingsActiveSection, setSettingsActiveSection] = useState("notifications");
   const { auth, markAuthenticated, markUnauthenticated, retryAuthStatus } = useAuthState();
-  const [uiPreferences, setUiPreferences] = useState({
-    timetableRefreshIntervalSeconds: DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
-    seatObservationIntervalSeconds: DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS,
-    updatedAt: new Date(0).toISOString(),
-  });
-  const [savingUiPreferences, setSavingUiPreferences] = useState(false);
   const {
     state: notificationState,
     push: setToast,
@@ -241,6 +230,16 @@ export function App() {
     demo: auth.demo,
     runtimePollingEnabled: activeView === "settings"
       && settingsActiveSection === "rail-accounts",
+    pushToast: setToast,
+  });
+  const {
+    preferences: uiPreferences,
+    saving: savingUiPreferences,
+    save: saveUiPreferences,
+    reset: resetUiPreferences,
+  } = useUiPreferencesSettings({
+    authenticated: auth.authenticated,
+    demo: auth.demo,
     pushToast: setToast,
   });
 
@@ -283,17 +282,6 @@ export function App() {
     deleteWatchRequest: deleteWatch,
   });
 
-  useEffect(() => {
-    if (!auth.authenticated || auth.demo) return undefined;
-    let active = true;
-    fetchUiPreferences().then((preferences) => {
-      if (active) setUiPreferences(preferences);
-    }).catch((error) => {
-      if (active) setToast(error instanceof Error ? error.message : "화면 갱신 설정을 불러오지 못했습니다.");
-    });
-    return () => { active = false; };
-  }, [auth.authenticated, auth.demo, setToast]);
-
   const navigate = (view, settingsSection) => {
     setActiveView(view);
     if (view === "settings") {
@@ -302,23 +290,6 @@ export function App() {
       setSettingsActiveSection(nextSettingsSection);
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const saveUiPreferences = async (input) => {
-    setSavingUiPreferences(true);
-    try {
-      const saved = auth.demo
-        ? { ...input, updatedAt: new Date().toISOString() }
-        : await updateUiPreferences(input);
-      setUiPreferences(saved);
-      setToast("화면·좌석 관측 간격을 저장했습니다. 활성 작업의 다음 관측부터 적용됩니다.");
-      return saved;
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "화면·좌석 관측 간격을 저장하지 못했습니다.");
-      throw error;
-    } finally {
-      setSavingUiPreferences(false);
-    }
   };
 
   const completeWizard = async ({ form, selectedTrains }) => {
@@ -373,12 +344,8 @@ export function App() {
       commitWatches([]);
       resetNotificationChannels();
       resetProviderAccounts();
+      resetUiPreferences();
       clearNotifications();
-      setUiPreferences({
-        timetableRefreshIntervalSeconds: DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
-        seatObservationIntervalSeconds: DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS,
-        updatedAt: new Date(0).toISOString(),
-      });
       markUnauthenticated();
     }
   };

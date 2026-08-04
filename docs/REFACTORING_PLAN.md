@@ -533,6 +533,38 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: watch-group observation application, provider 역할별 계약, App shell·Auth와
   `NewWait` 나머지 strict 경계입니다.
 
+### 2026-08-05 열여섯 번째 구조 슬라이스
+
+- 관찰 그룹 application: worker의 provider 확인, 작업 준비·주기 선점, source cooldown 연기,
+  동일 조건 조회 병합, provider 오류 정규화, 작업별 관찰 저장·상태 요약, 예약 episode 선택과
+  예약 실행 위임을 FastAPI·Celery 비의존 `observations/group_application.py`로 이동했습니다.
+  `ObservationTarget`, 최소 `ObservationAdapter`와 실제 호출 서명을 고정한 dependency protocol을
+  사용하며, 예약 delegate는 adapter를 노출하지 않고 target만 받도록 composition closure로
+  연결했습니다. `worker.py`는 실행 임대 획득·해제, concrete adapter registry, drain·close,
+  due/Celery·설정·metric 조립만 남은 498줄입니다.
+- 실행 임대·잠금 보강: 외부 관찰 호출 전과 저장·예약 위임 직전에 현재 임대를 다시 확인합니다.
+  prepare·cooldown 연기·회로 확인·관찰 저장·회로 반영 transaction은 실행 임대 행을 먼저
+  `FOR UPDATE`한 뒤 watch·candidate·circuit을 잠가 stale owner의 쓰기를 막고 잠금 순서를
+  일관되게 유지합니다. 여러 작업을 한 번에 연기할 때는 `Watch.id` 순서로 잠그며 PostgreSQL
+  compile 계약에서 `ORDER BY watches.id FOR UPDATE`를 고정했습니다.
+- 테스트·경계: 새 owner 테스트에서 동일 요청 1회 조회와 작업별 관찰 투영, 일치 좌석 등급 부재의
+  fail-closed 오류, episode가 묶인 winner 위임, 잠긴 임대 상실 시 mutation 0건, 관찰 저장 실패의
+  전체 rollback, 다중 작업의 결정적 PostgreSQL lock SQL을 검증했습니다. worker의 테스트 전용
+  target alias·episode·defer wrapper는 제거했고 테스트가 실제 owner를 직접 참조합니다. 새 application은
+  worker·Celery·FastAPI 역의존과 config·database·metric·provider registry·provider account·실행 임대·
+  services·예약 application·KORAIL/SRT concrete 실행 모듈 직접 import를 경계 테스트로 차단합니다.
+- 확인된 검증: focused pytest 74건, 전체 pytest 1,048건, Ruff `E/F/I`, format ratchet 64개,
+  module boundary와 `git diff --check`를 통과했습니다. 전체 pytest에는 기존 Starlette/httpx
+  deprecation 경고 1건만 남았습니다. 독립 재감사에서 P0·P1 잔여 지적은 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: SQLite 회귀와 PostgreSQL SQL compile은 확인했지만, 두 실제 PostgreSQL session에서
+  lease takeover가 guarded transaction commit까지 대기하는지와 다중 worker 교착 부재는 아직
+  운영·CI 실DB 검증 항목입니다.
+- 남은 핵심 부채: provider 역할별 계약, 실제 PostgreSQL 실행 임대 경합 검증, App shell·Auth와
+  `NewWait` 나머지 strict 경계입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

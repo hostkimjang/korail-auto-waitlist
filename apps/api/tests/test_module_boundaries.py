@@ -50,6 +50,7 @@ def _is_worker_independent_application(relative_path: Path) -> bool:
     return relative_path.as_posix() in {
         "rail_waitlist/notification_management/delivery.py",
         "rail_waitlist/observations/due_pipeline_application.py",
+        "rail_waitlist/observations/group_application.py",
         "rail_waitlist/reservations/execution_application.py",
         "rail_waitlist/reservations/reconciliation_application.py",
         "rail_waitlist/watch_management/expiry_application.py",
@@ -66,6 +67,10 @@ def _is_watch_expiry_application(relative_path: Path) -> bool:
 
 def _is_reservation_execution_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/execution_application.py")
+
+
+def _is_observation_group_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == ("rail_waitlist/observations/group_application.py")
 
 
 BOUNDARY_RULES = (
@@ -102,6 +107,9 @@ BOUNDARY_RULES = (
         forbidden_import_roots=frozenset(
             {
                 "config",
+                "celery_app",
+                "database",
+                "korail_execution",
                 "metrics",
                 "observations",
                 "provider_accounts",
@@ -109,6 +117,28 @@ BOUNDARY_RULES = (
                 "providers",
                 "services",
                 "srt_reservation",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="observation group application receives concrete runtime dependencies",
+        matches=_is_observation_group_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery_app",
+                "config",
+                "database",
+                "korail_execution",
+                "metrics",
+                "provider_accounts",
+                "provider_execution_lease",
+                "providers",
+                "reservations",
+                "services",
+                "srt_execution",
+                "srt_provider_adapter",
+                "srt_reservation",
+                "worker",
             }
         ),
     ),

@@ -32,6 +32,12 @@ from rail_waitlist.models import (
     WatchCandidate,
     WatchTransitionHistory,
 )
+from rail_waitlist.observations.group_application import (
+    ObservationGroupDependencies,
+    ObservationTarget,
+    defer_watch_group_observation,
+    retryable_reservation_episode_key,
+)
 from rail_waitlist.provider_execution_lease import (
     ExecutionLeaseGrant,
     lock_execution_lease_current,
@@ -53,18 +59,62 @@ from rail_waitlist.schemas import (
     SeatObservationResult,
 )
 from rail_waitlist.security import secret_box
-from rail_waitlist.services import resume_watches_after_verified_provider_login
+from rail_waitlist.services import (
+    add_outbox_event,
+    apply_watch_transition,
+    finish_observation_cycle,
+    get_or_create_provider_circuit,
+    is_confirmed_absent_retry_source,
+    latest_observation_fingerprint,
+    record_seat_observation,
+    resume_watches_after_verified_provider_login,
+)
 from rail_waitlist.worker import (
     _acquire_execution_lease,
     _arm_supported_provider_watches,
-    _CandidateTarget,
-    _defer_watch_group_observation,
     _process_due_watches,
     _process_watch_group,
     _process_watch_now,
     _reserve_winner,
-    _retryable_reservation_episode_key,
 )
+
+
+async def _retryable_reservation_episode_key(
+    session,
+    candidate: WatchCandidate,
+    observation: SeatObservation,
+    provider: Provider,
+) -> str | None:
+    return await retryable_reservation_episode_key(
+        session,
+        candidate,
+        observation,
+        provider,
+        is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+    )
+
+
+def _observation_dependencies(session_factory) -> ObservationGroupDependencies:
+    async def lease_is_current(_grant: object, *, now: datetime) -> bool:
+        return True
+
+    async def reserve_winner(_target: ObservationTarget) -> None:
+        return None
+
+    return ObservationGroupDependencies(
+        session_factory=session_factory,
+        apply_watch_transition=apply_watch_transition,
+        add_outbox_event=add_outbox_event,
+        get_or_create_provider_circuit=get_or_create_provider_circuit,
+        latest_observation_fingerprint=latest_observation_fingerprint,
+        record_seat_observation=record_seat_observation,
+        finish_observation_cycle=finish_observation_cycle,
+        is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        reserve_winner=reserve_winner,
+        lease_is_current=lease_is_current,
+        lease_is_current_in_session=lock_execution_lease_current,
+        provider_call_errors=(RuntimeError, ValueError),
+    )
 
 
 async def test_worker_execution_lease_covers_adapter_timeout(
@@ -2033,7 +2083,7 @@ async def test_auth_failure_rearms_once_after_newer_verified_account_generation(
             Provider.KORAIL,
         )
         assert episode_key is not None and episode_key.startswith("auth:4:")
-        target = _CandidateTarget(
+        target = ObservationTarget(
             watch_id=watch.id,
             candidate_id=candidate.id,
             provider=Provider.KORAIL,
@@ -2451,7 +2501,7 @@ async def test_reservation_rechecks_verified_account_before_creating_attempt(
         )
         session.add(candidate)
         await session.commit()
-        target = _CandidateTarget(
+        target = ObservationTarget(
             watch_id=watch.id,
             candidate_id=candidate.id,
             provider=Provider.KORAIL,
@@ -3002,6 +3052,16 @@ async def test_lost_srt_execution_lease_fences_observation_persistence(app, db_e
             next_check_at=now - timedelta(seconds=1),
         )
         session.add(watch)
+        session.add(
+            ProviderExecutionLease(
+                provider=Provider.SRT,
+                account_scope=grant.account_scope,
+                owner_token=grant.owner_token,
+                fencing_token=grant.fencing_token,
+                expires_at=grant.expires_at,
+                updated_at=now,
+            )
+        )
         await session.flush()
         session.add(
             WatchCandidate(
@@ -3421,11 +3481,13 @@ async def test_invalid_srt_lease_cannot_write_source_cooldown_deferral(
         fencing_token=1,
         expires_at=now + timedelta(minutes=1),
     )
-    await _defer_watch_group_observation(
+    await defer_watch_group_observation(
         [watch_id],
         now + timedelta(minutes=10),
         now,
-        stale_grant,
+        lease_grant=stale_grant,
+        prepared=False,
+        dependencies=_observation_dependencies(app.state.test_session_factory),
     )
 
     async with factory() as session:

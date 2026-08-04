@@ -292,6 +292,15 @@ KORAIL Chromium·SRT live source를 주 시간표 경로로 사용하고, 주 �
 계정 없는 실행 scope는 `anonymous/public`이고, 이 임대는 provider circuit·Redis cooldown·
 후보별 DB 고유 제약을 대체하지 않고 함께 적용됩니다.
 
+관찰 그룹의 use case는 `observations/group_application.py`가 소유합니다. 이 application은 작업
+준비·source cooldown 연기·동일 요청 병합·provider 오류 정규화·작업별 관찰 저장과 상태 요약·
+가용성 episode winner 선택을 수행하고 target만 받는 port로 예약 실행을 위임합니다. worker는
+concrete provider adapter와 실행 임대의 수명주기만 조립합니다. 외부 provider의 prepare·연기·회로
+확인·관찰 저장·회로 반영 transaction은 실행 임대 행을 먼저 잠근 뒤 watch·candidate·circuit을
+잠급니다. 여러 watch를 연기할 때는 ID 순서로 `FOR UPDATE`하여 잠금 순서를 결정적으로 유지합니다.
+SQLite 회귀와 PostgreSQL SQL compile로 이 계약을 확인했지만, 실제 두 PostgreSQL session의
+takeover 대기와 다중 worker 교착 부재는 별도 운영·CI 검증 대상입니다.
+
 SRT background query key는 정규화한 출발역·도착역·KST 서비스일·인원으로 구성합니다. 같은
 키의 후보들은 `00:00–23:59` 하루 검색 하나를 singleflight와 TTL cache로 공유하므로 서로 다른
 열차를 감시해도 같은 주기의 상류 호출을 중복하지 않습니다. 공유 결과를 후보에 기록할 때는

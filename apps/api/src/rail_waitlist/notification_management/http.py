@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -11,16 +10,18 @@ from ..auth import require_admin
 from ..config import get_settings
 from ..database import get_session
 from ..models import NotificationChannel
-from ..services import (
-    add_outbox_event,
-    create_notification_channel,
-    update_notification_channel,
-)
 from .schemas import (
     NotificationChannelCreate,
     NotificationChannelRead,
     NotificationChannelUpdate,
     QueuedResponse,
+)
+from .service import (
+    NotificationChannelDisabledError,
+    NotificationConfigError,
+    create_notification_channel,
+    queue_test_notification,
+    update_notification_channel,
 )
 
 router = APIRouter(prefix="/api/v1/notifications", dependencies=[Depends(require_admin)])
@@ -29,7 +30,10 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 
 @router.post("/channels", response_model=NotificationChannelRead, status_code=201)
 async def channels_create(data: NotificationChannelCreate, session: Session) -> NotificationChannel:
-    return await create_notification_channel(session, data)
+    try:
+        return await create_notification_channel(session, data)
+    except NotificationConfigError as error:
+        raise HTTPException(422, str(error)) from None
 
 
 @router.get("/web-push/public-key")
@@ -64,7 +68,12 @@ async def channels_get(channel_id: str, session: Session) -> NotificationChannel
 async def channels_update(
     channel_id: str, data: NotificationChannelUpdate, session: Session
 ) -> NotificationChannel:
-    return await update_notification_channel(session, await find_channel(session, channel_id), data)
+    try:
+        return await update_notification_channel(
+            session, await find_channel(session, channel_id), data
+        )
+    except NotificationConfigError as error:
+        raise HTTPException(422, str(error)) from None
 
 
 @router.delete("/channels/{channel_id}", status_code=204)
@@ -82,15 +91,7 @@ async def channels_delete(channel_id: str, session: Session) -> Response:
 )
 async def channels_test_send(channel_id: str, session: Session) -> QueuedResponse:
     channel = await find_channel(session, channel_id)
-    if not channel.enabled:
-        raise HTTPException(409, "notification channel is disabled")
-    event = await add_outbox_event(
-        session,
-        aggregate_type="notification_channel",
-        aggregate_id=channel.id,
-        event_type="notification.test_requested",
-        payload={"channel_id": channel.id, "message": "KORAIL·SRT 알림 테스트입니다."},
-        dedupe_key=f"notification:{channel.id}:test:{datetime.now().isoformat()}",
-    )
-    await session.commit()
-    return QueuedResponse(queued=True, event_id=event.id)
+    try:
+        return await queue_test_notification(session, channel)
+    except NotificationChannelDisabledError as error:
+        raise HTTPException(409, str(error)) from None

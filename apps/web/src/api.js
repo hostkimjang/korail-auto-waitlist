@@ -5,7 +5,7 @@ import {
 import { normalizeReservationPolicy } from "./domain/reservationPolicy";
 import { mapLatestReservationAttempt } from "./domain/reservationAttempt";
 import { mapOperationalCandidate } from "./domain/watchOperational";
-import { API_ROOT, ApiError, request } from "./api/client";
+import { ApiError, request } from "./api/client";
 
 export { ApiError } from "./api/client";
 export {
@@ -14,6 +14,18 @@ export {
   logout,
   registerAdmin,
 } from "./api/auth";
+export {
+  connectBrowserPush,
+  createNotificationChannel,
+  deleteNotificationChannel,
+  disconnectBrowserPush,
+  fetchNotificationChannels,
+  readBrowserPushState,
+  testNotificationChannel,
+  updateNotificationChannel,
+  waitForServiceWorkerRegistration,
+} from "./api/notifications";
+export { subscribeToEvents } from "./api/events";
 
 export const DEMO_MODE = import.meta.env.DEV && import.meta.env.VITE_DEMO_MODE !== "false";
 
@@ -967,160 +979,6 @@ export async function deleteWatch(id) {
   return request(`/watches/${id}`, { method: "DELETE" });
 }
 
-export async function fetchNotificationChannels() {
-  return request("/notifications/channels");
-}
-
-export async function createNotificationChannel(payload) {
-  return request("/notifications/channels", { method: "POST", body: JSON.stringify(payload) });
-}
-
-export async function updateNotificationChannel(id, payload) {
-  return request(`/notifications/channels/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
-}
-
-export async function testNotificationChannel(id) {
-  return request(`/notifications/channels/${id}/test-send`, { method: "POST" });
-}
-
-export async function waitForServiceWorkerRegistration(timeoutMs = 8_000) {
-  let timeoutId;
-  try {
-    return await Promise.race([
-      navigator.serviceWorker.ready,
-      new Promise((_, reject) => {
-        timeoutId = window.setTimeout(() => {
-          reject(new ApiError("알림 서비스를 준비하지 못했습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요."));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-  }
-}
-
-function browserPushSupported() {
-  return typeof navigator !== "undefined"
-    && "serviceWorker" in navigator
-    && typeof window !== "undefined"
-    && "PushManager" in window
-    && "Notification" in window;
-}
-
-function requireBrowserPushSupport() {
-  if (!browserPushSupported()) {
-    throw new ApiError("이 브라우저는 OS 알림을 지원하지 않습니다.");
-  }
-  if (window.isSecureContext === false) {
-    throw new ApiError("OS 알림은 HTTPS 또는 이 기기의 localhost 주소에서만 사용할 수 있습니다.");
-  }
-}
-
-export async function readBrowserPushState() {
-  if (!browserPushSupported()) {
-    return { support: "unsupported", permission: "default", subscribed: false };
-  }
-  if (window.isSecureContext === false) {
-    return { support: "insecure", permission: Notification.permission, subscribed: false };
-  }
-  const registration = await navigator.serviceWorker.getRegistration();
-  const subscription = registration
-    ? await registration.pushManager.getSubscription()
-    : null;
-  return {
-    support: "supported",
-    permission: Notification.permission,
-    subscribed: subscription !== null,
-  };
-}
-
-export async function disconnectBrowserPush() {
-  requireBrowserPushSupport();
-  const registration = await navigator.serviceWorker.getRegistration();
-  const subscription = registration
-    ? await registration.pushManager.getSubscription()
-    : null;
-  if (subscription) await subscription.unsubscribe();
-  return readBrowserPushState();
-}
-
-/**
- * @param {string} name
- * @param {string | null} existingChannelId
- */
-export async function connectBrowserPush(name = "이 브라우저", existingChannelId = null) {
-  requireBrowserPushSupport();
-  const { public_key: publicKey } = await request("/notifications/web-push/public-key");
-  const existingRegistration = await navigator.serviceWorker.getRegistration();
-  if (!existingRegistration) await navigator.serviceWorker.register("/sw.js");
-  const registration = await waitForServiceWorkerRegistration();
-  const permission = await Notification.requestPermission();
-  if (permission === "denied") {
-    throw new ApiError("OS 알림 권한이 차단되어 있습니다. 브라우저 사이트 설정에서 알림을 허용해 주세요.");
-  }
-  if (permission !== "granted") throw new ApiError("OS 알림 권한을 허용해야 연결할 수 있습니다.");
-  const subscription = await registration.pushManager.getSubscription()
-    ?? await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: fromBase64Url(publicKey),
-    });
-  const payload = {
-    name,
-    config: { subscription_info: JSON.stringify(subscription.toJSON()) },
-    enabled: true,
-  };
-  if (existingChannelId) return updateNotificationChannel(existingChannelId, payload);
-  return createNotificationChannel({ kind: "web_push", ...payload });
-}
-
 export async function fetchProviders() {
   return request("/providers");
-}
-
-function parseLiveEvent(event, onError) {
-  try {
-    return JSON.parse(event.data);
-  } catch (error) {
-    onError(error);
-    return null;
-  }
-}
-
-function isCurrentLiveEvent(payload, subscribedAt) {
-  const createdAt = Date.parse(String(payload?.created_at ?? ""));
-  return Number.isFinite(createdAt) && createdAt >= subscribedAt;
-}
-
-export function subscribeToEvents(onEvent, onError, options = {}) {
-  // The API intentionally exposes the durable outbox through SSE. A new browser
-  // connection has no Last-Event-ID, so it receives historical rows first. The
-  // initial REST load is the canonical snapshot; only events created after this
-  // subscription should invalidate it.
-  const subscribedAt = Number.isFinite(options.subscribedAt)
-    ? options.subscribedAt
-    : Date.now();
-  const source = new EventSource(`${API_ROOT}/events`, { withCredentials: true });
-  const handleEvent = (event) => {
-    const payload = parseLiveEvent(event, onError);
-    if (payload && isCurrentLiveEvent(payload, subscribedAt)) onEvent(payload);
-  };
-  source.onmessage = handleEvent;
-  const types = [
-    "watch.created",
-    "watch.updated",
-    "watch.status_changed",
-    "watch.seat_observed",
-    "watch.reservation_attempted",
-    "watch.reservation_result",
-    "watch.reservation_result_requires_manual_check",
-    "notification.dispatch_requested",
-  ];
-  for (const type of types) source.addEventListener(type, handleEvent);
-  source.onerror = onError;
-  return () => source.close();
-}
-
-function fromBase64Url(value) {
-  const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
 }

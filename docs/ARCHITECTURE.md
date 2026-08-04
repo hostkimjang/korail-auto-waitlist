@@ -37,6 +37,18 @@ stream인 `/events`는 알림 채널 CRUD와 수명주기가 다른 기존 `api.
 이 이동은 공개 endpoint·payload·인증·알림 전달 정책을 바꾸지 않는 기계적 분리이며,
 `App.jsx`·`api.js`·`styles.css`와 API `services.py`·`worker.py`·provider 경계의 추가 분리가 남아 있습니다.
 
+웹의 알림 채널 CRUD·시험 전송과 Web Push 브라우저 수명주기는 `api/notifications.ts`, SSE 연결·
+history cutoff·정리 계약은 `api/events.ts`가 소유합니다. `App.jsx`는 이 소유 모듈을 직접 사용하고
+`api.js`는 전환 중 호출자를 위한 동일 함수 객체 compatibility export만 유지합니다. `NewWait`의
+운영사별 역 카탈로그 요청·재시도·stale 응답 차단·선택한 역명/node ID 정합성은
+`features/new-wait/useStationCatalog.ts`가 맡으며, TAGO 역 카탈로그를 운영사별 실제 운행이나 좌석
+재고 근거로 승격하지 않습니다.
+
+API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정책은
+`notification_management/service.py`가 소유하고 HTTP 계층은 이 service의 오류만 transport 상태로
+변환합니다. 여러 기능이 공유하는 outbox idempotency primitive는 `outbox.py`에 두며,
+`services.py`의 import는 기존 worker와 테스트를 위한 identity-compatible 전환 경계입니다.
+
 ## 주요 흐름
 
 1. 관리자 계정이 없고 서버 운영자가 `AUTH_INITIAL_REGISTRATION_ENABLED=true`를 명시한 최초 접속에서만 관리자 ID와 비밀번호를 등록합니다. 정규화한 ID, Argon2id 비밀번호 해시, 인증 세션을 DB 트랜잭션으로 저장하고 등록 직후 앱에 진입합니다. 계정이 생기면 설정값과 무관하게 추가 등록은 닫히며, 이후에는 유효 세션이 없을 때만 ID·비밀번호 로그인 화면을 표시합니다.

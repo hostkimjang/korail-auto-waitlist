@@ -20,31 +20,33 @@ import {
   WifiHigh,
 } from "@phosphor-icons/react";
 import {
-  ApiError,
   DEMO_MODE,
   buildWatchCreatePayloads,
   cancelWatch,
-  connectBrowserPush,
-  createNotificationChannel,
   createWatch,
   deleteWatch,
-  disconnectBrowserPush,
-  fetchNotificationChannels,
   fetchStations,
   fetchTimetables,
   fetchWatches,
   filterTimetables,
-  logout,
   pauseWatch as pauseWatchRequest,
-  readBrowserPushState,
   refreshSeatStatus,
   mapTimetable,
   startWatch,
-  subscribeToEvents,
-  testNotificationChannel,
   updateWatch,
-  updateNotificationChannel,
 } from "./api.js";
+import { ApiError } from "./api/client";
+import { logout } from "./api/auth";
+import {
+  connectBrowserPush,
+  createNotificationChannel,
+  disconnectBrowserPush,
+  fetchNotificationChannels,
+  readBrowserPushState,
+  testNotificationChannel,
+  updateNotificationChannel,
+} from "./api/notifications";
+import { subscribeToEvents } from "./api/events";
 import { AuthGate } from "./features/auth/AuthGate";
 import { useAuthState } from "./features/auth/useAuthState";
 import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
@@ -64,6 +66,7 @@ import { StepThreeDateSelector } from "./features/new-wait/StepThreeDateSelector
 import { StepThreeTimeRange } from "./features/new-wait/StepThreeTimeRange";
 import { StepThreeRefreshControl } from "./features/new-wait/StepThreeRefreshControl";
 import { StationCombobox } from "./features/new-wait/StationCombobox";
+import { useStationCatalog } from "./features/new-wait/useStationCatalog";
 import { reconcileTrainSnapshots } from "./features/new-wait/trainSnapshots";
 import { recoverRefreshedRegistrationTrain } from "./features/new-wait/registrationEvidenceRecovery";
 import {
@@ -609,7 +612,6 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
   const [submitError, setSubmitError] = useState("");
   const [trains, setTrains] = useState([]);
   const [timetableState, setTimetableState] = useState({ loadingProviders: [], providerResults: {} });
-  const [stationReloadKey, setStationReloadKey] = useState(0);
   const reservationPolicyManuallySelectedRef = useRef(false);
   const [form, setForm] = useState(() => createInitialNewWaitForm({
     demo,
@@ -628,13 +630,20 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
   useLayoutEffect(() => {
     timetableQueryKeyRef.current = timetableQueryKey;
   }, [timetableQueryKey]);
-  const stationProviderKey = [...form.providers].sort().join(",");
-  const [stationState, setStationState] = useState(() => demo
-    ? { status: "ready", providerKey: "KORAIL", stations: demoStations(["KORAIL"]), source: "mock", error: "" }
-    : { status: "loading", providerKey: "", stations: [], source: "", error: "" });
-  const stationCatalogReady = stationState.status === "ready" && stationState.providerKey === stationProviderKey;
-  const selectableStations = stationCatalogReady ? stationState.stations : [];
-  const hasSelectedStation = (name, nodeId) => selectableStations.some((station) => station.name === name && station.nodeId === nodeId);
+  const {
+    state: stationState,
+    providerKey: stationProviderKey,
+    ready: stationCatalogReady,
+    stations: selectableStations,
+    hasStation: hasSelectedStation,
+    retry: retryStationCatalog,
+  } = useStationCatalog({
+    demo,
+    providers: form.providers,
+    loadStations: fetchStations,
+    loadDemoStations: demoStations,
+    setForm,
+  });
 
   useEffect(() => {
     const reservationPolicy = demo
@@ -754,58 +763,6 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
     timetableState.providerResults,
     timetableState.loadingProviders,
   );
-
-  useEffect(() => {
-    let active = true;
-    if (!form.providers.length) {
-      setStationState({ status: "idle", providerKey: "", stations: [], source: "", error: "" });
-      setForm((value) => ({ ...value, origin: "", origin_node_id: null, destination: "", destination_node_id: null }));
-      return undefined;
-    }
-
-    if (demo) {
-      const stations = demoStations(form.providers);
-      setStationState({ status: "ready", providerKey: stationProviderKey, stations, source: "mock", error: "" });
-      setForm((value) => ({
-        ...value,
-        origin: stations.some((station) => station.name === value.origin && station.nodeId === value.origin_node_id) ? value.origin : "",
-        origin_node_id: stations.some((station) => station.name === value.origin && station.nodeId === value.origin_node_id) ? value.origin_node_id : null,
-        destination: stations.some((station) => station.name === value.destination && station.nodeId === value.destination_node_id) ? value.destination : "",
-        destination_node_id: stations.some((station) => station.name === value.destination && station.nodeId === value.destination_node_id) ? value.destination_node_id : null,
-      }));
-      return undefined;
-    }
-
-    setStationState({ status: "loading", providerKey: stationProviderKey, stations: [], source: "", error: "" });
-    fetchStations(form.providers).then(({ stations, catalogs }) => {
-      if (!active) return;
-      setStationState({
-        status: "ready",
-        providerKey: stationProviderKey,
-        stations,
-        source: catalogs.every((catalog) => catalog.source === "mock") ? "mock" : "official",
-        error: "",
-      });
-      setForm((value) => ({
-        ...value,
-        origin: stations.some((station) => station.name === value.origin && station.nodeId === value.origin_node_id) ? value.origin : "",
-        origin_node_id: stations.some((station) => station.name === value.origin && station.nodeId === value.origin_node_id) ? value.origin_node_id : null,
-        destination: stations.some((station) => station.name === value.destination && station.nodeId === value.destination_node_id) ? value.destination : "",
-        destination_node_id: stations.some((station) => station.name === value.destination && station.nodeId === value.destination_node_id) ? value.destination_node_id : null,
-      }));
-    }).catch(() => {
-      if (!active) return;
-      setStationState({
-        status: "error",
-        providerKey: stationProviderKey,
-        stations: [],
-        source: "",
-        error: "공식 역 목록이 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해 주세요.",
-      });
-      setForm((value) => ({ ...value, origin: "", origin_node_id: null, destination: "", destination_node_id: null }));
-    });
-    return () => { active = false; };
-  }, [demo, stationProviderKey, stationReloadKey]);
 
   useEffect(() => {
     if (step !== 3) return undefined;
@@ -995,7 +952,7 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
               <StationCombobox label="도착역" value={form.destination} selectedNodeId={form.destination_node_id} stations={selectableStations} loading={stationState.status === "loading"} disabled={!stationCatalogReady} error={destinationStationError} onChange={(station) => setForm((value) => ({ ...value, destination: station.name, destination_node_id: station.nodeId }))} />
             </div>
             {stationState.status === "loading" && <div className="station-catalog-state" role="status"><Clock size={19} /><span>선택한 운영사의 역 목록을 불러오고 있습니다.</span></div>}
-            {stationState.status === "error" && <div className="form-error station-catalog-error" role="alert"><WarningCircle weight="fill" /><span><strong>역 목록을 불러오지 못했습니다.</strong> {stationState.error}</span><button type="button" className="button button-outline compact" onClick={() => setStationReloadKey((value) => value + 1)}>다시 불러오기</button></div>}
+            {stationState.status === "error" && <div className="form-error station-catalog-error" role="alert"><WarningCircle weight="fill" /><span><strong>역 목록을 불러오지 못했습니다.</strong> {stationState.error}</span><button type="button" className="button button-outline compact" onClick={retryStationCatalog}>다시 불러오기</button></div>}
             {stationNotice && <div className="station-notice" role="note"><WarningCircle size={19} weight="fill" /><span>{stationNotice}</span></div>}
             <div className="journey-schedule-grid">
               <CalendarPicker value={form.date} onChange={setTravelDate} />

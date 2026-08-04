@@ -225,6 +225,11 @@
 - [x] API의 Web Push 공개키·알림 채널 CRUD·시험 전송 route와 schema를 `notification_management` 기능 패키지로 이동하고 중앙 schema 객체 identity·인증·오류·commit 계약 유지. SSE `/events`는 기존 `api.py`에 유지
 - [x] 두 번째 웹 구조 슬라이스의 ESLint 오류 0·고정된 기존 경고 27, strict·unused typecheck, Vitest 54개 파일·377건, production build, Sites 4건과 통합 작업 트리 API 전체 pytest 955건 확인
 - [x] 두 번째 구조 슬라이스 통합 작업 트리의 API 전체 pytest 955건과 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 오류 표식 0건 확인
+- [x] 웹 알림 채널 CRUD·시험 전송·Web Push 수명주기를 `api/notifications.ts`, SSE 연결·history cutoff·정리 계약을 `api/events.ts`로 이동하고 `App.jsx` 직접 import·`api.js` 함수 identity 호환 export·transport 계약 테스트 유지
+- [x] `NewWait` 역 카탈로그 provider key·demo/공식 source·재시도·stale 응답 차단·역명/node ID fail-closed 정합성을 `useStationCatalog.ts`로 이동하고 race·실패·빈 provider 회귀 테스트 추가. 기존 App effect/ref 경고 2건 제거
+- [x] API 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정책을 `notification_management/service.py`, 공용 outbox idempotency primitive를 `outbox.py`로 이동하고 HTTP→중앙 services 역의존 제거
+- [x] 세 번째 구조 슬라이스 웹 ESLint 오류 0·고정 경고 25, strict·unused typecheck, Vitest 57개 파일·393건, production build·Sites 4건과 API 전체 pytest 958건·Ruff `E/F/I`·format ratchet·module boundary 통과
+- [x] 세 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
 - [ ] 웹 도메인 타입·API validator/mapper를 `.ts`로 분리하고 `api.js` 제거
 - [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거

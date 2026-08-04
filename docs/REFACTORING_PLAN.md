@@ -184,6 +184,25 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: 웹 `App.jsx`·`api.js`·`styles.css`, API `services.py`·`worker.py`와 provider 역할
   분리를 후속 수직 슬라이스로 진행합니다. 이번 완료는 전체 클린 구조 전환 완료를 뜻하지 않습니다.
 
+### 2026-08-04 세 번째 구조 슬라이스
+
+- 웹 알림 경계: 알림 채널 CRUD·시험 전송과 Web Push 수명주기를 `api/notifications.ts`로, SSE 이벤트
+  종류·history cutoff·오류·close 계약을 `api/events.ts`로 이동했습니다. `App.jsx`는 두 소유 모듈을
+  직접 사용하고 `api.js`에는 동일 함수 객체 compatibility export만 남겼습니다.
+- `NewWait` 역 카탈로그: 운영사 key, demo/공식 source, 비동기 요청·재시도, provider 변경 뒤 stale
+  응답 차단, 실패 시 역명/node ID 원자적 초기화를 `useStationCatalog.ts`로 옮겼습니다. 이 이동으로
+  `App.jsx`의 기존 effect/ref ESLint 부채 2건을 제거해 고정 경고가 27건에서 25건으로 줄었습니다.
+- API 알림 application: 설정 필수 필드·Webhook URL 검증, secret 암호화, 생성·수정과 시험 전송 outbox
+  정책을 `notification_management/service.py`로 이동했습니다. 공용 outbox idempotency primitive는
+  `outbox.py`로 분리했고, 중앙 `services.py`에는 기존 호출자를 위한 동일 함수 import만 유지했습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 기존 경고 25, strict·unused typecheck, Vitest 57개 파일·393건,
+  production build와 Sites 4건을 통과했습니다. API 전체 pytest 958건, Ruff `E/F/I`, format ratchet과
+  module boundary도 통과했습니다. `experimental-rail` 전체 이미지를 재빌드·강제 재생성한 뒤
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건을
+  확인했습니다.
+- 남은 핵심 부채: `NewWait` 시간표 검색·등록·열차 선택, App shell의 작업 CRUD·SSE orchestration,
+  `api.js`의 역·시간표·작업 API, 전역 CSS, API worker·provider 역할을 다음 슬라이스에서 분리합니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

@@ -51,7 +51,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: operations summary와 seat-status source mapper를 API 소유 모듈로 이동해 `api -> features/settings` 역방향 import 제거
    - 완료: 관리자 인증 상태·최초 등록·로그인·로그아웃 endpoint를 `api/auth.ts`로 이동하고
      `api.js`에는 함수 객체 identity가 같은 compatibility re-export 유지
-   - `client`, `auth`, `stations`, `timetables`, `watches`, `notifications`, `events`로 분리
+   - 완료: 알림 채널 CRUD·시험 전송·Web Push 수명주기를 `api/notifications.ts`, SSE 연결·history
+     cutoff·정리를 `api/events.ts`로 이동하고 `App.jsx` 직접 import와 compatibility re-export 유지
+   - 남음: `stations`, `timetables`, `watches` API 분리
    - DTO validator와 mapper를 endpoint 호출과 분리해 단위 테스트
 4. leaf UI 전환
    - 완료: 공용 결제기한 표시 UI를 `shared/ui`, 공유 clock hook을 `hooks/`로 이동
@@ -63,7 +65,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: `App.jsx`의 demo 계정·runtime·watch·시간표·역 카탈로그를 `fixtures/demoData.ts`로 이동
    - 완료: `NewWait`의 폼·KST 초기 날짜·날짜/요일 동기화·과거 날짜 보정·역명과 node ID의 원자적
      교환·provider 토글과 예약 정책 fail-closed 보정을 `newWaitForm.ts` 순수 모델로 이동
-   - 남음: `NewWait`의 station catalog, timetable search, stale query 차단, selection priority와 등록 상태 hook
+   - 완료: `NewWait`의 station catalog 요청·demo/공식 source·재시도·provider 변경 stale 응답 차단과
+     역명/node ID fail-closed 정합성을 `useStationCatalog.ts`로 이동
+   - 남음: `NewWait`의 timetable search, stale query 차단, selection priority와 등록 상태 hook
    - Home, Reservations, Settings, Auth page와 feature hook
 6. shell과 테스트
    - 마지막에 `App.tsx`로 전환

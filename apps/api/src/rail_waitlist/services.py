@@ -17,7 +17,6 @@ from .domain import (
     TERMINAL_STATUSES,
     BookingWindowStatus,
     OperationalStatus,
-    OutboxStatus,
     Provider,
     ProviderCircuitState,
     ReservationOutcome,
@@ -30,7 +29,6 @@ from .models import (
     AdminAccount,
     IdempotencyRecord,
     NotificationChannel,
-    OutboxEvent,
     ProviderCircuit,
     ProviderExecutionLease,
     ReservationAttempt,
@@ -40,11 +38,7 @@ from .models import (
     WatchCandidate,
     WatchTransitionHistory,
 )
-from .notification_management.schemas import (
-    NotificationChannelCreate,
-    NotificationChannelUpdate,
-)
-from .notifications import validate_webhook_url_syntax
+from .outbox import add_outbox_event
 from .policy import build_watch_dedupe_key, next_interval
 from .provider_execution_lease import ANONYMOUS_PUBLIC_ACCOUNT_SCOPE
 from .providers import get_execution_provider, get_timetable_provider
@@ -62,7 +56,6 @@ from .schemas import (
     WatchUpdate,
     normalize_official_train_number,
 )
-from .security import secret_box
 from .ui_preferences.schemas import UiPreferencesUpdate
 
 RESERVATION_RECONCILIATION_MAX_ATTEMPTS = 3
@@ -192,8 +185,6 @@ _RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
     }
 )
 
-OUTBOX_DEDUPE_KEY_MAX_LENGTH = 128
-
 _BOOKING_OPEN_OBSERVATIONS = frozenset(
     {
         SeatObservationStatus.AVAILABLE,
@@ -259,15 +250,6 @@ def apply_operational_projection(
     candidate.operational_fresh_until = result.fresh_until
 
 
-def normalize_outbox_dedupe_key(value: str) -> str:
-    """Keep human-readable context while bounding the persistent idempotency key."""
-    if len(value) <= OUTBOX_DEDUPE_KEY_MAX_LENGTH:
-        return value
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
-    prefix_length = OUTBOX_DEDUPE_KEY_MAX_LENGTH - len(digest) - 1
-    return f"{value[:prefix_length]}:{digest}"
-
-
 def request_hash(value: Any) -> str:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
@@ -301,34 +283,6 @@ async def remember_idempotency(
                 scope=scope, key=key, resource_id=resource_id, request_hash=payload_hash
             )
         )
-
-
-async def add_outbox_event(
-    session: AsyncSession,
-    *,
-    aggregate_type: str,
-    aggregate_id: str,
-    event_type: str,
-    payload: dict[str, Any],
-    dedupe_key: str,
-) -> OutboxEvent:
-    persistent_dedupe_key = normalize_outbox_dedupe_key(dedupe_key)
-    existing = await session.scalar(
-        select(OutboxEvent).where(OutboxEvent.dedupe_key == persistent_dedupe_key)
-    )
-    if existing:
-        return existing
-    event = OutboxEvent(
-        aggregate_type=aggregate_type,
-        aggregate_id=aggregate_id,
-        event_type=event_type,
-        payload=payload,
-        dedupe_key=persistent_dedupe_key,
-        status=OutboxStatus.PENDING,
-    )
-    session.add(event)
-    await session.flush()
-    return event
 
 
 async def add_watch_notifications(
@@ -1839,55 +1793,3 @@ async def validate_channel_ids(session: AsyncSession, channel_ids: list[str]) ->
     )
     if unique_ids - found:
         raise HTTPException(422, "notification channels must exist and be enabled")
-
-
-def validate_notification_config(data: NotificationChannelCreate) -> None:
-    required = {
-        "web_push": {"subscription_info"},
-        "telegram": {"bot_token", "chat_id"},
-        "discord_webhook": {"url"},
-        "generic_webhook": {"url"},
-    }[data.kind.value]
-    missing = required - data.config.keys()
-    if missing:
-        raise HTTPException(422, f"missing channel fields: {', '.join(sorted(missing))}")
-    if data.kind.value in {"discord_webhook", "generic_webhook"}:
-        try:
-            validate_webhook_url_syntax(data.config["url"])
-        except ValueError as error:
-            raise HTTPException(422, str(error)) from None
-
-
-async def create_notification_channel(
-    session: AsyncSession, data: NotificationChannelCreate
-) -> NotificationChannel:
-    validate_notification_config(data)
-    channel = NotificationChannel(
-        kind=data.kind,
-        name=data.name,
-        config_ciphertext=secret_box.encrypt_dict(data.config),
-        enabled=data.enabled,
-    )
-    session.add(channel)
-    await session.commit()
-    await session.refresh(channel)
-    return channel
-
-
-async def update_notification_channel(
-    session: AsyncSession, channel: NotificationChannel, data: NotificationChannelUpdate
-) -> NotificationChannel:
-    if data.name is not None:
-        channel.name = data.name
-    if data.enabled is not None:
-        channel.enabled = data.enabled
-    if data.config is not None:
-        validate_notification_config(
-            NotificationChannelCreate(
-                kind=channel.kind, name=channel.name, config=data.config, enabled=channel.enabled
-            )
-        )
-        channel.config_ciphertext = secret_box.encrypt_dict(data.config)
-    await session.commit()
-    await session.refresh(channel)
-    return channel

@@ -499,6 +499,40 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: reservation execution application, watch-group observation application, provider
   역할별 계약, App shell·Auth와 `NewWait` 나머지 strict 경계입니다.
 
+### 2026-08-05 열다섯 번째 구조 슬라이스
+
+- 예약 실행 application: worker의 예약 target·공식 확인·인증 상태 투영·선점·provider 실행·결과 적용을
+  FastAPI·Celery 비의존 `reservations/execution_application.py`로 이동했습니다. 최소
+  `ReservationExecutionTarget`과 `ReservationProvider` protocol, runtime dependency bundle을 두고,
+  worker는 observation target 변환과 concrete service·provider 오류·SRT exact source 조립만 맡습니다.
+  각 dependency callback도 실제 positional·keyword·return 계약을 명시한 `Protocol.__call__`로 고정하고,
+  인증 상태 갱신 port는 composition root가 `commit=False`를 봉인하는 `None` 반환 adapter로 연결했습니다.
+  `worker.py`는 1,108줄, 새 application은 540줄입니다.
+- transaction·잠금 보존: claim은 외부 provider에서 `account -> watch -> candidate -> circuit`, 결과는
+  필요한 경우 `account -> watch -> candidate -> attempt` 순서로 잠급니다. PENDING attempt·transition·
+  claim outbox를 provider I/O 전에 commit하고 예약 호출은 생성된 episode당 한 번만 수행합니다. 결과
+  CAS·confirmation·상태·outbox는 별도 transaction으로 commit하며 실패하면 부분 결과만 rollback하고
+  선점 claim은 보존합니다. 늦은 결과는 terminal 상태를 되살리지 않고 UNKNOWN·manual-check로 닫습니다.
+- 테스트 재소유·보강: 기존 confirmation 2건과 outcome 표 테스트를 새 owner로 옮기고 PostgreSQL
+  `FOR UPDATE` compile, 기존 request hash parity, 독립 session의 claim·outbox 가시성, 상태 gate를 다시
+  통과한 동일 episode의 attempt/outbox/provider 1회 fence, 결과 transaction rollback과 result outbox
+  부재, provider 호출 중 credential generation 4→5 교체 뒤 stale 결과 CAS 보존을 직접 검증했습니다.
+  테스트 파일은 82개로 유지되고 전체 수집은 1,038건에서 1,042건으로 4건 증가했습니다.
+- 의존성 경계: application의 worker·Celery·FastAPI 역의존과 config·metric·observation·provider account·
+  실행 임대·provider registry·services·SRT concrete source 직접 import를 차단했습니다. worker에는 due
+  observation·episode 계산·provider lease·adapter 생성/drain/close/release가 남아 있습니다.
+- 확인된 검증: focused pytest 80건, 보강 focused 18건, 전체 pytest 1,042건, Ruff `E/F/I`, format
+  ratchet 64개, module boundary와 `git diff --check`를 통과했습니다. 독립 보정 재리뷰 뒤 P0~P3 잔여
+  지적 사항이 없음을 확인했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: SQLite application 테스트와 PostgreSQL SQL compile 계약은 확인했지만, 동일 episode의
+  여러 process 동시 실행, 로그인 저장과 예약 실행의 실제 교착 부재, credential 교체와 늦은 결과의
+  실제 PostgreSQL concurrent scheduling은 아직 운영·CI 실DB 검증 항목입니다.
+- 남은 핵심 부채: watch-group observation application, provider 역할별 계약, App shell·Auth와
+  `NewWait` 나머지 strict 경계입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

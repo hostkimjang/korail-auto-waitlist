@@ -62,7 +62,6 @@ from rail_waitlist.worker import (
     _process_due_watches,
     _process_watch_group,
     _process_watch_now,
-    _provider_auth_status_for_reservation_outcome,
     _reserve_winner,
     _retryable_reservation_episode_key,
 )
@@ -693,24 +692,6 @@ async def test_legacy_expired_confirmed_hold_is_selected_and_cleared(
         assert watch.status is WatchStatus.WATCHING
         assert watch.payment_deadline is None
         assert watch.official_booking_url is None
-
-
-@pytest.mark.parametrize(
-    ("outcome", "expected"),
-    [
-        (ReservationOutcome.PAYMENT_REQUIRED, "authenticated"),
-        (ReservationOutcome.NOT_AVAILABLE, "authenticated"),
-        (ReservationOutcome.AUTH_REQUIRED, "auth_required"),
-        (ReservationOutcome.PROVIDER_BLOCKED, "provider_blocked"),
-        (ReservationOutcome.FAILED, None),
-        (ReservationOutcome.UNKNOWN, None),
-    ],
-)
-def test_reservation_outcome_updates_only_conclusive_provider_auth_status(
-    outcome: ReservationOutcome,
-    expected: str | None,
-) -> None:
-    assert _provider_auth_status_for_reservation_outcome(outcome) == expected
 
 
 def test_missing_deadline_payment_hold_is_due_for_bounded_legacy_refresh() -> None:

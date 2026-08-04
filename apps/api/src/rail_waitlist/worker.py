@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .celery_app import celery_app
 from .config import get_settings
@@ -17,7 +18,6 @@ from .domain import (
     ProviderCircuitState,
     ReservationOutcome,
     ReservationPolicy,
-    SeatClass,
     SeatObservationStatus,
     WatchStatus,
 )
@@ -37,19 +37,18 @@ from .observations.due_pipeline_application import (
     process_due_pipeline,
 )
 from .operational import decide_operational_expiry
-from .provider_accounts import (
-    update_provider_auth_status,
-)
+from .provider_accounts import update_provider_auth_status
 from .provider_execution_lease import (
     ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
     ExecutionLeaseGrant,
     ProviderExecutionLeaseService,
 )
 from .providers import ProviderUnavailable, RailProviderAdapter, get_execution_provider
-from .reservation_confirmation import (
-    ReservationConfirmationOutcome,
-    ReservationConfirmationResult,
-    ReservationConfirmationTarget,
+from .reservation_confirmation import ReservationConfirmationOutcome
+from .reservations.execution_application import (
+    ReservationExecutionDependencies,
+    ReservationExecutionTarget,
+    execute_reservation,
 )
 from .reservations.reconciliation_application import (
     ReconciliationDependencies,
@@ -58,13 +57,7 @@ from .reservations.reconciliation_application import (
 from .reservations.reconciliation_application import (
     reconcile_reservation_attempt as run_reservation_reconciliation,
 )
-from .schemas import (
-    RailProviderAuthStatus,
-    ReservationRequest,
-    ReservationResult,
-    SeatObservationRequest,
-    SeatObservationResult,
-)
+from .schemas import RailProviderAuthStatus, SeatObservationRequest, SeatObservationResult
 from .services import (
     ACTIONABLE_SEAT_STATUSES,
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
@@ -79,7 +72,6 @@ from .services import (
     latest_observation_fingerprint,
     record_reservation_confirmation,
     record_seat_observation,
-    request_hash,
 )
 from .srt_reservation import SRT_RESERVATION_SOURCE
 from .watch_management.expiry_application import (
@@ -111,145 +103,6 @@ PROVIDER_EXECUTION_LEASE_DURATION = timedelta(minutes=2)
 NOT_AVAILABLE_RETRY_EPISODE_PREFIX = "not-available-retry:"
 _EXTERNAL_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
 LOGGER = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class _ReservationConfirmationEvaluation:
-    result: ReservationResult
-    confirmation: ReservationConfirmationResult | None
-
-    def __iter__(self):
-        yield self.result
-        yield self.confirmation
-
-    @property
-    def outcome(self) -> ReservationOutcome:
-        return self.result.outcome
-
-    @property
-    def source(self) -> str:
-        return self.result.source
-
-    @property
-    def payment_deadline(self) -> datetime | None:
-        return self.result.payment_deadline
-
-    @property
-    def official_handoff_url(self):
-        return self.result.official_handoff_url
-
-
-def _provider_auth_status_for_reservation_outcome(
-    outcome: ReservationOutcome,
-) -> RailProviderAuthStatus | None:
-    """Return only authentication metadata supported by a conclusive outcome."""
-    if outcome in {
-        ReservationOutcome.PAYMENT_REQUIRED,
-        ReservationOutcome.RESERVED,
-        ReservationOutcome.NOT_AVAILABLE,
-    }:
-        return "authenticated"
-    if outcome is ReservationOutcome.AUTH_REQUIRED:
-        return "auth_required"
-    if outcome is ReservationOutcome.PROVIDER_BLOCKED:
-        return "provider_blocked"
-    # UNKNOWN and FAILED include provider execution/result boundaries that do not
-    # prove the saved account became invalid. Preserve the separately verified
-    # account status; AUTH_REQUIRED and PROVIDER_BLOCKED are the conclusive signals.
-    return None
-
-
-async def _confirm_provider_reservation_result(
-    adapter: RailProviderAdapter,
-    target: _CandidateTarget,
-    attempt_id: str,
-    result: ReservationResult,
-) -> _ReservationConfirmationEvaluation:
-    """Require exact official hold evidence before exposing a payment-required state."""
-
-    if target.provider not in _EXTERNAL_PROVIDERS or result.outcome not in {
-        ReservationOutcome.PAYMENT_REQUIRED,
-        ReservationOutcome.RESERVED,
-        ReservationOutcome.UNKNOWN,
-    }:
-        return _ReservationConfirmationEvaluation(result, None)
-    if result.credential_version is None:
-        return _ReservationConfirmationEvaluation(
-            ReservationResult(
-                outcome=ReservationOutcome.UNKNOWN,
-                source=result.source,
-                observed_at=result.observed_at,
-            ),
-            None,
-        )
-    if (
-        target.provider is Provider.SRT
-        and result.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and result.source == SRT_RESERVATION_SOURCE
-        and result.official_handoff_url is not None
-    ):
-        # The SRT executor already exact-matched the returned official reservation's
-        # trip, seat class and passenger count. A second full-list lookup is slower and
-        # may become ambiguous when the account holds the same train more than once.
-        confirmation = ReservationConfirmationResult(
-            provider=Provider.SRT,
-            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
-            source=result.source,
-            observed_at=result.observed_at,
-            payment_deadline=result.payment_deadline,
-            official_handoff_url=str(result.official_handoff_url),
-        )
-        return _ReservationConfirmationEvaluation(result, confirmation)
-    confirmation_target = ReservationConfirmationTarget(
-        attempt_id=attempt_id,
-        candidate_id=target.candidate_id,
-        provider=target.provider,
-        train_number=target.train_number,
-        origin=target.origin,
-        destination=target.destination,
-        departure_at=target.departure_at,
-        arrival_at=target.arrival_at,
-        seat_class=SeatClass(target.seat_class),
-        passenger_count=target.passenger_count,
-        credential_version=result.credential_version,
-    )
-    try:
-        confirmation = await adapter.confirm_reservation(confirmation_target)
-    except (ProviderUnavailable, RuntimeError, TypeError, ValueError):
-        return _ReservationConfirmationEvaluation(
-            ReservationResult(
-                outcome=ReservationOutcome.UNKNOWN,
-                source=result.source,
-                observed_at=datetime.now(timezone.utc),
-                credential_version=result.credential_version,
-            ),
-            None,
-        )
-    if confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED:
-        return _ReservationConfirmationEvaluation(
-            ReservationResult(
-                outcome=ReservationOutcome.PAYMENT_REQUIRED,
-                source=confirmation.source,
-                observed_at=confirmation.observed_at,
-                credential_version=result.credential_version,
-                payment_deadline=confirmation.payment_deadline,
-                official_handoff_url=confirmation.official_handoff_url,
-            ),
-            confirmation,
-        )
-    mapped_outcome = {
-        ReservationConfirmationOutcome.AUTH_REQUIRED: ReservationOutcome.AUTH_REQUIRED,
-        ReservationConfirmationOutcome.PROVIDER_BLOCKED: (ReservationOutcome.PROVIDER_BLOCKED),
-    }.get(confirmation.outcome, ReservationOutcome.UNKNOWN)
-    return _ReservationConfirmationEvaluation(
-        ReservationResult(
-            outcome=mapped_outcome,
-            source=confirmation.source,
-            observed_at=confirmation.observed_at,
-            credential_version=result.credential_version,
-        ),
-        confirmation,
-    )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -406,20 +259,6 @@ class _CandidateTarget:
             departure_at=self.departure_at,
             seat_class=self.seat_class,
             passenger_count=self.passenger_count,
-        )
-
-    def reservation_request(
-        self,
-        idempotency_key: str,
-        *,
-        expected_credential_version: int | None = None,
-    ) -> ReservationRequest:
-        return ReservationRequest(
-            **self.observation_request().model_dump(),
-            candidate_id=self.candidate_id,
-            idempotency_key=idempotency_key,
-            expected_credential_version=expected_credential_version,
-            arrival_at=self.arrival_at,
         )
 
 
@@ -979,184 +818,58 @@ async def _apply_current_circuit_to_watch(watch_id: str) -> None:
         await session.commit()
 
 
-async def _reserve_winner(adapter, target: _CandidateTarget) -> None:
-    provider_credential_version: int | None = None
-    async with SessionFactory() as session:
-        if target.provider in {Provider.KORAIL, Provider.SRT}:
-            # Provider-account writes always lock account -> watches. Keep the same
-            # order here so a concurrent verified login cannot deadlock reservation.
-            provider_credential_version = await session.scalar(
-                select(RailProviderAccount.credential_version)
-                .where(
-                    RailProviderAccount.provider == target.provider,
-                    RailProviderAccount.enabled.is_(True),
-                    RailProviderAccount.last_auth_status == "authenticated",
-                )
-                .with_for_update()
-            )
-        watch = await session.scalar(
-            select(Watch).where(Watch.id == target.watch_id).with_for_update()
-        )
-        candidate = await session.scalar(
-            select(WatchCandidate)
-            .where(WatchCandidate.id == target.candidate_id)
-            .with_for_update(of=WatchCandidate)
-        )
-        if (
-            watch is None
-            or candidate is None
-            or watch.status != WatchStatus.SEAT_FOUND
-            or watch.reservation_policy != ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-        ):
-            return
-        circuit = await get_or_create_provider_circuit(session, watch.provider, lock=True)
-        if circuit.state != ProviderCircuitState.CLOSED:
-            if circuit.state == ProviderCircuitState.OPEN and not circuit.manual_resume_required:
-                watch.cooldown_until = circuit.cooldown_until
-                await apply_watch_transition(
-                    session,
-                    watch,
-                    WatchStatus.COOLDOWN,
-                    reason="provider_circuit_open_before_reservation",
-                )
-                watch.next_check_at = circuit.cooldown_until
-            else:
-                await apply_watch_transition(
-                    session,
-                    watch,
-                    WatchStatus.AUTH_REQUIRED,
-                    reason="provider_circuit_manual_hold_before_reservation",
-                )
-                watch.next_check_at = None
-            await session.commit()
-            return
-        if (
-            watch.provider in {Provider.KORAIL, Provider.SRT}
-            and provider_credential_version is None
-        ):
-            # The account can become invalid after the user enabled automatic
-            # reservation. Re-check it inside the locked reservation transaction
-            # before claiming an episode attempt or calling the provider.
-            await apply_watch_transition(
-                session,
-                watch,
-                WatchStatus.AUTH_REQUIRED,
-                reason="provider_account_not_authenticated_before_reservation",
-            )
-            watch.next_check_at = None
-            await session.commit()
-            return
-        if target.reservation_episode_key is None:
-            return
-        idempotency_key = (
-            f"reserve:{target.candidate_id}:{request_hash(target.reservation_episode_key)[:32]}"
-        )
-        attempt, created = await begin_reservation_attempt(
-            session,
-            watch,
-            candidate,
-            idempotency_key,
-            episode_key=target.reservation_episode_key,
-            retry_authorized=True,
-            credential_version=provider_credential_version,
-        )
-        attempt_id = attempt.id
-        await session.commit()
-    if not created:
-        return
+async def _update_provider_auth_status_in_reservation_transaction(
+    session: AsyncSession,
+    provider: Provider,
+    status: RailProviderAuthStatus,
+    *,
+    expected_credential_version: int,
+) -> None:
+    await update_provider_auth_status(
+        session,
+        provider,
+        status,
+        expected_credential_version=expected_credential_version,
+        commit=False,
+    )
 
-    try:
-        result = await adapter.reserve_once(
-            target.reservation_request(
-                idempotency_key,
-                expected_credential_version=provider_credential_version,
-            )
-        )
-    except (ProviderUnavailable, RuntimeError, ValueError):
-        result = ReservationResult(
-            outcome=ReservationOutcome.FAILED,
-            source="mock" if target.provider == Provider.MOCK else "authorized-provider",
-            observed_at=datetime.now(timezone.utc),
-        )
-    result, confirmation = await _confirm_provider_reservation_result(
+
+def _reservation_execution_dependencies() -> ReservationExecutionDependencies:
+    return ReservationExecutionDependencies(
+        session_factory=SessionFactory,
+        get_or_create_provider_circuit=get_or_create_provider_circuit,
+        apply_watch_transition=apply_watch_transition,
+        begin_reservation_attempt=begin_reservation_attempt,
+        add_outbox_event=add_outbox_event,
+        complete_reservation_attempt=complete_reservation_attempt,
+        record_reservation_confirmation=record_reservation_confirmation,
+        update_provider_auth_status=_update_provider_auth_status_in_reservation_transaction,
+        provider_call_errors=(ProviderUnavailable, RuntimeError, ValueError),
+        srt_exact_reservation_source=SRT_RESERVATION_SOURCE,
+    )
+
+
+async def _reserve_winner(adapter: RailProviderAdapter, target: _CandidateTarget) -> None:
+    """Compatibility wiring for worker and focused integration tests."""
+    await execute_reservation(
         adapter,
-        target,
-        attempt_id,
-        result,
+        ReservationExecutionTarget(
+            watch_id=target.watch_id,
+            candidate_id=target.candidate_id,
+            provider=target.provider,
+            origin=target.origin,
+            destination=target.destination,
+            origin_node_id=target.origin_node_id,
+            destination_node_id=target.destination_node_id,
+            train_number=target.train_number,
+            departure_at=target.departure_at,
+            arrival_at=target.arrival_at,
+            seat_class=target.seat_class,
+            passenger_count=target.passenger_count,
+            reservation_episode_key=target.reservation_episode_key,
+        ),
+        dependencies=_reservation_execution_dependencies(),
     )
-
-    auth_status = (
-        _provider_auth_status_for_reservation_outcome(result.outcome)
-        if target.provider in {Provider.KORAIL, Provider.SRT}
-        else None
-    )
-    async with SessionFactory() as session:
-        if auth_status is not None and result.credential_version is not None:
-            # Match provider-account -> watch lock order used by verified login saves.
-            await session.scalar(
-                select(RailProviderAccount.id)
-                .where(RailProviderAccount.provider == target.provider)
-                .with_for_update()
-            )
-        watch = await session.scalar(
-            select(Watch).where(Watch.id == target.watch_id).with_for_update()
-        )
-        candidate = await session.scalar(
-            select(WatchCandidate)
-            .where(WatchCandidate.id == target.candidate_id)
-            .with_for_update(of=WatchCandidate)
-        )
-        attempt = await session.scalar(
-            select(ReservationAttempt).where(ReservationAttempt.id == attempt_id).with_for_update()
-        )
-        if watch is None or candidate is None or attempt is None:
-            return
-        if (
-            watch.status != WatchStatus.RESERVING
-            or attempt.outcome != ReservationOutcome.PENDING
-            or candidate.state != "reservation_attempted"
-        ):
-            if attempt.outcome == ReservationOutcome.PENDING:
-                attempt.outcome = ReservationOutcome.UNKNOWN
-                attempt.finished_at = datetime.now(timezone.utc)
-                attempt.credential_version = result.credential_version
-                if confirmation is not None:
-                    record_reservation_confirmation(attempt, confirmation)
-            if watch.status == WatchStatus.EXPIRED:
-                candidate.state = "expired"
-            elif candidate.state == "reservation_attempted":
-                candidate.state = "failed"
-            await add_outbox_event(
-                session,
-                aggregate_type="watch",
-                aggregate_id=watch.id,
-                event_type="watch.reservation_result_requires_manual_check",
-                payload={
-                    "watch_id": watch.id,
-                    "candidate_id": candidate.id,
-                    "reason": "watch_state_changed_during_provider_call",
-                },
-                dedupe_key=f"reservation-result-fenced:{attempt.id}",
-            )
-            await session.commit()
-            return
-        if auth_status is not None and result.credential_version is not None:
-            await update_provider_auth_status(
-                session,
-                watch.provider,
-                auth_status,
-                expected_credential_version=result.credential_version,
-                commit=False,
-            )
-        await complete_reservation_attempt(
-            session,
-            watch,
-            candidate,
-            attempt,
-            result,
-            confirmation=confirmation,
-        )
-        await session.commit()
 
 
 async def _process_watch_group(

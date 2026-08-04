@@ -50,6 +50,7 @@ def _is_worker_independent_application(relative_path: Path) -> bool:
     return relative_path.as_posix() in {
         "rail_waitlist/notification_management/delivery.py",
         "rail_waitlist/observations/due_pipeline_application.py",
+        "rail_waitlist/reservations/execution_application.py",
         "rail_waitlist/reservations/reconciliation_application.py",
         "rail_waitlist/watch_management/expiry_application.py",
     }
@@ -61,6 +62,10 @@ def _is_due_pipeline_application(relative_path: Path) -> bool:
 
 def _is_watch_expiry_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/watch_management/expiry_application.py")
+
+
+def _is_reservation_execution_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == ("rail_waitlist/reservations/execution_application.py")
 
 
 BOUNDARY_RULES = (
@@ -89,6 +94,22 @@ BOUNDARY_RULES = (
         matches=_is_watch_expiry_application,
         forbidden_import_roots=frozenset(
             {"config", "metrics", "provider_execution_lease", "providers"}
+        ),
+    ),
+    BoundaryRule(
+        name="reservation execution application receives concrete runtime dependencies",
+        matches=_is_reservation_execution_application,
+        forbidden_import_roots=frozenset(
+            {
+                "config",
+                "metrics",
+                "observations",
+                "provider_accounts",
+                "provider_execution_lease",
+                "providers",
+                "services",
+                "srt_reservation",
+            }
         ),
     ),
 )

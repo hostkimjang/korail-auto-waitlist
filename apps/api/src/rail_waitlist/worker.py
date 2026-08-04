@@ -6,7 +6,6 @@ from collections.abc import Awaitable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -83,20 +82,11 @@ from .services import (
     request_hash,
 )
 from .srt_reservation import SRT_RESERVATION_SOURCE
-
-EXPIRABLE_WATCH_STATUSES = frozenset(
-    {
-        WatchStatus.SCHEDULED,
-        WatchStatus.WATCHING,
-        WatchStatus.OFFICIAL_WAITLIST,
-        WatchStatus.SEAT_FOUND,
-        WatchStatus.RESERVING,
-        WatchStatus.PAYMENT_REQUIRED,
-        WatchStatus.PAUSED,
-        WatchStatus.COOLDOWN,
-        WatchStatus.AUTH_REQUIRED,
-    }
+from .watch_management.expiry_application import (
+    WatchExpiryDependencies,
+    expire_elapsed_watches,
 )
+
 OBSERVATION_WATCH_STATUSES = frozenset(
     {
         WatchStatus.SCHEDULED,
@@ -268,19 +258,6 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _watch_monitoring_deadline(watch: Watch) -> datetime:
-    """Use the legacy KST window only when a watch has no observable candidates."""
-    local_window_start = datetime.combine(
-        watch.travel_date, watch.time_from, tzinfo=ZoneInfo("Asia/Seoul")
-    )
-    local_window_end = datetime.combine(
-        watch.travel_date, watch.time_to, tzinfo=ZoneInfo("Asia/Seoul")
-    )
-    if local_window_end <= local_window_start:
-        local_window_end += timedelta(days=1)
-    return local_window_end.astimezone(timezone.utc)
-
-
 async def _close_execution_adapter(
     adapter: RailProviderAdapter,
     provider: Provider,
@@ -313,68 +290,16 @@ async def _run_isolated(operation: Awaitable[int]) -> int:
         await engine.dispose()
 
 
+def _watch_expiry_dependencies() -> WatchExpiryDependencies:
+    return WatchExpiryDependencies(apply_watch_transition=apply_watch_transition)
+
+
 async def _expire_elapsed_watches(session, now: datetime) -> int:
-    # ``travel_date`` is not an expiry eligibility gate. Near KST midnight, a fresh
-    # official CLOSED/CANCELLED signal can precede the candidate's next service date.
-    # The per-candidate operational decision below remains the authoritative boundary
-    # and preserves future, delayed, boarding, OPEN, and WAITLIST services.
-    candidate_ids = list(
-        (
-            await session.scalars(
-                select(Watch.id)
-                .where(
-                    Watch.status.in_(EXPIRABLE_WATCH_STATUSES),
-                )
-                .order_by(Watch.id)
-            )
-        ).all()
+    return await expire_elapsed_watches(
+        session,
+        now,
+        dependencies=_watch_expiry_dependencies(),
     )
-    expired = 0
-    mutated = False
-    for watch_id in candidate_ids:
-        watch = await session.scalar(
-            select(Watch)
-            .where(
-                Watch.id == watch_id,
-                Watch.status.in_(EXPIRABLE_WATCH_STATUSES),
-            )
-            .with_for_update()
-        )
-        if watch is None:
-            continue
-        candidates = [
-            candidate
-            for candidate in watch.candidates
-            if candidate.state in OBSERVABLE_CANDIDATE_STATES
-        ]
-        if candidates:
-            active_candidates = []
-            for candidate in candidates:
-                decision = decide_operational_expiry(candidate, now)
-                if decision.expire:
-                    candidate.state = "expired"
-                    mutated = True
-                else:
-                    active_candidates.append(candidate)
-            if active_candidates:
-                continue
-            await apply_watch_transition(
-                session,
-                watch,
-                WatchStatus.EXPIRED,
-                reason="all_candidates_operationally_terminal_or_horizon_elapsed",
-            )
-            mutated = True
-            expired += 1
-            continue
-        if _watch_monitoring_deadline(watch) > now:
-            continue
-        await apply_watch_transition(session, watch, WatchStatus.EXPIRED)
-        mutated = True
-        expired += 1
-    if mutated:
-        await session.commit()
-    return expired
 
 
 async def _recover_stale_reservation_attempts(session, now: datetime) -> int:

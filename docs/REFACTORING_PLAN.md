@@ -449,6 +449,33 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: App shell·Home·Auth와 `NewWait` 나머지 단계, legacy JS/JSX, feature CSS 추가
   재소유, API expiry·reservation·observation pipeline과 provider 역할 분리입니다.
 
+### 2026-08-05 열세 번째 구조 슬라이스
+
+- watch expiry application: worker의 만료 가능 상태·후보 상태·KST legacy deadline과 ordered expiry
+  pass를 `watch_management/expiry_application.py`로 이동했습니다. due application은 기존 session과
+  UTC 시각을 넘기고 worker는 `WatchExpiryDependencies(apply_watch_transition=...)`와 private wrapper만
+  조립합니다. `worker.py`는 1,395줄입니다.
+- UoW·정책 보존: `Watch.id` 오름차순 조회 뒤 상태를 다시 확인하며 각 행을 `FOR UPDATE`로 잠급니다.
+  후보가 있으면 `travel_date`를 별도 gate로 쓰지 않고 fresh delay/open·closed·unknown horizon과
+  실제 출발 시각을 기존 `decide_operational_expiry`로 판단합니다. 후보 없는 legacy watch는
+  `Asia/Seoul` 시간창과 자정 교차 익일 보정을 사용합니다. 후보 부분 만료·watch 상태·이력·outbox는
+  pass당 한 commit에 묶고 예외 시 명시적으로 모두 rollback합니다.
+- 테스트 재소유: worker의 세부 expiry 5함수·6케이스를 새 owner로 이동하고 ID 처리 순서·PostgreSQL
+  `FOR UPDATE` compile 계약·전체 rollback·후보 없는 KST 자정 경계 4건을 추가했습니다. worker에는
+  due dependency wiring, 전체 활성 상태의 만료·이력·알림 outbox, 늦은 예약 결과 fencing 같은 통합
+  계약을 유지했습니다. 전체 테스트 수는 이전 단계보다 4건 순증했습니다.
+- 의존성 경계: expiry application을 worker-independent 목록에 넣고 Celery·FastAPI·worker 역의존과
+  config·metrics·providers·provider execution lease 직접 import를 module-boundary test로 차단했습니다.
+  독립 리뷰는 P0~P3 지적 사항 없이 완료됐습니다.
+- 확인된 검증: API focused 91건, 전체 pytest 1,038건, Ruff `E/F/I`, format ratchet 65개,
+  module boundary와 `git diff --check`를 통과했습니다. 전체 pytest의 기존 Starlette/httpx 전환 경고
+  1건은 이번 변경과 무관한 dependency 부채로 남아 있습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: reservation execution application, watch-group observation application, provider
+  역할별 계약, App Home·shell·Auth와 `NewWait` 나머지 strict 경계입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

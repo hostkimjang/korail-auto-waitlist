@@ -98,6 +98,14 @@ provider의 관측 그룹과 예약 정합화는 직렬이며 provider 간에는
 전 만료 처리는 `Watch.id` 순서로 잠그고 후보 부분 만료·watch 상태·transition history·outbox를 한
 transaction에서 commit하므로 stale 예약 복구 행의 유무가 만료 지속 여부를 바꾸지 않습니다.
 
+watch 만료 수명주기는 worker-independent `watch_management/expiry_application.py`가 소유합니다.
+due application이 연 UTC 시각과 DB session을 넘기고 worker는 `apply_watch_transition` dependency만
+조립합니다. 만료 가능한 상태 9종을 `Watch.id` 순서로 다시 잠그며, 관측 가능한 후보가 있으면
+`decide_operational_expiry`의 fresh 운행·booking-window 결정을 권위 경계로 사용합니다. 후보가 없는
+legacy watch만 KST 서비스 날짜와 시간창을 사용하고 종료가 시작 이하이면 익일로 보정합니다.
+후보 부분 만료, watch 상태, transition history와 outbox는 pass당 한 transaction으로 commit하며 예외
+시 함께 rollback합니다. 이 application은 provider·실행 임대·설정·metric을 소유하지 않습니다.
+
 웹 역 카탈로그 DTO 검증·identity 병합은 `api/stations.ts`, 시간표 query·provider 부분 실패·DTO→도메인
 mapping은 `api/timetables.ts`, 좌석 등급과 provenance fail-closed 정규화는 `api/seatClasses.ts`가
 소유합니다. canonical 시간표 mapper는 provider·열차번호·출발역·도착역과 timezone-aware 출도착

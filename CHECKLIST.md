@@ -273,6 +273,9 @@
 - [x] 예약 요약·목록·새 대기·공식 handoff 조립을 strict `features/reservations/ReservationsPage.tsx`로 이동하고 typed `ReservationListWatch`, 구체적 `onCreate`, optional URL fail-closed와 `_blank`·`noopener,noreferrer`, 기한 경과 집계·terminal 삭제를 feature 테스트로 고정. production App 직접 사용과 legacy `Reservations({ onNavigate })` adapter 행동을 함께 보존하고 `App.jsx`를 998줄로 축소
 - [x] 열두 번째 구조 슬라이스의 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 68개 파일·484건, production build·Sites 4건, 기본 Playwright E2E 14건, 독립 보정 재리뷰 P0~P3 없음과 `git diff --check` 통과
 - [x] 열두 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] 만료 가능 상태·후보 상태·KST legacy deadline·ordered expiry pass를 worker-independent `watch_management/expiry_application.py`로 이동하고 worker에는 `apply_watch_transition` dependency와 due wiring만 유지. `Watch.id` 순서·행별 `FOR UPDATE`, fresh 운행/booking-window 정책, travel-date 비-gate, 후보 없는 자정 교차 fallback, 후보 부분 만료·상태·이력·outbox 단일 commit과 예외 rollback을 직접 DB·PostgreSQL compile 계약으로 검증하고 `worker.py`를 1,395줄로 축소
+- [x] 열세 번째 구조 슬라이스의 API focused 91건, 전체 pytest 1,038건, Ruff `E/F/I`, format ratchet 65개, module boundary, 독립 리뷰 P0~P3 없음과 `git diff --check` 통과. worker 세부 6케이스를 새 owner로 재소유하고 순서·lock·rollback·KST 4건을 추가해 전체 순증 4건
+- [x] 열세 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
@@ -284,7 +287,7 @@
 - [ ] API의 나머지 router·schema·application 경계를 분리하고 application의 HTTP 오류 의존 제거
 - [x] 예약 결과의 재시도·수동 확인 투영을 `reservations/domain.py` 순수 정책과 전체 outcome 표 테스트로 분리
 - [ ] watch transition·reservation episode·reconciliation 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
-- [ ] worker를 얇은 Celery entrypoint와 provider별 pipeline으로 분리하고 UoW·잠금 순서·outbox 원자성·lease fencing 통합 테스트
+- [ ] worker의 reservation execution·watch-group observation을 application으로 추가 분리하고 얇은 Celery entrypoint, UoW·잠금 순서·outbox 원자성·lease fencing 통합 테스트 완성
 - [ ] provider 계약을 timetable·observe·reserve·confirm·lifecycle 역할로 점진 분리하고 capability 교집합·부분 실패 fail-closed 검증
 - [ ] 웹·API의 저위험 수직 슬라이스가 안정된 뒤 KORAIL browser sidecar의 lifecycle·DOM·검색·인증·예약 책임 분리
 - [x] KORAIL Pydoll·SRT 로그인 세션 재사용형 에피소드당 1회 자동 예약 adapter, exact 열차·시각·좌석 등급 판정, 결제 직전 중단, credential version invalidation과 결과 정규화 구현

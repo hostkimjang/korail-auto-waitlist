@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
+from typing import Annotated, Any
 
-from pydantic import Field
+from pydantic import StringConstraints, field_validator
 
 from ..domain import NotificationKind
 from ..schema_base import ApiModel
 
+NotificationChannelName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=80),
+]
+
 
 class NotificationChannelCreate(ApiModel):
     kind: NotificationKind
-    name: str = Field(min_length=1, max_length=80)
+    name: NotificationChannelName
     config: dict[str, Any]
     enabled: bool = True
 
 
 class NotificationChannelUpdate(ApiModel):
-    name: str | None = Field(default=None, min_length=1, max_length=80)
+    name: NotificationChannelName | None = None
     config: dict[str, Any] | None = None
     enabled: bool | None = None
 
@@ -30,6 +35,17 @@ class NotificationChannelRead(ApiModel):
     configured: bool = True
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("created_at", "updated_at", mode="before")
+    @classmethod
+    def normalize_database_timestamp(cls, value: object) -> object:
+        if not isinstance(value, datetime):
+            return value
+        # PostgreSQL stores UTC instants and SQLite drops timezone metadata in tests.
+        # The HTTP contract is always timezone-aware so strict clients never have to guess.
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class QueuedResponse(ApiModel):

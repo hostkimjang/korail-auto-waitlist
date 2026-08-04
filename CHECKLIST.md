@@ -255,6 +255,14 @@
 - [x] 여덟 번째 구조 슬라이스 전체 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 66개 파일·443건, production build·Sites 4건과 API 전체 pytest 1,007건·Ruff `E/F/I`·format ratchet·module boundary 통과
 - [ ] outbox delivery의 외부 전송 중 batch row lock·transaction 유지와 unexpected rollback 뒤 이미 전송된 알림의 재전송 가능성을 claim·결과 transaction, crash recovery, 수신자 dedupe 정책으로 분리 설계
 - [x] 여덟 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 오류 표식 0건 확인
+- [x] 예약 정합화 due·공식 확인·credential generation 재검증·상태/outbox 적용을 FastAPI·Celery 비의존 `reservations/reconciliation_application.py`로 이동하고 worker의 기존 task 이름·`rail` route·runtime wiring 보존. `worker.py` 1,589줄
+- [x] 정합화 상태 transaction의 잠금 순서를 실행 임대→계정→작업→후보→시도로 통일하고 도메인 잠금 뒤 동일 epoch를 다시 확인. fresh `reconciled_at`, 임대 손실·credential 교체·행 삭제·결제기한 교차·owned/shared adapter cleanup·apply rollback·Celery 조립 회귀 테스트 추가
+- [x] strict `features/settings/NotificationChannelSettings.tsx`로 알림 목록·비밀 입력 editor·종류별 pending·Web Push 기기 상태를 이동하고 `configured=false`, 비활성 시험 전송, 44px switch, focus·ARIA 계약을 고정. `App.jsx` 1,056줄·고정 ESLint 경고 18건
+- [x] 알림 API를 secret-free ViewModel로 투영하고 kind·boolean·UTC timestamp, `queued=true + event_id`, Web Push P-256 공개키를 fail-closed 검증. 서버도 채널 이름·필수 config를 trim하고 공백값 거부
+- [x] 아홉 번째 구조 슬라이스 전체 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 66개 파일·475건, production build·Sites 4건과 API 전체 pytest 1,025건·Ruff `E/F/I`·format ratchet 65개·module boundary 통과
+- [x] 아홉 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건과 실제 PostgreSQL 임대 row-lock/takeover/fencing token 증가 확인
+- [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
+- [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
 - [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거

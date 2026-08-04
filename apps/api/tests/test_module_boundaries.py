@@ -46,8 +46,11 @@ def _is_application_module(relative_path: Path) -> bool:
     )
 
 
-def _is_notification_delivery_module(relative_path: Path) -> bool:
-    return relative_path.as_posix() == "rail_waitlist/notification_management/delivery.py"
+def _is_worker_independent_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() in {
+        "rail_waitlist/notification_management/delivery.py",
+        "rail_waitlist/reservations/reconciliation_application.py",
+    }
 
 
 BOUNDARY_RULES = (
@@ -62,8 +65,8 @@ BOUNDARY_RULES = (
         forbidden_import_roots=frozenset({"fastapi"}),
     ),
     BoundaryRule(
-        name="notification delivery application is independent from worker frameworks",
-        matches=_is_notification_delivery_module,
+        name="worker-independent applications do not reverse-depend on worker frameworks",
+        matches=_is_worker_independent_application,
         forbidden_import_roots=frozenset({"celery", "fastapi", "worker"}),
     ),
 )

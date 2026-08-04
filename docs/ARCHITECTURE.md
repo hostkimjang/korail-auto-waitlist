@@ -45,6 +45,14 @@ history cutoff·정리 계약은 `api/events.ts`가 소유하며 `App.jsx`는 �
 `features/new-wait/useStationCatalog.ts`가 맡으며, TAGO 역 카탈로그를 운영사별 실제 운행이나 좌석
 재고 근거로 승격하지 않습니다.
 
+strict `features/settings/NotificationChannelSettings.tsx`는 알림 종류별 표시·편집·시험·활성화와
+Web Push 기기 상태를 소유합니다. 채널별 pending key를 독립적으로 관리해 한 작업의 종료가 다른
+저장·연결 상태를 지우지 않으며, 비밀 입력은 읽기 응답에서 복원하지 않고 성공·취소 때 지웁니다.
+`api/notifications.ts`는 외부 JSON을 `unknown`에서 검증해 raw `config`를 버린 secret-free ViewModel만
+반환하고 시험 전송은 `queued=true`와 비어 있지 않은 `event_id`를 함께 확인합니다. API는 채널 이름과
+필수 설정 문자열을 공백까지 검증·정규화하고, DB가 timezone 정보를 잃어도 읽기 응답 시각을 UTC로
+보정합니다. `App.jsx`에는 네트워크 mutation과 전역 알림 조립만 남았습니다.
+
 API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정책은
 `notification_management/service.py`가 소유하고 HTTP 계층은 이 service의 오류만 transport 상태로
 변환합니다. 알림 outbox의 소비와 전달 결과 기록은 FastAPI·Celery 비의존
@@ -60,6 +68,15 @@ API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정
 돌아가 다음 주기에 다시 전달될 수 있습니다. 이는 이번 기계적 이동에서 행동을 바꾸지 않고 보존한
 기존 at-least-once 성격이며, claim transaction과 전달 결과 transaction을 분리하려면 crash recovery와
 중복 수신 정책을 함께 설계해야 하는 후속 부채입니다.
+
+예약 시도 읽기 전용 정합화의 due 선택·공식 확인·credential generation 재검증·상태/outbox 적용은
+FastAPI·Celery 비의존 `reservations/reconciliation_application.py`가 소유합니다. worker는 기존 task
+이름과 `rail` queue, runtime dependency 조립만 유지합니다. 상태 적용 transaction은 실행 임대 행부터
+`account -> watch -> candidate -> attempt` 순서로 잠그고, 도메인 잠금 뒤 같은 owner·scope·fencing
+token·미만료 조건을 다시 확인합니다. 두 번째 확인 직후의 새 UTC 시각으로 due와 결제기한을
+재평가하고 상태와 outbox를 함께 commit합니다. 잠금 대기 중 임대 epoch나 결제기한이 바뀐 늦은
+공식 확인 결과는 저장하지 않으며, commit 뒤에만 adapter drain·소유 adapter close·임대 release를
+수행합니다.
 
 웹 역 카탈로그 DTO 검증·identity 병합은 `api/stations.ts`, 시간표 query·provider 부분 실패·DTO→도메인
 mapping은 `api/timetables.ts`, 좌석 등급과 provenance fail-closed 정규화는 `api/seatClasses.ts`가
@@ -91,7 +108,7 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 현재 1,150줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
+조립만 남았으며 알림 설정 추출 뒤 현재 1,056줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복
 차단·만료 evidence 재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가
 소유합니다.

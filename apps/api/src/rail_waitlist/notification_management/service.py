@@ -21,7 +21,7 @@ class NotificationChannelDisabledError(RuntimeError):
     """A disabled channel must never produce a delivery request."""
 
 
-def validate_notification_config(data: NotificationChannelCreate) -> None:
+def validate_notification_config(data: NotificationChannelCreate) -> dict[str, object]:
     required = {
         "web_push": {"subscription_info"},
         "telegram": {"bot_token", "chat_id"},
@@ -31,21 +31,34 @@ def validate_notification_config(data: NotificationChannelCreate) -> None:
     missing = required - data.config.keys()
     if missing:
         raise NotificationConfigError(f"missing channel fields: {', '.join(sorted(missing))}")
+    invalid = sorted(
+        field
+        for field in required
+        if not isinstance(data.config[field], str) or not data.config[field].strip()
+    )
+    if invalid:
+        raise NotificationConfigError(f"empty or invalid channel fields: {', '.join(invalid)}")
+    normalized = dict(data.config)
+    for field in required | {"authorization"}:
+        value = normalized.get(field)
+        if isinstance(value, str):
+            normalized[field] = value.strip()
     if data.kind.value in {"discord_webhook", "generic_webhook"}:
         try:
-            validate_webhook_url_syntax(data.config["url"])
+            validate_webhook_url_syntax(normalized["url"])
         except ValueError as error:
             raise NotificationConfigError(str(error)) from None
+    return normalized
 
 
 async def create_notification_channel(
     session: AsyncSession, data: NotificationChannelCreate
 ) -> NotificationChannel:
-    validate_notification_config(data)
+    config = validate_notification_config(data)
     channel = NotificationChannel(
         kind=data.kind,
         name=data.name,
-        config_ciphertext=secret_box.encrypt_dict(data.config),
+        config_ciphertext=secret_box.encrypt_dict(config),
         enabled=data.enabled,
     )
     session.add(channel)
@@ -62,12 +75,12 @@ async def update_notification_channel(
     if data.enabled is not None:
         channel.enabled = data.enabled
     if data.config is not None:
-        validate_notification_config(
+        config = validate_notification_config(
             NotificationChannelCreate(
                 kind=channel.kind, name=channel.name, config=data.config, enabled=channel.enabled
             )
         )
-        channel.config_ciphertext = secret_box.encrypt_dict(data.config)
+        channel.config_ciphertext = secret_box.encrypt_dict(config)
     await session.commit()
     await session.refresh(channel)
     return channel

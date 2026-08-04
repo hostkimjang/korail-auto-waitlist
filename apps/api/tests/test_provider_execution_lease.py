@@ -5,13 +5,16 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rail_waitlist.domain import Provider
 from rail_waitlist.models import ProviderExecutionLease
 from rail_waitlist.provider_execution_lease import (
     ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
+    ExecutionLeaseGrant,
     ProviderExecutionLeaseService,
+    lock_execution_lease_current,
 )
 
 
@@ -164,6 +167,98 @@ async def test_renew_requires_live_owner_and_preserves_fencing_token(db_engine):
         )
         is None
     )
+
+
+async def test_transaction_fence_accepts_only_the_live_matching_epoch(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    service = ProviderExecutionLeaseService(factory)
+    now = datetime(2026, 7, 30, 5, tzinfo=UTC)
+    grant = await service.acquire(
+        Provider.SRT,
+        ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
+        "replica-a",
+        now=now,
+        expires_at=now + timedelta(seconds=30),
+    )
+    assert grant is not None
+
+    async with factory() as session:
+        assert await lock_execution_lease_current(
+            session,
+            grant,
+            now=now + timedelta(seconds=1),
+        )
+        await session.commit()
+
+    stale_grant = ExecutionLeaseGrant(
+        provider=grant.provider,
+        account_scope=grant.account_scope,
+        owner_token=grant.owner_token,
+        fencing_token=grant.fencing_token + 1,
+        expires_at=grant.expires_at,
+    )
+    async with factory() as session:
+        assert not await lock_execution_lease_current(
+            session,
+            stale_grant,
+            now=now + timedelta(seconds=1),
+        )
+        assert not await lock_execution_lease_current(
+            session,
+            grant,
+            now=now + timedelta(seconds=31),
+        )
+
+
+async def test_transaction_fence_statement_uses_postgresql_row_lock_and_full_epoch_identity():
+    now = datetime(2026, 7, 30, 6, tzinfo=UTC)
+    grant = ExecutionLeaseGrant(
+        provider=Provider.KORAIL,
+        account_scope="account:primary",
+        owner_token="replica-a",
+        fencing_token=11,
+        expires_at=now + timedelta(minutes=1),
+    )
+
+    class CapturingSession:
+        statement = None
+
+        async def scalar(self, statement):
+            self.statement = statement
+            return grant.fencing_token
+
+    session = CapturingSession()
+    assert await lock_execution_lease_current(session, grant, now=now)
+    assert session.statement is not None
+    compiled = session.statement.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    assert "FOR UPDATE" in sql
+    assert "provider_execution_leases.provider" in sql
+    assert "provider_execution_leases.account_scope" in sql
+    assert "provider_execution_leases.owner_token" in sql
+    assert "provider_execution_leases.fencing_token" in sql
+    assert "provider_execution_leases.expires_at" in sql
+    assert grant.account_scope in compiled.params.values()
+    assert grant.owner_token in compiled.params.values()
+    assert grant.fencing_token in compiled.params.values()
+
+
+async def test_transaction_fence_rejects_naive_timestamp_without_querying():
+    now = datetime(2026, 7, 30, 6)
+    grant = ExecutionLeaseGrant(
+        provider=Provider.SRT,
+        account_scope=ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
+        owner_token="replica-a",
+        fencing_token=1,
+        expires_at=now.replace(tzinfo=UTC) + timedelta(minutes=1),
+    )
+
+    class FailIfQueriedSession:
+        async def scalar(self, _statement):
+            raise AssertionError("naive time must fail before querying")
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await lock_execution_lease_current(FailIfQueriedSession(), grant, now=now)
 
 
 @pytest.mark.parametrize(

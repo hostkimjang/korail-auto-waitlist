@@ -14,6 +14,20 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+function browserPushChannel(name: string): Record<string, unknown> {
+  return {
+    id: "web-push-1",
+    kind: "web_push",
+    name,
+    enabled: true,
+    configured: true,
+    created_at: "2026-08-05T00:00:00Z",
+    updated_at: "2026-08-05T00:00:00Z",
+  };
+}
+
+const VALID_PUBLIC_KEY = "BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -52,13 +66,8 @@ describe("browser push connection", () => {
     };
     const requestPermission = vi.fn().mockResolvedValue("granted");
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ public_key: "AQ" }))
-      .mockResolvedValueOnce(jsonResponse({
-        id: "web-push-1",
-        kind: "web_push",
-        name: "이 브라우저",
-        enabled: true,
-      }));
+      .mockResolvedValueOnce(jsonResponse({ public_key: VALID_PUBLIC_KEY }))
+      .mockResolvedValueOnce(jsonResponse(browserPushChannel("이 브라우저")));
     vi.stubGlobal("navigator", { serviceWorker });
     vi.stubGlobal("PushManager", class PushManager {});
     vi.stubGlobal("Notification", { requestPermission });
@@ -91,13 +100,8 @@ describe("browser push connection", () => {
       ready: Promise.resolve(registration),
     };
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ public_key: "AQ" }))
-      .mockResolvedValueOnce(jsonResponse({
-        id: "web-push-1",
-        kind: "web_push",
-        name: "내 PC",
-        enabled: true,
-      }));
+      .mockResolvedValueOnce(jsonResponse({ public_key: VALID_PUBLIC_KEY }))
+      .mockResolvedValueOnce(jsonResponse(browserPushChannel("내 PC")));
     vi.stubGlobal("navigator", { serviceWorker });
     vi.stubGlobal("PushManager", class PushManager {});
     vi.stubGlobal("Notification", { permission: "granted", requestPermission: vi.fn().mockResolvedValue("granted") });

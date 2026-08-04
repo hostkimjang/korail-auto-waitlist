@@ -23,4 +23,8 @@ describe("responsive layout CSS contracts", () => {
     expect(styles).not.toContain("+ 184px");
     expect(styles).not.toContain("+ 238px");
   });
+
+  it("keeps the notification switch target at least 44px tall", () => {
+    expect(styles).toMatch(/\.switch\s*\{[\s\S]*?min-width:\s*46px[\s\S]*?min-height:\s*44px/);
+  });
 });

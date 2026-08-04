@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
@@ -34,11 +35,20 @@ from rail_waitlist.models import (
     WatchCandidate,
     WatchTransitionHistory,
 )
-from rail_waitlist.provider_execution_lease import ExecutionLeaseGrant
+from rail_waitlist.provider_execution_lease import (
+    ExecutionLeaseGrant,
+    lock_execution_lease_current,
+)
 from rail_waitlist.providers import MockProviderAdapter
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
+)
+from rail_waitlist.reservations.reconciliation_application import (
+    _reservation_reconciliation_is_due,
+)
+from rail_waitlist.reservations.reconciliation_application import (
+    reconcile_reservation_attempt as run_reservation_reconciliation,
 )
 from rail_waitlist.schemas import (
     ProviderCapabilities,
@@ -58,8 +68,6 @@ from rail_waitlist.worker import (
     _process_watch_group,
     _process_watch_now,
     _provider_auth_status_for_reservation_outcome,
-    _reconcile_reservation_attempt,
-    _reservation_reconciliation_is_due,
     _reserve_winner,
     _retryable_reservation_episode_key,
 )
@@ -115,6 +123,71 @@ class CurrentReconciliationLeaseService:
         assert now.tzinfo is not None
         self.released += 1
         return True
+
+
+async def _run_reconciliation_application(
+    attempt_id: str,
+    *,
+    adapter: ReadOnlyReconciliationAdapter,
+) -> int:
+    async def lease_is_current_in_session(_session, _grant, *, now: datetime) -> bool:
+        assert now.tzinfo is not None
+        return True
+
+    return await run_reservation_reconciliation(
+        attempt_id,
+        dependencies=replace(
+            worker_module._reconciliation_dependencies(),
+            lease_is_current_in_session=lease_is_current_in_session,
+        ),
+        adapter=adapter,
+    )
+
+
+async def test_worker_reconciliation_delegate_wires_runtime_dependencies(monkeypatch) -> None:
+    adapter = object()
+    captured = {}
+
+    async def fake_reconciliation(attempt_id, *, dependencies, adapter):
+        captured.update(
+            attempt_id=attempt_id,
+            dependencies=dependencies,
+            adapter=adapter,
+        )
+        return 7
+
+    monkeypatch.setattr(worker_module, "run_reservation_reconciliation", fake_reconciliation)
+
+    assert await worker_module._reconcile_reservation_attempt("attempt-7", adapter=adapter) == 7
+    dependencies = captured["dependencies"]
+    assert captured["attempt_id"] == "attempt-7"
+    assert captured["adapter"] is adapter
+    assert dependencies.session_factory is worker_module.SessionFactory
+    assert dependencies.acquire_execution_lease is worker_module._acquire_execution_lease
+    assert dependencies.get_execution_provider is worker_module.get_execution_provider
+    assert dependencies.drain_execution_adapter is worker_module._drain_execution_adapter
+    assert dependencies.close_execution_adapter is worker_module._close_execution_adapter
+    assert dependencies.provider_circuit_is_closed is worker_module._provider_circuit_is_closed
+    assert dependencies.lease_is_current_in_session is lock_execution_lease_current
+
+
+def test_reconciliation_celery_task_preserves_name_route_and_delegate(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_reconciliation(attempt_id: str) -> int:
+        calls.append(attempt_id)
+        return 9
+
+    monkeypatch.setattr(worker_module, "_reconcile_reservation_attempt", fake_reconciliation)
+
+    assert worker_module.reconcile_reservation_attempt.name == (
+        "rail_waitlist.worker.reconcile_reservation_attempt"
+    )
+    assert worker_module.reconcile_reservation_attempt.run("attempt-9") == 9
+    assert calls == ["attempt-9"]
+    assert worker_module.celery_app.conf.task_routes[
+        "rail_waitlist.worker.reconcile_reservation_attempt"
+    ] == {"queue": "rail"}
 
 
 async def test_process_watch_now_uses_normal_single_watch_group_path(monkeypatch) -> None:
@@ -274,8 +347,8 @@ async def test_reconciliation_uses_same_generation_read_only_confirmation_once(
         attempt_id = attempt.id
         candidate_id = candidate.id
 
-    assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 1
-    assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 0
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 0
     assert len(adapter.targets) == 1
     assert adapter.targets[0].candidate_id == candidate_id
     assert adapter.targets[0].credential_version == 3
@@ -292,6 +365,16 @@ async def test_reconciliation_uses_same_generation_read_only_confirmation_once(
         assert attempt.reconciliation_attempt_count == 1
         assert attempt.next_reconcile_at is None
         assert attempt.payment_deadline == deadline.replace(tzinfo=None)
+        reconciliation_events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "watch.reservation_reconciled",
+                    )
+                )
+            ).all()
+        )
+        assert len(reconciliation_events) == 1
 
 
 async def test_unknown_inconclusive_reconciliation_uses_extended_bounded_schedule(
@@ -367,8 +450,8 @@ async def test_unknown_inconclusive_reconciliation_uses_extended_bounded_schedul
         await session.commit()
         attempt_id = attempt.id
 
-    assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 1
-    assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 0
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 0
 
     expected_intervals = {
         1: timedelta(seconds=30),
@@ -390,7 +473,7 @@ async def test_unknown_inconclusive_reconciliation_uses_extended_bounded_schedul
             assert attempt is not None
             attempt.next_reconcile_at = datetime.now(timezone.utc) - timedelta(seconds=1)
             await session.commit()
-        assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 1
+        assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
         async with factory() as session:
             attempt = await session.get(ReservationAttempt, attempt_id)
             assert attempt is not None
@@ -401,7 +484,7 @@ async def test_unknown_inconclusive_reconciliation_uses_extended_bounded_schedul
             else:
                 assert attempt.next_reconcile_at - attempt.last_reconciled_at == expected_interval
 
-    assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 0
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 0
     assert len(adapter.targets) == 6
     assert lease_service.released == 6
     async with factory() as session:
@@ -510,7 +593,7 @@ async def test_legacy_unknown_count_three_without_next_schedule_is_selected(
         await session.commit()
         attempt_id = attempt.id
 
-    assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 1
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
     async with factory() as session:
         attempt = await session.get(ReservationAttempt, attempt_id)
         assert attempt is not None
@@ -595,7 +678,7 @@ async def test_legacy_expired_confirmed_hold_is_selected_and_cleared(
         attempt_id = attempt.id
         watch_id = watch.id
 
-    assert await _reconcile_reservation_attempt(attempt_id, adapter=adapter) == 1
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
     assert len(adapter.targets) == 1
     assert lease_service.released == 1
     async with factory() as session:

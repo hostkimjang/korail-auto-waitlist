@@ -189,9 +189,7 @@ class ProviderExecutionLeaseService:
         return current == grant.fencing_token
 
     @staticmethod
-    def _current_owner_predicates(
-        grant: ExecutionLeaseGrant, now: datetime
-    ) -> tuple[object, ...]:
+    def _current_owner_predicates(grant: ExecutionLeaseGrant, now: datetime) -> tuple[object, ...]:
         return (
             ProviderExecutionLease.provider == grant.provider,
             ProviderExecutionLease.account_scope == grant.account_scope,
@@ -200,3 +198,25 @@ class ProviderExecutionLeaseService:
             ProviderExecutionLease.expires_at.is_not(None),
             ProviderExecutionLease.expires_at > now,
         )
+
+
+async def lock_execution_lease_current(
+    session: AsyncSession,
+    grant: ExecutionLeaseGrant,
+    *,
+    now: datetime,
+) -> bool:
+    """Fence a state mutation to the current lease epoch in the same transaction.
+
+    A separate ``is_current`` check can become stale while the caller waits for domain
+    row locks. Locking the matching lease row in the mutation transaction prevents a
+    newer owner from acquiring that lease until the guarded state commit completes.
+    """
+
+    normalized_now = _aware_utc(now, label="now")
+    current = await session.scalar(
+        select(ProviderExecutionLease.fencing_token)
+        .where(*ProviderExecutionLeaseService._current_owner_predicates(grant, normalized_now))
+        .with_for_update()
+    )
+    return current == grant.fencing_token

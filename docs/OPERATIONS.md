@@ -311,6 +311,17 @@ docker compose --profile experimental-rail build
 docker compose --profile experimental-rail up -d --force-recreate
 ```
 
+실행 임대의 잠금·fencing 구현을 바꾼 배포에서는 재생성 뒤 실제 PostgreSQL 두 세션 경합도 확인합니다.
+검사는 임시 `execution-lease-verification:<uuid>` scope만 만들고 종료 시 삭제하며 credential·token·DSN을
+출력하지 않습니다. guarded transaction이 끝나기 전 takeover가 완료되거나 token이 단조 증가하지
+않으면 실패합니다.
+
+```powershell
+docker compose --profile experimental-rail run --rm --no-deps `
+  --volume "${PWD}/apps/api/scripts/check_execution_lease_fencing_postgres.py:/tmp/check.py:ro" `
+  api python /tmp/check.py
+```
+
 sidecar는 host 포트를 열지 않고 API 내부망과 별도 egress network에만 연결합니다. read-only root filesystem에서도 이미지의 `pwuser` UID/GID 1001이 쓸 수 있는 전용 HOME tmpfs와 `/tmp`를 제공합니다. `/healthz`는 프로세스 liveness만 나타내고, Compose healthcheck가 사용하는 `/readyz`는 공식 페이지를 열지 않은 채 선택한 엔진의 Chromium launch/close probe를 통과한 뒤에만 `200`을 반환합니다. startup probe가 일시적으로 실패하면 `/readyz`는 준비 전까지 `503`으로 닫고, 5초 간격·동시 1개·30초 제한으로 재probe해 성공을 캐시하므로 컨테이너 수동 재시작 없이 회복할 수 있습니다. API가 sidecar 전체 응답을 기다리는 기본 제한은 90초, sidecar의 각 UI 대기는 25초로 분리합니다.
 
 Pydoll은 공식 역 자산을 24시간 TTL·singleflight로 읽고 같은 레코드의 4자리 코드와 역명을

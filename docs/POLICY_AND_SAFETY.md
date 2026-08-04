@@ -84,6 +84,12 @@ SR의 특정 차단 수치는 허용 호출량이 아닙니다. 개인용이고 
 
 서비스 파일 로그도 같은 비밀값 경계를 적용합니다. JSONL formatter는 줄바꿈을 escape하고 UTC timestamp, service, level, logger, message, error type만 기록합니다. 환경에 있는 보호값, Bearer 값, `password`·`token`·`secret`·`authorization`·`cookie`·API key assignment, URL userinfo와 query string은 `[REDACTED]`로 바꾸며 traceback 본문은 파일에 넣지 않습니다. 세션·CSRF·adapter token·DB/Redis credential·TAGO key·VAPID key·webhook/Push endpoint·storage state·원문 요청/응답·HTML은 파일 로그, stdout 로그, 운영 요약 모두에 기록하지 않습니다. 파일 로그는 raw network capture 저장소가 아닙니다.
 
+예약 정합화의 공식 목록 확인 결과는 외부 실행 임대가 살아 있다는 별도 조회만으로 저장하지 않습니다.
+상태와 outbox를 적용하는 같은 transaction에서 임대 행을 먼저 잠그고 계정·작업·후보·시도를 고정한
+뒤 owner·scope·fencing token·만료를 다시 확인합니다. 잠금 대기 뒤 새 UTC 시각으로 due와 결제기한을
+재평가하므로 그 사이 임대가 바뀌거나 결제기한이 지난 결과는 fail-closed로 버립니다. 이 임대 잠금은
+새 예약 권한이나 재시도 근거를 만들지 않고, 오직 이전 실행 epoch의 늦은 기록을 막습니다.
+
 KORAIL·SRT background worker도 같은 shared source cooldown을 외부 실행 임대·fencing 안에서 확인합니다.
 활성 TTL 동안 due 작업은 `next_check_at`·`cooldown_until`만 만료 시각으로 연기하고 upstream 호출과
 오류 관측 행을 만들지 않습니다. preflight와 observe 사이 race는 오류 저장 전에 다시 확인합니다.

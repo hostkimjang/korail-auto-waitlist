@@ -215,6 +215,43 @@ async def test_notification_management_invalid_update_rolls_back_and_keeps_422_d
     assert unsafe_webhook.json() == {"detail": "webhook URL must target a public IP address"}
 
 
+async def test_notification_management_trims_names_and_rejects_blank_required_config(
+    client,
+) -> None:
+    created = await client.post(
+        "/api/v1/notifications/channels",
+        json={
+            "kind": "telegram",
+            "name": "  운영 알림  ",
+            "config": {"bot_token": "  test-token  ", "chat_id": " 123 "},
+        },
+    )
+    blank_name = await client.post(
+        "/api/v1/notifications/channels",
+        json={
+            "kind": "telegram",
+            "name": "   ",
+            "config": {"bot_token": "test-token", "chat_id": "123"},
+        },
+    )
+    blank_token = await client.post(
+        "/api/v1/notifications/channels",
+        json={
+            "kind": "telegram",
+            "name": "빈 토큰",
+            "config": {"bot_token": "   ", "chat_id": "123"},
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["name"] == "운영 알림"
+    assert created.json()["created_at"].endswith(("Z", "+00:00"))
+    assert created.json()["updated_at"].endswith(("Z", "+00:00"))
+    assert blank_name.status_code == 422
+    assert blank_token.status_code == 422
+    assert blank_token.json() == {"detail": "empty or invalid channel fields: bot_token"}
+
+
 async def test_notification_management_delete_commits(client) -> None:
     created = await client.post(
         "/api/v1/notifications/channels",

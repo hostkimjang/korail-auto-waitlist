@@ -4,7 +4,7 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 여덟 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 1,150줄입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 알림·화면 전환 조립은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 아홉 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 1,056줄입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현, 알림 채널 표시·편집 상태는 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 화면 전환 shell은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict TypeScript와 typecheck gate는 적용되어 있습니다. `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff, reservations, settings의 leaf 컴포넌트·hook·순수 함수가 일부 분리되어 있습니다. `api.js` barrel과 확인된 feature 간 역방향 import는 제거됐지만, 이는 `App.jsx` 제거, 모든 DTO/mapper 경계 완성, 전체 JS/JSX 전환이 끝났다는 뜻은 아닙니다.
 
@@ -53,6 +53,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `api.js`에는 함수 객체 identity가 같은 compatibility re-export 유지
    - 완료: 알림 채널 CRUD·시험 전송·Web Push 수명주기를 `api/notifications.ts`, SSE 연결·history
      cutoff·정리를 `api/events.ts`로 이동하고 `App.jsx` 직접 import와 compatibility re-export 유지
+   - 완료: 알림 응답을 secret-free camel ViewModel로 투영하고 kind·boolean·UTC timestamp를 검증하며,
+     시험 전송의 `queued=true + event_id`와 65바이트 P-256 Web Push 공개키를 fail-closed로 확인
    - 완료: `stations.ts`의 외부 DTO·metadata·identity 검증, `timetables.ts`의 query·부분 실패·mapper,
      `seatClasses.ts`의 provenance·`unknown/not_observed` fail-closed 정규화
    - 완료: `timetables.ts`의 canonical DTO mapper가 provider·열차번호·구간과 timezone-aware 출도착
@@ -72,6 +74,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - StationCombobox, CalendarPicker, TimeRangePicker
    - 완료: strict `TrainResultCard.tsx`가 카드·좌석 표현, provenance/freshness, 좌석별 등록 상태 union과
      typed `OfficialHandoff` component 주입 경계를 소유
+   - 완료: strict `NotificationChannelSettings.tsx`가 종류별 상태·비밀 입력 editor·동시 pending key,
+     Web Push 기기 상태, 44px switch와 editor focus/ARIA 계약을 소유
    - PriorityList
    - OfficialHandoff portal·focus·clipboard 흐름
 5. 기능 상태 분리

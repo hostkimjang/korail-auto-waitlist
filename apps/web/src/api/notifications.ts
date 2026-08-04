@@ -1,6 +1,75 @@
 import { ApiError, request } from "./client";
 
-export type BrowserPushSupport = "supported" | "unsupported" | "insecure";
+type UnknownRecord = Record<string, unknown>;
+
+export type NotificationChannelKind =
+  | "web_push"
+  | "telegram"
+  | "discord_webhook"
+  | "generic_webhook";
+
+export interface NotificationChannel {
+  id: string;
+  kind: NotificationChannelKind;
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TelegramNotificationConfig {
+  bot_token: string;
+  chat_id: string;
+}
+
+export interface WebhookNotificationConfig {
+  url: string;
+  authorization?: string;
+}
+
+export interface WebPushNotificationConfig {
+  subscription_info: string;
+}
+
+export type NotificationChannelEditorSubmission =
+  | {
+    kind: "telegram";
+    name: string;
+    config: TelegramNotificationConfig;
+  }
+  | {
+    kind: "discord_webhook";
+    name: string;
+    config: WebhookNotificationConfig;
+  }
+  | {
+    kind: "generic_webhook";
+    name: string;
+    config: WebhookNotificationConfig;
+  };
+
+export type NotificationChannelCreatePayload =
+  | (NotificationChannelEditorSubmission & { enabled?: boolean })
+  | {
+    kind: "web_push";
+    name: string;
+    config: WebPushNotificationConfig;
+    enabled?: boolean;
+  };
+
+export interface NotificationChannelUpdatePayload {
+  name?: string;
+  config?: TelegramNotificationConfig | WebhookNotificationConfig | WebPushNotificationConfig;
+  enabled?: boolean;
+}
+
+export interface QueuedNotification {
+  queued: true;
+  eventId: string;
+}
+
+export type BrowserPushSupport = "checking" | "supported" | "unsupported" | "insecure";
 
 export interface BrowserPushState {
   support: BrowserPushSupport;
@@ -8,33 +77,102 @@ export interface BrowserPushState {
   subscribed: boolean;
 }
 
-export async function fetchNotificationChannels(): Promise<unknown> {
-  return request("/notifications/channels");
+const NOTIFICATION_CHANNEL_KINDS: ReadonlySet<string> = new Set([
+  "web_push",
+  "telegram",
+  "discord_webhook",
+  "generic_webhook",
+]);
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export async function createNotificationChannel(payload: unknown): Promise<unknown> {
-  return request("/notifications/channels", {
+function awareTimestamp(value: unknown): value is string {
+  return typeof value === "string"
+    && /(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
+    && Number.isFinite(Date.parse(value));
+}
+
+function requiredString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isNotificationChannelKind(value: string): value is NotificationChannelKind {
+  return NOTIFICATION_CHANNEL_KINDS.has(value);
+}
+
+export function mapNotificationChannel(value: unknown): NotificationChannel {
+  if (!isRecord(value)) {
+    throw new ApiError("알림 채널 응답 형식을 확인할 수 없습니다.");
+  }
+  const id = requiredString(value.id);
+  const kind = requiredString(value.kind);
+  const name = requiredString(value.name);
+  if (
+    id === null
+    || kind === null
+    || !isNotificationChannelKind(kind)
+    || name === null
+    || typeof value.enabled !== "boolean"
+    || typeof value.configured !== "boolean"
+    || !awareTimestamp(value.created_at)
+    || !awareTimestamp(value.updated_at)
+  ) {
+    throw new ApiError("알림 채널 응답 형식을 확인할 수 없습니다.");
+  }
+  return {
+    id,
+    kind,
+    name,
+    enabled: value.enabled,
+    configured: value.configured,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+}
+
+function mapNotificationChannels(value: unknown): NotificationChannel[] {
+  if (!Array.isArray(value)) {
+    throw new ApiError("알림 채널 목록 응답 형식을 확인할 수 없습니다.");
+  }
+  return value.map(mapNotificationChannel);
+}
+
+export async function fetchNotificationChannels(): Promise<NotificationChannel[]> {
+  return mapNotificationChannels(await request("/notifications/channels"));
+}
+
+export async function createNotificationChannel(
+  payload: NotificationChannelCreatePayload,
+): Promise<NotificationChannel> {
+  return mapNotificationChannel(await request("/notifications/channels", {
     method: "POST",
     body: JSON.stringify(payload),
-  });
+  }));
 }
 
 export async function updateNotificationChannel(
   id: string,
-  payload: unknown,
-): Promise<unknown> {
-  return request(`/notifications/channels/${id}`, {
+  payload: NotificationChannelUpdatePayload,
+): Promise<NotificationChannel> {
+  return mapNotificationChannel(await request(`/notifications/channels/${id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
-  });
+  }));
 }
 
-export async function deleteNotificationChannel(id: string): Promise<unknown> {
-  return request(`/notifications/channels/${id}`, { method: "DELETE" });
+export async function deleteNotificationChannel(id: string): Promise<void> {
+  await request(`/notifications/channels/${id}`, { method: "DELETE" });
 }
 
-export async function testNotificationChannel(id: string): Promise<unknown> {
-  return request(`/notifications/channels/${id}/test-send`, { method: "POST" });
+export async function testNotificationChannel(id: string): Promise<QueuedNotification> {
+  const payload = await request(`/notifications/channels/${id}/test-send`, { method: "POST" });
+  const eventId = isRecord(payload) ? requiredString(payload.event_id) : null;
+  if (!isRecord(payload) || payload.queued !== true || eventId === null) {
+    throw new ApiError("시험 알림 응답 형식을 확인할 수 없습니다.");
+  }
+  return { queued: true, eventId };
 }
 
 export async function waitForServiceWorkerRegistration(
@@ -103,13 +241,14 @@ export async function disconnectBrowserPush(): Promise<BrowserPushState> {
 }
 
 function publicKeyFrom(payload: unknown): string {
-  if (
-    typeof payload === "object"
-    && payload !== null
-    && "public_key" in payload
-    && typeof payload.public_key === "string"
-  ) {
-    return payload.public_key;
+  const publicKey = isRecord(payload) ? requiredString(payload.public_key) : null;
+  if (publicKey !== null && /^[A-Za-z0-9_-]+$/.test(publicKey)) {
+    try {
+      const decoded = fromBase64Url(publicKey);
+      if (decoded.length === 65 && decoded[0] === 4) return publicKey;
+    } catch {
+      // Normalize malformed base64url data into the public API boundary error below.
+    }
   }
   throw new ApiError("Web Push 공개키 응답을 확인할 수 없습니다.");
 }
@@ -125,7 +264,7 @@ function fromBase64Url(value: string): Uint8Array<ArrayBuffer> {
 export async function connectBrowserPush(
   name = "이 브라우저",
   existingChannelId: string | null = null,
-): Promise<unknown> {
+): Promise<NotificationChannel> {
   requireBrowserPushSupport();
   const publicKey = publicKeyFrom(await request("/notifications/web-push/public-key"));
   const existingRegistration = await navigator.serviceWorker.getRegistration();

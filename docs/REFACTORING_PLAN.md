@@ -337,6 +337,37 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   JS/JSX와 전역 CSS, API schema·services와 worker observation·reservation pipeline 및 provider 역할
   분리입니다.
 
+### 2026-08-05 아홉 번째 구조 슬라이스
+
+- 웹 알림 설정 경계: App/Settings에 있던 채널 목록·편집·Web Push 표시 상태를 strict
+  `features/settings/NotificationChannelSettings.tsx`로 이동했습니다. 채널별 pending key가 동시 작업을
+  격리하고, 공백 필수값·HTTPS URL을 제출 전에 막으며 비밀 입력은 읽기 응답에서 복원하지 않습니다.
+  미설정 `configured=false`, 비활성 시험 전송, Web Push checking/권한/구독 상태, editor focus·ARIA와
+  46×44px switch 행동 영역을 계약 테스트로 고정했습니다. `App.jsx`는 1,056줄입니다.
+- 웹 알림 transport 보강: `api/notifications.ts`가 channel DTO를 `unknown`에서 secret-free ViewModel로
+  투영하고, 시험 전송의 `queued=true + event_id`, Web Push 공개키의 base64url·65바이트 uncompressed
+  P-256 형식을 검증합니다. demo 연결도 실제 UI 상태와 같은 `supported/granted/subscribed`로 갱신합니다.
+- 예약 정합화 application: worker의 due SQL·read-only 확인 orchestration·credential generation 재검증·
+  상태/outbox commit을 `reservations/reconciliation_application.py`로 이동했습니다. worker에는 기존
+  Celery task 이름·`rail` route와 dependency 조립만 남아 1,589줄입니다. 임대 행을 먼저 잠근 뒤
+  `account -> watch -> candidate -> attempt` 순서를 사용하고 도메인 잠금 뒤 같은 epoch를 다시 검증하며,
+  fresh `reconciled_at`으로 due와 결제기한을 재평가합니다. commit 뒤 drain·owned close·release 순서를
+  유지하고 apply 실패는 상태와 outbox를 함께 rollback합니다.
+- 서버 알림 경계 보강: 채널 이름과 필수 config 문자열을 trim한 뒤 빈 값을 거부하고, SQLite처럼 DB가
+  timezone metadata를 잃은 경우에도 읽기 DTO는 UTC timestamp를 반환합니다. raw config·token·URL은
+  읽기 응답이나 검증 오류에 포함하지 않습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 66개 파일·475건, production
+  build와 Sites 4건을 통과했습니다. API 전체 pytest 1,025건, Ruff `E/F/I`, format ratchet 65개와
+  module boundary를 통과했습니다. focused 검증은 예약 정합화·임대·worker·Celery·알림 API 110건,
+  알림 설정·transport·Web Push·반응형 계약 50건을 통과했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 재빌드·강제 재생성한 뒤 migration·log-init exit 0,
+  장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건을 확인했습니다. 실제 PostgreSQL
+  두 세션 검사에서 guarded transaction 동안 만료 후 takeover가 대기하고, commit 뒤 fencing token이
+  1 증가하며 이전 epoch가 거부되는 것도 확인했습니다.
+- 남은 핵심 부채: PostgreSQL 경합 검사를 CI의 격리 DB job으로 상시 실행하는 작업, 같은 알림 종류의
+  복수 채널을 허용할지에 대한 제품 계약, `NewWait` 나머지 단계와 App shell, legacy JS/JSX·전역 CSS,
+  worker observation/reservation pipeline과 provider 역할 분리입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

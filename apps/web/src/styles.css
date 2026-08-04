@@ -4214,6 +4214,18 @@ select:focus-visible {
   font-size: 18px;
 }
 
+.channel-editor h3:focus-visible {
+  outline: 3px solid rgba(13, 139, 132, 0.28);
+  outline-offset: 4px;
+}
+
+.channel-editor-error {
+  margin: 0;
+  color: #9d3f3f;
+  font-size: 13px;
+  font-weight: 750;
+}
+
 .channel-editor .form-grid {
   margin-top: 0;
 }
@@ -4231,6 +4243,10 @@ select:focus-visible {
 .switch {
   position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  min-height: 44px;
 }
 
 .switch input {

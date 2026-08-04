@@ -6,12 +6,10 @@ import {
   Bell,
   CheckCircle,
   Clock,
-  DiscordLogo,
   GearSix,
   GlobeSimple,
   House,
   LockKey,
-  PaperPlaneTilt,
   Plus,
   ShieldCheck,
   Ticket,
@@ -77,6 +75,7 @@ import {
 } from "./features/new-wait/TrainResultCard";
 import { useSeatWatchRegistration } from "./features/new-wait/useSeatWatchRegistration";
 import { SystemStatusDashboard } from "./features/settings/SystemStatusDashboard";
+import { NotificationChannelSettings } from "./features/settings/NotificationChannelSettings";
 import { TimetableRefreshSettings } from "./features/settings/TimetableRefreshSettings";
 import { ProviderAccountSettings } from "./features/settings/ProviderAccountSettings";
 import {
@@ -136,12 +135,6 @@ function currentRailAccountStatus(provider, accounts, loaded) {
 export function isActiveWatch(watch) {
   return activeWatchStatuses.has(watch.status);
 }
-
-const notificationOptions = [
-  { id: "web_push", label: "OS 알림", helper: "Windows·Android·iOS 시스템 알림", icon: Bell },
-  { id: "telegram", label: "텔레그램", helper: "Bot API로 즉시 전송", icon: PaperPlaneTilt },
-  { id: "discord_webhook", label: "디스코드", helper: "Webhook 채널 알림", icon: DiscordLogo },
-];
 
 const providers = [
   { id: "KORAIL", name: "KTX · KORAIL", helper: "KTX 시간표" },
@@ -609,9 +602,6 @@ export function Reservations({ watches, onNavigate, onDelete }) {
 
 export function Settings({ channels, demo, browserPushState = { support: "checking", permission: "default", subscribed: false }, providerAccounts = [], providerRuntimeStatuses = [], providerAccountsLoading = false, pendingProviderAccount = null, uiPreferences, savingUiPreferences, onSaveUiPreferences, onSaveChannel, onToggleChannel, onTestChannel, onConnectWebPush, onSaveProviderAccount = async () => undefined, onDeleteProviderAccount = async () => undefined, onSectionChange = () => undefined, onLogout, initialSection = "notifications" }) {
   const [section, setSection] = useState(initialSection);
-  const [editingKind, setEditingKind] = useState("");
-  const [draft, setDraft] = useState({ name: "", token: "", chatId: "", url: "", authorization: "" });
-  const [pendingAction, setPendingAction] = useState("");
   const sections = [
     { id: "rail-accounts", label: "철도 계정", icon: User },
     { id: "notifications", label: "알림 채널", icon: Bell },
@@ -619,61 +609,6 @@ export function Settings({ channels, demo, browserPushState = { support: "checki
     { id: "security", label: "보안", icon: LockKey },
     { id: "system", label: "로그·진행 상태", icon: WifiHigh },
   ];
-  const configuredByKind = Object.fromEntries(channels.map((channel) => [channel.kind, channel]));
-  const allOptions = [
-    ...notificationOptions,
-    { id: "generic_webhook", label: "범용 Webhook", helper: "HTTPS JSON endpoint", icon: GlobeSimple },
-  ];
-  const beginConfigure = async (kind) => {
-    if (kind === "web_push") {
-      setPendingAction("connect:web_push");
-      try {
-        await onConnectWebPush();
-      } finally {
-        setPendingAction("");
-      }
-      return;
-    }
-    const existing = configuredByKind[kind];
-    setDraft({ name: existing?.name ?? "", token: "", chatId: "", url: "", authorization: "" });
-    setEditingKind(kind);
-  };
-  const saveDraft = async () => {
-    const config = editingKind === "telegram"
-      ? { bot_token: draft.token, chat_id: draft.chatId }
-      : editingKind === "generic_webhook"
-        ? { url: draft.url, ...(draft.authorization ? { authorization: draft.authorization } : {}) }
-        : { url: draft.url };
-    setPendingAction(`save:${editingKind}`);
-    try {
-      await onSaveChannel(editingKind, draft.name || allOptions.find((item) => item.id === editingKind)?.label, config);
-      setEditingKind("");
-    } catch {
-      // App owns user-facing API errors through the global toast.
-    } finally {
-      setPendingAction("");
-    }
-  };
-  const toggleOption = async (kind, channel, nextEnabled) => {
-    if (!channel) {
-      await beginConfigure(kind);
-      return;
-    }
-    setPendingAction(`toggle:${kind}`);
-    try {
-      await onToggleChannel(channel, nextEnabled);
-    } finally {
-      setPendingAction("");
-    }
-  };
-  const testOption = async (kind, channel) => {
-    setPendingAction(`test:${kind}`);
-    try {
-      await onTestChannel(channel);
-    } finally {
-      setPendingAction("");
-    }
-  };
   const selectSection = (nextSection) => {
     setSection(nextSection);
     onSectionChange(nextSection);
@@ -686,38 +621,7 @@ export function Settings({ channels, demo, browserPushState = { support: "checki
         <nav className="settings-nav" aria-label="설정 메뉴">{sections.map(({ id, label, icon: Icon }) => <button key={id} type="button" className={section === id ? "is-active" : ""} onClick={() => selectSection(id)}><Icon size={21} />{label}<ArrowRight size={17} /></button>)}</nav>
         <section className="settings-panel">
           {section === "rail-accounts" && <><div className="panel-heading"><h2>철도 계정</h2><p>새 좌석 가용성 에피소드마다 결제 직전까지 자동 예매할 계정을 연결합니다. 자동 결제는 하지 않습니다.</p></div><ProviderAccountSettings accounts={providerAccounts} runtimeStatuses={providerRuntimeStatuses} loading={providerAccountsLoading} pendingProvider={pendingProviderAccount} onSave={onSaveProviderAccount} onDelete={onDeleteProviderAccount} /></>}
-          {section === "notifications" && <><div className="panel-heading"><h2>알림 채널</h2><p>여러 채널을 함께 켜 중요한 알림 누락을 줄입니다.</p></div><div className="settings-list">{allOptions.map(({ id, label, helper, icon: Icon }) => {
-            const channel = configuredByKind[id];
-            const isPending = pendingAction.endsWith(`:${id}`);
-            const isWebPush = id === "web_push";
-            const webPushReady = browserPushState.support === "supported"
-              && browserPushState.permission === "granted"
-              && browserPushState.subscribed;
-            const checked = isWebPush
-              ? Boolean(channel?.enabled && (browserPushState.support === "checking" || webPushReady))
-              : Boolean(channel?.enabled);
-            const webPushDetail = browserPushState.support === "unsupported"
-              ? "이 브라우저는 OS 알림을 지원하지 않음"
-              : browserPushState.support === "insecure"
-                ? "HTTPS 또는 localhost 접속 필요"
-                : browserPushState.permission === "denied"
-                  ? "브라우저 사이트 설정에서 알림 권한이 차단됨"
-                  : channel?.enabled && browserPushState.subscribed
-                    ? "이 기기의 OS 알림 사용 중"
-                    : channel?.enabled
-                      ? "이 기기 구독이 없어 다시 연결 필요"
-                      : channel
-                        ? "이 기기의 OS 알림 꺼짐"
-                        : helper;
-            const detail = isPending
-              ? "처리 중…"
-              : isWebPush
-                ? webPushDetail
-                : channel
-                  ? `${channel.name} · ${channel.enabled ? "사용 중" : "꺼짐"}`
-                  : helper;
-            return <div key={id} className="setting-row" aria-busy={isPending || undefined}><Icon size={25} /><div><strong>{label}</strong><span>{detail}</span>{isWebPush && <small className="setting-row-note">허용하면 브라우저를 닫아도 운영체제 알림 영역으로 전달됩니다. iOS는 홈 화면에 설치한 PWA에서 지원됩니다.</small>}</div>{channel ? <button type="button" className="button button-ghost compact" disabled={isPending || (isWebPush && !webPushReady)} aria-label={`${label} 시험 알림 보내기`} onClick={() => testOption(id, channel)}>시험</button> : <button type="button" className="button button-ghost compact" disabled={isPending} aria-label={`${label} 연결 설정 열기`} onClick={() => beginConfigure(id)}>{isPending ? "연결 중…" : "설정"}</button>}<label className="switch"><input type="checkbox" disabled={isPending || (isWebPush && ["unsupported", "insecure"].includes(browserPushState.support))} aria-label={`${label} ${checked ? "끄기" : "켜기"}`} checked={checked} onChange={(event) => toggleOption(id, channel, event.target.checked)} /><span /></label></div>;
-          })}</div>{editingKind && <div className="channel-editor"><h3>{allOptions.find((item) => item.id === editingKind)?.label} 연결</h3><Field label="표시 이름"><input name="railwait-notification-name" autoComplete="off" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="내 알림" /></Field>{editingKind === "telegram" ? <div className="form-grid"><Field label="Bot token"><input type="password" name="railwait-telegram-bot-token" value={draft.token} onChange={(event) => setDraft({ ...draft, token: event.target.value })} autoComplete="new-password" data-lpignore="true" /></Field><Field label="Chat ID"><input name="railwait-telegram-chat-id" autoComplete="off" value={draft.chatId} onChange={(event) => setDraft({ ...draft, chatId: event.target.value })} /></Field></div> : <><Field label="HTTPS URL"><input type="url" name={`railwait-${editingKind}-url`} autoComplete="off" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://" /></Field>{editingKind === "generic_webhook" && <Field label="Authorization (선택)"><input type="password" name="railwait-webhook-authorization" value={draft.authorization} onChange={(event) => setDraft({ ...draft, authorization: event.target.value })} autoComplete="new-password" data-lpignore="true" /></Field>}</>}<div className="editor-actions"><button type="button" className="button button-ghost" disabled={pendingAction.startsWith("save:")} onClick={() => setEditingKind("")}>취소</button><button type="button" className="button button-primary" disabled={pendingAction.startsWith("save:")} onClick={saveDraft}>{pendingAction.startsWith("save:") ? "저장 중…" : "저장"}</button></div></div>}</>}
+          {section === "notifications" && <NotificationChannelSettings channels={channels} browserPushState={browserPushState} onSaveChannel={onSaveChannel} onToggleChannel={onToggleChannel} onTestChannel={onTestChannel} onConnectWebPush={onConnectWebPush} />}
           {section === "display" && <><div className="panel-heading"><h2>화면 동작</h2><p>화면 표시와 백엔드 좌석 관측 간격을 관리합니다.</p></div><TimetableRefreshSettings preferences={uiPreferences} saving={savingUiPreferences} onSave={onSaveUiPreferences} /></>}
           {section === "security" && <><div className="panel-heading"><h2>보안</h2><p>관리자 한 명만 사용하며 공개 가입 기능은 없습니다.</p></div><div className="security-card"><ShieldCheck size={34} weight="fill" /><div><strong>관리자 ID·비밀번호 로그인 활성화</strong><span>비밀번호는 Argon2id 단방향 해시로 저장됩니다.</span></div><StatusPill status="watching">보호됨</StatusPill></div><div className="security-card"><GlobeSimple size={34} /><div><strong>접속 경로</strong><span>Tailscale 우선 · 공개 도메인 선택 지원</span></div></div><button type="button" className="button button-outline logout-button" onClick={onLogout}>이 기기에서 로그아웃</button></>}
           {section === "system" && <SystemStatusDashboard demo={demo} />}
@@ -1026,7 +930,7 @@ export function App() {
     return createdWatches;
   };
 
-  const saveChannel = async (kind, name, config) => {
+  const saveChannel = async ({ kind, name, config }) => {
     try {
       const existing = channels.find((channel) => channel.kind === kind);
       const saved = existing
@@ -1082,7 +986,9 @@ export function App() {
   const connectWebPushChannel = async () => {
     try {
       if (auth.demo) {
-        setChannels((items) => [{ id: "demo-web-push", kind: "web_push", name: "이 브라우저", enabled: true }, ...items.filter((item) => item.kind !== "web_push")]);
+        const now = new Date().toISOString();
+        setChannels((items) => [{ id: "demo-web-push", kind: "web_push", name: "이 브라우저", enabled: true, configured: true, createdAt: now, updatedAt: now }, ...items.filter((item) => item.kind !== "web_push")]);
+        setBrowserPushState({ support: "supported", permission: "granted", subscribed: true });
       } else {
         const existing = channels.find((channel) => channel.kind === "web_push");
         const channel = await connectBrowserPush(existing?.name ?? "이 브라우저", existing?.id ?? null);

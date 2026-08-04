@@ -9,6 +9,28 @@ import {
   updateNotificationChannel,
 } from "../src/api/notifications";
 
+const CHANNEL_DTO = {
+  id: "channel-1",
+  kind: "telegram",
+  name: "운영 알림",
+  enabled: true,
+  configured: true,
+  created_at: "2026-08-05T00:00:00Z",
+  updated_at: "2026-08-05T00:01:00Z",
+};
+
+const CHANNEL = {
+  id: "channel-1",
+  kind: "telegram",
+  name: "운영 알림",
+  enabled: true,
+  configured: true,
+  createdAt: "2026-08-05T00:00:00Z",
+  updatedAt: "2026-08-05T00:01:00Z",
+};
+
+const VALID_PUBLIC_KEY = "BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -28,11 +50,15 @@ describe("notification transport boundary", () => {
   });
 
   it("lists channels with the shared credential contract and no CSRF header", async () => {
-    const payload = [{ id: "push-1", kind: "web_push", enabled: true }];
+    const payload = [{
+      ...CHANNEL_DTO,
+      config: { bot_token: "must-not-cross-read-boundary" },
+      arbitrary: "drop-me",
+    }];
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(payload));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchNotificationChannels()).resolves.toEqual(payload);
+    await expect(fetchNotificationChannels()).resolves.toEqual([CHANNEL]);
 
     const requestCall = fetchMock.mock.calls[0];
     expect(requestCall).toBeDefined();
@@ -48,7 +74,7 @@ describe("notification transport boundary", () => {
       action: () => createNotificationChannel({
         kind: "telegram",
         name: "운영 알림",
-        config: { chat_id: "123" },
+        config: { bot_token: "token", chat_id: "123" },
         enabled: true,
       }),
       url: "/api/v1/notifications/channels",
@@ -56,7 +82,7 @@ describe("notification transport boundary", () => {
       body: {
         kind: "telegram",
         name: "운영 알림",
-        config: { chat_id: "123" },
+        config: { bot_token: "token", chat_id: "123" },
         enabled: true,
       },
       responseStatus: 201,
@@ -77,7 +103,7 @@ describe("notification transport boundary", () => {
     responseStatus,
   }) => {
     const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValue(jsonResponse({ id: "channel-1" }, responseStatus));
+      .mockResolvedValue(jsonResponse(CHANNEL_DTO, responseStatus));
     vi.stubGlobal("fetch", fetchMock);
 
     await action();
@@ -94,6 +120,31 @@ describe("notification transport boundary", () => {
   });
 
   it.each([
+    { ...CHANNEL_DTO, kind: "email" },
+    { ...CHANNEL_DTO, id: "" },
+    { ...CHANNEL_DTO, created_at: "2026-08-05 00:00:00" },
+    { ...CHANNEL_DTO, updated_at: "not-a-time" },
+    { ...CHANNEL_DTO, configured: "yes" },
+  ])("rejects malformed channel DTOs without partially trusting the list", async (invalid) => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([
+      CHANNEL_DTO,
+      invalid,
+    ])));
+
+    await expect(fetchNotificationChannels()).rejects.toThrow(
+      "알림 채널 응답 형식을 확인할 수 없습니다.",
+    );
+  });
+
+  it("rejects a non-array channel list", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(CHANNEL_DTO)));
+
+    await expect(fetchNotificationChannels()).rejects.toThrow(
+      "알림 채널 목록 응답 형식을 확인할 수 없습니다.",
+    );
+  });
+
+  it.each([
     ["delete", deleteNotificationChannel, "DELETE", "/api/v1/notifications/channels/channel-1", 204],
     ["test-send", testNotificationChannel, "POST", "/api/v1/notifications/channels/channel-1/test-send", 202],
   ] as const)("uses the exact %s action contract", async (
@@ -105,7 +156,7 @@ describe("notification transport boundary", () => {
   ) => {
     const response = responseStatus === 204
       ? new Response(null, { status: responseStatus })
-      : jsonResponse({ queued: true }, responseStatus);
+      : jsonResponse({ queued: true, event_id: "event-1" }, responseStatus);
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response);
     vi.stubGlobal("fetch", fetchMock);
 
@@ -120,6 +171,30 @@ describe("notification transport boundary", () => {
     expect(new Headers(options?.headers).get("X-CSRF-Token")).toBe("notification-csrf");
   });
 
+  it.each([
+    { queued: false, event_id: "event-1" },
+    { queued: true },
+    { queued: true, event_id: "  " },
+  ])("rejects a test-send response that does not prove queueing", async (payload) => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(payload, 202)));
+
+    await expect(testNotificationChannel("channel-1")).rejects.toThrow(
+      "시험 알림 응답 형식을 확인할 수 없습니다.",
+    );
+  });
+
+  it("maps the queue event identity after validating a successful test-send response", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      queued: true,
+      event_id: " event-1 ",
+    }, 202)));
+
+    await expect(testNotificationChannel("channel-1")).resolves.toEqual({
+      queued: true,
+      eventId: "event-1",
+    });
+  });
+
   it("rejects an invalid Web Push public-key payload at the unknown JSON boundary", async () => {
     vi.stubGlobal("navigator", {
       serviceWorker: { getRegistration: vi.fn() },
@@ -127,6 +202,24 @@ describe("notification transport boundary", () => {
     vi.stubGlobal("PushManager", class PushManager {});
     vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn() });
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ key: "AQ" })));
+
+    await expect(connectBrowserPush()).rejects.toThrow(
+      "Web Push 공개키 응답을 확인할 수 없습니다.",
+    );
+  });
+
+  it.each([
+    { public_key: "" },
+    { public_key: "not+base64url" },
+    { public_key: "AQ" },
+    { public_key: `A${VALID_PUBLIC_KEY.slice(1)}` },
+  ])("rejects a malformed Web Push P-256 public key", async (payload) => {
+    vi.stubGlobal("navigator", {
+      serviceWorker: { getRegistration: vi.fn() },
+    });
+    vi.stubGlobal("PushManager", class PushManager {});
+    vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn() });
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(payload)));
 
     await expect(connectBrowserPush()).rejects.toThrow(
       "Web Push 공개키 응답을 확인할 수 없습니다.",
@@ -156,11 +249,20 @@ describe("notification transport boundary", () => {
       requestPermission: vi.fn().mockResolvedValue("granted"),
     });
     const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ public_key: "AQ" }))
-      .mockResolvedValueOnce(jsonResponse({ id: "push-1", kind: "web_push" }, 201));
+      .mockResolvedValueOnce(jsonResponse({ public_key: VALID_PUBLIC_KEY }))
+      .mockResolvedValueOnce(jsonResponse({
+        ...CHANNEL_DTO,
+        id: "push-1",
+        kind: "web_push",
+        name: "업무 PC",
+      }, 201));
     vi.stubGlobal("fetch", fetchMock);
 
-    await connectBrowserPush("업무 PC");
+    await expect(connectBrowserPush("업무 PC")).resolves.toMatchObject({
+      id: "push-1",
+      kind: "web_push",
+      name: "업무 PC",
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [publicKeyUrl, publicKeyOptions] = fetchMock.mock.calls[0] ?? [];

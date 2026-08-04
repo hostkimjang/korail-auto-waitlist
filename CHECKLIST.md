@@ -293,12 +293,16 @@
 - [x] provider contract import allowlist, due·정합화 application의 concrete runtime 역의존 차단, KORAIL·SRT 기본→관찰 3중 gate→예약 4중 gate 공개 capability 6조합 golden matrix와 canonical 예외 identity 검증
 - [x] 열일곱 번째 구조 슬라이스 A의 focused pytest 166건, API 전체 pytest 1,056건, Ruff `E/F/I`, format ratchet 63개, module boundary·독립 재감사 P0/P1 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
 - [x] 열일곱 번째 구조 슬라이스 A의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] 여정·조건·열차 단계 렌더링과 station·timetable·registration hook 조립을 strict `features/new-wait/NewWaitPage.tsx`로 이동하고, production App의 typed 공식 handoff 주입·공개 `NewWait` 호환 adapter·등록 완료와 정확한 watch ID 취소 계약 보존. `new-wait`에서 `app`·`official-handoff` feature 역import 없음
+- [x] 새 대기 행동 28건을 `NewWaitPage.test.tsx`로 재소유하고 App에는 즉시 등록→collection 반영→재진입 hydrate→정확한 ID 취소 통합과 legacy adapter 계약 유지. 관련 테스트 55→56건, App 976→639줄, 불필요한 폼 index signature 제거
+- [x] 열일곱 번째 구조 슬라이스 B의 웹 ESLint 오류 0·고정 경고 17, strict typecheck, Vitest 70개 파일·492건, production build·Sites 4건, 기본 Playwright E2E 14건과 독립 재감사 P0~P2 잔여 없음 확인
+- [x] 열일곱 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
-- [ ] `NewWait`·OfficialHandoff·Auth의 남은 책임을 feature별 `.tsx`·hook으로 분리
+- [ ] OfficialHandoff·Auth의 남은 책임과 App의 알림·화면 전환 조립을 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
 - [ ] `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행

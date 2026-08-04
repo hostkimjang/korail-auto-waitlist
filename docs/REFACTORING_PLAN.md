@@ -596,6 +596,34 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: provider execution base와 concrete 구현·registry의 물리 분리, Python 정적 타입 gate
   도입 판단, 실제 PostgreSQL 실행 임대 경합 검증, `NewWaitPage`와 App shell의 strict 경계입니다.
 
+### 2026-08-05 열일곱 번째 구조 슬라이스 B
+
+- 새 대기 페이지 소유권: 여정·조건·열차 단계 렌더링과 station catalog·timetable search·좌석별
+  registration hook 조립을 strict `features/new-wait/NewWaitPage.tsx`로 이동했습니다. production
+  App은 이 페이지를 직접 사용하고 실제 공식 handoff component를 typed prop으로 주입합니다.
+  `new-wait`는 `app`이나 `official-handoff` feature를 역으로 import하지 않습니다.
+- 호환·타입 경계: 기존 공개 `NewWait`는 동일한 optional 기본값과 실제 `OfficialHandoff`를 주입하는
+  얇은 adapter로 보존했습니다. 등록 완료·취소 callback을 공개 타입으로 고정하고,
+  `TimetableSearchForm`과 내부 폼의 불필요한 `Record<string, unknown>` index signature를 제거해 외부
+  응답은 경계 mapper에서만 열고 기능 폼은 닫힌 계약으로 유지합니다. App은 976줄에서 639줄로
+  줄었습니다.
+- 테스트 소유권: 새 대기 행동 28건을 `NewWaitPage.test.tsx`로 이동하고 App에는 조립 통합과 legacy
+  adapter 계약을 남겼습니다. 두 파일의 관련 테스트는 55건에서 56건으로 한 건 늘었으며 stale 응답,
+  provider 부분 성공, station name/node ID 정합성, exact watch ID 취소, evidence 1회 복구,
+  키보드·초점·ARIA·320px 계약을 보존합니다.
+- 확인된 검증: ESLint 오류 0개·고정된 기존 경고 17개, strict typecheck, Vitest 70개 파일·492건,
+  production build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다. 독립 재감사에서는 P0~P2
+  잔여 지적이 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: CSS·DOM 순서·selector는 변경하지 않았습니다. `App.jsx`는 아직 `checkJs=false`이므로
+  production caller props의 정적 검증은 최종 `App.tsx` 전환 전까지 남으며, 즉시 등록→collection
+  반영→재진입 hydrate→정확한 ID 취소 App 통합 테스트로 현재 runtime seam을 고정했습니다.
+- 남은 핵심 부채: App의 알림·화면 전환 조립과 Auth·OfficialHandoff 최종 feature 경계, App과 legacy
+  JS/JSX 테스트의 TSX 전환, provider concrete base·구현·registry 물리 분리, 실제 PostgreSQL 실행 임대
+  경합 검증입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

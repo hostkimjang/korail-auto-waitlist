@@ -147,10 +147,17 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 Home 페이지 추출과 호환 props 명시 뒤 현재 976줄입니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과
-마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다. `NewWait`의 좌석별 등록·정확한 watch ID 취소·pending 중복
-차단·만료 evidence 재조회와 1회 재시도는 `features/new-wait/useSeatWatchRegistration.ts`가
-소유합니다.
+조립만 남았으며 Home과 새 대기 페이지 추출 뒤 현재 639줄입니다. `fixtures/demoData.ts`의 typed
+factory는 초기 demo 작업과 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다.
+
+strict `features/new-wait/NewWaitPage.tsx`는 여정·조건·열차 단계 렌더링, 역 카탈로그·시간표 조회·
+좌석별 등록 hook 조립과 취소 흐름을 소유합니다. 공식 handoff는 다른 feature를 직접 import하지 않고
+typed component prop으로 받아 `app -> feature` 의존 방향을 유지합니다. 등록 완료 뒤 canonical watch
+collection 반영은 App 조립점이 담당하며, 공개 `NewWait` 호환 adapter는 실제 `OfficialHandoff`를
+주입합니다. `useSeatWatchRegistration.ts`는 좌석별 등록·정확한 watch ID 취소·pending 중복 차단·
+만료 evidence 재조회와 1회 재시도를 계속 소유합니다. App 조립점은 아직 `checkJs=false`인 JSX이므로
+직접 caller props의 정적 검증은 최종 `App.tsx` 전환 때 완료하며, 현재는 App 통합 회귀 테스트가 이
+연결 계약을 고정합니다.
 
 strict `features/home/HomePage.tsx`는 `WatchManagementHero`와 결제 보류·활성 감시 목록 조립을
 소유합니다. 페이지는 home 소유 컴포넌트와 shared UI만 직접 사용하고, production App에서 새 대기·

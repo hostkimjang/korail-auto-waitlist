@@ -71,7 +71,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
 4. leaf UI 전환
    - 완료: 공용 결제기한 표시 UI를 `shared/ui`, 공유 clock hook을 `hooks/`로 이동
    - 완료: App 전용 알림 center를 `features/app` 소유로 이동해 `shared -> feature` 역방향 import 제거
-   - StationCombobox, CalendarPicker, TimeRangePicker
+   - 완료: StationCombobox와 CalendarPicker를 strict TSX leaf로 분리하고, TimeRangePicker는 strict
+     `NewWaitPage.tsx`가 소유
    - 완료: strict `TrainResultCard.tsx`가 카드·좌석 표현, provenance/freshness, 좌석별 등록 상태 union과
      typed `OfficialHandoff` component 주입 경계를 소유
    - 완료: strict `NotificationChannelSettings.tsx`가 종류별 상태·비밀 입력 editor·동시 pending key,
@@ -105,11 +106,15 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `features/home/HomePage.tsx`로 이동하고 production App의 구체 callback·typed 좌석 발견 renderer
      주입, legacy `Home`의 단일 `paymentWatch`·optional refresh adapter 계약을 feature/App 테스트로
      고정
-   - 남음: `NewWait`의 나머지 단계 렌더링과 선택 우선순위 leaf UI 경계
+   - 완료: `NewWait`의 여정·조건·열차 단계 렌더링과 기존 station·timetable·registration hook 조립을
+     strict `features/new-wait/NewWaitPage.tsx`로 이동. 공식 handoff는 다른 feature 직접 import 대신
+     typed component prop으로 주입하고 공개 `NewWait` 호환 adapter를 보존
    - 남음: App의 알림·화면 전환 조립과 Auth page의 최종 feature 경계
 6. shell과 테스트
    - 마지막에 `App.tsx`로 전환
-   - 기존 대형 테스트를 feature별 `.test.tsx`·`.test.ts`로 분리
+   - 진행: 새 대기 행동 28건을 `NewWaitPage.test.tsx`로 재소유하고 App 조립·호환 계약은
+     `App.test.jsx`에 유지. App caller의 props 정적 검증과 남은 JS/JSX 테스트 전환은 `App.tsx`
+     전환 때 완료
 7. CSS와 JavaScript 제거
    - 완료: class·규칙·cascade 순서를 그대로 유지하고 `styles.css`를 import-only 진입점,
      `styles/{tokens,base,shell,features,responsive}.css` 1차 경계로 분리. 원본 Git blob과 다섯 파일

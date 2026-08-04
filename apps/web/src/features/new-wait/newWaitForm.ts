@@ -42,6 +42,14 @@ function parseDateInput(value: string): Date {
   return new Date(year, month - 1, day);
 }
 
+export function formatNewWaitDateLabel(value: string): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  }).format(parseDateInput(value));
+}
+
 function dateInputValue(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }

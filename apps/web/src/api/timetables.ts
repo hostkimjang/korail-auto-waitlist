@@ -10,7 +10,7 @@ import {
 type UnknownRecord = Record<string, unknown>;
 type WeekdayValue = number | string;
 
-export interface TimetableSearchForm extends UnknownRecord {
+export interface TimetableSearchForm {
   provider?: RailProvider | string | null;
   providers?: readonly (RailProvider | string)[];
   origin?: string;

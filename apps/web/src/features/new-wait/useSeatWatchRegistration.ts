@@ -36,19 +36,19 @@ export interface SeatWatchRegistrationSubmission {
   selectedTrains: [SelectedSeatWatchRegistrationTrain];
 }
 
-type RegistrationCompletion = (
+export type SeatWatchRegistrationCompletion = (
   submission: SeatWatchRegistrationSubmission,
 ) => Promise<WatchRegistrationResult | readonly WatchRegistrationResult[]>
   | WatchRegistrationResult
   | readonly WatchRegistrationResult[];
 
-type WatchCancellation = (watchId: string) => Promise<unknown> | unknown;
+export type SeatWatchCancellation = (watchId: string) => Promise<unknown> | unknown;
 
 interface RegistrationInputs {
   form: NewWaitForm;
   trains: readonly unknown[];
-  onComplete: RegistrationCompletion;
-  onCancelWatch: WatchCancellation;
+  onComplete: SeatWatchRegistrationCompletion;
+  onCancelWatch: SeatWatchCancellation;
   refreshProviderSeatStatus: (
     provider: RailProvider,
     form: NewWaitForm,

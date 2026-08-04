@@ -376,37 +376,6 @@ describe("RailWait responsive core flow", () => {
     expect(screen.queryByText(/분 남음/)).toBeNull();
   });
 
-  it("returns home to watch management when the only payment deadline elapsed", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T00:00:00Z"));
-    try {
-      render(<Home
-        watches={[]}
-        paymentWatches={[{
-          provider: "SRT",
-          train: "SRT 370",
-          route: "대전 → 수서",
-          departure: "22:06",
-          arrival: "23:12",
-          date: "8월 4일",
-          payment_deadline: "2026-08-01T23:59:59Z",
-          official_booking_url: "https://etk.srail.kr",
-        }]}
-        onNavigate={vi.fn()}
-        onPause={vi.fn()}
-        onResume={vi.fn()}
-        onCancel={vi.fn()}
-        onToast={vi.fn()}
-      />);
-
-      expect(screen.getByText("관심 열차 관리")).toBeTruthy();
-      expect(screen.queryByRole("heading", { name: /결제 대기/ })).toBeNull();
-      expect(screen.queryByRole("button", { name: /공식 결제 열기/ })).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("registers a selected seat immediately and updates the active wait list without a confirmation step", async () => {
     const user = userEvent.setup();
     render(<App />);

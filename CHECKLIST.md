@@ -276,10 +276,14 @@
 - [x] 만료 가능 상태·후보 상태·KST legacy deadline·ordered expiry pass를 worker-independent `watch_management/expiry_application.py`로 이동하고 worker에는 `apply_watch_transition` dependency와 due wiring만 유지. `Watch.id` 순서·행별 `FOR UPDATE`, fresh 운행/booking-window 정책, travel-date 비-gate, 후보 없는 자정 교차 fallback, 후보 부분 만료·상태·이력·outbox 단일 commit과 예외 rollback을 직접 DB·PostgreSQL compile 계약으로 검증하고 `worker.py`를 1,395줄로 축소
 - [x] 열세 번째 구조 슬라이스의 API focused 91건, 전체 pytest 1,038건, Ruff `E/F/I`, format ratchet 65개, module boundary, 독립 리뷰 P0~P3 없음과 `git diff --check` 통과. worker 세부 6케이스를 새 owner로 재소유하고 순서·lock·rollback·KST 4건을 추가해 전체 순증 4건
 - [x] 열세 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] `WatchManagementHero`와 결제 보류·활성 감시 목록 조립을 strict `features/home/HomePage.tsx`로 이동하고 production App의 구체 행동 callback·typed 좌석 발견 renderer 주입, 실제 `OfficialHandoff` renderer·`activeWatchHandoffTrain` 변환·legacy `Home` adapter를 보존해 호환 props를 명시한 `App.jsx`를 976줄로 축소
+- [x] legacy `Home`의 단일 `paymentWatch`와 optional refresh 계약을 명시 타입·회귀 테스트로 고정하고, 최초 P3 테스트 보강 권고 반영 뒤 열네 번째 구조 슬라이스 독립 재리뷰에서 P0~P3 잔여 지적 사항 없음 확인
+- [x] 열네 번째 구조 슬라이스의 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 69개 파일·491건, production build·Sites 4건, 기본 Playwright E2E 14건 통과
+- [x] 열네 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
-- [ ] `NewWait`·OfficialHandoff·Home·Auth를 feature별 `.tsx`·hook으로 분리
+- [ ] `NewWait`·OfficialHandoff·Auth의 남은 책임을 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
 - [ ] `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행

@@ -4,7 +4,7 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열두 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 998줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현, 알림 채널 표시·편집 상태, 설정과 예약 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 화면 전환 shell은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열네 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 976줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현, 알림 채널 표시·편집 상태, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 화면 전환 shell은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict TypeScript와 typecheck gate는 적용되어 있습니다. `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff, reservations, settings의 leaf 컴포넌트·hook·순수 함수가 일부 분리되어 있습니다. `api.js` barrel과 확인된 feature 간 역방향 import는 제거됐지만, 이는 `App.jsx` 제거, 모든 DTO/mapper 경계 완성, 전체 JS/JSX 전환이 끝났다는 뜻은 아닙니다.
 
@@ -101,8 +101,12 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `features/reservations/ReservationsPage.tsx`로 이동하고 production App은 구체적 `onCreate`를
      전달. 기한 경과·terminal 삭제·공식 URL 보안 옵션과 legacy `Reservations({ onNavigate })`
      adapter 계약을 feature/App 테스트로 고정
+   - 완료: `WatchManagementHero`와 결제 보류·활성 감시 목록 조립을 strict
+     `features/home/HomePage.tsx`로 이동하고 production App의 구체 callback·typed 좌석 발견 renderer
+     주입, legacy `Home`의 단일 `paymentWatch`·optional refresh adapter 계약을 feature/App 테스트로
+     고정
    - 남음: `NewWait`의 나머지 단계 렌더링과 선택 우선순위 leaf UI 경계
-   - 남음: App의 알림·화면 전환 조립과 Home, Auth page의 최종 feature 경계
+   - 남음: App의 알림·화면 전환 조립과 Auth page의 최종 feature 경계
 6. shell과 테스트
    - 마지막에 `App.tsx`로 전환
    - 기존 대형 테스트를 feature별 `.test.tsx`·`.test.ts`로 분리

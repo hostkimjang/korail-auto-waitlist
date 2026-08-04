@@ -47,7 +47,7 @@ import { useAuthState } from "./features/auth/useAuthState";
 import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
 import { useWatchCollection } from "./features/app/useWatchCollection";
 import { useWatchMutations } from "./features/app/useWatchMutations";
-import { ActiveWatchList } from "./features/home/ActiveWatchList";
+import { HomePage } from "./features/home/HomePage";
 import { PaymentRequiredSection } from "./features/home/PaymentRequiredSection";
 import { ReservationsPage } from "./features/reservations/ReservationsPage";
 import { CalendarPicker } from "./features/new-wait/CalendarPicker";
@@ -82,7 +82,6 @@ import {
 import { useAppNotifications } from "./features/app/useAppNotifications";
 import { Brand } from "./shared/ui/Brand";
 import { PageHeader } from "./shared/ui/PageHeader";
-import { StatusPill } from "./shared/ui/StatusPill";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
 import { DEMO_MODE } from "./shared/lib/runtimeConfig";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
@@ -217,15 +216,6 @@ export function PaymentHero({ watch, onOfficialPayment }) {
   return <PaymentRequiredSection watches={[watch]} onOpenPayment={() => onOfficialPayment()} />;
 }
 
-function WatchManagementHero({ onNavigate }) {
-  return (
-    <section className="watch-management-hero">
-      <div><StatusPill status="watching">관심 열차 관리</StatusPill><h2>공식 예약대기와 예매를<br />한곳에서 관리하세요.</h2><p>선택한 열차와 좌석 등급을 한곳에서 확인하세요.</p></div>
-      <button className="button button-primary" type="button" onClick={() => onNavigate("new")}><Plus size={21} />새 대기 만들기</button>
-    </section>
-  );
-}
-
 function activeWatchHandoffTrain(watch) {
   const [routeOrigin = "", routeDestination = ""] = String(watch.route ?? "").split(" → ");
   const origin = watch.origin || routeOrigin;
@@ -245,64 +235,52 @@ function activeWatchHandoffTrain(watch) {
   };
 }
 
+function renderHomeSeatFoundAction(watch) {
+  return (
+    <OfficialHandoff
+      train={activeWatchHandoffTrain(watch)}
+      selectedSeatClass={watch.seatClass}
+      onCopy={copyTrainJourney}
+      triggerLabel="예매"
+      actionUrl={watch.officialBookingUrl}
+      seatFoundObservation={watch.seatFoundObservation}
+      triggerClassName="button button-primary compact watch-booking-button"
+    />
+  );
+}
+
+/** @param {import("./features/home/HomePage").HomeCompatibilityProps} props */
 export function Home({
   watches,
   paymentWatch = null,
   paymentWatches = paymentWatch ? [paymentWatch] : [],
   watchRefreshState = { isRefreshing: false, lastRefreshedAt: null },
-  onRefreshWatches,
+  onRefreshWatches = undefined,
   onNavigate,
   onPause,
   onResume,
   onCancel,
-  onChangeReservationPolicy,
-  reservationPolicyUpdatingIds,
+  onChangeReservationPolicy = undefined,
+  reservationPolicyUpdatingIds = new Set(),
   onToast,
 }) {
-  const today = new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(new Date());
-  const openOfficialPayment = (watch) => {
-    if (!watch?.official_booking_url) {
-      onToast("공식 예매 주소를 확인할 수 없습니다.");
-      return;
-    }
-    onToast("공식 결제 화면을 새 창에서 엽니다.");
-    window.open(watch.official_booking_url, "_blank", "noopener,noreferrer");
-  };
-
   return (
-    <div className="page home-page">
-      <PageHeader title="지금 할 일" helper={today} />
-      <PaymentRequiredSection
-        watches={paymentWatches}
-        onOpenPayment={openOfficialPayment}
-        emptyState={<WatchManagementHero onNavigate={onNavigate} />}
-      />
-      <ActiveWatchList
-        watches={watches}
-        isRefreshing={watchRefreshState.isRefreshing}
-        lastRefreshedAt={watchRefreshState.lastRefreshedAt}
-        onRefresh={onRefreshWatches}
-        onCreate={() => onNavigate("new")}
-        onViewAll={() => onNavigate("reservations")}
-        onPause={onPause}
-        onResume={onResume}
-        onCancel={onCancel}
-        onChangeReservationPolicy={onChangeReservationPolicy}
-        reservationPolicyUpdatingIds={reservationPolicyUpdatingIds}
-        onOpenRailAccounts={() => onNavigate("settings", "rail-accounts")}
-        renderSeatFoundAction={(watch) => (
-          <OfficialHandoff
-            train={activeWatchHandoffTrain(watch)}
-            selectedSeatClass={watch.seatClass}
-            onCopy={copyTrainJourney}
-            triggerLabel="예매"
-            actionUrl={watch.officialBookingUrl}
-            seatFoundObservation={watch.seatFoundObservation}
-            triggerClassName="button button-primary compact watch-booking-button"
-          />
-        )}
-      />
-    </div>
+    <HomePage
+      watches={watches}
+      paymentWatches={paymentWatches}
+      watchRefreshState={watchRefreshState}
+      {...(onRefreshWatches ? { onRefreshWatches } : {})}
+      onCreate={() => onNavigate("new")}
+      onViewReservations={() => onNavigate("reservations")}
+      onOpenRailAccounts={() => onNavigate("settings", "rail-accounts")}
+      onPause={onPause}
+      onResume={onResume}
+      onCancel={onCancel}
+      {...(onChangeReservationPolicy ? { onChangeReservationPolicy } : {})}
+      reservationPolicyUpdatingIds={reservationPolicyUpdatingIds}
+      onToast={onToast}
+      renderSeatFoundAction={renderHomeSeatFoundAction}
+    />
   );
 }
 
@@ -981,7 +959,7 @@ export function App() {
       <Sidebar activeView={activeView} onNavigate={navigate} />
       <main className="main-content">
         <div className="mobile-header"><Brand /><button type="button" className="icon-button" aria-label="알림"><Bell size={23} /></button></div>
-        {activeView === "home" && <Home watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onNavigate={navigate} onPause={pauseWatch} onResume={resumeWatch} onCancel={cancelWatchItem} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} />}
+        {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={cancelWatchItem} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
         {activeView === "new" && <NewWait demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} />}
         {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
         {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={setSettingsActiveSection} onLogout={signOut} initialSection={settingsInitialSection} />}

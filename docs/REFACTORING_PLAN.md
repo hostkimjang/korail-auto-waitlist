@@ -476,6 +476,29 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: reservation execution application, watch-group observation application, provider
   역할별 계약, App Home·shell·Auth와 `NewWait` 나머지 strict 경계입니다.
 
+### 2026-08-05 열네 번째 구조 슬라이스
+
+- Home 페이지 경계: App의 `WatchManagementHero`와 결제 보류·활성 감시 목록 조립을 strict
+  `features/home/HomePage.tsx`로 이동했습니다. production App은 구체적인 `onCreate`·
+  `onViewReservations`·`onOpenRailAccounts`와 typed 좌석 발견 action renderer를 주입하며,
+  호환 props를 명시한 `App.jsx`는 976줄입니다.
+- 공식 handoff와 호환 경계: 실제 `OfficialHandoff` renderer와 `activeWatchHandoffTrain` 변환은 App에
+  남겼고, 공개 `Home` adapter의 navigation·단일 `paymentWatch`·optional refresh 계약을 보존했습니다.
+  `HomeCompatibilityProps`로 JavaScript 기본값의 잘못된 협소 추론을 바로잡아 런타임과 공개 타입을
+  일치시켰습니다.
+- 테스트 재소유: Home의 결제 URL fail-closed·사용자 행동 뒤 안전한 새 창 열기·기한 경과 fallback과
+  좌석 발견 renderer 주입 계약을 `HomePage.test.tsx`로 옮겼습니다. legacy 단일 결제 대상과 refresh
+  callback 생략·제공 계약을 보강하고, 실제 handoff 매핑은 App 통합 경계에 유지했습니다.
+- 독립 리뷰: 최초 P3 테스트 보강 권고를 반영한 뒤 전체 diff를 다시 검토했으며 P0~P3 잔여 지적
+  사항이 없음을 확인했습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 69개 파일·491건, production
+  build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: reservation execution application, watch-group observation application, provider
+  역할별 계약, App shell·Auth와 `NewWait` 나머지 strict 경계입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

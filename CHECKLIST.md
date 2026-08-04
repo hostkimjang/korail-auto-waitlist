@@ -230,6 +230,11 @@
 - [x] API 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정책을 `notification_management/service.py`, 공용 outbox idempotency primitive를 `outbox.py`로 이동하고 HTTP→중앙 services 역의존 제거
 - [x] 세 번째 구조 슬라이스 웹 ESLint 오류 0·고정 경고 25, strict·unused typecheck, Vitest 57개 파일·393건, production build·Sites 4건과 API 전체 pytest 958건·Ruff `E/F/I`·format ratchet·module boundary 통과
 - [x] 세 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
+- [x] 웹 역 카탈로그 DTO·metadata·identity 검증을 `api/stations.ts`, 시간표 query·provider 부분 실패·DTO mapper를 `api/timetables.ts`, 좌석 provenance fail-closed 정규화를 `api/seatClasses.ts`로 이동하고 `api.js` identity 호환 export 유지
+- [x] `NewWait`의 자동 시간표 검색·provider별 재시도·수동 전체 조회·cache-only 동기화·좌석 fallback을 `useTimetableSearch.ts`로 이동하고 같은 query key의 stale 응답 차단·부분 성공 보존·demo·reference reconciliation 회귀 테스트 추가
+- [x] API `/timetables`·`/timetable-snapshots`·`/seat-status/refresh`와 snapshot background session을 `timetable_management/http.py`, live→TAGO fallback·overlay·evidence orchestration을 FastAPI 비의존 `application.py`로 이동. `/seat-status/status`는 cooldown 수명주기로 중앙 유지
+- [x] 네 번째 구조 슬라이스 웹 ESLint 오류 0·고정 경고 23, strict·unused typecheck, Vitest 60개 파일·406건, production build·Sites 4건과 API 전체 pytest 960건·관련 37건·Ruff `E/F/I`·format ratchet 68개·module boundary 통과
+- [x] 네 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 완료. migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 오류 표식 0건 확인
 - [ ] 웹 도메인 타입·API validator/mapper를 `.ts`로 분리하고 `api.js` 제거
 - [ ] `NewWait`·OfficialHandoff·Home·Reservations·Settings·Auth를 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거

@@ -50,9 +50,7 @@ from rail_waitlist.timetable_snapshot_cache import TimetableSnapshotCache
 
 
 def watch_payload(**overrides):
-    travel_date = overrides.get(
-        "travel_date", (date.today() + timedelta(days=7)).isoformat()
-    )
+    travel_date = overrides.get("travel_date", (date.today() + timedelta(days=7)).isoformat())
     payload = {
         "provider": "mock",
         "origin": "서울",
@@ -178,9 +176,7 @@ async def test_health_and_safe_provider_contract(client):
         if item["provider"] == "korail" and not item["experimental"]
     )
     srt = next(
-        item
-        for item in response.json()
-        if item["provider"] == "srt" and not item["experimental"]
+        item for item in response.json() if item["provider"] == "srt" and not item["experimental"]
     )
     assert korail["timetable"] is True
     assert korail["seat_monitoring"] is False
@@ -393,16 +389,12 @@ async def test_ui_preferences_reject_an_unsafe_refresh_interval(app, client):
         assert response.status_code == 422
 
 
-async def test_observation_preferences_reschedule_idle_watches_but_not_leased_provider(
-    app, client
-):
+async def test_observation_preferences_reschedule_idle_watches_but_not_leased_provider(app, client):
     now = datetime.now(UTC)
     departure_at = now + timedelta(hours=2)
     leased_next_check = now + timedelta(minutes=10)
     async with app.state.test_session_factory() as session:
-        session.add(
-            AdminAccount(username="admin", password_hash="not-a-real-password-hash")
-        )
+        session.add(AdminAccount(username="admin", password_hash="not-a-real-password-hash"))
         leased_watch = Watch(
             provider=Provider.KORAIL,
             origin="대전",
@@ -521,9 +513,7 @@ async def test_observation_preferences_reschedule_idle_watches_but_not_leased_pr
         assert 4 <= balanced_elapsed <= 6
 
 
-async def test_legacy_split_preference_payload_is_accepted_but_does_not_change_cadence(
-    app, client
-):
+async def test_legacy_split_preference_payload_is_accepted_but_does_not_change_cadence(app, client):
     async with app.state.test_session_factory() as session:
         session.add(
             AdminAccount(
@@ -561,9 +551,7 @@ async def test_mock_station_catalog_endpoint(client):
     }
 
 
-async def test_official_station_catalog_endpoint_maps_missing_key_to_503(
-    client, monkeypatch
-):
+async def test_official_station_catalog_endpoint_maps_missing_key_to_503(client, monkeypatch):
     from rail_waitlist import api
 
     class MissingKeyAdapter(MockProviderAdapter):
@@ -674,7 +662,7 @@ def tago_timetable_item() -> TimetableItem:
 async def test_korail_live_timetable_without_station_node_ids_does_not_call_tago(
     client, monkeypatch
 ):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     captured = None
 
@@ -690,7 +678,7 @@ async def test_korail_live_timetable_without_station_node_ids_does_not_call_tago
     app = client._transport.app
     previous = app.state.korail_browser_seat_source
     app.state.korail_browser_seat_source = CapturingLiveSource()
-    monkeypatch.setattr(api, "get_timetable_provider", must_not_call_tago)
+    monkeypatch.setattr(timetable_application, "get_timetable_provider", must_not_call_tago)
     try:
         response = await client.get(
             "/api/v1/timetables",
@@ -720,7 +708,7 @@ async def test_korail_live_timetable_without_station_node_ids_does_not_call_tago
 async def test_timetable_snapshot_is_cache_only_after_a_successful_timetable_request(
     client, monkeypatch
 ):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     params = {
         "provider": "mock",
@@ -738,7 +726,7 @@ async def test_timetable_snapshot_is_cache_only_after_a_successful_timetable_req
     def must_not_call_provider(provider):
         raise AssertionError("cache-only endpoint must not load a provider")
 
-    monkeypatch.setattr(api, "get_timetable_provider", must_not_call_provider)
+    monkeypatch.setattr(timetable_application, "get_timetable_provider", must_not_call_provider)
     snapshot = await client.get("/api/v1/timetable-snapshots", params=params)
 
     assert snapshot.status_code == 200
@@ -749,12 +737,12 @@ async def test_timetable_snapshot_is_cache_only_after_a_successful_timetable_req
 async def test_timetable_snapshot_returns_404_without_a_successful_source_request(
     client, monkeypatch
 ):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     def must_not_call_provider(provider):
         raise AssertionError("cache-only endpoint must not load a provider")
 
-    monkeypatch.setattr(api, "get_timetable_provider", must_not_call_provider)
+    monkeypatch.setattr(timetable_application, "get_timetable_provider", must_not_call_provider)
     response = await client.get(
         "/api/v1/timetable-snapshots",
         params={
@@ -772,7 +760,7 @@ async def test_timetable_snapshot_returns_404_without_a_successful_source_reques
 async def test_timetable_snapshot_revalidates_cached_journey_in_the_background(
     app, client, monkeypatch
 ):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     now = datetime(2026, 8, 1, tzinfo=timezone.utc)
     cache = TimetableSnapshotCache(
@@ -789,7 +777,9 @@ async def test_timetable_snapshot_revalidates_cached_journey_in_the_background(
             items = await super().timetable(*args, **kwargs)
             return [item.model_copy(update={"train_number": f"MOCK-{calls}"}) for item in items]
 
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: RefreshingAdapter())
+    monkeypatch.setattr(
+        timetable_application, "get_timetable_provider", lambda provider: RefreshingAdapter()
+    )
     params = {
         "provider": "mock",
         "origin": "서울",
@@ -814,7 +804,7 @@ async def test_timetable_snapshot_revalidates_cached_journey_in_the_background(
 
 
 async def test_srt_timetable_uses_live_primary_without_tago(app, client, monkeypatch):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     captured = None
 
@@ -842,7 +832,7 @@ async def test_srt_timetable_uses_live_primary_without_tago(app, client, monkeyp
 
     previous = app.state.srt_seat_source
     app.state.srt_seat_source = CapturingSeatSource()
-    monkeypatch.setattr(api, "get_timetable_provider", must_not_call_tago)
+    monkeypatch.setattr(timetable_application, "get_timetable_provider", must_not_call_tago)
     try:
         response = await client.get(
             "/api/v1/timetables",
@@ -893,9 +883,7 @@ async def test_watch_read_projects_expired_confirmed_hold_as_ended(app, client):
                 finished_at=started_at + timedelta(seconds=2),
                 outcome=ReservationOutcome.PAYMENT_REQUIRED,
                 payment_deadline=deadline,
-                confirmation_outcome=(
-                    ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-                ),
+                confirmation_outcome=(ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
                 confirmation_source="srt.reservations",
                 confirmation_observed_at=reconciled_at,
                 last_reconciled_at=reconciled_at,
@@ -929,7 +917,7 @@ async def test_official_live_timetable_does_not_require_tago_station_nodes(
     origin,
     source_attribute,
 ):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     class LiveSource:
         async def search_timetable(self, **kwargs):
@@ -954,7 +942,7 @@ async def test_official_live_timetable_does_not_require_tago_station_nodes(
         raise AssertionError("successful official live timetable must not call TAGO")
 
     monkeypatch.setattr(app.state, source_attribute, LiveSource())
-    monkeypatch.setattr(api, "get_timetable_provider", must_not_call_tago)
+    monkeypatch.setattr(timetable_application, "get_timetable_provider", must_not_call_tago)
     response = await client.get(
         "/api/v1/timetables",
         params={
@@ -980,8 +968,8 @@ async def test_official_live_timetable_does_not_require_tago_station_nodes(
 async def test_live_timetable_failure_falls_back_to_tago_once_without_live_retry(
     app, client, monkeypatch
 ):
-    from rail_waitlist import api
     from rail_waitlist.korail_browser_seat_source import KorailBrowserTimetableUnavailable
+    from rail_waitlist.timetable_management import application as timetable_application
 
     live_calls = 0
     tago_calls = 0
@@ -1000,7 +988,9 @@ async def test_live_timetable_failure_falls_back_to_tago_once_without_live_retry
 
     previous = app.state.korail_browser_seat_source
     app.state.korail_browser_seat_source = UnavailableLiveSource()
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: CapturingTagoAdapter())
+    monkeypatch.setattr(
+        timetable_application, "get_timetable_provider", lambda provider: CapturingTagoAdapter()
+    )
     try:
         response = await client.get(
             "/api/v1/timetables",
@@ -1026,9 +1016,9 @@ async def test_live_timetable_failure_falls_back_to_tago_once_without_live_retry
 async def test_timetable_returns_safe_503_when_live_and_tago_are_unavailable(
     app, client, monkeypatch
 ):
-    from rail_waitlist import api
     from rail_waitlist.korail_browser_seat_source import KorailBrowserTimetableUnavailable
     from rail_waitlist.providers import ProviderUnavailable
+    from rail_waitlist.timetable_management import application as timetable_application
 
     class UnavailableLiveSource:
         async def search_timetable(self, **kwargs):
@@ -1040,7 +1030,9 @@ async def test_timetable_returns_safe_503_when_live_and_tago_are_unavailable(
 
     previous = app.state.korail_browser_seat_source
     app.state.korail_browser_seat_source = UnavailableLiveSource()
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: UnavailableTagoAdapter())
+    monkeypatch.setattr(
+        timetable_application, "get_timetable_provider", lambda provider: UnavailableTagoAdapter()
+    )
     try:
         response = await client.get(
             "/api/v1/timetables",
@@ -1064,9 +1056,9 @@ async def test_timetable_returns_safe_503_when_live_and_tago_are_unavailable(
 async def test_srt_timetable_does_not_expose_route_outside_server_source_roster(
     app, client, monkeypatch
 ):
-    from rail_waitlist import api
     from rail_waitlist.domain import Provider
     from rail_waitlist.providers import OfficialTimetableAdapter
+    from rail_waitlist.timetable_management import application as timetable_application
 
     class RejectingTagoClient:
         async def timetable(self, *args, **kwargs):
@@ -1087,11 +1079,9 @@ async def test_srt_timetable_does_not_expose_route_outside_server_source_roster(
     app.state.station_catalog_service = FakeStationCatalogService()
     app.state.srt_seat_source = UnsupportedRouteLiveSource()
     monkeypatch.setattr(
-        api,
+        timetable_application,
         "get_timetable_provider",
-        lambda provider: OfficialTimetableAdapter(
-            Provider.SRT, tago_client=RejectingTagoClient()
-        ),
+        lambda provider: OfficialTimetableAdapter(Provider.SRT, tago_client=RejectingTagoClient()),
     )
     try:
         response = await client.get(
@@ -1116,7 +1106,7 @@ async def test_srt_timetable_does_not_expose_route_outside_server_source_roster(
 async def test_authenticated_seat_status_refresh_never_uses_server_korail_source(
     app, client, monkeypatch
 ):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     class KorailTimetableAdapter(MockProviderAdapter):
         async def timetable(
@@ -1139,7 +1129,9 @@ async def test_authenticated_seat_status_refresh_never_uses_server_korail_source
         async def overlay(self, items, **kwargs):
             raise AssertionError("KORAIL direct source must not be called")
 
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: KorailTimetableAdapter())
+    monkeypatch.setattr(
+        timetable_application, "get_timetable_provider", lambda provider: KorailTimetableAdapter()
+    )
     app.state.korail_seat_source = RejectingSeatSource()
     request_data = {
         "provider": "korail",
@@ -1160,7 +1152,7 @@ async def test_authenticated_seat_status_refresh_never_uses_server_korail_source
     def must_not_call_provider(provider):
         raise AssertionError("cache-only endpoint must not load a provider")
 
-    monkeypatch.setattr(api, "get_timetable_provider", must_not_call_provider)
+    monkeypatch.setattr(timetable_application, "get_timetable_provider", must_not_call_provider)
     snapshot = await client.get("/api/v1/timetable-snapshots", params=request_data)
     assert snapshot.status_code == 200
     assert snapshot.json() == response.json()
@@ -1291,9 +1283,7 @@ async def test_watch_crud_transition_and_idempotency(client, db_engine):
         assert list((await session.scalars(select(WatchCandidate))).all()) == []
 
 
-async def test_concurrent_watch_create_reuses_one_idempotent_resource(
-    client, db_engine
-):
+async def test_concurrent_watch_create_reuses_one_idempotent_resource(client, db_engine):
     headers = {"Idempotency-Key": "concurrent-create-seoul-busan"}
     first, second = await asyncio.gather(
         client.post("/api/v1/watches", json=watch_payload(), headers=headers),
@@ -1353,19 +1343,13 @@ async def test_watch_persists_station_nodes_and_ordered_candidates(client, db_en
     assert [item["priority"] for item in body["candidates"]] == [1, 2]
     assert all(item["id"] for item in body["candidates"])
     assert datetime.fromisoformat(body["candidates"][0]["departure_at"]) == (
-        datetime.fromisoformat(payload["candidates"][1]["departure_at"]).astimezone(
-            timezone.utc
-        )
+        datetime.fromisoformat(payload["candidates"][1]["departure_at"]).astimezone(timezone.utc)
     )
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         rows = list(
-            (
-                await session.scalars(
-                    select(WatchCandidate).order_by(WatchCandidate.priority)
-                )
-            ).all()
+            (await session.scalars(select(WatchCandidate).order_by(WatchCandidate.priority))).all()
         )
     assert [(row.train_number, row.priority) for row in rows] == [
         ("KTX-001", 1),
@@ -1578,8 +1562,7 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
     response = await client.get(f"/api/v1/watches/{created.json()['id']}")
     assert response.status_code == 200, response.text
     attempts = [
-        candidate["latest_reservation_attempt"]
-        for candidate in response.json()["candidates"]
+        candidate["latest_reservation_attempt"] for candidate in response.json()["candidates"]
     ]
     assert attempts[0] == {
         "outcome": "not_available",
@@ -1722,9 +1705,7 @@ async def test_watch_read_projects_elapsed_confirmed_hold_by_policy(
                 finished_at=started_at + timedelta(seconds=2),
                 outcome=ReservationOutcome.PAYMENT_REQUIRED,
                 payment_deadline=deadline,
-                confirmation_outcome=(
-                    ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-                ),
+                confirmation_outcome=(ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
                 confirmation_source="srtrain-reservation-list",
                 confirmation_observed_at=reconciled_at,
                 last_reconciled_at=reconciled_at,
@@ -1810,9 +1791,7 @@ async def test_watch_read_keeps_incomplete_payment_hold_end_evidence_fail_closed
 async def test_official_watch_fails_closed_without_station_node_identity(client):
     response = await client.post(
         "/api/v1/watches",
-        json=watch_payload(
-            provider="korail", origin_node_id=None, destination_node_id=None
-        ),
+        json=watch_payload(provider="korail", origin_node_id=None, destination_node_id=None),
     )
     assert response.status_code == 422
     assert "station node IDs" in response.text
@@ -1882,9 +1861,7 @@ async def test_watch_update_rejects_candidate_inconsistency(client):
     created = await client.post("/api/v1/watches", json=watch_payload())
     watch_id = created.json()["id"]
 
-    seat_mismatch = await client.patch(
-        f"/api/v1/watches/{watch_id}", json={"seat_class": "first"}
-    )
+    seat_mismatch = await client.patch(f"/api/v1/watches/{watch_id}", json={"seat_class": "first"})
     train_mismatch = await client.patch(
         f"/api/v1/watches/{watch_id}", json={"train_numbers": ["KTX-999"]}
     )
@@ -2143,9 +2120,7 @@ async def test_focused_observation_is_limited_to_three_watches_per_provider(clie
     assert "up to 3" in rejected.json()["detail"]
 
 
-async def test_transition_refreshes_stale_watch_before_idempotent_commit(
-    client, db_engine
-):
+async def test_transition_refreshes_stale_watch_before_idempotent_commit(client, db_engine):
     created = await client.post("/api/v1/watches", json=watch_payload(provider="mock"))
     watch_id = created.json()["id"]
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -2154,9 +2129,7 @@ async def test_transition_refreshes_stale_watch_before_idempotent_commit(
         stale = await stale_session.get(Watch, watch_id)
         assert first.status is WatchStatus.DRAFT
         assert stale.status is WatchStatus.DRAFT
-        await transition_watch(
-            first_session, first, WatchStatus.SCHEDULED, "same-transition-key"
-        )
+        await transition_watch(first_session, first, WatchStatus.SCHEDULED, "same-transition-key")
         result = await transition_watch(
             stale_session, stale, WatchStatus.SCHEDULED, "same-transition-key"
         )
@@ -2187,9 +2160,7 @@ async def test_transition_refreshes_stale_watch_before_idempotent_commit(
         assert len(keys) == 1
 
 
-async def test_update_refreshes_stale_watch_before_rebuilding_dedupe_key(
-    client, db_engine
-):
+async def test_update_refreshes_stale_watch_before_rebuilding_dedupe_key(client, db_engine):
     created = await client.post("/api/v1/watches", json=watch_payload(provider="mock"))
     watch_id = created.json()["id"]
     factory = async_sessionmaker(db_engine, expire_on_commit=False)

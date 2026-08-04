@@ -496,13 +496,15 @@ async def test_overlay_recalculates_actions_for_every_bridge_status(db_engine):
 async def test_korail_timetable_endpoint_overlays_browser_snapshot(
     app, public_client, client, monkeypatch
 ):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     class LocalKorailTimetable(MockProviderAdapter):
         async def timetable(self, *args, **kwargs):
             return [timetable_item()]
 
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: LocalKorailTimetable())
+    monkeypatch.setattr(
+        timetable_application, "get_timetable_provider", lambda provider: LocalKorailTimetable()
+    )
     previous = enable_bridge()
     try:
         await seed_bridge_credential(app)

@@ -15,8 +15,6 @@ from .celery_app import celery_app
 from .config import get_settings
 from .database import SessionFactory, get_session
 from .domain import Provider, ReservationOutcome, ReservationPolicy, WatchStatus
-from .korail_browser_bridge import overlay_korail_browser_snapshots
-from .korail_browser_seat_source import KorailBrowserTimetableUnavailable
 from .models import (
     KorailBrowserSnapshotBatch,
     OutboxEvent,
@@ -25,15 +23,11 @@ from .models import (
     Watch,
     WatchCandidate,
 )
-from .official_page_confirmations import (
-    overlay_official_page_confirmations,
-    upsert_official_page_confirmations,
-)
+from .official_page_confirmations import upsert_official_page_confirmations
 from .provider_accounts import has_authenticated_provider_account
 from .providers import (
     OfficialTimetableAdapter,
     ProviderUnavailable,
-    RouteValidationError,
     get_execution_provider,
     get_timetable_provider,
     list_capabilities,
@@ -45,10 +39,8 @@ from .schemas import (
     OfficialPageSeatConfirmationRead,
     ProviderCapabilities,
     ReservationResult,
-    SeatStatusRefreshRequest,
     SeatStatusSourceStatus,
     StationCatalog,
-    TimetableItem,
     WatchCreate,
     WatchRead,
     WatchUpdate,
@@ -64,12 +56,6 @@ from .services import (
     transition_watch,
     update_watch,
 )
-from .srt_live_timetable import map_srt_live_timetable
-from .srt_provider_adapter import SrtProviderAdapterUnavailable
-from .srt_seat_source import SrtLiveTimetableUnavailable
-from .timetable_evidence import persist_timetable_seat_evidence
-from .timetable_snapshot_cache import TimetableSnapshotKey
-from .watch_registration_policy import apply_watch_registration_capability
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -126,129 +112,6 @@ async def stations(provider: Provider, request: Request) -> StationCatalog:
         raise HTTPException(503, str(error)) from None
 
 
-@router.get("/timetables", response_model=list[TimetableItem])
-async def timetables(
-    request: Request,
-    response: Response,
-    session: Session,
-    provider: Provider,
-    origin: Annotated[str, Query(min_length=1, max_length=40)],
-    destination: Annotated[str, Query(min_length=1, max_length=40)],
-    departure_from: datetime,
-    departure_to: datetime,
-    passenger_count: Annotated[int, Query(ge=1, le=9)] = 1,
-    origin_node_id: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
-    destination_node_id: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
-) -> list[TimetableItem]:
-    response.headers["Cache-Control"] = "no-store"
-    items = await _load_timetable_items(
-        app=request.app,
-        session=session,
-        provider=provider,
-        origin=origin,
-        destination=destination,
-        departure_from=departure_from,
-        departure_to=departure_to,
-        passenger_count=passenger_count,
-        origin_node_id=origin_node_id,
-        destination_node_id=destination_node_id,
-    )
-    await _store_timetable_snapshot(
-        request=request,
-        provider=provider,
-        origin=origin,
-        destination=destination,
-        departure_from=departure_from,
-        departure_to=departure_to,
-        passenger_count=passenger_count,
-        origin_node_id=origin_node_id,
-        destination_node_id=destination_node_id,
-        items=items,
-    )
-    return items
-
-
-@router.post("/seat-status/refresh", response_model=list[TimetableItem])
-async def refresh_seat_status(
-    data: SeatStatusRefreshRequest,
-    request: Request,
-    response: Response,
-    session: Session,
-) -> list[TimetableItem]:
-    """Fetch a fresh server-managed seat snapshot and return exact-matched timetable rows."""
-    response.headers["Cache-Control"] = "no-store"
-    items = await _load_timetable_items(
-        app=request.app,
-        session=session,
-        provider=data.provider,
-        origin=data.origin,
-        destination=data.destination,
-        departure_from=data.departure_from,
-        departure_to=data.departure_to,
-        passenger_count=data.passenger_count,
-        origin_node_id=data.origin_node_id,
-        destination_node_id=data.destination_node_id,
-    )
-    await _store_timetable_snapshot(
-        request=request,
-        provider=data.provider,
-        origin=data.origin,
-        destination=data.destination,
-        departure_from=data.departure_from,
-        departure_to=data.departure_to,
-        passenger_count=data.passenger_count,
-        origin_node_id=data.origin_node_id,
-        destination_node_id=data.destination_node_id,
-        items=items,
-    )
-    return items
-
-
-@router.get("/timetable-snapshots", response_model=list[TimetableItem])
-async def timetable_snapshot(
-    request: Request,
-    response: Response,
-    provider: Provider,
-    origin: Annotated[str, Query(min_length=1, max_length=40)],
-    destination: Annotated[str, Query(min_length=1, max_length=40)],
-    departure_from: datetime,
-    departure_to: datetime,
-    passenger_count: Annotated[int, Query(ge=1, le=9)] = 1,
-    origin_node_id: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
-    destination_node_id: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
-) -> list[TimetableItem]:
-    """Return a cached snapshot and only schedule bounded background revalidation."""
-    response.headers["Cache-Control"] = "no-store"
-    key = TimetableSnapshotKey.from_request(
-        provider=provider,
-        origin=origin,
-        destination=destination,
-        departure_from=departure_from,
-        departure_to=departure_to,
-        passenger_count=passenger_count,
-        origin_node_id=origin_node_id,
-        destination_node_id=destination_node_id,
-    )
-    items = await request.app.state.timetable_snapshot_cache.get(key)
-    if items is None:
-        raise HTTPException(404, "timetable snapshot was not found")
-    await request.app.state.timetable_snapshot_cache.refresh_if_due(
-        key,
-        lambda: _load_timetable_snapshot_in_background(
-            request=request,
-            provider=provider,
-            origin=origin,
-            destination=destination,
-            departure_from=departure_from,
-            departure_to=departure_to,
-            passenger_count=passenger_count,
-            origin_node_id=origin_node_id,
-            destination_node_id=destination_node_id,
-        ),
-    )
-    return items
-
-
 @router.get("/seat-status/status", response_model=list[SeatStatusSourceStatus])
 async def seat_status_sources(
     request: Request,
@@ -285,218 +148,6 @@ def _seat_status_source_status(
         cause=cooldown.reason,
         retry_after_seconds=cooldown.retry_after_seconds,
     )
-
-
-async def _load_timetable_items(
-    *,
-    app,
-    session: AsyncSession,
-    provider: Provider,
-    origin: str,
-    destination: str,
-    departure_from: datetime,
-    departure_to: datetime,
-    passenger_count: int,
-    origin_node_id: str | None,
-    destination_node_id: str | None,
-) -> list[TimetableItem]:
-    try:
-        if provider == Provider.MOCK:
-            items = await _load_adapter_timetable(
-                app=app,
-                provider=provider,
-                origin=origin,
-                destination=destination,
-                departure_from=departure_from,
-                departure_to=departure_to,
-                origin_node_id=origin_node_id,
-                destination_node_id=destination_node_id,
-            )
-            return items
-        if provider not in {Provider.KORAIL, Provider.SRT}:
-            raise HTTPException(400, "unsupported provider")
-
-        try:
-            items = await _load_live_timetable(
-                app=app,
-                provider=provider,
-                origin=origin,
-                destination=destination,
-                departure_from=departure_from,
-                departure_to=departure_to,
-                passenger_count=passenger_count,
-            )
-        except (
-            KorailBrowserTimetableUnavailable,
-            SrtLiveTimetableUnavailable,
-            SrtProviderAdapterUnavailable,
-            ValueError,
-        ):
-            LOGGER.warning(
-                "Official live timetable unavailable provider=%s; trying TAGO fallback",
-                provider.value,
-            )
-            items = await _load_adapter_timetable(
-                app=app,
-                provider=provider,
-                origin=origin,
-                destination=destination,
-                departure_from=departure_from,
-                departure_to=departure_to,
-                origin_node_id=origin_node_id,
-                destination_node_id=destination_node_id,
-            )
-
-        has_station_nodes = origin_node_id is not None and destination_node_id is not None
-        if has_station_nodes:
-            items = await overlay_official_page_confirmations(
-                session,
-                items,
-                provider=provider,
-                origin_node_id=origin_node_id,
-                destination_node_id=destination_node_id,
-                passenger_count=passenger_count,
-            )
-        if provider == Provider.KORAIL:
-            items = await overlay_korail_browser_snapshots(
-                session,
-                items,
-                origin=origin,
-                destination=destination,
-                passenger_count=passenger_count,
-            )
-        execution_capabilities = get_execution_provider(provider).capabilities()
-        items = apply_watch_registration_capability(
-            items,
-            seat_monitoring_enabled=execution_capabilities.seat_monitoring,
-        )
-        if has_station_nodes:
-            items = await persist_timetable_seat_evidence(
-                session,
-                items,
-                provider=provider,
-                origin_node_id=origin_node_id,
-                destination_node_id=destination_node_id,
-                passenger_count=passenger_count,
-            )
-        await session.commit()
-        return items
-    except ProviderUnavailable as error:
-        raise HTTPException(503, str(error)) from None
-    except RouteValidationError as error:
-        raise HTTPException(422, str(error)) from None
-    raise HTTPException(400, "unsupported provider")
-
-
-async def _load_live_timetable(
-    *,
-    app,
-    provider: Provider,
-    origin: str,
-    destination: str,
-    departure_from: datetime,
-    departure_to: datetime,
-    passenger_count: int,
-) -> list[TimetableItem]:
-    if provider == Provider.KORAIL:
-        return await app.state.korail_browser_seat_source.search_timetable(
-            origin=origin,
-            destination=destination,
-            departure_from=departure_from,
-            departure_to=departure_to,
-            passenger_count=passenger_count,
-        )
-    if provider == Provider.SRT:
-        trains = await app.state.srt_seat_source.search_timetable(
-            origin=origin,
-            destination=destination,
-            departure_from=departure_from,
-            departure_to=departure_to,
-            passenger_count=passenger_count,
-        )
-        return map_srt_live_timetable(trains)
-    raise ValueError("provider does not expose a live timetable")
-
-
-async def _load_adapter_timetable(
-    *,
-    app,
-    provider: Provider,
-    origin: str,
-    destination: str,
-    departure_from: datetime,
-    departure_to: datetime,
-    origin_node_id: str | None,
-    destination_node_id: str | None,
-) -> list[TimetableItem]:
-    adapter = get_timetable_provider(provider)
-    if isinstance(adapter, OfficialTimetableAdapter):
-        service = app.state.station_catalog_service
-        await service.get_catalog(provider)
-        adapter.tago_client = service.tago_client
-    return await adapter.timetable(
-        origin=origin,
-        destination=destination,
-        departure_from=departure_from,
-        origin_node_id=origin_node_id,
-        destination_node_id=destination_node_id,
-        departure_to=departure_to,
-    )
-
-
-async def _store_timetable_snapshot(
-    *,
-    request: Request,
-    provider: Provider,
-    origin: str,
-    destination: str,
-    departure_from: datetime,
-    departure_to: datetime,
-    passenger_count: int,
-    origin_node_id: str | None,
-    destination_node_id: str | None,
-    items: list[TimetableItem],
-) -> None:
-    key = TimetableSnapshotKey.from_request(
-        provider=provider,
-        origin=origin,
-        destination=destination,
-        departure_from=departure_from,
-        departure_to=departure_to,
-        passenger_count=passenger_count,
-        origin_node_id=origin_node_id,
-        destination_node_id=destination_node_id,
-    )
-    await request.app.state.timetable_snapshot_cache.store(key, items)
-
-
-async def _load_timetable_snapshot_in_background(
-    *,
-    request: Request,
-    provider: Provider,
-    origin: str,
-    destination: str,
-    departure_from: datetime,
-    departure_to: datetime,
-    passenger_count: int,
-    origin_node_id: str | None,
-    destination_node_id: str | None,
-) -> list[TimetableItem]:
-    """Use a fresh database session so cache refresh outlives the GET response safely."""
-    session_factory = request.app.state.timetable_snapshot_session_factory
-    async with session_factory() as session:
-        return await _load_timetable_items(
-            app=request.app,
-            session=session,
-            provider=provider,
-            origin=origin,
-            destination=destination,
-            departure_from=departure_from,
-            departure_to=departure_to,
-            passenger_count=passenger_count,
-            origin_node_id=origin_node_id,
-            destination_node_id=destination_node_id,
-        )
 
 
 @router.post(

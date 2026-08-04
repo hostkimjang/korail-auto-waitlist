@@ -234,13 +234,15 @@ async def test_idempotency_replay_returns_immutable_original_batch_after_new_rev
 
 
 async def test_timetable_endpoint_overlays_exact_confirmation_batch(client, monkeypatch):
-    from rail_waitlist import api
+    from rail_waitlist.timetable_management import application as timetable_application
 
     class LocalKorailTimetable(MockProviderAdapter):
         async def timetable(self, *args, **kwargs):
             return [timetable_item()]
 
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: LocalKorailTimetable())
+    monkeypatch.setattr(
+        timetable_application, "get_timetable_provider", lambda provider: LocalKorailTimetable()
+    )
     stored = await client.post(
         "/api/v1/seat-observations/official-page-confirmations",
         json=confirmation_payload(),

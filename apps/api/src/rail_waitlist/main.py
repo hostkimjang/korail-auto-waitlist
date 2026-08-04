@@ -44,6 +44,7 @@ from .srt_provider_adapter import SrtProviderAdapterClient
 from .srt_seat_source import SrtLiveSeatSource
 from .station_catalog_cache import StationCatalogService
 from .station_visibility import KorailStationVisibility
+from .timetable_management.http import router as timetable_management_router
 from .timetable_snapshot_cache import TimetableSnapshotCache
 from .ui_preferences.http import router as ui_preferences_router
 
@@ -186,6 +187,7 @@ def create_app(
     app.include_router(notification_management_router)
     app.include_router(operation_summary_router)
     app.include_router(provider_account_management_router)
+    app.include_router(timetable_management_router)
     app.include_router(ui_preferences_router)
     app.include_router(router)
 

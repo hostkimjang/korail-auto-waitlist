@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -67,7 +67,7 @@ import { StepThreeTimeRange } from "./features/new-wait/StepThreeTimeRange";
 import { StepThreeRefreshControl } from "./features/new-wait/StepThreeRefreshControl";
 import { StationCombobox } from "./features/new-wait/StationCombobox";
 import { useStationCatalog } from "./features/new-wait/useStationCatalog";
-import { reconcileTrainSnapshots } from "./features/new-wait/trainSnapshots";
+import { useTimetableSearch } from "./features/new-wait/useTimetableSearch";
 import { recoverRefreshedRegistrationTrain } from "./features/new-wait/registrationEvidenceRecovery";
 import {
   SeatRegistrationCancelButton,
@@ -79,7 +79,6 @@ import { resolvedSeatRegistration } from "./features/new-wait/watchRegistrationH
 import { SystemStatusDashboard } from "./features/settings/SystemStatusDashboard";
 import { TimetableRefreshSettings } from "./features/settings/TimetableRefreshSettings";
 import { ProviderAccountSettings } from "./features/settings/ProviderAccountSettings";
-import { buildTimetableQueryKey } from "./features/new-wait/timetableQueryKey";
 import {
   createInitialNewWaitForm,
   selectNewWaitWeekday,
@@ -610,8 +609,6 @@ const TrainResultCard = memo(function TrainResultCard({
 export function NewWait({ demo, watches = [], providerAccounts = [], refreshIntervalSeconds = DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS, onComplete, onCancelWatch = async () => undefined, onCancel }) {
   const [step, setStep] = useState(1);
   const [submitError, setSubmitError] = useState("");
-  const [trains, setTrains] = useState([]);
-  const [timetableState, setTimetableState] = useState({ loadingProviders: [], providerResults: {} });
   const reservationPolicyManuallySelectedRef = useRef(false);
   const [form, setForm] = useState(() => createInitialNewWaitForm({
     demo,
@@ -625,11 +622,25 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
     const local = getRegistrationState(seatRegistrationKey(train.id, seatClass));
     return resolvedSeatRegistration(local, watches, train, seatClass);
   };
-  const timetableQueryKey = buildTimetableQueryKey(form);
-  const timetableQueryKeyRef = useRef(timetableQueryKey);
-  useLayoutEffect(() => {
-    timetableQueryKeyRef.current = timetableQueryKey;
-  }, [timetableQueryKey]);
+  const {
+    trains,
+    state: timetableState,
+    retryProvider: retryTimetableProvider,
+    refreshProviderSeatStatus,
+    retrySeatStatusProviders,
+    refreshAll: refreshAllTimetables,
+    synchronizeCached: synchronizeCachedTimetables,
+  } = useTimetableSearch({
+    active: step === 3,
+    demo,
+    form,
+    loadTimetables: fetchTimetables,
+    loadSeatStatus: refreshSeatStatus,
+    loadCachedSnapshot: fetchCachedTimetableSnapshot,
+    loadDemoTimetables: demoTimetablesForForm,
+    filterTimetables,
+    mapTimetable,
+  });
   const {
     state: stationState,
     providerKey: stationProviderKey,
@@ -763,169 +774,6 @@ export function NewWait({ demo, watches = [], providerAccounts = [], refreshInte
     timetableState.providerResults,
     timetableState.loadingProviders,
   );
-
-  useEffect(() => {
-    if (step !== 3) return undefined;
-    let active = true;
-    const requestQueryKey = timetableQueryKey;
-    setTimetableState({ loadingProviders: [...form.providers], providerResults: {} });
-
-    if (demo) {
-      const datedItems = demoTimetablesForForm(form);
-      const items = filterTimetables({ ...form, timeFrom: form.time, timeTo: form.timeEnd }, datedItems);
-      setTrains((previous) => reconcileTrainSnapshots(previous, items));
-      setTimetableState({ loadingProviders: [], providerResults: Object.fromEntries(form.providers.map((provider) => [provider, { status: "success", count: items.filter((item) => item.provider === provider).length }])) });
-      return undefined;
-    }
-
-    setTrains([]);
-    fetchTimetables({
-      ...form,
-      origin: form.origin.trim(),
-      destination: form.destination.trim(),
-      date: form.date,
-      timeFrom: form.time,
-      timeTo: form.timeEnd,
-    }).then(({ trains: items, providerResults }) => {
-      if (!active || timetableQueryKeyRef.current !== requestQueryKey) return;
-      setTrains((previous) => reconcileTrainSnapshots(previous, items));
-      setTimetableState({ loadingProviders: [], providerResults });
-    }).catch((error) => {
-      if (!active || timetableQueryKeyRef.current !== requestQueryKey) return;
-      const prefix = error instanceof ApiError && error.status === 503
-        ? "공식 시간표 제공자가 응답하지 않습니다."
-        : "공식 시간표를 불러오지 못했습니다.";
-      setTimetableState({ loadingProviders: [], providerResults: Object.fromEntries(form.providers.map((provider) => [provider, { status: "error", provider, message: `${prefix} 잠시 후 다시 시도해 주세요.` }])) });
-    });
-    return () => { active = false; };
-  }, [demo, step, timetableQueryKey]);
-
-  const retryTimetableProvider = async (provider) => {
-    const requestQueryKey = timetableQueryKeyRef.current;
-    setTimetableState((value) => ({ ...value, loadingProviders: [...new Set([...value.loadingProviders, provider])] }));
-    if (demo) {
-      const items = filterTimetables(
-        { ...form, providers: [provider], timeFrom: form.time, timeTo: form.timeEnd },
-        demoTimetablesForForm(form, provider),
-      );
-      setTrains((value) => reconcileTrainSnapshots(value, [...value.filter((train) => train.provider !== provider), ...items].sort((left, right) => new Date(left.departure_at) - new Date(right.departure_at))));
-      setTimetableState((value) => ({
-        loadingProviders: value.loadingProviders.filter((item) => item !== provider),
-        providerResults: { ...value.providerResults, [provider]: { status: "success", provider, count: items.length } },
-      }));
-      return;
-    }
-    try {
-      const result = await fetchTimetables({ ...form, timeFrom: form.time, timeTo: form.timeEnd }, provider);
-      if (timetableQueryKeyRef.current !== requestQueryKey) return;
-      setTrains((value) => reconcileTrainSnapshots(value, [...value.filter((train) => train.provider !== provider), ...result.trains].sort((left, right) => new Date(left.departure_at) - new Date(right.departure_at))));
-      setTimetableState((value) => ({
-        loadingProviders: value.loadingProviders.filter((item) => item !== provider),
-        providerResults: { ...value.providerResults, ...result.providerResults },
-      }));
-    } catch {
-      if (timetableQueryKeyRef.current !== requestQueryKey) return;
-      setTimetableState((value) => ({
-        loadingProviders: value.loadingProviders.filter((item) => item !== provider),
-        providerResults: { ...value.providerResults, [provider]: { status: "error", provider, message: "공식 시간표를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." } },
-      }));
-    }
-  };
-
-  const refreshProviderSeatStatus = async (provider, requestForm = form) => {
-    const requestQueryKey = buildTimetableQueryKey(requestForm);
-    setTimetableState((value) => ({ ...value, loadingProviders: [...new Set([...value.loadingProviders, provider])] }));
-    try {
-      const items = await refreshSeatStatus(
-        { ...requestForm, timeFrom: requestForm.time, timeTo: requestForm.timeEnd },
-        provider,
-      );
-      if (timetableQueryKeyRef.current !== requestQueryKey) {
-        throw new Error("조회 조건이 변경되었습니다.");
-      }
-      setTrains((value) => reconcileTrainSnapshots(value, [
-        ...value.filter((train) => train.provider !== provider),
-        ...items,
-      ].sort((left, right) => new Date(left.departure_at) - new Date(right.departure_at))));
-      setTimetableState((value) => ({
-        loadingProviders: value.loadingProviders.filter((item) => item !== provider),
-        providerResults: {
-          ...value.providerResults,
-          [provider]: { status: "success", provider, count: items.length },
-        },
-      }));
-      return items;
-    } catch (error) {
-      if (timetableQueryKeyRef.current === requestQueryKey) {
-        setTimetableState((value) => ({
-          loadingProviders: value.loadingProviders.filter((item) => item !== provider),
-          providerResults: {
-            ...value.providerResults,
-            [provider]: {
-              status: "error",
-              provider,
-              message: "좌석 상태를 다시 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.",
-            },
-          },
-        }));
-      }
-      throw error;
-    }
-  };
-
-  const retrySeatStatusProviders = async (providers) => {
-    return Promise.all(providers.map((provider) => refreshProviderSeatStatus(provider)));
-  };
-
-  const refreshAllTimetables = async () => {
-    const requestQueryKey = timetableQueryKeyRef.current;
-    setTimetableState((value) => ({ ...value, loadingProviders: [...form.providers] }));
-    try {
-      const result = demo
-        ? {
-          trains: filterTimetables({ ...form, timeFrom: form.time, timeTo: form.timeEnd }, demoTimetablesForForm(form)),
-          providerResults: Object.fromEntries(form.providers.map((provider) => [provider, { status: "success", provider }])),
-        }
-        : await fetchTimetables({ ...form, timeFrom: form.time, timeTo: form.timeEnd });
-      if (timetableQueryKeyRef.current !== requestQueryKey) return;
-      setTrains((previous) => reconcileTrainSnapshots(previous, result.trains));
-      setTimetableState({ loadingProviders: [], providerResults: result.providerResults });
-    } catch (error) {
-      if (timetableQueryKeyRef.current !== requestQueryKey) return;
-      setTimetableState((value) => ({
-        loadingProviders: [],
-        providerResults: Object.fromEntries(form.providers.map((provider) => [provider, value.providerResults[provider] ?? { status: "error", provider, message: "공식 시간표를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요." }])),
-      }));
-      throw error;
-    }
-  };
-
-  const synchronizeCachedTimetables = async () => {
-    if (demo) {
-      const items = filterTimetables(
-        { ...form, timeFrom: form.time, timeTo: form.timeEnd },
-        demoTimetablesForForm(form),
-      );
-      setTrains((previous) => reconcileTrainSnapshots(previous, items));
-      return;
-    }
-    const requestQueryKey = timetableQueryKeyRef.current;
-    const snapshots = await Promise.all(form.providers.map(async (provider) => ({
-      provider,
-      items: await fetchCachedTimetableSnapshot(form, provider),
-    })));
-    if (timetableQueryKeyRef.current !== requestQueryKey) return;
-    setTrains((previous) => {
-      const providersWithSnapshots = new Set(snapshots.filter(({ items }) => items !== null).map(({ provider }) => provider));
-      const incoming = [
-        ...previous.filter((train) => !providersWithSnapshots.has(train.provider)),
-        ...snapshots.flatMap(({ items }) => items === null
-          ? []
-          : filterTimetables({ ...form, timeFrom: form.time, timeTo: form.timeEnd }, items).map(mapTimetable)),
-      ].sort((left, right) => new Date(left.departure_at) - new Date(right.departure_at));
-      return reconcileTrainSnapshots(previous, incoming);
-    });
-  };
 
   return (
     <div className="page wizard-page">

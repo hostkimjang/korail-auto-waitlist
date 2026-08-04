@@ -203,6 +203,27 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: `NewWait` 시간표 검색·등록·열차 선택, App shell의 작업 CRUD·SSE orchestration,
   `api.js`의 역·시간표·작업 API, 전역 CSS, API worker·provider 역할을 다음 슬라이스에서 분리합니다.
 
+### 2026-08-04 네 번째 구조 슬라이스
+
+- 웹 API 경계: 역 카탈로그 외부 DTO 검증·metadata tuple·identity 병합을 `api/stations.ts`, 시간표 검색
+  조건·provider override·부분 실패·DTO mapping을 `api/timetables.ts`, 좌석 provenance와
+  `unknown/not_observed` 정규화를 `api/seatClasses.ts`로 이동했습니다. `api.js`는 동일 구현 객체를
+  다시 export하는 전환 경계로 축소했습니다.
+- `NewWait` 시간표 상태: step 3 자동 조회, provider별 재시도, 좌석 fallback, 수동 전체 조회와
+  cache-only 동기화를 `useTimetableSearch.ts`로 옮겼습니다. 모든 경로가 같은 query key를 사용해 조건
+  변경 뒤 늦은 응답을 버리고, 한 provider 실패 시 다른 provider의 성공 열차와 상태를 보존합니다.
+- API 시간표 경계: `/timetables`, `/timetable-snapshots`, `/seat-status/refresh`와 snapshot background
+  session을 `timetable_management/http.py`로, live→TAGO fallback·overlay·evidence orchestration을
+  FastAPI 비의존 `application.py`로 이동했습니다. cooldown 조회 `/seat-status/status`는 별도 수명주기로
+  중앙 router에 유지했습니다.
+- 확인된 검증: 웹 ESLint 오류 0·고정 경고 23, strict·unused typecheck, Vitest 60개 파일·406건,
+  production build와 Sites 4건을 통과했습니다. API 전체 pytest 960건, 관련 회귀 37건, Ruff `E/F/I`,
+  format ratchet과 module boundary를 통과했고 legacy 미포맷 baseline은 68개로 줄었습니다.
+  `experimental-rail` 전체 이미지를 재빌드·강제 재생성한 뒤 migration·log-init exit 0, 장기 서비스
+  11개 healthy, API·proxy health 200, 최근 오류 표식 0건을 확인했습니다.
+- 남은 핵심 부채: `NewWait` 등록 상태·열차 선택 UI, watch API와 App shell 작업 orchestration,
+  `api.js` compatibility 제거, 전역 CSS, API watch/reservation service와 worker·provider 역할 분리입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

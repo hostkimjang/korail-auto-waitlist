@@ -8,7 +8,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from rail_waitlist import api
 from rail_waitlist import worker as worker_module
 from rail_waitlist.domain import Provider, SeatClass, SeatObservationStatus
 from rail_waitlist.models import (
@@ -26,6 +25,7 @@ from rail_waitlist.schemas import (
     TimetableItem,
 )
 from rail_waitlist.timetable_evidence import persist_timetable_seat_evidence
+from rail_waitlist.timetable_management import application as timetable_application
 from rail_waitlist.worker import _process_due_watches
 
 DEPARTURE = datetime(2030, 8, 1, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))
@@ -77,7 +77,7 @@ class StaticOfficialAdapter(MockProviderAdapter):
 
 def enable_watch_registration(monkeypatch) -> None:
     monkeypatch.setattr(
-        api,
+        timetable_application,
         "get_execution_provider",
         lambda provider: MockProviderAdapter(),
     )
@@ -136,7 +136,11 @@ async def test_not_observed_seat_does_not_issue_registration_evidence(
     item = timetable_item().model_copy(
         update={"timetable_retrieved_at": datetime.now(UTC) - timedelta(days=1)}
     )
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(item))
+    monkeypatch.setattr(
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(item),
+    )
 
     first = await timetable_request(client)
     second = await timetable_request(client)
@@ -207,7 +211,11 @@ async def test_observed_seats_without_execution_capability_cannot_create_watches
     client, db_engine, monkeypatch
 ):
     item = timetable_item(observed=True)
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(item))
+    monkeypatch.setattr(
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(item),
+    )
 
     response = await timetable_request(client)
 
@@ -226,7 +234,11 @@ async def test_observed_seats_without_execution_capability_cannot_create_watches
 async def test_observed_add_to_watch_seats_issue_evidence_and_create_watches(client, monkeypatch):
     item = timetable_item(observed=True)
     enable_watch_registration(monkeypatch)
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(item))
+    monkeypatch.setattr(
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(item),
+    )
 
     response = await timetable_request(client)
     assert response.status_code == 200
@@ -250,7 +262,9 @@ async def test_provider_and_user_confirmed_provenance_remain_distinct(
     observed_item = timetable_item(observed=True)
     enable_watch_registration(monkeypatch)
     monkeypatch.setattr(
-        api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(observed_item)
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(observed_item),
     )
     provider_response = await timetable_request(client)
     provider_seat = provider_response.json()[0]["seat_classes"][0]
@@ -258,7 +272,9 @@ async def test_provider_and_user_confirmed_provenance_remain_distinct(
 
     unknown_item = timetable_item()
     monkeypatch.setattr(
-        api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(unknown_item)
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(unknown_item),
     )
     confirmation = await client.post(
         "/api/v1/seat-observations/official-page-confirmations",
@@ -302,7 +318,11 @@ async def test_provider_and_user_confirmed_provenance_remain_distinct(
 async def test_watch_rejects_exact_identity_mismatch(client, monkeypatch, mismatch):
     item = timetable_item(observed=True)
     enable_watch_registration(monkeypatch)
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(item))
+    monkeypatch.setattr(
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(item),
+    )
     response = await timetable_request(client)
     evidence_id = response.json()[0]["seat_classes"][0]["registration_evidence_id"]
     payload = watch_payload(evidence_id)
@@ -382,7 +402,11 @@ async def test_observed_issuance_bucket_reuses_then_rolls_over(db_engine):
 async def test_watch_rejects_expired_evidence(client, db_engine, monkeypatch):
     item = timetable_item(observed=True)
     enable_watch_registration(monkeypatch)
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(item))
+    monkeypatch.setattr(
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(item),
+    )
     response = await timetable_request(client)
     evidence_id = response.json()[0]["seat_classes"][0]["registration_evidence_id"]
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -416,7 +440,11 @@ async def test_evidence_and_official_watch_do_not_trigger_worker_side_effects(
 ):
     item = timetable_item(observed=True)
     enable_watch_registration(monkeypatch)
-    monkeypatch.setattr(api, "get_timetable_provider", lambda provider: StaticOfficialAdapter(item))
+    monkeypatch.setattr(
+        timetable_application,
+        "get_timetable_provider",
+        lambda provider: StaticOfficialAdapter(item),
+    )
     response = await timetable_request(client)
     evidence_id = response.json()[0]["seat_classes"][0]["registration_evidence_id"]
     factory = async_sessionmaker(db_engine, expire_on_commit=False)

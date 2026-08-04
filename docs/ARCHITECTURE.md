@@ -49,6 +49,17 @@ API의 알림 설정 검증·암호화·생성·수정·시험 전송 outbox 정
 변환합니다. 여러 기능이 공유하는 outbox idempotency primitive는 `outbox.py`에 두며,
 `services.py`의 import는 기존 worker와 테스트를 위한 identity-compatible 전환 경계입니다.
 
+웹 역 카탈로그 DTO 검증·identity 병합은 `api/stations.ts`, 시간표 query·provider 부분 실패·DTO→도메인
+mapping은 `api/timetables.ts`, 좌석 등급과 provenance fail-closed 정규화는 `api/seatClasses.ts`가
+소유합니다. `NewWait`의 자동 검색·provider별 재시도·수동 전체 조회·cache-only 동기화는
+`useTimetableSearch.ts`에서 하나의 query key와 stale 응답 차단 계약을 공유합니다.
+
+API의 `/timetables`, `/timetable-snapshots`, `/seat-status/refresh` HTTP 경계는
+`timetable_management/http.py`, live→TAGO fallback·공식 confirmation/browser snapshot overlay·등록
+capability·evidence 저장 orchestration은 FastAPI 비의존 `timetable_management/application.py`가
+소유합니다. `/seat-status/status`는 시간표 요청이 아니라 source cooldown 상태 수명주기이므로 기존
+중앙 router에 남겨 두었습니다.
+
 ## 주요 흐름
 
 1. 관리자 계정이 없고 서버 운영자가 `AUTH_INITIAL_REGISTRATION_ENABLED=true`를 명시한 최초 접속에서만 관리자 ID와 비밀번호를 등록합니다. 정규화한 ID, Argon2id 비밀번호 해시, 인증 세션을 DB 트랜잭션으로 저장하고 등록 직후 앱에 진입합니다. 계정이 생기면 설정값과 무관하게 추가 등록은 닫히며, 이후에는 유효 세션이 없을 때만 ID·비밀번호 로그인 화면을 표시합니다.

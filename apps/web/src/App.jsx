@@ -7,7 +7,6 @@ import {
   ShieldCheck,
   Ticket,
 } from "@phosphor-icons/react";
-import { ApiError } from "./api/client";
 import { logout } from "./api/auth";
 import {
   buildWatchCreatePayloads,
@@ -19,15 +18,6 @@ import {
   startWatch,
   updateWatch,
 } from "./api/watches";
-import {
-  connectBrowserPush,
-  createNotificationChannel,
-  disconnectBrowserPush,
-  fetchNotificationChannels,
-  readBrowserPushState,
-  testNotificationChannel,
-  updateNotificationChannel,
-} from "./api/notifications";
 import { AuthGate } from "./features/auth/AuthGate";
 import { useAuthState } from "./features/auth/useAuthState";
 import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
@@ -42,6 +32,7 @@ import {
   seatClassNames,
 } from "./features/new-wait/TrainResultCard";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import { useNotificationChannelSettings } from "./features/settings/useNotificationChannelSettings";
 import { formatNewWaitDateLabel } from "./features/new-wait/newWaitForm";
 import { useAppNotifications } from "./features/app/useAppNotifications";
 import { Brand } from "./shared/ui/Brand";
@@ -219,12 +210,6 @@ export function App() {
   const [settingsInitialSection, setSettingsInitialSection] = useState("notifications");
   const [settingsActiveSection, setSettingsActiveSection] = useState("notifications");
   const { auth, markAuthenticated, markUnauthenticated, retryAuthStatus } = useAuthState();
-  const [channels, setChannels] = useState([]);
-  const [browserPushState, setBrowserPushState] = useState({
-    support: "checking",
-    permission: "default",
-    subscribed: false,
-  });
   const [providerAccounts, setProviderAccounts] = useState(DEMO_MODE ? demoProviderAccounts : []);
   const [providerRuntimeStatuses, setProviderRuntimeStatuses] = useState(
     DEMO_MODE ? demoProviderRuntimeStatuses : [],
@@ -247,6 +232,20 @@ export function App() {
     dismissTimed: dismissTimedNotifications,
     clear: clearNotifications,
   } = useAppNotifications();
+  const {
+    channels,
+    browserPushState,
+    saveChannel,
+    toggleChannel,
+    testChannel,
+    connectWebPushChannel,
+    reset: resetNotificationChannels,
+  } = useNotificationChannelSettings({
+    authenticated: auth.authenticated,
+    demo: auth.demo,
+    onAuthenticationExpired: markUnauthenticated,
+    pushToast: setToast,
+  });
   const refreshProviderRuntimeStatuses = useCallback(async () => {
     if (auth.demo) {
       setProviderRuntimeStatuses(demoProviderRuntimeStatuses);
@@ -306,35 +305,6 @@ export function App() {
     updateWatchRequest: updateWatch,
     deleteWatchRequest: deleteWatch,
   });
-
-  useEffect(() => {
-    if (!auth.authenticated || auth.demo) return undefined;
-    let active = true;
-    fetchNotificationChannels().then((channelItems) => {
-      if (active) setChannels(channelItems);
-    }).catch((error) => {
-      if (error instanceof ApiError && error.status === 401) markUnauthenticated();
-    });
-    return () => { active = false; };
-  }, [auth.authenticated, auth.demo]);
-
-  useEffect(() => {
-    if (!auth.authenticated || auth.demo) return undefined;
-    let active = true;
-    const refresh = () => {
-      readBrowserPushState().then((state) => {
-        if (active) setBrowserPushState(state);
-      }).catch(() => {
-        if (active) setBrowserPushState({ support: "unsupported", permission: "default", subscribed: false });
-      });
-    };
-    refresh();
-    window.addEventListener("focus", refresh);
-    return () => {
-      active = false;
-      window.removeEventListener("focus", refresh);
-    };
-  }, [auth.authenticated, auth.demo]);
 
   useEffect(() => {
     if (!auth.authenticated) return undefined;
@@ -513,83 +483,12 @@ export function App() {
     return createdWatches;
   };
 
-  const saveChannel = async ({ kind, name, config }) => {
-    try {
-      const existing = channels.find((channel) => channel.kind === kind);
-      const saved = existing
-        ? await updateNotificationChannel(existing.id, { name, config, enabled: true })
-        : await createNotificationChannel({ kind, name, config, enabled: true });
-      setChannels((items) => [saved, ...items.filter((item) => item.kind !== kind)]);
-      setToast("알림 채널을 연결했습니다.");
-    } catch (error) {
-      setToast(error.message);
-      throw error;
-    }
-  };
-
-  const toggleChannel = async (channel, nextEnabled = !channel?.enabled) => {
-    if (!channel) return;
-    try {
-      if (auth.demo) setChannels((items) => items.map((item) => item.id === channel.id ? { ...item, enabled: nextEnabled } : item));
-      else if (channel.kind === "web_push") {
-        if (nextEnabled) {
-          const updated = await connectBrowserPush(channel.name, channel.id);
-          setChannels((items) => items.map((item) => item.id === channel.id ? updated : item));
-        } else {
-          const updated = await updateNotificationChannel(channel.id, { enabled: false });
-          setChannels((items) => items.map((item) => item.id === channel.id ? updated : item));
-          await disconnectBrowserPush();
-        }
-        setBrowserPushState(await readBrowserPushState());
-      } else {
-        const updated = await updateNotificationChannel(channel.id, { enabled: nextEnabled });
-        setChannels((items) => items.map((item) => item.id === channel.id ? updated : item));
-      }
-    } catch (error) {
-      setToast(error.message);
-    }
-  };
-
-  const testChannel = async (channel) => {
-    try {
-      if (channel.kind === "web_push") {
-        const state = await readBrowserPushState();
-        setBrowserPushState(state);
-        if (state.permission !== "granted" || !state.subscribed) {
-          throw new ApiError("이 기기의 OS 알림 구독을 먼저 켜 주세요.");
-        }
-      }
-      if (!auth.demo) await testNotificationChannel(channel.id);
-      setToast(`${channel.name} 시험 알림을 전송 대기열에 넣었습니다.`);
-    } catch (error) {
-      setToast(error.message);
-    }
-  };
-
-  const connectWebPushChannel = async () => {
-    try {
-      if (auth.demo) {
-        const now = new Date().toISOString();
-        setChannels((items) => [{ id: "demo-web-push", kind: "web_push", name: "이 브라우저", enabled: true, configured: true, createdAt: now, updatedAt: now }, ...items.filter((item) => item.kind !== "web_push")]);
-        setBrowserPushState({ support: "supported", permission: "granted", subscribed: true });
-      } else {
-        const existing = channels.find((channel) => channel.kind === "web_push");
-        const channel = await connectBrowserPush(existing?.name ?? "이 브라우저", existing?.id ?? null);
-        setChannels((items) => [channel, ...items.filter((item) => item.kind !== "web_push")]);
-        setBrowserPushState(await readBrowserPushState());
-      }
-      setToast("이 기기의 OS 알림을 연결했습니다.");
-    } catch (error) {
-      setToast(error.message);
-    }
-  };
-
   const signOut = async () => {
     try {
       if (!auth.demo) await logout();
     } finally {
       commitWatches([]);
-      setChannels([]);
+      resetNotificationChannels();
       setProviderAccounts([]);
       clearNotifications();
       setUiPreferences({

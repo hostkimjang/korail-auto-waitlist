@@ -297,10 +297,16 @@
 - [x] 새 대기 행동 28건을 `NewWaitPage.test.tsx`로 재소유하고 App에는 즉시 등록→collection 반영→재진입 hydrate→정확한 ID 취소 통합과 legacy adapter 계약 유지. 관련 테스트 55→56건, App 976→639줄, 불필요한 폼 index signature 제거
 - [x] 열일곱 번째 구조 슬라이스 B의 웹 ESLint 오류 0·고정 경고 17, strict typecheck, Vitest 70개 파일·492건, production build·Sites 4건, 기본 Playwright E2E 14건과 독립 재감사 P0~P2 잔여 없음 확인
 - [x] 열일곱 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] App의 알림 채널·Web Push 상태와 인증 뒤 조회·401 전달·focus refresh/cleanup·저장·활성화·시험·기기 연결을 strict `features/settings/useNotificationChannelSettings.ts`로 이동하고 auth·toast callback 의존, logout reset, 기존 명령 순서와 동일 kind 비대상 행 보존
+- [x] 알림 channel hook owner 테스트 17건을 추가해 stale unmount·401·focus cleanup·unsupported fallback·create/update 성공/실패·일반/Web Push toggle·시험 전송·신규/기존 Web Push 연결·기존 demo 경로·reset을 검증. App 639→538줄, ESLint 고정 경고 17→16
+- [x] 열여덟 번째 구조 슬라이스 A의 웹 ESLint 오류 0·고정 경고 16, strict typecheck, Vitest 71개 파일·509건, production build·Sites 4건, 기본 Playwright E2E 14건 통과
+- [x] 열여덟 번째 구조 슬라이스 A의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
+- [ ] 개발 demo의 Telegram·Webhook editor 저장을 로컬 metadata simulation으로 제공할지 비활성화할지 확정하고, demo에서 live create/update API를 호출하지 않는 계약을 별도 행동 변경 슬라이스로 구현
+- [ ] 알림 채널 저장·toggle·시험·Web Push 연결 mutation의 401을 인증 만료로 전달하고, logout/reset 뒤 완료되는 늦은 mutation이 채널 상태·toast를 되살리지 않도록 request epoch fence를 별도 행동 변경 슬라이스로 구현
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
 - [ ] OfficialHandoff·Auth의 남은 책임과 App의 알림·화면 전환 조립을 feature별 `.tsx`·hook으로 분리
 - [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거

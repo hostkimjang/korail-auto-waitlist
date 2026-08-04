@@ -624,6 +624,37 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   JS/JSX 테스트의 TSX 전환, provider concrete base·구현·registry 물리 분리, 실제 PostgreSQL 실행 임대
   경합 검증입니다.
 
+### 2026-08-05 열여덟 번째 구조 슬라이스 A
+
+- 알림 채널 application hook: App의 채널 목록·Web Push 상태, 인증 뒤 조회와 401 전달, focus 갱신·
+  cleanup, 저장·활성화·시험·기기 연결 명령을 strict
+  `features/settings/useNotificationChannelSettings.ts`로 이동했습니다. hook은 auth·app feature를
+  import하지 않고 인증 만료와 toast를 callback으로 받으며 transport는 `api/notifications.ts`를 직접
+  사용합니다.
+- 행동 보존: 기존 저장의 kind 기준 upsert, toggle의 ID 기준 행 교체·순서 보존, Web Push 비활성화의
+  서버 channel disable→브라우저 subscription 해제→상태 재조회 순서, 시험 전송 전 permission·subscription
+  fail-closed와 logout의 채널 목록 초기화를 그대로 유지했습니다. hook reset은 Web Push 화면 상태도
+  `checking`으로 함께 되돌려 재로그인 전 stale 기기 표시를 막습니다. 같은 kind 복수 채널 중 비대상
+  행을 toggle이 지우지 않는 계약도 회귀 테스트로 고정했습니다. 오류는 `unknown`에서 안전한 사용자
+  문구로 정규화합니다.
+- 테스트 소유권: 최초 live 조회, unmount 뒤 stale 결과 폐기, 401 인증 만료, focus refresh·listener
+  cleanup, Web Push 상태 읽기 실패, create/update 실패, 비활성화 순서, 시험 전송 fail-closed, 기존 demo
+  toggle·test-send·connect 경로, reset과 성공 create/update·toggle·시험·신규/기존 Web Push 연결의
+  17건을 새 hook 테스트가 소유합니다. App은 이 controller와 watch 등록·logout을 연결하는 composition
+  root로 남으며 639줄에서 538줄로 줄었습니다.
+- 확인된 검증: ESLint 오류 0개·고정된 기존 경고 16개, strict typecheck, Vitest 71개 파일·509건,
+  production build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: 이번 단계는 CSS·DOM·transport payload·demo 정책을 바꾸지 않은 구조 이동입니다. 개발
+  demo에서 Telegram·Webhook editor 저장이 기존처럼 live create/update API를 호출하는 문제, 같은 알림
+  종류의 복수 채널 허용 여부, mutation 401의 인증 만료 전달과 logout 뒤 늦은 mutation을 폐기할 epoch
+  fence는 별도 행동·제품 계약으로 남겼습니다.
+- 남은 핵심 부채: provider account·UI preference orchestration, typed app navigation과 Auth 경계,
+  App·legacy JS/JSX의 TSX 전환, provider compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대
+  경합 검증입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

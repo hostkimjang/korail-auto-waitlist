@@ -4,7 +4,7 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열네 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 976줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현, 알림 채널 표시·편집 상태, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 화면 전환 shell은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열여덟 번째 A 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 538줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 알림 채널 표시·편집·브라우저 수명주기, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. App에는 provider account·UI preference resource와 화면 전환 shell 조립이 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict TypeScript와 typecheck gate는 적용되어 있습니다. `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff, reservations, settings의 leaf 컴포넌트·hook·순수 함수가 일부 분리되어 있습니다. `api.js` barrel과 확인된 feature 간 역방향 import는 제거됐지만, 이는 `App.jsx` 제거, 모든 DTO/mapper 경계 완성, 전체 JS/JSX 전환이 끝났다는 뜻은 아닙니다.
 
@@ -106,10 +106,13 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `features/home/HomePage.tsx`로 이동하고 production App의 구체 callback·typed 좌석 발견 renderer
      주입, legacy `Home`의 단일 `paymentWatch`·optional refresh adapter 계약을 feature/App 테스트로
      고정
+   - 완료: 인증된 알림 채널 조회·401 전달, focus 시 Web Push 상태·cleanup, 저장·toggle·시험·연결과
+     logout reset을 strict `features/settings/useNotificationChannelSettings.ts`로 이동. auth·toast는
+     callback으로 받고 transport owner를 직접 사용하며 동일 kind 비대상 행·기존 명령 순서를 보존
    - 완료: `NewWait`의 여정·조건·열차 단계 렌더링과 기존 station·timetable·registration hook 조립을
      strict `features/new-wait/NewWaitPage.tsx`로 이동. 공식 handoff는 다른 feature 직접 import 대신
      typed component prop으로 주입하고 공개 `NewWait` 호환 adapter를 보존
-   - 남음: App의 알림·화면 전환 조립과 Auth page의 최종 feature 경계
+   - 남음: App의 provider account·UI preference·화면 전환 조립과 Auth page의 최종 feature 경계
 6. shell과 테스트
    - 마지막에 `App.tsx`로 전환
    - 진행: 새 대기 행동 28건을 `NewWaitPage.test.tsx`로 재소유하고 App 조립·호환 계약은

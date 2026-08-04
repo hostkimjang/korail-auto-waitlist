@@ -34,9 +34,13 @@ function train(evidenceId = "evidence-old"): SeatWatchRegistrationTrain {
   return {
     id: "KORAIL:901:2026-08-05T14:30:00+09:00",
     provider: "KORAIL",
+    name: "KTX 901",
     train_number: "KTX 901",
     departure_at: "2026-08-05T14:30:00+09:00",
     arrival_at: "2026-08-05T17:00:00+09:00",
+    departure: "14:30",
+    arrival: "17:00",
+    official_booking_url: "https://www.korail.com/ticket/search/list",
     seat_classes: [{
       seat_class: "standard",
       status: "sold_out",
@@ -139,6 +143,30 @@ describe("useSeatWatchRegistration", () => {
     expect(onComplete).toHaveBeenCalledOnce();
     expect(result.current.registrationStateForSeat(validTrain, "standard").status).toBe("active");
     expect(result.current.hasActiveRegistration).toBe(true);
+  });
+
+  it("fails closed when canonical watch-creation train fields are missing or malformed", async () => {
+    const onComplete = vi.fn().mockResolvedValue([{ id: "watch-standard" }]);
+    const canonicalTrain = train();
+    const { name: removedName, ...withoutName } = canonicalTrain;
+    const missingNameTrain = { ...withoutName, id: "missing-name" };
+    const malformedOfficialUrlTrain = {
+      ...canonicalTrain,
+      id: "malformed-official-url",
+      official_booking_url: 42,
+    };
+    const { result } = renderHook(() => useSeatWatchRegistration(options({
+      trains: [missingNameTrain, malformedOfficialUrlTrain, canonicalTrain],
+      onComplete,
+    })));
+
+    expect(removedName).toBe("KTX 901");
+    await act(() => result.current.chooseTrainSeat(missingNameTrain.id, "standard"));
+    await act(() => result.current.chooseTrainSeat(malformedOfficialUrlTrain.id, "standard"));
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await act(() => result.current.chooseTrainSeat(canonicalTrain.id, "standard"));
+    expect(onComplete).toHaveBeenCalledOnce();
   });
 
   it("cancels the exact hydrated watch id and keeps local cancelling state ahead of hydration", async () => {

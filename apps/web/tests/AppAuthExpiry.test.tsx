@@ -35,7 +35,7 @@ vi.mock("../src/api/providerAccounts", () => ({
 }));
 
 import { ApiError } from "../src/api/client";
-import { App } from "../src/App.jsx";
+import { App } from "../src/App";
 
 describe("App authenticated data expiry", () => {
   it("returns to login when authenticated data loading receives 401", async () => {

@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Home } from "../src/App.jsx";
+import { Home } from "../src/App";
 import type { ActiveWatch } from "../src/features/home/ActiveWatchList";
 import {
   HomePage,

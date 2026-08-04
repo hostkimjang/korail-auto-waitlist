@@ -12,7 +12,6 @@ const codeFiles = [
   "worker/**/*.{js,jsx,mjs,ts,tsx}",
 ];
 const legacyEffectFiles = [
-  "src/App.jsx",
   "src/features/auth/useAuthState.ts",
   "src/features/new-wait/CalendarPicker.tsx",
   "src/features/new-wait/StationCombobox.tsx",
@@ -25,7 +24,6 @@ const legacyEffectFiles = [
   "src/hooks/usePaymentDeadlineClock.ts",
 ];
 const legacyDependencyFiles = [
-  "src/App.jsx",
   "src/features/settings/KorailBrowserPairingPanel.tsx",
 ];
 

@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Reservations } from "../src/App.jsx";
+import { Reservations } from "../src/App";
 import type { ReservationListWatch } from "../src/features/reservations/ReservationList";
 import { ReservationsPage } from "../src/features/reservations/ReservationsPage";
 

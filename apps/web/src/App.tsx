@@ -1,6 +1,16 @@
-import { logout } from "./api/auth";
+import type { ReactElement } from "react";
+
+import { AppAuthenticationBoundary } from "./app/AppAuthenticationBoundary";
+import {
+  Home,
+  NewWait,
+  PaymentHero,
+  Reservations,
+} from "./app/AppCompatibility";
+import { renderHomeSeatFoundAction } from "./app/HomeSeatFoundOfficialHandoff";
 import { AppShell } from "./app/AppShell";
 import { useAppNavigation } from "./app/useAppNavigation";
+import { useAppLogout } from "./app/useAppLogout";
 import {
   buildWatchCreatePayloads,
   cancelWatch,
@@ -11,128 +21,41 @@ import {
   startWatch,
   updateWatch,
 } from "./api/watches";
-import { AuthGate } from "./features/auth/AuthGate";
 import { useAuthState } from "./features/auth/useAuthState";
 import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
 import { useWatchCollection } from "./features/app/useWatchCollection";
 import { useWatchMutations } from "./features/app/useWatchMutations";
 import { HomePage } from "./features/home/HomePage";
-import { PaymentRequiredSection } from "./features/home/PaymentRequiredSection";
+import type { PaymentRequiredWatch } from "./features/home/PaymentRequiredSection";
 import { ReservationsPage } from "./features/reservations/ReservationsPage";
 import { NewWaitPage } from "./features/new-wait/NewWaitPage";
-import {
-  copyTrainJourney,
-  seatClassNames,
-} from "./features/new-wait/TrainResultCard";
+import { seatClassNames } from "./features/new-wait/TrainResultCard";
+import type { SeatWatchRegistrationCompletion } from "./features/new-wait/useSeatWatchRegistration";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { useNotificationChannelSettings } from "./features/settings/useNotificationChannelSettings";
 import { useProviderAccountSettings } from "./features/settings/useProviderAccountSettings";
 import { useUiPreferencesSettings } from "./features/settings/useUiPreferencesSettings";
 import { formatNewWaitDateLabel } from "./features/new-wait/newWaitForm";
 import { useAppNotifications } from "./features/app/useAppNotifications";
+import { isActiveWatch } from "./features/app/watchSelectors";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
 import { DEMO_MODE } from "./shared/lib/runtimeConfig";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
+import type { MappedWatch } from "./api/watches";
 import {
   createDemoWatch,
   demoPaymentWatch,
   initialWatches,
 } from "./fixtures/demoData";
 
-const activeWatchStatuses = new Set(["draft", "scheduled", "watching", "official_waitlist", "seat_found", "reserving", "paused", "cooldown", "auth_required"]);
-const initialWatchCollection = DEMO_MODE ? initialWatches : [];
-
-export function isActiveWatch(watch) {
-  return activeWatchStatuses.has(watch.status);
-}
-
-export function PaymentHero({ watch, onOfficialPayment }) {
-  return <PaymentRequiredSection watches={[watch]} onOpenPayment={() => onOfficialPayment()} />;
-}
-
-function activeWatchHandoffTrain(watch) {
-  const [routeOrigin = "", routeDestination = ""] = String(watch.route ?? "").split(" → ");
-  const origin = watch.origin || routeOrigin;
-  const destination = watch.destination || routeDestination;
-  const travelDate = watch.travelDate || "";
-  return {
-    id: `active-watch-${watch.id}`,
-    provider: watch.provider,
-    origin,
-    destination,
-    name: watch.train,
-    date: watch.date,
-    departure_at: travelDate ? `${travelDate}T${watch.departure}:00+09:00` : "",
-    departure: watch.departure,
-    arrival: watch.arrival,
-    seat_classes: [],
-  };
-}
-
-function renderHomeSeatFoundAction(watch) {
-  return (
-    <OfficialHandoff
-      train={activeWatchHandoffTrain(watch)}
-      selectedSeatClass={watch.seatClass}
-      onCopy={copyTrainJourney}
-      triggerLabel="예매"
-      actionUrl={watch.officialBookingUrl}
-      seatFoundObservation={watch.seatFoundObservation}
-      triggerClassName="button button-primary compact watch-booking-button"
-    />
-  );
-}
-
-/** @param {import("./features/home/HomePage").HomeCompatibilityProps} props */
-export function Home({
-  watches,
-  paymentWatch = null,
-  paymentWatches = paymentWatch ? [paymentWatch] : [],
-  watchRefreshState = { isRefreshing: false, lastRefreshedAt: null },
-  onRefreshWatches = undefined,
-  onNavigate,
-  onPause,
-  onResume,
-  onCancel,
-  onChangeReservationPolicy = undefined,
-  reservationPolicyUpdatingIds = new Set(),
-  onToast,
-}) {
-  return (
-    <HomePage
-      watches={watches}
-      paymentWatches={paymentWatches}
-      watchRefreshState={watchRefreshState}
-      {...(onRefreshWatches ? { onRefreshWatches } : {})}
-      onCreate={() => onNavigate("new")}
-      onViewReservations={() => onNavigate("reservations")}
-      onOpenRailAccounts={() => onNavigate("settings", "rail-accounts")}
-      onPause={onPause}
-      onResume={onResume}
-      onCancel={onCancel}
-      {...(onChangeReservationPolicy ? { onChangeReservationPolicy } : {})}
-      reservationPolicyUpdatingIds={reservationPolicyUpdatingIds}
-      onToast={onToast}
-      renderSeatFoundAction={renderHomeSeatFoundAction}
-    />
-  );
-}
+const initialWatchCollection: MappedWatch[] = DEMO_MODE ? initialWatches : [];
 
 export { WatchRow } from "./features/home/ActiveWatchList";
+export { Home, NewWait, PaymentHero, Reservations, isActiveWatch };
 export { OfficialHandoff, hasObservedSeatEvidence };
-
-/** @param {Omit<import("./features/new-wait/NewWaitPage").NewWaitPageProps, "officialHandoffComponent">} props */
-export function NewWait(props) {
-  return <NewWaitPage {...props} officialHandoffComponent={OfficialHandoff} />;
-}
-
-export function Reservations({ watches, onNavigate, onDelete = () => undefined }) {
-  return <ReservationsPage watches={watches} onCreate={() => onNavigate("new")} onDelete={onDelete} />;
-}
-
 export { SettingsPage as Settings };
 
-export function App() {
+export function App(): ReactElement {
   const {
     activeView,
     settingsInitialSection,
@@ -231,8 +154,8 @@ export function App() {
     deleteWatchRequest: deleteWatch,
   });
 
-  const completeWizard = async ({ form, selectedTrains }) => {
-    let createdWatches;
+  const completeWizard: SeatWatchRegistrationCompletion = async ({ form, selectedTrains }) => {
+    let createdWatches: MappedWatch[];
     if (auth.demo) {
       createdWatches = selectedTrains.map((item, index) => {
         const seatClass = item.selected_seat_class || "any";
@@ -276,23 +199,19 @@ export function App() {
     return createdWatches;
   };
 
-  const signOut = async () => {
-    try {
-      if (!auth.demo) await logout();
-    } finally {
-      commitWatches([]);
-      resetNotificationChannels();
-      resetProviderAccounts();
-      resetUiPreferences();
-      clearNotifications();
-      markUnauthenticated();
-    }
-  };
+  const signOut = useAppLogout({
+    demo: auth.demo,
+    commitWatches,
+    resetNotificationChannels,
+    resetProviderAccounts,
+    resetUiPreferences,
+    clearNotifications,
+    markUnauthenticated,
+  });
 
-  if (auth.loading) return <main className="auth-page"><div className="loading-state"><img src="/icons/app-icon-512.png" alt="" /><span>안전하게 연결하는 중…</span></div></main>;
-  if (!auth.authenticated) return <AuthGate status={auth} onAuthenticated={markAuthenticated} onRetryStatus={retryAuthStatus} />;
-
-  const paymentWatches = watches.filter((watch) => watch.status === "payment_required");
+  const paymentWatches: PaymentRequiredWatch[] = watches.filter(
+    (watch) => watch.status === "payment_required",
+  );
   if (auth.demo && paymentWatches.length === 0) paymentWatches.push(demoPaymentWatch);
   const activeWatches = watches.filter(isActiveWatch).map((watch) => {
     const accountAuthStatus = accountAuthStatusFor(watch.provider);
@@ -302,20 +221,26 @@ export function App() {
     ? [demoPaymentWatch, ...watches]
     : watches;
   return (
-    <AppShell
-      activeView={activeView}
-      onNavigate={navigate}
-      overlay={<AppNotificationCenter
-        state={notificationState}
-        onDismiss={dismissNotification}
-        onDismissGroup={dismissNotificationGroup}
-        onDismissTimed={dismissTimedNotifications}
-      />}
+    <AppAuthenticationBoundary
+      status={auth}
+      onAuthenticated={markAuthenticated}
+      onRetryStatus={retryAuthStatus}
     >
-      {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={cancelWatchItem} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
-      {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
-      {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
-      {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={onSettingsSectionChange} onLogout={signOut} initialSection={settingsInitialSection} />}
-    </AppShell>
+      <AppShell
+        activeView={activeView}
+        onNavigate={navigate}
+        overlay={<AppNotificationCenter
+          state={notificationState}
+          onDismiss={dismissNotification}
+          onDismissGroup={dismissNotificationGroup}
+          onDismissTimed={dismissTimedNotifications}
+        />}
+      >
+        {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={async (watchId) => { await cancelWatchItem(watchId); }} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
+        {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
+        {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
+        {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={onSettingsSectionChange} onLogout={signOut} initialSection={settingsInitialSection} />}
+      </AppShell>
+    </AppAuthenticationBoundary>
   );
 }

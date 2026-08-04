@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { UiPreferences } from "../src/api/uiPreferences";
-import { Settings } from "../src/App.jsx";
+import { Settings } from "../src/App";
 import {
   SettingsPage,
   type SettingsPageProps,

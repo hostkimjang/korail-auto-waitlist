@@ -147,6 +147,15 @@ describe("module dependency boundaries", () => {
     );
   });
 
+  it("keeps features independent from app composition", () => {
+    assertRatchet(
+      "features-must-not-import-app",
+      edges.filter(({ importer, imported }) => (
+        importer.startsWith("features/") && imported.startsWith("app/")
+      )),
+    );
+  });
+
   it("does not add imports between feature internals", () => {
     assertRatchet(
       "features-must-not-import-other-features",

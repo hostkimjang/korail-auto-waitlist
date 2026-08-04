@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import type { RailProvider } from "../../api/providerAccounts";
+import type { Timetable } from "../../api/timetables";
 import { isExpiredWatchCreateConflict } from "../../domain/apiErrors";
 import type { NewWaitForm } from "./newWaitForm";
 import { recoverRefreshedRegistrationTrain } from "./registrationEvidenceRecovery";
@@ -20,9 +21,18 @@ interface SeatWatchRegistrationSeat extends Record<string, unknown> {
   actions: unknown[];
 }
 
-export interface SeatWatchRegistrationTrain extends Record<string, unknown> {
-  id: string;
-  provider: RailProvider;
+export interface SeatWatchRegistrationTrain extends Pick<
+  Timetable,
+  | "id"
+  | "provider"
+  | "name"
+  | "train_number"
+  | "departure_at"
+  | "arrival_at"
+  | "departure"
+  | "arrival"
+  | "official_booking_url"
+> {
   seat_classes: SeatWatchRegistrationSeat[];
 }
 
@@ -100,6 +110,13 @@ function isSeatWatchRegistrationTrain(value: unknown): value is SeatWatchRegistr
     || typeof value.id !== "string"
     || !value.id.trim()
     || (value.provider !== "KORAIL" && value.provider !== "SRT")
+    || typeof value.name !== "string"
+    || typeof value.train_number !== "string"
+    || typeof value.departure_at !== "string"
+    || typeof value.arrival_at !== "string"
+    || typeof value.departure !== "string"
+    || typeof value.arrival !== "string"
+    || (value.official_booking_url !== null && typeof value.official_booking_url !== "string")
     || !Array.isArray(value.seat_classes)
   ) return false;
   return value.seat_classes.every((seat) => (

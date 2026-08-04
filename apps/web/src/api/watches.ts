@@ -725,7 +725,7 @@ function watchId(id: unknown): string {
   return encodeURIComponent(requiredString(id, "대기 작업 식별자를 확인해 주세요."));
 }
 
-function watchCreateIdempotencyKey(payload: UnknownRecord): string {
+function watchCreateIdempotencyKey(payload: WatchCreatePayload | UnknownRecord): string {
   const evidenceIds = Array.isArray(payload.candidates)
     ? payload.candidates
       .map((candidate) => normalizedRegistrationEvidenceId(
@@ -737,7 +737,11 @@ function watchCreateIdempotencyKey(payload: UnknownRecord): string {
   return crypto.randomUUID();
 }
 
-export async function createWatch(payload: UnknownRecord): Promise<MappedWatch> {
+export function createWatch(payload: WatchCreatePayload): Promise<MappedWatch>;
+export function createWatch(payload: UnknownRecord): Promise<MappedWatch>;
+export async function createWatch(
+  payload: WatchCreatePayload | UnknownRecord,
+): Promise<MappedWatch> {
   try {
     const value = await request("/watches", {
       method: "POST",

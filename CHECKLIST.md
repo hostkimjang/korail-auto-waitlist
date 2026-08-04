@@ -313,6 +313,10 @@
 - [x] app navigation·shell owner 테스트 10건으로 초기값·settings default/명시 section·non-settings 보존·smooth scroll·callback identity와 두 named nav·active class·callback·shell/overlay 순서를 검증하고 App 384→321줄, 기존 App/Settings/Home/responsive/official inert 회귀 유지
 - [x] 열아홉 번째 구조 슬라이스 A의 웹 ESLint 오류 0·고정 경고 12, strict typecheck, Vitest 75개 파일·551건, production build·Sites 4건, 기본 Playwright E2E 14건과 독립 재감사 도입 P0~P3 코드 회귀 없음 확인
 - [x] 열아홉 번째 구조 슬라이스 A의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] 인증 렌더·logout cleanup·Home 좌석 발견 공식 인계·공개 compatibility adapter와 active watch selector를 strict `app/`·`features/app/` 경계로 이동하고 controller hook 수명주기, cleanup 순서, KST/route fallback, portal inert, 원본 export identity 보존
+- [x] 좌석 등록 completion의 선택 열차를 canonical 시간표 필드로 강화하고 generic watch snapshot의 임의 index signature를 실제 전이 필드로 좁힌 뒤 forwarding shim 없이 `App.jsx`를 246줄 strict `App.tsx`로 교체. main·통합 테스트는 extensionless import로 통일
+- [x] 열아홉 번째 구조 슬라이스 B의 auth/logout/Home handoff/compatibility owner 테스트 17건, feature→app 역의존·선택 열차 fail-closed 구조 테스트 2건, 웹 ESLint 오류 0·고정 경고 12, strict typecheck, Vitest 79개 파일·570건, production build·Sites 4건, 기본 Playwright E2E 14건 통과
+- [x] 열아홉 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -323,8 +327,8 @@
 - [ ] UI preference initial GET·save·logout 교차와 복수 save에 request/session epoch·latest-wins를 적용하고 mutation 401 인증 만료 전달을 별도 안전성 슬라이스로 구현
 - [ ] Settings 화면에서 같은 Settings nav 재선택 시 mount-only 표시 section과 runtime polling active section을 동기화하고, `aria-current`·reduced-motion scroll·URL/history/deep-link·mobile 알림 행동은 각각 제품·접근성 계약을 정한 뒤 별도 슬라이스로 구현
 - [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
-- [ ] OfficialHandoff·Auth의 남은 책임과 App의 페이지 props·등록·logout 조립을 strict `.tsx` 경계로 전환
-- [ ] `App.jsx`와 기존 JS/JSX 테스트를 TSX로 전환한 뒤 `allowJs` 제거
+- [x] OfficialHandoff·Auth 조립, App의 페이지 props·등록·logout 경계를 strict `.tsx`로 전환하고 `App.jsx` 제거
+- [ ] 기존 JS/JSX 테스트를 owner별 strict TSX로 전환한 뒤 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
 - [ ] `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행
 - [x] API의 operations summary, UI preferences, 철도 계정·runtime 라우트와 schema를 기능 패키지로 이동하고 중앙 schema compatibility export·전체 pytest 949건 검증

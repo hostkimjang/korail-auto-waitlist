@@ -36,13 +36,18 @@ strict `app/useAppNavigation.ts`는 `home|new|reservations|settings` view와 set
 모든 이동의 smooth scroll을 소유합니다. strict `app/AppShell.tsx`는 sidebar·mobile header·bottom nav와
 overlay slot을 소유하며 `.app-shell` 직접 자식 순서를 `sidebar → main → bottom nav → overlay`로
 유지합니다. 따라서 공식 handoff의 inert 범위와 notification overlay 위치, 기존 CSS selector·ARIA가
-바뀌지 않습니다.
+바뀌지 않습니다. strict `app/AppAuthenticationBoundary.tsx`는 loading·미인증·인증 렌더 선택만
+담당하고 application controller hook은 계속 상위 `App.tsx`에서 항상 같은 순서로 호출합니다.
+`app/useAppLogout.ts`는 live logout 요청과 성공·실패 공통 정리 순서를, `app/AppCompatibility.tsx`는
+기존 공개 adapter와 원본 export identity를 소유합니다. Home 좌석 발견의 공식 인계 조립은
+`app/HomeSeatFoundOfficialHandoff.tsx`에 있어 feature끼리 서로 역import하지 않습니다.
 API의 알림 채널 관리 HTTP route와 transport schema는 `notification_management/` 기능 패키지가
 소유하고, 중앙 `schemas.py`는 같은 Pydantic class 객체를 다시 export합니다. 실시간 outbox 이벤트
 stream인 `/events`는 알림 채널 CRUD와 수명주기가 다르므로 `event_stream/http.py`가 독립적으로
 소유합니다. 중앙 `api.py`는 제거됐으며 아래 기능 router를 `main.py`가 명시적으로 조립합니다. 공개
-endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. `App.jsx`와 API
-`services.py`·`worker.py`·provider 경계의 추가 분리는 계속 남아 있습니다.
+endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. 웹 진입 조립은 strict
+`App.tsx`로 전환됐고, API `services.py`·`worker.py`·provider 경계와 잔여 JS/JSX 테스트의 추가
+분리는 계속 남아 있습니다.
 
 웹 전역 CSS 진입점 `styles.css`는 일반 규칙을 직접 소유하지 않고 `tokens -> base -> shell ->
 features -> responsive` 순서의 다섯 경계를 import합니다. 첫 구조 분리는 기존 6,648줄의 selector·규칙·
@@ -55,7 +60,7 @@ media/container query·keyframes 순서를 바꾸지 않은 기계적 이동이�
 history cutoff·정리 계약은 `api/events.ts`가 소유합니다. strict
 `features/settings/useNotificationChannelSettings.ts`는 인증된 채널 조회, 401 인증 만료 전달, focus 시
 Web Push 상태 갱신과 listener 정리, 저장·활성화·시험·기기 연결 명령 및 logout reset을 조립합니다.
-`App.jsx`는 인증·toast callback을 주입하고 등록할 watch의 채널 ID를 선택하는 상위 조립만 맡습니다. `NewWait`의
+`App.tsx`는 인증·toast callback을 주입하고 등록할 watch의 채널 ID를 선택하는 상위 조립만 맡습니다. `NewWait`의
 운영사별 역 카탈로그 요청·재시도·stale 응답 차단·선택한 역명/node ID 정합성은
 `features/new-wait/useStationCatalog.ts`가 맡으며, TAGO 역 카탈로그를 운영사별 실제 운행이나 좌석
 재고 근거로 승격하지 않습니다.
@@ -158,8 +163,9 @@ mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canon
 소유합니다. pause·resume·cancel·delete와 예약정책 변경은 strict
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
-뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. `App.jsx`에는 이 훅과 화면을 연결하는
-조립만 남았으며 기능 페이지·설정 resource·app shell/navigation 추출 뒤 현재 321줄입니다. `fixtures/demoData.ts`의 typed
+뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. strict `App.tsx`에는 이 훅과 화면을 연결하는
+조립만 남았으며 기능 페이지·설정 resource·app shell/navigation·auth/logout·compatibility 추출 뒤
+현재 246줄입니다. `fixtures/demoData.ts`의 typed
 factory는 초기 demo 작업과 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다.
 
 strict `features/new-wait/NewWaitPage.tsx`는 여정·조건·열차 단계 렌더링, 역 카탈로그·시간표 조회·
@@ -167,16 +173,16 @@ strict `features/new-wait/NewWaitPage.tsx`는 여정·조건·열차 단계 렌�
 typed component prop으로 받아 `app -> feature` 의존 방향을 유지합니다. 등록 완료 뒤 canonical watch
 collection 반영은 App 조립점이 담당하며, 공개 `NewWait` 호환 adapter는 실제 `OfficialHandoff`를
 주입합니다. `useSeatWatchRegistration.ts`는 좌석별 등록·정확한 watch ID 취소·pending 중복 차단·
-만료 evidence 재조회와 1회 재시도를 계속 소유합니다. App 조립점은 아직 `checkJs=false`인 JSX이므로
-직접 caller props의 정적 검증은 최종 `App.tsx` 전환 때 완료하며, 현재는 App 통합 회귀 테스트가 이
-연결 계약을 고정합니다.
+만료 evidence 재조회와 1회 재시도를 계속 소유합니다. 선택 열차 계약은 watch 생성에 필요한 canonical
+시간표 필드를 명시하고, strict App caller props와 App 통합 회귀 테스트가 이 연결 계약을 함께
+고정합니다.
 
 strict `features/home/HomePage.tsx`는 `WatchManagementHero`와 결제 보류·활성 감시 목록 조립을
 소유합니다. 페이지는 home 소유 컴포넌트와 shared UI만 직접 사용하고, production App에서 새 대기·
 예약 목록·철도 계정 행동과 좌석 발견 action renderer를 구체 callback으로 주입받습니다. 실제
-`OfficialHandoff` renderer와 `activeWatchHandoffTrain` 변환, 공개 `Home` 호환 adapter는 App에
-유지합니다. 호환 adapter의 단일 `paymentWatch`와 optional refresh 계약은 명시 타입과 회귀 테스트로
-고정했습니다.
+`OfficialHandoff` renderer와 `activeWatchHandoffTrain` 변환은 상위 app 조립 경계에, 공개 `Home`
+호환 adapter는 `app/AppCompatibility.tsx`에 유지합니다. 호환 adapter의 단일 `paymentWatch`와
+optional refresh 계약은 명시 타입과 회귀 테스트로 고정했습니다.
 
 strict `features/reservations/ReservationsPage.tsx`는 예약 요약·목록·새 대기 행동과 공식 예매/결제
 handoff 조립을 소유합니다. `ReservationListWatch`를 직접 사용하고 App의 화면 이름 대신 구체적인

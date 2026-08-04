@@ -27,7 +27,7 @@ describe("ESLint warning ratchet", () => {
         useEffect(() => { setValue(1); }, []);
         return value;
       }
-    `, "src/App.jsx");
+    `, "src/features/auth/useAuthState.ts");
     const actual = warningFingerprints([result]);
 
     expect(actual).toHaveLength(1);

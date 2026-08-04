@@ -207,7 +207,23 @@ export const initialWatches: MappedWatch[] = [
   }),
 ];
 
-export const demoPaymentWatch = {
+export interface DemoPaymentWatch {
+  id: string;
+  provider: "SRT";
+  train: string;
+  route: string;
+  origin: string;
+  destination: string;
+  departure: string;
+  arrival: string;
+  date: string;
+  status: "payment_required";
+  statusLabel: string;
+  official_booking_url: string;
+  payment_deadline: null;
+}
+
+export const demoPaymentWatch: DemoPaymentWatch = {
   id: "demo-payment-srt-327",
   provider: "SRT",
   train: "SRT 327",

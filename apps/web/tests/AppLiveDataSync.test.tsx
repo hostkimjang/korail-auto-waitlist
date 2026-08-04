@@ -57,7 +57,7 @@ vi.mock("../src/api/providerAccounts", () => ({
   deleteProviderAccount: providerAccountsApi.deleteProviderAccount,
 }));
 
-import { App } from "../src/App.jsx";
+import { App } from "../src/App";
 
 describe("App live data synchronization", () => {
   beforeEach(() => {

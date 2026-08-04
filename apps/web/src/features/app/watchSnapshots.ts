@@ -8,7 +8,12 @@ export interface WatchSnapshot {
   date?: string;
   departure?: string;
   arrival?: string;
-  [key: string]: unknown;
+  latestReservationAttempt?: unknown;
+  payment_deadline?: string | null;
+  reservationCandidateContexts?: unknown;
+  reservationPolicy?: string;
+  seatFoundObservation?: unknown;
+  updated_at?: string | null;
 }
 
 export interface SeatFoundTransition {

@@ -28,7 +28,7 @@
 | API | `providers.py` | 1,300 | provider 계약, 구현 선택, capability |
 | API | `api.py` | 1,197 | 여러 기능의 route와 HTTP 변환 |
 
-웹에는 이미 `main.tsx`, strict TypeScript 설정과 `domain/`, `api/`, `features/`, `shared/`의 기능별 경계가 존재합니다. `api.js` barrel과 확인된 `api -> feature` 역의존은 제거됐고 `auth`, `home`, `new-wait`, `official-handoff`, `reservations`, `settings`의 leaf 컴포넌트·hook·순수 함수도 점진 분리됐습니다. 다만 `App.jsx`와 전역 CSS가 계속 여러 화면 조립 책임을 소유하며, 남은 JS/JSX와 DTO·도메인·ViewModel 혼용은 후속 정리가 필요합니다.
+웹에는 이미 `main.tsx`, strict TypeScript 설정과 `domain/`, `api/`, `features/`, `shared/`의 기능별 경계가 존재합니다. `api.js` barrel과 확인된 `api -> feature` 역의존은 제거됐고 `auth`, `home`, `new-wait`, `official-handoff`, `reservations`, `settings`의 leaf 컴포넌트·hook·순수 함수도 점진 분리됐습니다. 현재 진입 조립도 strict `App.tsx`로 전환됐으며, 남은 JS/JSX 테스트와 DTO·도메인·ViewModel 혼용, feature CSS 추가 분리는 후속 정리가 필요합니다.
 
 백엔드는 FastAPI·SQLAlchemy·Pydantic·Celery와 provider별 구현이 단일 Python package의 평면 모듈로 배치되어 있습니다. DB unique, idempotency, outbox, provider lease, credential generation 같은 안전 불변식은 이미 있으므로 구조 이동 중 보존해야 하며, 먼저 model과 migration 전체를 재배치하지 않습니다.
 
@@ -747,6 +747,40 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: Auth·OfficialHandoff 조립과 App.tsx 전환, legacy JS/JSX·allowJs 제거, provider
   compatibility facade 기반 물리 분리, 실제 PostgreSQL 실행 임대 경합 검증입니다.
 
+### 2026-08-05 열아홉 번째 구조 슬라이스 B
+
+- strict App 전환: forwarding shim 없이 `App.jsx`를 `App.tsx`로 교체하고 main·App 통합·Home·예약·
+  설정 테스트 import를 extensionless 경로로 통일했습니다. production caller props가 strict 검사를
+  받으며 `App.tsx`는 page/controller 조립과 watch 등록 완료만 소유하는 246줄 진입점입니다.
+- app 조립 경계: `app/AppAuthenticationBoundary.tsx`가 loading·AuthGate·인증 child 선택만 담당하고,
+  모든 controller hook은 이전처럼 인증 분기 위에서 호출됩니다. `app/useAppLogout.ts`는 live 요청 뒤
+  성공·실패 공통 cleanup 순서와 demo 요청 생략을, `app/HomeSeatFoundOfficialHandoff.tsx`는 Home watch의
+  공식 인계 train 변환·KST 출발 시각·route fallback·CTA 조립을 소유합니다.
+- compatibility와 selector: `app/AppCompatibility.tsx`가 Home·NewWait·Reservations·PaymentHero adapter를
+  typed props로 소유하고, Settings·WatchRow·OfficialHandoff·seat evidence는 원본 identity로 다시
+  export합니다. active 상태 판정은 `features/app/watchSelectors.ts`로 이동했습니다.
+- canonical 경계 강화: 좌석별 등록 completion이 전달하는 열차는 watch 생성에 필요한 이름·열차번호·
+  출도착 시각·표시 시각·공식 URL을 canonical timetable 계약으로 보장합니다. generic watch snapshot의
+  임의 index signature는 실제 전이 탐지 필드로 좁혔고, watch 생성 API는 canonical payload와 기존
+  부분 객체 계약 테스트를 overload로 함께 보존합니다.
+- 테스트 소유권: 인증 경계 4건, logout 4건, Home 공식 인계 3건, compatibility·selector 6건을 새 strict
+  owner 테스트가 소유합니다. 기존 live `DEMO_MODE` hoisted mock 순서, 공개 export identity, portal inert,
+  등록·취소·Home·예약·설정 회귀는 그대로 유지했습니다. feature→app 역의존 ratchet과 선택 열차 필수
+  필드 fail-closed 테스트도 추가했습니다.
+- 확인된 검증: ESLint 오류 0개·고정된 기존 경고 12개, strict typecheck, Vitest 79개 파일·570건,
+  production build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다. build의 기존 500kB 초과 chunk
+  warning은 이번 구조 이동에서 새로 만들거나 숨기지 않았습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: `App.test.jsx`를 포함한 잔여 JS/JSX 테스트와 `allowJs=true`는 아직 남아 있습니다. 명시적
+  logout 요청 실패는 로컬 cleanup 뒤 원본 오류를 재전파하고, 401은 명시적 logout과 달리 feature
+  상태를 보존하며, 재인증 시 기존 view로 복귀하는 현재 계약은 행동 변경 없이 유지했습니다. 설정
+  버튼부터 AuthGate까지의 실제 `<App>` logout 관통은 logout hook과 Settings owner 테스트로 나눠
+  검증했으며 단일 통합 테스트로는 아직 고정하지 않았습니다.
+- 남은 핵심 부채: legacy JS/JSX 테스트·allowJs 제거, provider compatibility facade 기반 물리 분리,
+  실제 PostgreSQL 실행 임대 경합 검증과 설정 resource 요청 epoch 안전성입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |
@@ -758,7 +792,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 | 4 | 순수 결정 함수가 기존 상태 전이와 동일한 결과를 내고 예약 episode·reconciliation 회귀 테스트 통과 | 호출자를 기존 service 정책으로 되돌리고 새 함수는 비활성 상태로 보존해 차이를 재분석 |
 | 5 | route/task가 얇아지고 UoW 범위, lock 순서, outbox 원자성, PostgreSQL 동시성 테스트 통과 | 새 seam의 wiring만 이전 service 호출로 복원. migration이나 데이터 삭제로 되돌리지 않음 |
 | 6 | 역할별 provider 계약과 capability가 기존보다 넓어지지 않고 timeout·보호·부분 실패가 fail-closed | provider registry를 기존 adapter로 복원하고 capability를 안전하게 `false`로 강등 |
-| 7 | `App.jsx`·`api.js` 제거, `allowJs=false`, typecheck·Vitest·build·Sites 검증 통과, CSS 시각 회귀 확인 | TS와 CSS를 같은 rollback으로 묶지 않고 실패한 전환 단위만 이전 진입점 또는 stylesheet import로 복원 |
+| 7 | `App.jsx`·`api.js` 제거, 잔여 JS/JSX 테스트 전환과 `allowJs=false`, typecheck·Vitest·build·Sites 검증 통과, CSS 시각 회귀 확인 | TS와 CSS를 같은 rollback으로 묶지 않고 실패한 전환 단위만 이전 진입점 또는 stylesheet import로 복원 |
 | 8 | browser lifecycle·DOM parser·검색·로그인·예약 경계가 분리되고 실제 외부 재호출 없이 계약 테스트 통과, 허가된 smoke에서 보호·결제 전 중단 확인 | sidecar entrypoint를 기존 facade로 되돌리고 새 내부 모듈 호출을 끔. 보호 응답을 성공으로 완화하지 않음 |
 
 어떤 단계에서도 `down -v`, volume 삭제, migration history 재작성으로 rollback하지 않습니다. DB 계약 변경이 꼭 필요하면 forward migration과 호환 읽기 기간을 별도 설계합니다.

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { App, Home, NewWait, OfficialHandoff, PaymentHero, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App.jsx";
+import { App, Home, NewWait, OfficialHandoff, PaymentHero, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App";
 import { normalizeSeatClasses } from "../src/api/seatClasses";
 import { SeatClassPanel } from "../src/features/new-wait/TrainResultCard";
 import {

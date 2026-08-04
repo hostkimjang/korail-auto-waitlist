@@ -36,8 +36,15 @@ API의 알림 채널 관리 HTTP route와 transport schema는 `notification_mana
 소유하고, 중앙 `schemas.py`는 같은 Pydantic class 객체를 다시 export합니다. 실시간 outbox 이벤트
 stream인 `/events`는 알림 채널 CRUD와 수명주기가 다르므로 `event_stream/http.py`가 독립적으로
 소유합니다. 중앙 `api.py`는 제거됐으며 아래 기능 router를 `main.py`가 명시적으로 조립합니다. 공개
-endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. `App.jsx`·`styles.css`와 API
+endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. `App.jsx`와 API
 `services.py`·`worker.py`·provider 경계의 추가 분리는 계속 남아 있습니다.
+
+웹 전역 CSS 진입점 `styles.css`는 일반 규칙을 직접 소유하지 않고 `tokens -> base -> shell ->
+features -> responsive` 순서의 다섯 경계를 import합니다. 첫 구조 분리는 기존 6,648줄의 selector·규칙·
+media/container query·keyframes 순서를 바꾸지 않은 기계적 이동이며, 다섯 파일을 결합한 내용은 전환
+전 Git blob 113,950바이트와 같습니다. feature-local `providerRuntimeStatus.css`는 기존 위치와 import
+순서를 유지하고 전역 token을 사용합니다. 이후 feature별 CSS 재소유나 중복 selector 정리는 이
+동작 보존 체크포인트와 섞지 않는 별도 슬라이스로 다룹니다.
 
 웹의 알림 채널 CRUD·시험 전송과 Web Push 브라우저 수명주기는 `api/notifications.ts`, SSE 연결·
 history cutoff·정리 계약은 `api/events.ts`가 소유하며 `App.jsx`는 이 소유 모듈을 직접 사용합니다. `NewWait`의

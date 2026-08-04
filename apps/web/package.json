@@ -9,7 +9,7 @@
     "lint": "node scripts/check-eslint-ratchet.mjs",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:e2e": "playwright test e2e/journey.spec.ts e2e/live-authentication.contract.spec.ts",
+    "test:e2e": "playwright test e2e/journey.spec.ts e2e/live-authentication.contract.spec.ts e2e/responsive-css.spec.ts",
     "test:e2e:fullstack": "node scripts/run-fullstack-e2e.mjs",
     "test:e2e:live": "npm run test:e2e:live:srt",
     "test:e2e:live:srt": "playwright test e2e/live-srt-provider.smoke.spec.ts --project=desktop-chromium",

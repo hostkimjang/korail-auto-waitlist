@@ -396,6 +396,35 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: `NewWait` 나머지 단계·App shell과 Home·Reservations·Auth의 strict 경계,
   legacy JS/JSX, 전역 CSS 분리, worker의 더 깊은 observation/reservation 정책과 provider 역할 분리입니다.
 
+### 2026-08-05 열한 번째 구조 슬라이스
+
+- 전역 CSS 1차 경계: 6,648줄 `styles.css`를 import-only 진입점으로 바꾸고 `:root` token은
+  `styles/tokens.css`, reset·기본 요소·focus는 `base.css`, app·navigation·page·공용 button shell은
+  `shell.css`, 화면 규칙과 그 위치의 local media/container query·keyframes는 `features.css`, 파일
+  말미의 교차 화면 breakpoint와 공통 reduced-motion은 `responsive.css`로 이동했습니다. selector·
+  선언·중복을 정리하지 않고 원래 규칙 순서를 보존했으며, separator 빈 줄만 `git diff --check`에
+  맞게 다음 파일 시작에 둡니다. 전환 전 Git blob과 다섯 파일 결합은 각각 113,950바이트이며
+  byte-for-byte 같습니다.
+- 구조·브라우저 계약: `responsiveLayoutContract.test.ts`는 import 순서, 각 파일 시작·끝 경계와
+  dependency 없는 brace-depth block 추출로 정확한 rule/container 선언을 검사합니다. 신규
+  `responsive-css.spec.ts`는 정상 Home API mock과 긴 자동예매 정책을 사용해 1,440×1,000,
+  320×844, 720×500(1,440×1,000의 200% 확대 reflow 등가)에서 부모·실제 자식의 자체 overflow와
+  viewport 경계, watch 내부 네 영역 비겹침, 모바일 fixed navigation 가림, booking CTA·switch·
+  icon·하단 navigation의 실제 44×44px를 Chromium으로 확인합니다. 미처리 API·console·page error는
+  0건이어야 하며 새 spec은 기본 `test:e2e`와 `verify` 경로에 포함됩니다.
+- 독립 리뷰: 최초 리뷰의 기본 gate 누락, `overflow-x: clip` 허위 통과, 오류 상태 mock, y축·44px·
+  CSS 블록 경계 공백을 모두 보정했습니다. 세 차례 보정 재리뷰 뒤 P0~P3 지적 사항이 없음을
+  확인했습니다.
+- 확인된 검증: ESLint 오류 0·고정 경고 18, strict typecheck, Vitest 67개 파일·481건, production
+  build, Sites 4건, 기본 Playwright E2E 14건을 통과했습니다. responsive focused는 desktop·mobile
+  프로젝트 합계 6건, 기존 mocked journey는 4건을 통과했고 `git diff --check`도 통과했습니다.
+- 검증 범위: CSS 결합이 기존과 바이트 단위로 같고 320px·200% 확대 reflow 등가 Chromium 계약을
+  확인했습니다. 실제 headed Chrome의 native 200% zoom과 Step 3·Official Handoff geometry를 이
+  슬라이스에서 새로 수동 확인했다고 기록하지 않습니다. CSS·테스트·문서만 바뀌어 Compose 이미지
+  재빌드·재생성은 수행하지 않습니다.
+- 남은 핵심 부채: `features.css`의 기능별 재소유·중복 정리, 실제 native 200%와 Step 3·handoff의
+  확장 geometry 회귀, legacy JS/JSX와 App의 화면 조립, API worker/provider의 더 깊은 분리입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

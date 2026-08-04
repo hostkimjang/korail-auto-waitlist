@@ -1,0 +1,22 @@
+:root {
+  color-scheme: light;
+  font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", Inter, system-ui, sans-serif;
+  color: #0b1f3a;
+  background: #f7f9fb;
+  font-synthesis: none;
+  --ink: #0b1f3a;
+  --muted: #67758a;
+  --line: #dbe3e9;
+  --surface: #ffffff;
+  --surface-soft: #f5f8fa;
+  --navy: #0b2345;
+  --teal: #087f7b;
+  --teal-hover: #066e6b;
+  --teal-soft: #e8f6f3;
+  --orange: #e95420;
+  --orange-soft: #fff3eb;
+  --korail: #075bc4;
+  --srt: #7825a5;
+  --danger: #c93f3f;
+  --shadow: 0 12px 32px rgba(16, 43, 67, 0.08);
+}

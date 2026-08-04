@@ -1,0 +1,54 @@
+
+* {
+  box-sizing: border-box;
+}
+
+.sr-only {
+  width: 1px;
+  height: 1px;
+  position: absolute;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+html {
+  width: 100%;
+  overflow-x: clip;
+  background: #f7f9fb;
+}
+
+body {
+  margin: 0;
+  width: 100%;
+  overflow-x: clip;
+  min-height: 100vh;
+  background: #f7f9fb;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid #006d68;
+  outline-offset: 2px;
+}

@@ -4,7 +4,7 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 1,010줄입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현, 알림 채널 표시·편집 상태, 설정 페이지 section 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 화면 전환 shell은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열한 번째 수직 슬라이스를 마친 현재 `api.js`는 제거됐고 `App.jsx`는 1,010줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait`의 좌석별 등록·evidence 갱신·열차 결과 카드와 좌석 표현, 알림 채널 표시·편집 상태, 설정 페이지 section 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표도 production 응답과 같은 canonical mapper를 통과합니다. `NewWait`의 나머지 단계 조립과 App의 화면 전환 shell은 아직 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict TypeScript와 typecheck gate는 적용되어 있습니다. `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff, reservations, settings의 leaf 컴포넌트·hook·순수 함수가 일부 분리되어 있습니다. `api.js` barrel과 확인된 feature 간 역방향 import는 제거됐지만, 이는 `App.jsx` 제거, 모든 DTO/mapper 경계 완성, 전체 JS/JSX 전환이 끝났다는 뜻은 아닙니다.
 
@@ -103,7 +103,12 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 마지막에 `App.tsx`로 전환
    - 기존 대형 테스트를 feature별 `.test.tsx`·`.test.ts`로 분리
 7. CSS와 JavaScript 제거
-   - class name과 시각 결과를 유지한 채 tokens/base/shell/feature/responsive 순서로 분리
+   - 완료: class·규칙·cascade 순서를 그대로 유지하고 `styles.css`를 import-only 진입점,
+     `styles/{tokens,base,shell,features,responsive}.css` 1차 경계로 분리. 원본 Git blob과 다섯 파일
+     결합의 113,950바이트 동일성, 320px·720×500 reflow·overflow·44px Chromium 계약을 검증하고
+     responsive spec을 기본 `test:e2e`/`verify`에 연결
+   - 남음: `features.css`를 실제 기능 소유 경계로 더 나누고 중복 selector 정리는 별도 동작 변경
+     슬라이스에서 수행
    - 모든 소스·테스트 전환 후 `allowJs` 제거, Vitest JS/JSX include 제거
 
 각 단계에서 컴포넌트 이동과 동작 변경을 섞지 않습니다. 먼저 import만 바뀌는 이동을 완료하고 테스트한 뒤 타입·정책 개선을 별도 단계로 적용합니다.

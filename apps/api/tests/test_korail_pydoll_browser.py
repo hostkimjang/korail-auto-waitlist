@@ -687,14 +687,10 @@ async def test_http_replay_pool_reuses_first_route_after_second_route_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first_session = AnyRouteCaptureFixtureSession(_fixture_snapshot())
-    second_session = AnyRouteCaptureFixtureSession(
-        _fixture_snapshot_for_route("서울", "대전")
-    )
+    second_session = AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route("서울", "대전"))
     factory = SequenceSessionFactory(first_session, second_session)
     first_replay = FakeReplayClient()
-    second_replay = FakeReplayClient(
-        snapshot=_fixture_snapshot_for_route("서울", "대전")
-    )
+    second_replay = FakeReplayClient(snapshot=_fixture_snapshot_for_route("서울", "대전"))
     replay_clients = iter((first_replay, second_replay))
     monkeypatch.setattr(
         pydoll_module,
@@ -734,8 +730,7 @@ async def test_http_replay_pool_evicts_only_least_recent_route(
     monkeypatch.setattr(pydoll_module, "_HTTP_REPLAY_ROUTE_CACHE_SIZE", 2)
     routes = (("서울", "부산"), ("서울", "대전"), ("서울", "광주송정"), ("서울", "부산"))
     sessions = [
-        AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route(*route))
-        for route in routes
+        AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route(*route)) for route in routes
     ]
     factory = SequenceSessionFactory(*sessions)
     replay_clients = [
@@ -779,8 +774,7 @@ async def test_http_replay_ttl_expiration_is_isolated_by_route(
 ) -> None:
     routes = (("서울", "부산"), ("서울", "대전"), ("서울", "부산"))
     sessions = [
-        AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route(*route))
-        for route in routes
+        AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route(*route)) for route in routes
     ]
     factory = SequenceSessionFactory(*sessions)
     replay_clients = [
@@ -828,8 +822,7 @@ async def test_http_replay_search_limit_is_isolated_by_route(
 ) -> None:
     routes = (("서울", "부산"), ("서울", "대전"), ("서울", "부산"))
     sessions = [
-        AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route(*route))
-        for route in routes
+        AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route(*route)) for route in routes
     ]
     factory = SequenceSessionFactory(*sessions)
     replay_clients = [
@@ -916,9 +909,7 @@ async def test_login_transition_preserves_independent_http_replay_routes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first_session = AnyRouteCaptureFixtureSession(_fixture_snapshot())
-    second_session = AnyRouteCaptureFixtureSession(
-        _fixture_snapshot_for_route("서울", "대전")
-    )
+    second_session = AnyRouteCaptureFixtureSession(_fixture_snapshot_for_route("서울", "대전"))
     authenticated_session = AuthenticatedCaptureFixtureSession(_fixture_snapshot())
     factory = SequenceSessionFactory(first_session, second_session, authenticated_session)
     replay_clients = [FakeReplayClient(), FakeReplayClient()]
@@ -949,8 +940,9 @@ async def test_login_transition_preserves_independent_http_replay_routes(
 
 
 @pytest.mark.asyncio
-async def test_authenticated_browser_session_is_not_converted_into_a_timetable_replay_lease(
-) -> None:
+async def test_authenticated_browser_session_is_not_converted_into_a_timetable_replay_lease() -> (
+    None
+):
     authenticated_session = AuthenticatedCaptureFixtureSession(_fixture_snapshot())
     search_session = AuthenticatedCaptureFixtureSession(_fixture_snapshot())
     factory = SequenceSessionFactory(authenticated_session, search_session)
@@ -1470,8 +1462,7 @@ async def test_pydoll_real_browser_keeps_selected_same_day_when_picker_omits_day
     with serve_pydoll_fixture(monkeypatch) as base_url:
         client = PydollKorailBrowserClient(
             page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?today=2026-08-02&scenario=same_day_morning"
+                f"{base_url}/korail_browser_page.html?today=2026-08-02&scenario=same_day_morning"
             ),
             timeout_seconds=15,
             allow_test_loopback=True,
@@ -1498,8 +1489,7 @@ async def test_pydoll_real_browser_rejects_schedule_readback_mismatch(
     with serve_pydoll_fixture(monkeypatch) as base_url:
         client = PydollKorailBrowserClient(
             page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?today=2026-07-30&scenario=pre_submit_mismatch"
+                f"{base_url}/korail_browser_page.html?today=2026-07-30&scenario=pre_submit_mismatch"
             ),
             timeout_seconds=2,
             allow_test_loopback=True,
@@ -1527,8 +1517,7 @@ async def test_pydoll_real_browser_expands_visible_more_results_once(
     with serve_pydoll_fixture(monkeypatch) as base_url:
         client = PydollKorailBrowserClient(
             page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?today=2026-07-30&scenario=more_results"
+                f"{base_url}/korail_browser_page.html?today=2026-07-30&scenario=more_results"
             ),
             timeout_seconds=15,
             allow_test_loopback=True,
@@ -1602,8 +1591,7 @@ async def test_pydoll_real_browser_selects_exact_hour_from_full_dom_catalog(
     with serve_pydoll_fixture(monkeypatch) as base_url:
         client = PydollKorailBrowserClient(
             page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?today=2026-08-02&scenario=all_hour_dom_click"
+                f"{base_url}/korail_browser_page.html?today=2026-08-02&scenario=all_hour_dom_click"
             ),
             timeout_seconds=15,
             allow_test_loopback=True,

@@ -114,6 +114,10 @@ def _is_provider_registry_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/provider_registry/application.py"
 
 
+def _is_ui_preferences_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/ui_preferences/application.py"
+
+
 def _is_production_module_outside_provider_facade(relative_path: Path) -> bool:
     return relative_path.as_posix() != "rail_waitlist/providers.py"
 
@@ -225,6 +229,11 @@ BOUNDARY_RULES = (
         forbidden_import_roots=frozenset(
             {"celery_app", "fastapi", "providers", "services", "worker"}
         ),
+    ),
+    BoundaryRule(
+        name="UI preferences application does not reverse-depend on HTTP or legacy services",
+        matches=_is_ui_preferences_application,
+        forbidden_import_roots=frozenset({"fastapi", "services"}),
     ),
     BoundaryRule(
         name="production modules use canonical provider owners instead of the facade",

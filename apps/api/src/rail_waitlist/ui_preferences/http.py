@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_admin
 from ..database import get_session
 from ..models import AdminAccount
-from ..services import update_admin_ui_preferences
+from .application import update_admin_ui_preferences
 from .schemas import UiPreferencesRead, UiPreferencesUpdate
 
 router = APIRouter(prefix="/api/v1/preferences", dependencies=[Depends(require_admin)])

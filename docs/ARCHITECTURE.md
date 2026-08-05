@@ -8,6 +8,14 @@ Migration `0026_unified_observation_interval`는 앞선 작업별 속도 실험�
 
 전역 관측값 저장은 활성 작업을 잠근 뒤 아직 due가 아니고 provider 실행 lease·보호 cooldown이 없는 작업의 `next_check_at`만 새 값으로 다시 계산합니다. 이미 due이거나 실행 중인 작업을 중복 enqueue하지 않고, 해당 관측이 끝날 때 DB의 최신 전역값으로 다음 시각을 계산합니다. 따라서 이 설정은 목표 cadence이며 provider cache·운영사별 단일 lease·circuit·backoff·cooldown을 무시하는 강제 호출 주기가 아닙니다.
 
+이 저장 use case의 canonical owner는 FastAPI 비의존 `ui_preferences/application.py`입니다. HTTP route는
+관리자 계정을 `FOR UPDATE`로 읽은 뒤 application에 전달하고, application은 활성 provider 실행 lease를
+먼저 확인한 다음 후보를 eager load한 활성 작업을 행 잠금으로 읽습니다. 실행 중인 provider, 이미 due인
+작업, 미래 cooldown이 있는 작업은 재계산하지 않으며 후보가 없는 legacy 작업은 KST 서비스 날짜와
+시작 시각으로 출발 시각을 보정합니다. 변경과 스케줄 재계산은 한 transaction에서 commit한 뒤 계정을
+refresh합니다. 중앙 `services.py`는 기존 호출자를 위해 같은 함수 객체를 다시 export할 뿐 이 정책을
+소유하지 않으며, module-boundary gate가 application의 FastAPI·legacy services 역의존을 차단합니다.
+
 현재 `process_due_watches` beat는 5초입니다. 이는 이미 계산된 `next_check_at` 도달 작업을 찾는 sweep 주기이며, 모든 좌석을 5초마다 조회한다는 뜻이 아닙니다.
 
 ## 목표와 경계
@@ -46,8 +54,9 @@ API의 알림 채널 관리 HTTP route와 transport schema는 `notification_mana
 stream인 `/events`는 알림 채널 CRUD와 수명주기가 다르므로 `event_stream/http.py`가 독립적으로
 소유합니다. 중앙 `api.py`는 제거됐으며 아래 기능 router를 `main.py`가 명시적으로 조립합니다. 공개
 endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. 웹 진입 조립은 strict
-`App.tsx`로 전환됐고, API `services.py`·`worker.py`·provider 경계와 잔여 JS/JSX 테스트의 추가
-분리는 계속 남아 있습니다.
+`App.tsx`로 전환됐고, provider 물리 경계와 UI preference 저장 application도 분리됐습니다. API
+`services.py`의 나머지 use case, `worker.py`의 runtime 조립 정리와 잔여 JS/JSX 테스트의 추가 분리는
+계속 남아 있습니다.
 
 웹 전역 CSS 진입점 `styles.css`는 일반 규칙을 직접 소유하지 않고 `tokens -> base -> shell ->
 features -> responsive` 순서의 다섯 경계를 import합니다. 첫 구조 분리는 기존 6,648줄의 selector·규칙·

@@ -335,6 +335,9 @@
 - [x] `ExperimentalRailAdapter`를 `provider_adapters/experimental.py`, 시간표·실행 선택·historical alias·capability 병합을 `provider_registry/application.py`로 이동하고 `providers.py`를 동일 객체 re-export만 남은 63줄 호환 facade로 축소. production facade import 0건과 adapter/registry 역의존 자동 차단
 - [x] 스무 번째 구조 슬라이스 F의 registry identity·Settings 1회·동일 객체 전달·호출/반환 순서·safe capability 세 필드 병합 golden test와 기존 consumer monkeypatch를 포함한 focused pytest 254건, API 전체 pytest 1,072건, Ruff `E/F/I`, format ratchet 60개, 독립 재감사 152건·HTTP boundary 9건 P0~P3 회귀 없음과 `git diff --check` 통과. 수정한 legacy `station_visibility.py`를 formatter로 정리해 allowlist 61→60개 축소, 기존 Starlette/httpx deprecation 경고 1건
 - [x] 스무 번째 구조 슬라이스 F의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] UI preference 저장·전역 관측 간격 변경 뒤 idle 활성 작업 재스케줄을 FastAPI 비의존 `ui_preferences/application.py`로 이동하고 HTTP는 관리자 계정 `FOR UPDATE`·transport, application은 provider lease 조회→후보 eager load 활성 작업 잠금→due·cooldown 제외→commit/refresh를 소유하도록 분리. `services.py`는 동일 함수 객체 compatibility export만 유지
+- [x] 스물한 번째 구조 슬라이스 A의 compatibility identity, leased·idle·이미 due·미래 cooldown·후보 상태·후보 없는 KST fallback·legacy split payload·timezone 계약을 포함한 focused pytest 84건, API 전체 pytest 1,073건, Ruff `E/F/I`, format ratchet 60개, 독립 재감사 P0~P3 회귀 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
+- [x] 스물한 번째 구조 슬라이스 A의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -350,7 +353,7 @@
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
 - [ ] `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행
 - [x] API의 operations summary, UI preferences, 철도 계정·runtime 라우트와 schema를 기능 패키지로 이동하고 중앙 schema compatibility export·전체 pytest 949건 검증
-- [ ] API의 나머지 router·schema·application 경계를 분리하고 application의 HTTP 오류 의존 제거
+- [ ] UI preference application 분리 완료 위에서 API의 나머지 router·schema·application 경계를 분리하고 application의 HTTP 오류 의존 제거
 - [x] 예약 결과의 재시도·수동 확인 투영을 `reservations/domain.py` 순수 정책과 전체 outcome 표 테스트로 분리
 - [ ] watch transition·reservation episode·reconciliation 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
 - [x] worker의 reservation execution을 application으로 분리하고 얇은 runtime 조립, claim/result UoW·잠금 순서·outbox 원자성·credential CAS 회귀 테스트 완성

@@ -402,6 +402,8 @@ async def test_observation_preferences_reschedule_idle_watches_but_not_leased_pr
     now = datetime.now(UTC)
     departure_at = now + timedelta(hours=2)
     leased_next_check = now + timedelta(minutes=10)
+    due_next_check = now - timedelta(seconds=1)
+    cooldown_next_check = now + timedelta(minutes=10)
     async with app.state.test_session_factory() as session:
         session.add(AdminAccount(username="admin", password_hash="not-a-real-password-hash"))
         leased_watch = Watch(
@@ -476,11 +478,48 @@ async def test_observation_preferences_reschedule_idle_watches_but_not_leased_pr
                 ),
             ]
         )
+        due_watch = Watch(
+            provider=Provider.MOCK,
+            origin="대전",
+            destination="서울",
+            travel_date=departure_at.date(),
+            time_from=time(8),
+            time_to=time(12),
+            status=WatchStatus.WATCHING,
+            dedupe_key="already-due-watch",
+            next_check_at=due_next_check,
+        )
+        cooldown_watch = Watch(
+            provider=Provider.SRT,
+            origin="대전",
+            destination="수서",
+            travel_date=departure_at.date(),
+            time_from=time(8),
+            time_to=time(12),
+            status=WatchStatus.WATCHING,
+            dedupe_key="future-cooldown-watch",
+            next_check_at=cooldown_next_check,
+            cooldown_until=now + timedelta(minutes=5),
+        )
+        candidate_less_watch = Watch(
+            provider=Provider.MOCK,
+            origin="대전",
+            destination="서울",
+            travel_date=(now + timedelta(days=1)).date(),
+            time_from=time(8),
+            time_to=time(12),
+            status=WatchStatus.WATCHING,
+            dedupe_key="candidate-less-idle-watch",
+            next_check_at=now + timedelta(minutes=10),
+        )
         session.add_all(
             [
                 leased_watch,
                 focused_watch,
                 balanced_watch,
+                due_watch,
+                cooldown_watch,
+                candidate_less_watch,
                 ProviderExecutionLease(
                     provider=Provider.KORAIL,
                     account_scope="anonymous/public",
@@ -494,6 +533,9 @@ async def test_observation_preferences_reschedule_idle_watches_but_not_leased_pr
         leased_watch_id = leased_watch.id
         focused_watch_id = focused_watch.id
         balanced_watch_id = balanced_watch.id
+        due_watch_id = due_watch.id
+        cooldown_watch_id = cooldown_watch.id
+        candidate_less_watch_id = candidate_less_watch.id
 
     response = await client.patch(
         "/api/v1/preferences/ui",
@@ -506,8 +548,14 @@ async def test_observation_preferences_reschedule_idle_watches_but_not_leased_pr
         leased = await session.get(Watch, leased_watch_id)
         focused = await session.get(Watch, focused_watch_id)
         balanced = await session.get(Watch, balanced_watch_id)
+        due = await session.get(Watch, due_watch_id)
+        cooldown = await session.get(Watch, cooldown_watch_id)
+        candidate_less = await session.get(Watch, candidate_less_watch_id)
         assert leased is not None and focused is not None and balanced is not None
+        assert due is not None and cooldown is not None and candidate_less is not None
         assert leased.next_check_at == leased_next_check.replace(tzinfo=None)
+        assert due.next_check_at == due_next_check.replace(tzinfo=None)
+        assert cooldown.next_check_at == cooldown_next_check.replace(tzinfo=None)
         focused_next = focused.next_check_at
         assert focused_next is not None
         if focused_next.tzinfo is None:
@@ -520,6 +568,12 @@ async def test_observation_preferences_reschedule_idle_watches_but_not_leased_pr
             balanced_next = balanced_next.replace(tzinfo=UTC)
         balanced_elapsed = (balanced_next - datetime.now(UTC)).total_seconds()
         assert 4 <= balanced_elapsed <= 6
+        candidate_less_next = candidate_less.next_check_at
+        assert candidate_less_next is not None
+        if candidate_less_next.tzinfo is None:
+            candidate_less_next = candidate_less_next.replace(tzinfo=UTC)
+        candidate_less_elapsed = (candidate_less_next - datetime.now(UTC)).total_seconds()
+        assert 4 <= candidate_less_elapsed <= 6
 
 
 async def test_legacy_split_preference_payload_is_accepted_but_does_not_change_cadence(app, client):

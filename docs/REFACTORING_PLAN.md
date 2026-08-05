@@ -958,6 +958,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: 가짜 timetable/stations 기본 stub 제거와 capability 부분 실패 정책의 별도 행동
   슬라이스, 실행 전용 역할 base, Python 정적 타입 gate와 Mock 세부 fixture 계약 강화입니다.
 
+### 2026-08-05 스물한 번째 구조 슬라이스 A
+
+- UI preference application: 전역 화면·좌석 관측 간격 저장과 idle 활성 작업 재스케줄 orchestration을
+  `ui_preferences/application.py`로 이동했습니다. HTTP는 관리자 인증·계정 `FOR UPDATE`와 transport를,
+  application은 설정 투영·lease 조회·활성 작업 잠금·다음 관측 시각 계산·commit/refresh를 소유합니다.
+- 잠금·안전 계약: 활성 provider 실행 lease를 먼저 조회하고, 후보를 eager load한 활성 작업을
+  `FOR UPDATE`로 읽습니다. 실행 중 provider, 이미 due인 작업, 미래 cooldown이 있는 작업은 건너뛰며
+  후보 없는 legacy 작업은 KST 날짜·시작 시각 fallback을 사용합니다. legacy split interval payload를
+  무시하고 timezone-aware UTC로 저장하는 기존 계약도 유지했습니다.
+- canonical 소비와 호환: UI preference HTTP는 canonical application을 직접 import하고 중앙
+  `services.py`는 wrapper 없이 같은 함수 객체만 다시 export합니다. application의 FastAPI·legacy
+  services 역의존을 module-boundary gate로 차단했습니다.
+- 회귀 계약: owner와 compatibility export identity를 고정하고, 기존 leased·idle·후보 상태별 재계산에
+  이미 due, 미래 cooldown, 후보 없는 KST fallback 사례를 추가했습니다. 이동 함수와 helper의 AST,
+  잠금·쿼리·commit 순서는 독립 재감사에서 동일했고 P0~P3 회귀가 없었습니다.
+- 확인된 검증: UI preference·API·boundary·정책 focused pytest 84건, API 전체 pytest 1,073건, Ruff
+  `E/F/I`, format ratchet 60개와 `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation
+  경고 1건은 유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: `services.py`의 `_utc_instant`는 예약 정책에서도 사용하므로 이번 슬라이스에서는 UI owner에
+  같은 작은 helper를 유지해 무관한 정책 이동을 섞지 않았습니다. 남은 API router·schema와
+  `services.py` use case, UI preference의 요청 epoch·401 안전성은 후속 슬라이스입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

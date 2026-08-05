@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hmac
 import logging
 import os
@@ -8,7 +7,6 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Protocol
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
@@ -22,16 +20,14 @@ from .korail_browser_automation import (
     FULLSTACK_E2E_PAGE_URL,
     OFFICIAL_KORAIL_SEARCH_URL,
     BrowserAdapterError,
-    BrowserClient,
     BrowserProtectionDetected,
     BrowserRateLimited,
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
     KorailBrowserAutomation,
-    PlaywrightKorailBrowserClient,
-    probe_chromium,
 )
+from .korail_browser_automation import probe_chromium as probe_chromium
 from .korail_reservation_confirmation import (
     KORAIL_CONFIRMATION_SOURCE,
     normalize_korail_same_session_detail,
@@ -45,7 +41,16 @@ from .korail_reservation_contract import (
     KorailReserveOnceResult,
     KorailSessionStateResult,
 )
-from .korail_search_bootstrap import KorailStationIdentityResolver
+from .korail_sidecar.runtime import (
+    KorailBrowserEngine as KorailBrowserEngine,
+)
+from .korail_sidecar.runtime import ReadinessGate as _ReadinessGate
+from .korail_sidecar.runtime import browser_engine_setting as _browser_engine_setting
+from .korail_sidecar.runtime import build_automation as build_automation
+from .korail_sidecar.runtime import build_browser_client as _build_browser_client
+from .korail_sidecar.runtime import float_setting as _float_setting
+from .korail_sidecar.runtime import integer_setting as integer_setting
+from .korail_sidecar.runtime import readiness_probe_for_engine as _readiness_probe_for_engine
 from .reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -56,6 +61,8 @@ NO_STORE_HEADERS = {"Cache-Control": "no-store"}
 logger = logging.getLogger(__name__)
 configure_service_file_logging()
 
+_integer_setting = integer_setting
+
 
 class _ReservationClient(Protocol):
     async def reserve_once(self, request: object) -> object: ...
@@ -65,163 +72,6 @@ class _ReservationClient(Protocol):
     async def read_reservation_detail(self, target: object) -> object: ...
 
     def session_snapshot(self) -> object: ...
-
-
-class _ReadinessGate:
-    """Cache a successful probe while allowing bounded recovery after startup failure."""
-
-    def __init__(
-        self,
-        probe: Callable[[], Awaitable[None]],
-        *,
-        retry_interval_seconds: float,
-        probe_timeout_seconds: float,
-    ) -> None:
-        self._probe = probe
-        self._retry_interval_seconds = retry_interval_seconds
-        self._probe_timeout_seconds = probe_timeout_seconds
-        self._lock = asyncio.Lock()
-        self._last_attempt_at: float | None = None
-        self.ready = False
-
-    async def probe_if_due(self, *, force: bool = False) -> bool:
-        if self.ready:
-            return True
-        async with self._lock:
-            if self.ready:
-                return True
-            now = time.monotonic()
-            if (
-                not force
-                and self._last_attempt_at is not None
-                and now - self._last_attempt_at < self._retry_interval_seconds
-            ):
-                return False
-            self._last_attempt_at = now
-            try:
-                await asyncio.wait_for(self._probe(), timeout=self._probe_timeout_seconds)
-            except Exception:  # noqa: BLE001 -- optional browser backends expose unstable errors.
-                logger.error("Chromium readiness probe failed; sidecar remains not ready")
-                return False
-            self.ready = True
-            return True
-
-
-class KorailBrowserEngine(StrEnum):
-    PLAYWRIGHT_DIRECT_CDP = "playwright_direct_cdp"
-    PYDOLL = "pydoll"
-
-
-def _browser_engine_setting() -> KorailBrowserEngine:
-    raw_value = os.getenv("KORAIL_BROWSER_ENGINE", KorailBrowserEngine.PYDOLL.value)
-    try:
-        return KorailBrowserEngine(raw_value.strip().lower())
-    except ValueError as error:
-        allowed = ", ".join(engine.value for engine in KorailBrowserEngine)
-        raise RuntimeError(f"KORAIL_BROWSER_ENGINE must be one of: {allowed}") from error
-
-
-def _build_browser_client(
-    engine: KorailBrowserEngine,
-    *,
-    page_url: str,
-    timeout_seconds: float,
-    allow_fullstack_fixture: bool,
-) -> BrowserClient:
-    if engine is KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP:
-        return PlaywrightKorailBrowserClient(
-            page_url=page_url,
-            timeout_seconds=timeout_seconds,
-            allow_fullstack_fixture=allow_fullstack_fixture,
-        )
-
-    from .korail_pydoll_browser import PydollKorailBrowserClient
-
-    return PydollKorailBrowserClient(
-        page_url=page_url,
-        timeout_seconds=timeout_seconds,
-        allow_fullstack_fixture=allow_fullstack_fixture,
-        station_identity_resolver=(
-            None
-            if allow_fullstack_fixture
-            else KorailStationIdentityResolver(
-                url=os.getenv(
-                    "KORAIL_STATION_DATA_URL",
-                    "https://www.korail.com/public/st_info/station_data.json",
-                )
-            )
-        ),
-        session_reuse_ttl_seconds=_integer_setting(
-            "KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS", 1800, minimum=30, maximum=1800
-        ),
-        session_reuse_max_searches=_integer_setting(
-            "KORAIL_BROWSER_SESSION_REUSE_MAX_SEARCHES", 100, minimum=2, maximum=100
-        ),
-    )
-
-
-def _readiness_probe_for_engine(
-    engine: KorailBrowserEngine,
-) -> Callable[[], Awaitable[None]]:
-    if engine is KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP:
-        return probe_chromium
-
-    from .korail_pydoll_browser import probe_pydoll_chromium
-
-    return probe_pydoll_chromium
-
-
-def _integer_setting(name: str, default: int, *, minimum: int, maximum: int) -> int:
-    try:
-        value = int(os.getenv(name, str(default)))
-    except ValueError as error:
-        raise RuntimeError(f"{name} must be an integer") from error
-    if not minimum <= value <= maximum:
-        raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
-    return value
-
-
-def _float_setting(name: str, default: float, *, minimum: float, maximum: float) -> float:
-    try:
-        value = float(os.getenv(name, str(default)))
-    except ValueError as error:
-        raise RuntimeError(f"{name} must be numeric") from error
-    if not minimum <= value <= maximum:
-        raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
-    return value
-
-
-def build_automation(
-    engine: KorailBrowserEngine | None = None,
-    *,
-    browser_client: BrowserClient | None = None,
-) -> KorailBrowserAutomation:
-    selected_engine = engine or _browser_engine_setting()
-    page_url = os.getenv("KORAIL_BROWSER_PAGE_URL", OFFICIAL_KORAIL_SEARCH_URL)
-    allow_fullstack_fixture = (
-        os.getenv("ENVIRONMENT", "").strip().lower() == "test"
-        and page_url == FULLSTACK_E2E_PAGE_URL
-    )
-    client = browser_client or _build_browser_client(
-        selected_engine,
-        page_url=page_url,
-        timeout_seconds=_float_setting(
-            "KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS", 25, minimum=5, maximum=60
-        ),
-        allow_fullstack_fixture=allow_fullstack_fixture,
-    )
-    return KorailBrowserAutomation(
-        client,
-        cache_ttl_seconds=_integer_setting(
-            "KORAIL_BROWSER_CACHE_TTL_SECONDS", 1, minimum=1, maximum=300
-        ),
-        rate_limit_cooldown_seconds=_integer_setting(
-            "SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", 1800, minimum=60, maximum=86400
-        ),
-        protection_cooldown_seconds=_integer_setting(
-            "SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 300, minimum=300, maximum=86400
-        ),
-    )
 
 
 def create_adapter_app(

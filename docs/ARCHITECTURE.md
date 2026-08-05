@@ -392,6 +392,16 @@ worker의 `ProviderCircuit` 상태나 수동 재개 계약으로 해석하지 �
 
 KORAIL sidecar는 안정판 Google Chrome의 새 임시 프로필에 고정 desktop viewport `1440×1000`을 적용한다. 역 검색 결과와 출발일 dialog는 비동기 렌더링 뒤 하나의 안정된 가시 대상일 때만 선택한다. 중복·누락·불안정 대상은 `source_unavailable`으로 닫고 클릭하지 않는다. 시간 slider도 하나의 slider와 대상 hour를 검증한다. 소유가 확인된 활성 화살표가 있으면 그 control만 누르고, 공식 `.slideWrap`처럼 화살표가 없으면 유일한 가시 `.slick-list` viewport를 실제 CDP pointer로 드래그한다. 창 변화와 전환 완료 뒤 활성 목표만 누르며 모호·비활성·무진전이면 후보 시간을 추정하거나 다른 control을 누르지 않고 fail-closed한다.
 
+sidecar의 엔진 선택·환경값 범위 검증·Playwright/Pydoll client factory·Pydoll lazy import·readiness
+cache/retry/timeout의 canonical owner는 178줄 `korail_sidecar/runtime.py`입니다. FastAPI·HTTP route·credential·
+예약 정책에 의존하지 않고 `KorailBrowserAutomation`을 조립합니다. 기존
+`korail_browser_adapter_service.py`는 `KorailBrowserEngine`, private factory/settings/readiness symbol과
+`build_automation`을 같은 객체 identity로 re-export하며, lifespan은 호출 시점의 service globals를 계속
+조회해 기존 monkeypatch 주입 경로를 보존합니다. 기존 `service.time.monotonic` patch도 두 모듈이 같은
+표준 `time` 객체를 사용해 유지되고, readiness 실패 logger namespace·메시지·비밀값 비노출도 이동 전과
+같습니다. 이 1차 runtime 분리는 HTTP/lifespan·DOM driver·read-only 검색·인증 actor·예약·확인 책임을
+아직 service/Pydoll facade에 남기며 Phase 8 전체 완료로 확대하지 않습니다.
+
 현재 API 요청과 DB 집계 성공은 해당 요청 시점의 상태만 증명합니다. worker·scheduler heartbeat와 HTTP·프로세스 오류는 아직 영속 수집하지 않으므로 화면에서 `확인 불가`와 수집 한계를 표시하며 정상이나 0%로 추정하지 않습니다. Prometheus 프로필의 프로세스 메모리 지표와 이 관리자용 영속 집계는 서로 다른 관측 경계입니다.
 
 ### 공식 역 카탈로그 계약
@@ -481,7 +491,8 @@ adapter→registry/facade 역의존을 차단합니다.
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
 공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
 payment-hold·reservation attempt policy/claim/result application·watch transition notification
-application·watch transition policy/application·watch update application의 18개 오류 0
+application·watch transition policy/application·watch update application·KORAIL sidecar runtime의
+19개 오류 0
 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.

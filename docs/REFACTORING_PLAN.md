@@ -1564,6 +1564,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
   최근 안전한 오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 K
+
+- KORAIL sidecar runtime owner: 178줄 `korail_sidecar/runtime.py`가 `ReadinessGate`, engine enum·env
+  parser, Playwright/Pydoll client factory·Pydoll lazy import, readiness probe 선택과 automation 조립을
+  소유합니다. 환경값 이름·기본값·범위·오류 문구, cache/cooldown과 retry/timeout/fail-closed 동작은
+  바꾸지 않았고 기존 service logger namespace도 보존했습니다.
+- compatibility facade: `korail_browser_adapter_service.py`는 FastAPI route·lifespan·internal bearer·
+  credential redaction·reservation/confirmation DTO 변환을 계속 소유하면서 runtime 객체를 같은 identity로
+  re-export합니다. `create_adapter_app` lifespan은 호출 시점 service globals를 사용하고 두 모듈의 표준
+  `time` 객체가 같아 기존 factory·probe·`time.monotonic` monkeypatch path가 유지됩니다. service는
+  603→453줄로 줄었습니다.
+- 경계·검토 보정: runtime의 FastAPI/facade 역의존과 public/private compatibility identity를 새 테스트로
+  고정했습니다. 첫 리뷰가 발견한 표준 mypy allowlist 누락 P2와 `from fastapi import ...`를 놓치는 AST
+  P3를 보정해 Import/ImportFrom root를 모두 검사하고 strict ratchet을 18→19개 파일로 확장했습니다.
+  Pydoll module은 fresh runtime import에서 로드되지 않으며 재리뷰 나머지 P0~P3는 없습니다.
+- 확인된 검증: runtime/browser automation pytest 64건, reserve·confirmation endpoint pytest 108건,
+  API 전체 pytest 1,530건, Ruff `E/F/I`, format ratchet 60개, strict mypy 19개 파일 오류 0,
+  `uv lock --check`, `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은
+  유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
+  최근 안전한 오류 표식 0건을 확인했습니다.
+- 남은 Phase 8 범위: sidecar HTTP/lifespan owner, Pydoll DOM driver/parser, read-only 검색·replay lifecycle,
+  인증 actor와 예약·확인 application은 후속 수직 슬라이스에서 의존 방향과 fixture gate를 함께 고정합니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

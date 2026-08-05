@@ -410,6 +410,9 @@
 - [x] 285줄 `reservations/attempt_result_application.py`로 attempt 결과·confirmation·기한 경과 UNKNOWN fence·정상 보류/후보 억제·감시 재개/auth/blocked/failed 전이와 outbox를 이동하고 `services.complete_reservation_attempt`은 exact 409 facade만 유지. `services.py` 1,131→956줄, confirmation recorder identity 보존
 - [x] transition Protocol P3를 실제 idempotency/reason/observation signature와 wiring witness로 보정하고 owner 11건·owner/boundary 29건·관련 68+worker6건·API 전체 1,530건·Ruff `E/F/I`·format ratchet 60개·strict mypy 18개·lock check·재리뷰 P0~P3 없음 확인
 - [x] 스물다섯 번째 구조 슬라이스 J의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] 178줄 `korail_sidecar/runtime.py`로 engine/env/client factory·Pydoll lazy import·readiness cache/retry/timeout·automation 조립을 이동하고 `korail_browser_adapter_service.py`는 runtime 객체 identity·lifespan monkeypatch path·logger namespace를 보존하는 453줄 HTTP compatibility facade로 축소
+- [x] runtime FastAPI/facade 역의존·ImportFrom 누락 P3와 표준 mypy 누락 P2를 보정하고 strict ratchet 18→19개 확장. browser 64건·reserve/confirmation 108건·API 전체 1,530건·Ruff `E/F/I`·format ratchet 60개·lock check·재리뷰 나머지 P0~P3 없음 확인
+- [x] 스물다섯 번째 구조 슬라이스 K의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

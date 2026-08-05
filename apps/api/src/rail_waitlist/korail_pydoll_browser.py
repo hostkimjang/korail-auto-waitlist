@@ -55,9 +55,6 @@ from .korail_pydoll_confirmation_reader import (
     read_korail_same_session_confirmation,
 )
 from .korail_pydoll_contracts import (
-    KORAIL_ROUTE_HEADING as _ROUTE_HEADING,
-)
-from .korail_pydoll_contracts import (
     PydollPageSnapshot,
     PydollSeatBox,
     PydollTrainRow,
@@ -97,9 +94,15 @@ from .korail_pydoll_reservation_actor import (
 from .korail_pydoll_reservation_actor import (
     assert_reservation_identity as assert_actor_reservation_identity,
 )
+from .korail_pydoll_reservation_driver import (
+    PydollReservationDomDriver,
+    ReservationControlState,
+)
+from .korail_pydoll_reservation_driver import (
+    ReservationAttemptState as _ReservationAttemptState,
+)
 from .korail_pydoll_search_actor import PydollReadOnlySearchActor
 from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
-from .korail_reservation_controls import booking_seat_control_key
 from .korail_search_bootstrap import (
     KorailStationIdentityResolver,
     build_korail_general_search_url,  # noqa: F401 -- compatibility module export.
@@ -131,7 +134,7 @@ _snapshot_has_unique_reservation_target = has_unique_reservation_target
 
 
 @dataclass(frozen=True)
-class _ControlState:
+class _ControlState(ReservationControlState):
     enabled: bool
     aria_disabled: str
     disabled_attribute: bool
@@ -139,20 +142,6 @@ class _ControlState:
     container_classes: tuple[str, ...]
     slide_classes: tuple[str, ...]
     read_error: bool = False
-
-
-@dataclass
-class _ReservationAttemptState:
-    """One-shot latches whose loss could repeat an official booking action."""
-
-    login_attempted: bool = False
-    pre_login_route_check_attempted: bool = False
-    pre_login_route_authenticated: bool = False
-    post_submit_check_attempted: bool = False
-    post_submit_authenticated: bool = False
-    preserved_selection_checked: bool = False
-    preserved_selection_matches: bool = False
-    reservation_clicked: bool = False
 
 
 @dataclass(frozen=True)
@@ -613,6 +602,22 @@ class _PydollSession:
             ),
             monotonic=time.monotonic,
             sleep=asyncio.sleep,
+            event_logger=logger,
+        )
+        self._reservation_driver = PydollReservationDomDriver(
+            port=self,
+            timeout_ms=self.timeout_ms,
+            timeout_seconds=self._timeout_seconds,
+            execute_script=self._login_execute_script,
+            visible_elements=lambda selector, **options: self._visible_elements(
+                selector,
+                **options,
+            ),
+            current_schedule=lambda: self.current_schedule(),
+            read_control_state=lambda element: self._read_control_state(element),
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            utc_now=lambda: datetime.now(UTC),
             event_logger=logger,
         )
 
@@ -1141,418 +1146,40 @@ class _PydollSession:
         self,
         request: KorailReservationRequest,
     ) -> KorailReservationResult:
-        """Click only the exact seat and reservation controls, each at most once."""
-
-        target_rechecked_at: datetime | None = None
-        seat_selected_at: datetime | None = None
-        reservation_requested_at: datetime | None = None
-
-        def result(
-            outcome: KorailReservationOutcome,
-            reason: str,
-            *,
-            seat_clicked: bool = False,
-            reservation_clicked: bool = False,
-        ) -> KorailReservationResult:
-            return KorailReservationResult(
-                outcome=outcome,
-                reason=reason,
-                seat_clicked=seat_clicked,
-                reservation_clicked=reservation_clicked,
-                target_rechecked_at=target_rechecked_at,
-                seat_selected_at=seat_selected_at,
-                reservation_requested_at=reservation_requested_at,
-            )
-
-        rows = await self._visible_elements("li.tckList")
-        matches = [row for row in rows if await self._row_matches_reservation(row, request)]
-        if len(matches) != 1:
-            target_rechecked_at = datetime.now(UTC)
-            return result(
-                KorailReservationOutcome.UNAVAILABLE,
-                "target_not_unique",
-            )
-
-        row = matches[0]
-        seat_controls = await self._actionable_seat_controls(
-            row,
-            request.seat_class.label,
-        )
-        target_rechecked_at = datetime.now(UTC)
-        if len(seat_controls) > 1:
-            return result(
-                KorailReservationOutcome.UNAVAILABLE,
-                "seat_control_not_unique",
-            )
-        if not seat_controls:
-            return result(
-                KorailReservationOutcome.UNAVAILABLE,
-                "seat_not_available",
-            )
-
-        seat = seat_controls[0]
-        await seat.click()
-        seat_selected_at = datetime.now(UTC)
-        attempt = _ReservationAttemptState()
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            terminal = await self._probe_reservation_terminal(request, attempt)
-            if terminal is not None:
-                if terminal.outcome is KorailReservationOutcome.AUTH_REQUIRED:
-                    if attempt.login_attempted:
-                        return result(
-                            KorailReservationOutcome.AUTH_REQUIRED,
-                            "authentication_required",
-                            seat_clicked=True,
-                            reservation_clicked=attempt.reservation_clicked,
-                        )
-                    attempt.login_attempted = True
-                    if not await self._authenticate_in_place(request.credential, attempt):
-                        return result(
-                            KorailReservationOutcome.AUTH_REQUIRED,
-                            "authentication_required",
-                            seat_clicked=True,
-                            reservation_clicked=attempt.reservation_clicked,
-                        )
-                    deadline = time.monotonic() + self._timeout_seconds
-                    continue
-                return result(
-                    terminal.outcome,
-                    terminal.reason,
-                    seat_clicked=True,
-                    reservation_clicked=attempt.reservation_clicked,
-                )
-            if not attempt.reservation_clicked:
-                candidates = []
-                for control in await self._visible_elements("button.reservbtn"):
-                    if " ".join(str(await control.text).split()) == "예매":
-                        candidates.append(control)
-                if len(candidates) > 1:
-                    return result(
-                        KorailReservationOutcome.UNAVAILABLE,
-                        "reservation_control_ambiguous",
-                        seat_clicked=True,
-                    )
-                if len(candidates) == 1:
-                    if attempt.login_attempted:
-                        if not attempt.preserved_selection_checked:
-                            attempt.preserved_selection_checked = True
-                            attempt.preserved_selection_matches = (
-                                await self._has_exact_preserved_booking_state(request)
-                            )
-                        if not attempt.preserved_selection_matches:
-                            return result(
-                                KorailReservationOutcome.FAILED,
-                                "reservation_selection_not_preserved",
-                                seat_clicked=True,
-                            )
-                    state = await self._read_control_state(candidates[0])
-                    if (
-                        state.read_error
-                        or not state.enabled
-                        or state.disabled_attribute
-                        or state.aria_disabled.casefold() == "true"
-                    ):
-                        return result(
-                            KorailReservationOutcome.UNAVAILABLE,
-                            "reservation_control_disabled",
-                            seat_clicked=True,
-                        )
-                    # Set the latch before awaiting the click. An uncertain click
-                    # result must never permit a second reservation submission.
-                    attempt.reservation_clicked = True
-                    reservation_requested_at = datetime.now(UTC)
-                    try:
-                        await candidates[0].click()
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:  # noqa: BLE001 -- click outcome is intentionally uncertain.
-                        return result(
-                            KorailReservationOutcome.FAILED,
-                            "reservation_result_unknown:reservation_click_error",
-                            seat_clicked=True,
-                            reservation_clicked=True,
-                        )
-                    deadline = time.monotonic() + self._timeout_seconds
-                    continue
-            await asyncio.sleep(0.1)
-        if not attempt.reservation_clicked:
-            return result(
-                KorailReservationOutcome.FAILED,
-                "reservation_control_timeout",
-                seat_clicked=True,
-            )
-        return result(
-            KorailReservationOutcome.FAILED,
-            "reservation_result_unknown",
-            seat_clicked=True,
-            reservation_clicked=True,
-        )
+        return await self._reservation_driver.reserve_once(request)
 
     async def _has_exact_preserved_booking_state(
         self,
         request: KorailReservationRequest,
     ) -> bool:
-        """Re-identify the official same-tab selection without exporting its payload."""
-
-        script = """
-            (() => {
-              const state = history.state?.state;
-              if (!state || typeof state !== 'object') return false;
-              if (typeof state.redirectUrl !== 'string' ||
-                  !state.redirectUrl.startsWith('/ticket/')) return false;
-              if (!Array.isArray(state.reservedTrainList) ||
-                  state.reservedTrainList.length !== 1) return false;
-              return Boolean(state.reserveParams &&
-                typeof state.reserveParams === 'object' &&
-                !Array.isArray(state.reserveParams));
-            })()
-        """
-        response = await self._tab.execute_script(
-            script,
-            return_by_value=True,
-            await_promise=False,
-            timeout=self.timeout_ms,
-        )
-        try:
-            state_shape_matches = response["result"]["result"].get("value") is True
-        except (AttributeError, KeyError, TypeError):
-            return False
-        if not state_shape_matches:
-            return False
-        try:
-            selected_date, _ = await self.current_schedule()
-            rows = [
-                row
-                for row in await self._visible_elements("li.tckList")
-                if await self._row_matches_reservation(row, request)
-            ]
-            if selected_date != request.travel_date or len(rows) != 1:
-                return False
-            seat_controls = await self._actionable_seat_controls(
-                rows[0],
-                request.seat_class.label,
-            )
-            return len(seat_controls) == 1
-        except Exception:  # noqa: BLE001 -- missing/changed official state fails closed.
-            return False
+        return await self._reservation_driver.has_exact_preserved_booking_state(request)
 
     async def _actionable_seat_controls(
         self,
         row: Any,
         seat_class_label: str,
     ) -> list[Any]:
-        """Return exact visible price controls that are currently actionable.
+        return await self._reservation_driver.actionable_seat_controls(
+            row,
+            seat_class_label,
+        )
 
-        The official row can retain an unavailable anchor for the same seat class
-        beside its live price anchor.  Counting both labels before checking their
-        state incorrectly turns a unique booking action into an ambiguity.  Keep
-        the exact-row boundary established by the caller, then admit only controls
-        with the requested class, a price, and a live enabled state.
-        """
-
-        actionable_by_label: dict[str, Any] = {}
-        for control in await self._visible_elements("a", scope=row):
-            raw_text = str(await control.text)
-            price_box_text, price_box_classes = await self._seat_price_box_metadata(control)
-            key = booking_seat_control_key(
-                seat_class_label=seat_class_label,
-                control_text=raw_text,
-                price_box_text=price_box_text,
-                price_box_classes=price_box_classes,
-            )
-            if key is None:
-                continue
-            state = await self._read_control_state(control)
-            if (
-                state.read_error
-                or not state.enabled
-                or state.disabled_attribute
-                or state.aria_disabled.casefold() == "true"
-            ):
-                continue
-            # The responsive official row can render the same seat action more than
-            # once.  Once the caller has fixed the exact train row and seat class,
-            # controls with the same normalized label and price are equivalent.  Keep
-            # one of those duplicates, but preserve differently labelled/priced
-            # controls as ambiguous so the caller still fails closed.
-            actionable_by_label.setdefault(key, control)
-        return list(actionable_by_label.values())
-
-    @staticmethod
-    async def _seat_price_box_metadata(element: Any) -> tuple[str, tuple[str, ...]]:
-        """Read only the bounded label and CSS tokens of the owning seat box."""
-
-        try:
-            response = await element.execute_script(
-                """
-                function() {
-                  const box = this.closest('.price_box');
-                  return {
-                    text: box ? (box.innerText || '').slice(0, 200) : '',
-                    classes: box ? Array.from(box.classList).slice(0, 8) : [],
-                  };
-                }
-                """,
-                return_by_value=True,
-            )
-            value = response.get("result", {}).get("result", {}).get("value", {})
-            if not isinstance(value, dict):
-                return "", ()
-            classes = value.get("classes", [])
-            return (
-                str(value.get("text", ""))[:200],
-                _sanitized_class_tokens(
-                    " ".join(str(item) for item in classes) if isinstance(classes, list) else ""
-                ),
-            )
-        except Exception:  # noqa: BLE001 -- missing owner metadata falls back to anchor text.
-            return "", ()
+    async def _seat_price_box_metadata(self, element: Any) -> tuple[str, tuple[str, ...]]:
+        return await self._reservation_driver.seat_price_box_metadata(element)
 
     async def _row_matches_reservation(
         self,
         row: Any,
         request: KorailReservationRequest,
     ) -> bool:
-        kind = await row.query(".tck_inner .tit_box", raise_exc=False)
-        number = await row.query(".tck_inner .tit_box .num", raise_exc=False)
-        route = await row.query(".tck_inner .data_box.right", raise_exc=False)
-        if kind is None or route is None:
-            return False
-        kind_text = " ".join(str(await kind.text).split())
-        number_text = " ".join(str(await number.text).split()) if number is not None else kind_text
-        try:
-            normalized_number = _normalize_train_number(number_text)
-        except BrowserSourceUnavailable:
-            return False
-        if normalized_number != _normalize_train_number(request.train_number):
-            return False
-        type_text = re.sub(rf"(?<!\d)0*{re.escape(normalized_number)}(?!\d)", "", kind_text)
-        if request.train_type is not None:
-            normalized_type = re.sub(r"\s+", "", type_text).casefold()
-            if normalized_type != re.sub(r"\s+", "", request.train_type).casefold():
-                return False
-        route_text = " ".join(str(await route.text).split())
-        route_match = _ROUTE_HEADING.fullmatch(route_text)
-        if route_match is None:
-            return False
-        origin, destination, departure, arrival = route_match.groups()
-        return (
-            _normalize_station(origin) == request.origin
-            and _normalize_station(destination) == request.destination
-            and departure == request.departure_time.strftime("%H:%M")
-            and arrival == request.arrival_time.strftime("%H:%M")
-        )
+        return await self._reservation_driver.row_matches_reservation(row, request)
 
     async def _probe_reservation_terminal(
         self,
         request: KorailReservationRequest,
         attempt: _ReservationAttemptState | None = None,
     ) -> KorailReservationResult | None:
-        attempt = attempt or _ReservationAttemptState()
-        snapshot = await self._snapshot()
-        for status, resource_type in snapshot.network_responses:
-            if is_rate_limit_response(status, resource_type):
-                return KorailReservationResult(
-                    KorailReservationOutcome.PROVIDER_BLOCKED,
-                    "rate_limited",
-                )
-            if protection_trigger_from_http_response(status, resource_type) is not None:
-                return KorailReservationResult(
-                    KorailReservationOutcome.PROVIDER_BLOCKED,
-                    "provider_access_restricted",
-                )
-        if protection_trigger_from_text(snapshot.body_text) is not None or any(
-            protection_trigger_from_text(text) is not None for text in snapshot.protection_texts
-        ):
-            return KorailReservationResult(
-                KorailReservationOutcome.PROVIDER_BLOCKED,
-                "provider_access_restricted",
-            )
-
-        path = urlsplit(snapshot.url).path
-        authenticated_login_route = False
-        if path.rstrip("/") == "/ticket/login":
-            # The React router can briefly retain the login URL after the official
-            # session has already been established.  Confirm the same server-side
-            # session used by login verification before treating the route as an
-            # authentication terminal; continuing only observes the current attempt
-            # and never repeats either booking click.
-            # A successful post-submit loginCheck is authoritative for this same
-            # attempt even while the SPA temporarily retains the login URL. Reuse
-            # the latch without another official request.
-            authenticated = attempt.post_submit_authenticated
-            if not authenticated:
-                if not attempt.pre_login_route_check_attempted:
-                    attempt.pre_login_route_check_attempted = True
-                    attempt.pre_login_route_authenticated = (
-                        await self._probe_official_authenticated_session()
-                    )
-                authenticated = attempt.pre_login_route_authenticated
-            if not authenticated:
-                authenticated = await self._has_authenticated_header()
-            if not authenticated:
-                return KorailReservationResult(
-                    KorailReservationOutcome.AUTH_REQUIRED,
-                    "authentication_required",
-                )
-            authenticated_login_route = True
-            logger.info(
-                "KORAIL reservation marker stage=terminal_probe login_route_authenticated=true"
-            )
-
-        dialogs = await self._visible_elements("[role='dialog'], dialog[open], [aria-modal='true']")
-        delay_dialogs = []
-        for dialog in dialogs:
-            text = " ".join(str(await dialog.text).split())
-            labels = {
-                " ".join(str(await control.text).split())
-                for control in await self._visible_elements("button,a", scope=dialog)
-            }
-            if "지연승낙 안내" in text and {"아니오", "네"}.issubset(labels):
-                delay_dialogs.append(dialog)
-        if len(delay_dialogs) == 1:
-            return KorailReservationResult(
-                KorailReservationOutcome.CONSENT_REQUIRED,
-                "delay_consent_required",
-            )
-        if len(delay_dialogs) > 1:
-            return KorailReservationResult(
-                KorailReservationOutcome.FAILED,
-                "delay_consent_ambiguous",
-            )
-        if dialogs and not authenticated_login_route:
-            return KorailReservationResult(
-                KorailReservationOutcome.ACTION_REQUIRED,
-                "official_action_required",
-            )
-        if dialogs:
-            # The official SPA can retain its login-route dialog shell after
-            # loginCheck has already authenticated the same tab. It is not a
-            # booking consent gate, and treating it as one prevents the preserved
-            # exact reservation control from being used. Keep ignoring only while
-            # the authenticated tab still reports the login route. Once another
-            # route renders, any remaining dialog is a manual-action terminal.
-            logger.info(
-                "KORAIL reservation marker stage=terminal_probe "
-                "authenticated_login_shell_ignored=true"
-            )
-
-        body = " ".join(snapshot.body_text.split())
-        target_markers = (
-            _has_exact_train_number_marker(body, request.train_number)
-            and request.departure_time.strftime("%H:%M") in body
-            and request.arrival_time.strftime("%H:%M") in body
-            and request.seat_class.label in body
-            and any(marker in body for marker in _reservation_date_markers(request.travel_date))
-        )
-        pending_markers = all(marker in body for marker in ("예약취소", "장바구니", "결제하기"))
-        if path.rstrip("/") == "/ticket/reservation/detail" and target_markers and pending_markers:
-            return KorailReservationResult(
-                KorailReservationOutcome.PAYMENT_REQUIRED,
-                "reservation_pending_payment",
-            )
-        return None
+        return await self._reservation_driver.probe_reservation_terminal(request, attempt)
 
     async def _wait_for_result_growth(
         self,
@@ -2473,13 +2100,6 @@ def _normalize_train_number(value: str) -> str:
         raise BrowserSourceUnavailable("read_result") from error
 
 
-def _has_exact_train_number_marker(body: str, train_number: str) -> bool:
-    """Match one official train number while tolerating display-only leading zeroes."""
-
-    normalized = _normalize_train_number(train_number)
-    return re.search(rf"(?<!\d)0*{re.escape(normalized)}(?!\d)", body) is not None
-
-
 def _has_exact_text_marker(body: str, marker: str) -> bool:
     token = rf"(?<![0-9A-Za-z가-힣]){re.escape(marker)}(?![0-9A-Za-z가-힣])"
     return re.search(token, body) is not None
@@ -2500,17 +2120,6 @@ def _has_exact_route_markers(body: str, origin: str, destination: str) -> bool:
             body[origin_match.end() :],
         )
         is not None
-    )
-
-
-def _reservation_date_markers(value: date) -> tuple[str, ...]:
-    return (
-        value.isoformat(),
-        value.strftime("%Y.%m.%d"),
-        value.strftime("%Y. %m. %d"),
-        f"{value.year}년{value.month:02d}월{value.day:02d}일",
-        f"{value.year}년 {value.month}월 {value.day}일",
-        f"{value.month}월 {value.day}일",
     )
 
 

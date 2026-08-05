@@ -317,8 +317,12 @@ lifecycle 역할을 구조적 Protocol로 정의합니다. request application�
 객체이고 `providers.py`는 기존 호출자를 위해 같은 객체를 다시 export합니다. 역할 view를 나눠도
 runtime 객체를 역할별로 새로 만들지 않습니다. 하나의 task-scoped `ExecutionProvider` 인스턴스가
 재무장·관찰·예약·정합화와 drain·close를 함께 수행해 인증 actor·cache·event loop 수명주기를
-보존합니다. `RailProviderAdapter`와 concrete 구현·registry의 물리 분리는 호환성을 고정한 후의
-별도 단계입니다.
+보존합니다. 공통 `RailProviderAdapter`와 공식 URL map은 `provider_adapters/base.py`, 명시적인
+`FailClosedExecutionAdapter`는 `provider_adapters/execution.py`가 canonical owner입니다.
+`providers.py`는 세 객체를 재정의하지 않고 직접 import해 같은 객체로 다시 export합니다. 현재
+TAGO client·singleton, Official/Mock/Experimental과 KORAIL/SRT 실행 adapter, registry·capability 병합은
+아직 compatibility facade에 남아 있으며 task-scoped fresh 실행 adapter와 process-scoped TAGO
+singleflight를 보존하는 후속 수직 슬라이스에서 이동합니다.
 
 외부 provider 관측 그룹은 `provider_execution_leases`의 `provider + account_scope` 복합 키로
 직렬화합니다. 획득할 때마다 fencing token을 증가시키고, worker는 공식 호출 직전과 관측 결과

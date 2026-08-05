@@ -106,6 +106,10 @@ def _is_provider_contract(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/provider_contracts.py"
 
 
+def _is_provider_adapter_module(relative_path: Path) -> bool:
+    return relative_path.as_posix().startswith("rail_waitlist/provider_adapters/")
+
+
 BOUNDARY_RULES = (
     BoundaryRule(
         name="domain modules are framework and provider independent",
@@ -201,6 +205,11 @@ BOUNDARY_RULES = (
                 "worker",
             }
         ),
+    ),
+    BoundaryRule(
+        name="provider adapters do not reverse-depend on the compatibility facade",
+        matches=_is_provider_adapter_module,
+        forbidden_import_roots=frozenset({"providers"}),
     ),
 )
 

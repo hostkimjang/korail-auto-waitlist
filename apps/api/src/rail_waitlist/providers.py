@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,6 +20,8 @@ from .korail_execution import (
     korail_background_monitoring_enabled,
 )
 from .provider_accounts import ProviderCredentials, get_enabled_provider_credentials
+from .provider_adapters.base import OFFICIAL_BOOKING_URLS, RailProviderAdapter
+from .provider_adapters.execution import FailClosedExecutionAdapter
 from .provider_contracts import (
     ExecutionProvider,
     ProviderUnavailable,
@@ -60,11 +61,6 @@ from .srt_station_roster import (
     load_srt_station_roster,
 )
 
-OFFICIAL_BOOKING_URLS = {
-    Provider.KORAIL: "https://www.korail.com/ticket/search/general",
-    Provider.SRT: "https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000",
-    Provider.MOCK: "https://example.invalid/mock-booking",
-}
 STATION_CITY_HINTS = {
     "서울": "서울",
     "수서": "서울",
@@ -645,95 +641,6 @@ class TagoClient:
         return result
 
 
-class RailProviderAdapter(ABC):
-    provider: Provider
-
-    @abstractmethod
-    def capabilities(self) -> ProviderCapabilities: ...
-
-    @abstractmethod
-    async def timetable(
-        self,
-        origin: str,
-        destination: str,
-        departure_from: datetime,
-        origin_node_id: str | None = None,
-        destination_node_id: str | None = None,
-        departure_to: datetime | None = None,
-    ) -> list[TimetableItem]: ...
-
-    @abstractmethod
-    async def stations(self) -> StationCatalog: ...
-
-    async def observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
-        if not self.capabilities().seat_monitoring:
-            raise ProviderUnavailable(
-                f"{self.provider.value} provider does not support seat monitoring"
-            )
-        if request.provider != self.provider:
-            raise ProviderUnavailable("seat observation request provider does not match adapter")
-        return await self._observe_seats(request)
-
-    async def _observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
-        raise ProviderUnavailable(
-            f"{self.provider.value} provider has no seat monitoring implementation"
-        )
-
-    async def observation_deferred_until(self) -> datetime | None:
-        """Return a provider hold without performing an upstream observation.
-
-        External sources use this preflight to move due work past a shared cooldown.  The
-        default keeps adapters without a persisted source cooldown unchanged.
-        """
-        return None
-
-    async def drain_pending_calls(self) -> None:
-        """Wait for provider calls that can outlive an observation timeout."""
-        return
-
-    async def aclose(self) -> None:
-        """Release event-loop-bound resources owned by this adapter."""
-        return
-
-    async def reserve_once(self, request: ReservationRequest) -> ReservationResult:
-        if not self.capabilities().reservation_once:
-            raise ProviderUnavailable(
-                f"{self.provider.value} provider does not support one-time reservation"
-            )
-        if request.provider != self.provider:
-            raise ProviderUnavailable("reservation request provider does not match adapter")
-        return await self._reserve_once(request)
-
-    async def _reserve_once(self, request: ReservationRequest) -> ReservationResult:
-        raise ProviderUnavailable(
-            f"{self.provider.value} provider has no one-time reservation implementation"
-        )
-
-    async def confirm_reservation(
-        self,
-        target: ReservationConfirmationTarget,
-    ) -> ReservationConfirmationResult:
-        if target.provider is not self.provider:
-            raise ProviderUnavailable(
-                "reservation confirmation target provider does not match adapter"
-            )
-        return await self._confirm_reservation(target)
-
-    async def _confirm_reservation(
-        self,
-        target: ReservationConfirmationTarget,
-    ) -> ReservationConfirmationResult:
-        return ReservationConfirmationResult(
-            provider=self.provider,
-            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
-            source="provider-confirmation-unavailable",
-            observed_at=datetime.now(timezone.utc),
-        )
-
-    def official_booking_url(self) -> str:
-        return OFFICIAL_BOOKING_URLS[self.provider]
-
-
 _default_tago_client: TagoClient | None = None
 
 
@@ -948,42 +855,6 @@ class ExperimentalRailAdapter(RailProviderAdapter):
 
     async def stations(self) -> StationCatalog:
         raise NotImplementedError("experimental provider has no external implementation")
-
-
-class FailClosedExecutionAdapter(RailProviderAdapter):
-    """Explicit execution boundary for providers without an approved adapter."""
-
-    def __init__(self, provider: Provider) -> None:
-        self.provider = provider
-
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(
-            provider=self.provider,
-            timetable=False,
-            official_booking_link=False,
-            official_waitlist_link=False,
-            seat_monitoring=False,
-            reservation_once=False,
-            note="승인된 background 실행 adapter가 없어 좌석 감시와 예약을 실행하지 않습니다.",
-        )
-
-    async def timetable(
-        self,
-        origin: str,
-        destination: str,
-        departure_from: datetime,
-        origin_node_id: str | None = None,
-        destination_node_id: str | None = None,
-        departure_to: datetime | None = None,
-    ) -> list[TimetableItem]:
-        raise ProviderUnavailable(
-            f"{self.provider.value} execution provider does not expose timetables"
-        )
-
-    async def stations(self) -> StationCatalog:
-        raise ProviderUnavailable(
-            f"{self.provider.value} execution provider does not expose stations"
-        )
 
 
 class SrtLiveExecutionAdapter(RailProviderAdapter):

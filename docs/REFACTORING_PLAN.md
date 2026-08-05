@@ -781,6 +781,36 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: legacy JS/JSX 테스트·allowJs 제거, provider compatibility facade 기반 물리 분리,
   실제 PostgreSQL 실행 임대 경합 검증과 설정 resource 요청 epoch 안전성입니다.
 
+### 2026-08-05 스무 번째 구조 슬라이스 A
+
+- provider base 소유권: `provider_adapters/base.py`가 공식 URL map과 공통 `RailProviderAdapter` ABC의
+  capability guard, provider mismatch, 기본 observation/reservation/confirmation·drain·close 정책을
+  소유합니다. `provider_adapters/execution.py`는 승인된 실행 구현이 없는 경우의 명시적
+  `FailClosedExecutionAdapter`만 먼저 소유합니다.
+- compatibility facade: 기존 `providers.py`는 base·fail-closed class와 URL map을 wrapper/subclass 없이
+  직접 import해 같은 객체로 다시 export합니다. 따라서 기존 import, `isinstance`, ApprovedProviderAdapter
+  상속, canonical provider 예외 catch identity와 registry 반환 타입은 유지됩니다. adapter package의
+  `__init__.py`는 대형 barrel을 만들지 않습니다.
+- 수명주기 보존: TAGO client와 process singleton, Official/Mock/Experimental, KORAIL/SRT 실행 adapter,
+  credential loader 기본 binding과 모든 registry 함수는 이번 슬라이스에서 이동하지 않았습니다.
+  연속 실행 registry 호출의 fresh adapter·lazy source와 KORAIL/SRT 시간표 adapter의 같은 TAGO singleton
+  공유를 회귀 테스트로 고정했습니다.
+- 의존성 경계: module-boundary gate가 `provider_adapters/** -> providers.py` 역의존을 차단합니다.
+  facade와 canonical class·URL map 객체 identity, ApprovedProviderAdapter base, fail-closed capability를
+  새 owner 테스트 5건으로 확인했으며 `providers.py`는 1,284줄에서 1,155줄로 줄었습니다.
+- 확인된 검증: provider/contracts/approved/due-pipeline/worker 집중 pytest 151건, API 전체 pytest
+  1,061건, Ruff `E/F/I`, format ratchet 63개와 `git diff --check`를 통과했습니다. 기존
+  Starlette/httpx deprecation 경고 1건은 유지됐고 독립 재감사에서 도입 P0~P3 회귀는 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: class의 `__module__`은 의도대로 새 canonical owner 경로로 바뀌었으며 저장소 안에서
+  pickle·qualname 의존 사용처는 확인되지 않았습니다. 가짜 timetable/stations 추상 stub 제거는 행동
+  계약 변경이므로 이번 물리 이동에 섞지 않았습니다.
+- 남은 핵심 부채: timetable support·TAGO singleton과 Official/Mock adapter, 운영사 실행 adapter,
+  provider registry application의 단계별 물리 이동, 실행 전용 역할 base 설계, Python 정적 타입 gate와
+  실제 PostgreSQL 실행 임대 경합 검증입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

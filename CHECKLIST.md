@@ -320,6 +320,9 @@
 - [x] `provider_adapters/base.py`로 공식 URL map과 `RailProviderAdapter` ABC를, `provider_adapters/execution.py`로 `FailClosedExecutionAdapter`를 이동하고 `providers.py`가 동일 객체를 직접 re-export하도록 해 기존 import·`isinstance`·ApprovedProviderAdapter 상속·canonical 예외 identity 보존. adapter→facade 역의존 자동 차단
 - [x] provider facade/canonical identity, fail-closed capability, fresh/lazy execution factory, KORAIL·SRT TAGO singleton 공유 owner 테스트 5건과 focused pytest 151건, API 전체 pytest 1,061건, Ruff `E/F/I`, format ratchet 63개, 독립 재감사 P0~P3 회귀 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
 - [x] 스무 번째 구조 슬라이스 A의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] `provider_adapters/timetable_support.py`로 역명·KST 출발 시간창·공식 미관측 좌석 투영을, `provider_adapters/tago.py`로 immutable page와 TAGO envelope·pagination fail-closed parser를 이동하고 `providers.py`가 동일 함수·class 객체를 직접 re-export. TagoClient cache·singleflight·singleton은 이동하지 않아 수명주기 보존
+- [x] 스무 번째 구조 슬라이스 B의 facade/canonical identity와 기존 parser·KST·좌석 투영 회귀, focused pytest 110건, API 전체 pytest 1,062건, Ruff `E/F/I`, format ratchet 63개, 독립 재감사 P0~P3 회귀·필수 테스트 공백 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
+- [x] 스무 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

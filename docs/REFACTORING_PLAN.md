@@ -811,6 +811,33 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   provider registry application의 단계별 물리 이동, 실행 전용 역할 base 설계, Python 정적 타입 gate와
   실제 PostgreSQL 실행 임대 경합 검증입니다.
 
+### 2026-08-05 스무 번째 구조 슬라이스 B
+
+- timetable support: `provider_adapters/timetable_support.py`가 역명 공백·`역` suffix 정규화, naive/aware
+  시각의 KST 서비스일 변환과 역순·다른 날짜 fail-closed, 공식 시간표 fallback의 일반실·특실
+  `unknown/not_observed` 좌석·공식 확인/감시 등록 action 투영을 소유합니다.
+- TAGO parser: `provider_adapters/tago.py`가 immutable `TagoPage`와 response envelope·result code·body·
+  pagination metadata·items·양수 page 값 검증을 소유합니다. city-code의 명시적 unpaginated 예외 외에는
+  기존처럼 누락 metadata를 닫고, parser는 canonical `ProviderUnavailable`만 사용합니다.
+- compatibility facade: `providers.py`가 다섯 함수·class를 wrapper 없이 직접 import해 기존 공개 경로와
+  객체 identity를 유지합니다. TagoClient는 아직 facade에 있어 runtime global 참조, cache·singleflight,
+  기본 singleton 위치와 monkeypatch seam은 변하지 않았고 `providers.py`는 1,155줄에서 1,043줄로
+  줄었습니다.
+- 테스트·의존성: facade/canonical 다섯 객체 identity를 owner 테스트에 추가하고, 기존 malformed
+  envelope·pagination, KST offset·inclusive window·역명·미관측 좌석 회귀를 유지했습니다.
+  `provider_adapters/** -> providers.py` 역의존 gate도 그대로 적용됩니다.
+- 확인된 검증: 관련 focused pytest 110건, API 전체 pytest 1,062건, Ruff `E/F/I`, format ratchet 63개와
+  `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐고 독립
+  재감사에서 도입 P0~P3 회귀나 필수 테스트 공백은 발견되지 않았습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: `TagoPage.__module__`은 새 canonical owner로 바뀌었지만 저장소에 영속 pickle·qualname
+  의존 사용처는 없습니다. 네트워크·cache·singleton을 소유하는 TagoClient 이동은 다음 슬라이스로
+  분리했습니다.
+- 남은 핵심 부채: TagoClient와 process singleton·Official timetable adapter, Mock adapter, 운영사
+  execution adapter, registry application의 단계별 이동과 실행 전용 역할 base·정적 타입 gate입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

@@ -8,13 +8,29 @@ from rail_waitlist.provider_adapters.base import RailProviderAdapter as OwnerRai
 from rail_waitlist.provider_adapters.execution import (
     FailClosedExecutionAdapter as OwnerFailClosedExecutionAdapter,
 )
+from rail_waitlist.provider_adapters.tago import TagoPage as OwnerTagoPage
+from rail_waitlist.provider_adapters.tago import response_page as owner_response_page
+from rail_waitlist.provider_adapters.timetable_support import (
+    normalize_departure_window as owner_normalize_departure_window,
+)
+from rail_waitlist.provider_adapters.timetable_support import (
+    normalize_station_name as owner_normalize_station_name,
+)
+from rail_waitlist.provider_adapters.timetable_support import (
+    official_unknown_seat_classes as owner_official_unknown_seat_classes,
+)
 from rail_waitlist.providers import (
     OFFICIAL_BOOKING_URLS,
     FailClosedExecutionAdapter,
     OfficialTimetableAdapter,
     RailProviderAdapter,
+    TagoPage,
     get_execution_provider,
     get_timetable_provider,
+    normalize_departure_window,
+    normalize_station_name,
+    official_unknown_seat_classes,
+    response_page,
 )
 
 
@@ -22,6 +38,14 @@ def test_provider_facade_reexports_base_and_fail_closed_objects_by_identity() ->
     assert RailProviderAdapter is OwnerRailProviderAdapter
     assert FailClosedExecutionAdapter is OwnerFailClosedExecutionAdapter
     assert OFFICIAL_BOOKING_URLS is owner_booking_urls
+
+
+def test_provider_facade_reexports_timetable_support_objects_by_identity() -> None:
+    assert TagoPage is OwnerTagoPage
+    assert response_page is owner_response_page
+    assert normalize_station_name is owner_normalize_station_name
+    assert normalize_departure_window is owner_normalize_departure_window
+    assert official_unknown_seat_classes is owner_official_unknown_seat_classes
 
 
 def test_fail_closed_adapter_keeps_all_execution_capabilities_disabled() -> None:

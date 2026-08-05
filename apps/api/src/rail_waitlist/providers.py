@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -22,6 +21,12 @@ from .korail_execution import (
 from .provider_accounts import ProviderCredentials, get_enabled_provider_credentials
 from .provider_adapters.base import OFFICIAL_BOOKING_URLS, RailProviderAdapter
 from .provider_adapters.execution import FailClosedExecutionAdapter
+from .provider_adapters.tago import TagoPage, response_page
+from .provider_adapters.timetable_support import (
+    normalize_departure_window,
+    normalize_station_name,
+    official_unknown_seat_classes,
+)
 from .provider_contracts import (
     ExecutionProvider,
     ProviderUnavailable,
@@ -39,7 +44,6 @@ from .schemas import (
     ReservationResult,
     SeatAvailability,
     SeatAvailabilityAction,
-    SeatAvailabilityNotObservedReason,
     SeatAvailabilityProvenance,
     SeatClassAvailability,
     SeatObservationRequest,
@@ -73,27 +77,6 @@ ProviderCredentialLoader = Callable[[Provider], Awaitable[ProviderCredentials | 
 async def default_provider_credential_loader(provider: Provider) -> ProviderCredentials | None:
     async with SessionFactory() as session:
         return await get_enabled_provider_credentials(session, provider)
-
-
-def official_unknown_seat_classes(
-    official_booking_url: str,
-    reason: SeatAvailabilityNotObservedReason = "public_api_not_available",
-) -> list[SeatClassAvailability]:
-    return [
-        SeatClassAvailability(
-            seat_class=seat_class,
-            status="unknown",
-            provenance=SeatAvailabilityProvenance(
-                kind="not_observed",
-                reason=reason,
-            ),
-            actions=[
-                SeatAvailabilityAction(kind="official_check", url=official_booking_url),
-                SeatAvailabilityAction(kind="add_to_watch"),
-            ],
-        )
-        for seat_class in (SeatClass.STANDARD, SeatClass.FIRST)
-    ]
 
 
 def mock_seat_classes(index: int, observed_at: datetime) -> list[SeatClassAvailability]:
@@ -141,101 +124,6 @@ def mock_seat_classes(index: int, observed_at: datetime) -> list[SeatClassAvaila
             strict=True,
         )
     ]
-
-
-def normalize_station_name(value: str) -> str:
-    normalized = value.strip().replace(" ", "")
-    return normalized[:-1] if normalized.endswith("역") else normalized
-
-
-def normalize_departure_window(
-    departure_from: datetime,
-    departure_to: datetime | None,
-) -> tuple[datetime, datetime | None]:
-    korea = ZoneInfo("Asia/Seoul")
-
-    def localize(value: datetime) -> datetime:
-        return value.astimezone(korea) if value.tzinfo else value.replace(tzinfo=korea)
-
-    local_from = localize(departure_from)
-    if departure_to is None:
-        return local_from, None
-    local_to = localize(departure_to)
-    if local_to <= local_from:
-        raise RouteValidationError("departure_to must be later than departure_from")
-    if local_to.date() != local_from.date():
-        raise RouteValidationError(
-            "departure_to must be on the same Korea service date as departure_from"
-        )
-    return local_from, local_to
-
-
-@dataclass(frozen=True)
-class TagoPage:
-    items: list[dict[str, Any]]
-    total_count: int
-    page_no: int
-    num_rows: int
-
-
-def response_page(
-    payload: dict[str, Any],
-    requested_page: int = 1,
-    requested_num_rows: int = 100,
-    *,
-    allow_unpaginated: bool = False,
-) -> TagoPage:
-    if not isinstance(payload, dict) or "response" not in payload:
-        raise ProviderUnavailable("TAGO returned an invalid response envelope")
-    response = payload["response"]
-    if not isinstance(response, dict):
-        raise ProviderUnavailable("TAGO returned an invalid response object")
-    header = response.get("header", {})
-    if not isinstance(header, dict):
-        raise ProviderUnavailable("TAGO returned an invalid response header")
-    if "resultCode" not in header:
-        raise ProviderUnavailable("TAGO response header is missing resultCode")
-    if str(header["resultCode"]) not in {"00", "0"}:
-        raise ProviderUnavailable("TAGO returned an unsuccessful result")
-    if "body" not in response:
-        raise ProviderUnavailable("TAGO response is missing body")
-    body = response["body"]
-    if not isinstance(body, dict):
-        raise ProviderUnavailable("TAGO returned an invalid response body")
-    required_metadata = {"totalCount", "pageNo", "numOfRows"}
-    has_pagination = required_metadata.issubset(body)
-    if not has_pagination and not allow_unpaginated:
-        raise ProviderUnavailable("TAGO response is missing pagination metadata")
-    if "items" not in body:
-        raise ProviderUnavailable("TAGO response is missing items")
-    item_container = body["items"]
-    if item_container is None or item_container == "":
-        items = []
-    elif isinstance(item_container, dict):
-        items = item_container.get("item", [])
-    else:
-        raise ProviderUnavailable("TAGO returned invalid items")
-    if isinstance(items, dict):
-        items = [items]
-    elif not isinstance(items, list):
-        items = []
-
-    def positive_int(field: str, fallback: int) -> int:
-        raw = body.get(field, fallback)
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            raise ProviderUnavailable(f"TAGO returned invalid {field}") from None
-        if value < 0 or (field != "totalCount" and value < 1):
-            raise ProviderUnavailable(f"TAGO returned invalid {field}")
-        return value
-
-    return TagoPage(
-        items=items,
-        total_count=positive_int("totalCount", len(items)),
-        page_no=positive_int("pageNo", requested_page),
-        num_rows=positive_int("numOfRows", requested_num_rows),
-    )
 
 
 class TagoClient:

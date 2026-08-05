@@ -7,10 +7,9 @@ import os
 import re
 import time
 from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from datetime import time as clock_time
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, Protocol, Self
 from urllib.parse import urlsplit
@@ -76,6 +75,25 @@ from .korail_pydoll_page_safety import (
 from .korail_pydoll_page_safety import (
     assert_pydoll_response_allowed,
 )
+from .korail_pydoll_reservation_actor import (
+    KorailReservationOutcome as ActorKorailReservationOutcome,
+)
+from .korail_pydoll_reservation_actor import (
+    KorailReservationRequest as ActorKorailReservationRequest,
+)
+from .korail_pydoll_reservation_actor import (
+    KorailReservationResult as ActorKorailReservationResult,
+)
+from .korail_pydoll_reservation_actor import (
+    KorailReservationSeatClass as ActorKorailReservationSeatClass,
+)
+from .korail_pydoll_reservation_actor import (
+    PydollReservationActor,
+    has_unique_reservation_target,
+)
+from .korail_pydoll_reservation_actor import (
+    assert_reservation_identity as assert_actor_reservation_identity,
+)
 from .korail_pydoll_search_actor import PydollReadOnlySearchActor
 from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
 from .korail_reservation_controls import booking_seat_control_key
@@ -102,50 +120,11 @@ KorailCredentialInput = AuthKorailCredentialInput
 KorailLoginMethod = AuthKorailLoginMethod
 KorailSessionActorSnapshot = AuthKorailSessionActorSnapshot
 KorailSessionActorState = AuthKorailSessionActorState
-
-
-class KorailReservationSeatClass(StrEnum):
-    GENERAL = "general"
-    SPECIAL = "special"
-
-    @property
-    def label(self) -> str:
-        return "일반실" if self is self.GENERAL else "특실"
-
-
-class KorailReservationOutcome(StrEnum):
-    PAYMENT_REQUIRED = "payment_required"
-    AUTH_REQUIRED = "auth_required"
-    CONSENT_REQUIRED = "consent_required"
-    ACTION_REQUIRED = "action_required"
-    PROVIDER_BLOCKED = "provider_blocked"
-    UNAVAILABLE = "unavailable"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class KorailReservationRequest:
-    origin: str
-    destination: str
-    travel_date: date
-    train_number: str
-    train_type: str | None
-    departure_time: clock_time
-    arrival_time: clock_time
-    seat_class: KorailReservationSeatClass
-    credential: KorailCredentialInput = field(repr=False)
-
-
-@dataclass(frozen=True)
-class KorailReservationResult:
-    outcome: KorailReservationOutcome
-    reason: str
-    seat_clicked: bool = False
-    reservation_clicked: bool = False
-    session_ready_at: datetime | None = None
-    target_rechecked_at: datetime | None = None
-    seat_selected_at: datetime | None = None
-    reservation_requested_at: datetime | None = None
+KorailReservationOutcome = ActorKorailReservationOutcome
+KorailReservationRequest = ActorKorailReservationRequest
+KorailReservationResult = ActorKorailReservationResult
+KorailReservationSeatClass = ActorKorailReservationSeatClass
+_snapshot_has_unique_reservation_target = has_unique_reservation_target
 
 
 @dataclass(frozen=True)
@@ -361,6 +340,19 @@ class PydollKorailBrowserClient:
             http_replay_route_cache_size=_HTTP_REPLAY_ROUTE_CACHE_SIZE,
             event_logger=logger,
         )
+        self._reservation_actor = PydollReservationActor[PydollBrowserSession](
+            auth_lock=self._session_lock,
+            direct_search_url=self._direct_search_url,
+            discard_if_credential_changed=self._auth_actor.discard_if_credential_changed,
+            acquire_session=self._acquire_session,
+            ensure_authenticated_session=self._ensure_authenticated_session,
+            discard_with_state=self._auth_actor.discard_with_state,
+            response_safety_guard=self._assert_response_allowed,
+            reservation_identity_guard=self._assert_reservation_identity,
+            has_unique_reservation_target=_snapshot_has_unique_reservation_target,
+            max_more_result_actions=_MAX_MORE_RESULT_ACTIONS,
+            utc_now=lambda: datetime.now(UTC),
+        )
 
     @property
     def _session_lock(self) -> asyncio.Lock:
@@ -456,114 +448,7 @@ class PydollKorailBrowserClient:
         request: KorailReservationRequest,
     ) -> KorailReservationResult:
         """Run one exact booking attempt and stop before every payment action."""
-
-        direct_url = await self._direct_search_url(
-            request.origin,
-            request.destination,
-            request.travel_date,
-            request.departure_time,
-        )
-        async with self._session_lock:
-            # Detached timetable replay belongs to the read-only search actor.
-            # Reservation never consumes or retires it and therefore cannot wait for
-            # an in-flight timetable search before acting on the authenticated session.
-            await self._auth_actor.discard_if_credential_changed(request.credential)
-
-            lease: _PydollSessionLease[PydollBrowserSession] | None = None
-            stage = "browser_launch"
-            seat_clicked = False
-            reservation_clicked = False
-            session_ready_at: datetime | None = None
-            try:
-                lease = await self._acquire_session(
-                    credential_version=request.credential.version,
-                )
-                session = lease.session
-                warm_direct_navigation = direct_url is not None and lease.authenticated
-                if not warm_direct_navigation:
-                    stage = "load_page"
-                    self._assert_response_allowed(await session.open(), stage)
-                stage = "authenticate"
-                if not await self._ensure_authenticated_session(session, request.credential):
-                    return KorailReservationResult(
-                        outcome=KorailReservationOutcome.AUTH_REQUIRED,
-                        reason="authentication_required",
-                    )
-                session_ready_at = datetime.now(UTC)
-                if direct_url is not None and lease.authenticated:
-                    # Preserve a fresh document/history boundary for every attempt while
-                    # avoiding the redundant public search-page navigation. The new tab
-                    # stays in the authenticated Chromium context; no cookie, captured
-                    # template, or reservation payload crosses into application code.
-                    stage = "direct_navigation"
-                    self._assert_response_allowed(await session.navigate_fresh(direct_url), stage)
-                elif direct_url is None:
-                    stage = "choose_origin"
-                    await session.choose_station("departure", request.origin)
-                    stage = "choose_destination"
-                    await session.choose_station("arrival", request.destination)
-                    stage = "choose_departure"
-                    await session.choose_schedule(request.travel_date, request.departure_time.hour)
-                    stage = "pre_submit_identity_check"
-                    await self._assert_reservation_identity(session, request, stage)
-                    stage = "submit_search"
-                    await session.submit_once()
-                else:
-                    stage = "direct_navigation"
-                    self._assert_response_allowed(await session.navigate(direct_url), stage)
-                stage = "wait_result"
-                snapshot = await session.wait_for_result()
-                self._assert_response_allowed(snapshot, stage)
-                if not _snapshot_has_unique_reservation_target(snapshot, request):
-                    stage = "expand_results"
-                    snapshot = await session.expand_results(snapshot, _MAX_MORE_RESULT_ACTIONS)
-                    self._assert_response_allowed(snapshot, stage)
-                stage = "reserve_once"
-                result = await session.reserve_once(request)
-                seat_clicked = result.seat_clicked
-                reservation_clicked = result.reservation_clicked
-                if result.outcome in {
-                    KorailReservationOutcome.AUTH_REQUIRED,
-                    KorailReservationOutcome.PROVIDER_BLOCKED,
-                }:
-                    await self._auth_actor.discard_with_state(
-                        KorailSessionActorState.AUTH_REQUIRED
-                        if result.outcome is KorailReservationOutcome.AUTH_REQUIRED
-                        else KorailSessionActorState.BLOCKED,
-                    )
-                return replace(result, session_ready_at=session_ready_at)
-            except asyncio.CancelledError:
-                await self._auth_actor.discard_with_state(KorailSessionActorState.STALE)
-                raise
-            except (BrowserProtectionDetected, BrowserRateLimited):
-                await self._auth_actor.discard_with_state(KorailSessionActorState.BLOCKED)
-                return KorailReservationResult(
-                    outcome=KorailReservationOutcome.PROVIDER_BLOCKED,
-                    reason="provider_access_restricted",
-                    seat_clicked=seat_clicked,
-                    reservation_clicked=reservation_clicked,
-                    session_ready_at=session_ready_at,
-                )
-            except BrowserSourceUnavailable:
-                # An uncertain result after the reservation button is never retried.
-                return KorailReservationResult(
-                    outcome=KorailReservationOutcome.FAILED,
-                    reason=f"source_unavailable:{stage}",
-                    seat_clicked=seat_clicked,
-                    reservation_clicked=reservation_clicked,
-                    session_ready_at=session_ready_at,
-                )
-            except Exception:  # noqa: BLE001 -- browser backend errors are intentionally opaque.
-                return KorailReservationResult(
-                    outcome=KorailReservationOutcome.FAILED,
-                    reason=f"browser_error:{stage}",
-                    seat_clicked=seat_clicked,
-                    reservation_clicked=reservation_clicked,
-                    session_ready_at=session_ready_at,
-                )
-            finally:
-                if lease is not None and not lease.persistent:
-                    await lease.context.__aexit__(None, None, None)
+        return await self._reservation_actor.reserve_once(request)
 
     async def _direct_search_url(
         self,
@@ -667,20 +552,7 @@ class PydollKorailBrowserClient:
         request: KorailReservationRequest,
         stage: str,
     ) -> None:
-        origin = _normalize_station(await session.current_station("departure"))
-        destination = _normalize_station(await session.current_station("arrival"))
-        selected_date, selected_hour = await session.current_schedule()
-        passenger = " ".join((await session.current_passenger()).split())
-        if not all(
-            (
-                origin == request.origin,
-                destination == request.destination,
-                selected_date == request.travel_date,
-                selected_hour == request.departure_time.hour,
-                passenger == "총 1명",
-            )
-        ):
-            raise BrowserSourceUnavailable(stage)
+        await assert_actor_reservation_identity(session, request, stage)
 
     @staticmethod
     def _assert_response_allowed(snapshot: PydollPageSnapshot, stage: str) -> None:
@@ -2758,48 +2630,6 @@ def _normalize_train_number(value: str) -> str:
         return normalize_korail_train_number(value)
     except ValueError as error:
         raise BrowserSourceUnavailable("read_result") from error
-
-
-def _snapshot_has_unique_reservation_target(
-    snapshot: PydollPageSnapshot,
-    request: KorailReservationRequest,
-) -> bool:
-    """Skip expansion only when the initial DOM proves one exact target train."""
-
-    matches = 0
-    requested_number = _normalize_train_number(request.train_number)
-    for row in snapshot.rows:
-        try:
-            row_number = _normalize_train_number(row.train_number)
-        except BrowserSourceUnavailable:
-            continue
-        if row_number != requested_number:
-            continue
-        type_text = re.sub(
-            rf"(?<!\d)0*{re.escape(requested_number)}(?!\d)",
-            "",
-            " ".join(row.kind_text.split()),
-        )
-        if request.train_type is not None and (
-            re.sub(r"\s+", "", type_text).casefold()
-            != re.sub(r"\s+", "", request.train_type).casefold()
-        ):
-            continue
-        route_match = _ROUTE_HEADING.fullmatch(" ".join(row.route_text.split()))
-        if route_match is None:
-            continue
-        origin, destination, departure, arrival = route_match.groups()
-        if not (
-            _normalize_station(origin) == request.origin
-            and _normalize_station(destination) == request.destination
-            and departure == request.departure_time.strftime("%H:%M")
-            and arrival == request.arrival_time.strftime("%H:%M")
-        ):
-            continue
-        matches += 1
-        if matches > 1:
-            return False
-    return matches == 1
 
 
 def _has_exact_train_number_marker(body: str, train_number: str) -> bool:

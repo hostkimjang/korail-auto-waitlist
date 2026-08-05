@@ -76,6 +76,7 @@ files = [
   "src/rail_waitlist/korail_pydoll_contracts.py",
   "src/rail_waitlist/korail_pydoll_http_replay.py",
   "src/rail_waitlist/korail_pydoll_page_safety.py",
+  "src/rail_waitlist/korail_pydoll_reservation_actor.py",
   "src/rail_waitlist/korail_pydoll_search_actor.py",
   "src/rail_waitlist/reservations/reconciliation_policy.py",
   "src/rail_waitlist/reservations/reconciliation_state_application.py",

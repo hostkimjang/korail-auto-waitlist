@@ -1188,6 +1188,26 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
   오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물세 번째 구조 슬라이스 A
+
+- 마지막 legacy API test owner: `api.test.js`의 관리자 등록·로그인 2개 선언을 기존 strict
+  `authApi.test.ts`, replay SSE 1개 선언을 `eventsApi.test.ts`로 이동한 뒤 빈 legacy 파일을
+  삭제했습니다. production `auth.ts`·`events.ts`와 공개 export는 변경하지 않았습니다.
+- 계약 보존: 등록 요청에 legacy bootstrap header를 보내지 않는 유일한 assertion, 로그인 endpoint·
+  credentials/body, SSE의 old/current/future와 reservation event 전달·close를 그대로 유지했습니다.
+  기존 strict owner와 의미가 겹치는 테스트도 이번 이동에서 삭제·병합하지 않았습니다.
+- strict 전환: `vi.fn<typeof fetch>`, mock call 존재 검사, `Headers`, typed `FakeEventSource`와 unknown
+  event guard를 사용했습니다. `any`, non-null/type assertion, suppression은 추가하지 않았습니다.
+- 테스트 수 ratchet: 이동 전 legacy API 3실행 + auth 5실행 + events 2실행과 이동 후 auth 7실행 +
+  events 3실행이 모두 10건이며 선언 합계도 9개입니다. 전체 Vitest 실행은 571건을 유지하고 파일은
+  legacy owner 삭제로 80개에서 79개가 됐습니다.
+- 확인된 검증: auth/events focused 10건, 관련 consumer 7개 파일·26건, ESLint 오류 0개·고정된 legacy
+  warning 12개, strict typecheck, 전체 Vitest 79개 파일·571건, production build, Sites 4건, 기본
+  Playwright E2E 14건과 `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: production source와 runtime 행동을 바꾸지 않은 test/docs-only 슬라이스이므로 Compose
+  재배포는 수행하지 않았습니다. `allowJs` 제거 전 남은 포함 범위는 `setup.js`,
+  `eslintRatchet.test.js`, `App.test.jsx`, `sw.test.js` 네 파일입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

@@ -72,8 +72,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      12개 선언을 strict `timetablesApi.test.ts` owner로 이동하고 기존 inline fixture를 보존
    - 완료: watch mapper·생성 payload·REST mutation 21개 선언을 strict `watchesApi.test.ts`
      owner로 이동하고 이름·순서·fixture·assertion을 보존
-   - 남음: `api.test.js`의 auth 2개·events 1개와 잔여 API DTO·도메인·ViewModel 경계의 strict
-     TypeScript 전환
+   - 완료: 마지막 auth 2개를 `authApi.test.ts`, events 1개를 `eventsApi.test.ts`로 이동하고
+     `api.test.js` 삭제. bootstrap header 부재와 SSE replay cutoff·forward·close 계약 보존
+   - 남음: 잔여 API DTO·도메인·ViewModel 경계의 strict TypeScript 전환
    - DTO validator와 mapper를 endpoint 호출과 분리해 단위 테스트
 4. leaf UI 전환
    - 완료: 공용 결제기한 표시 UI를 `shared/ui`, 공유 clock hook을 `hooks/`로 이동
@@ -129,7 +130,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      adapter를 strict `app/` 경계로 분리하고 controller hook 수명주기와 공개 export identity 보존
    - 완료: `App.jsx`를 forwarding shim 없이 strict `App.tsx`로 전환하고 selected timetable·watch
      snapshot·page caller 계약을 정적으로 검증
-   - 남음: `api.test.js`의 auth 2개·events 1개를 포함한 잔여 JS/JSX 테스트와
+   - 완료: `api.test.js`의 마지막 auth/events 계약을 strict owner로 이동하고 파일 삭제
+   - 남음: `setup.js`, `eslintRatchet.test.js`, `App.test.jsx`, `sw.test.js`와
      DTO·도메인·ViewModel 경계 전환
 6. shell과 테스트
    - 완료: top-level `app/useAppNavigation.ts`가 view·settings section state와 smooth scroll을,

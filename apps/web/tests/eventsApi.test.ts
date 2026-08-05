@@ -36,6 +36,11 @@ class FakeEventSource {
   }
 }
 
+function eventId(payload: unknown): unknown {
+  if (typeof payload !== "object" || payload === null || !("id" in payload)) return undefined;
+  return payload.id;
+}
+
 afterEach(() => {
   FakeEventSource.latest = undefined;
   vi.unstubAllGlobals();
@@ -86,5 +91,30 @@ describe("live event transport boundary", () => {
     ]);
     expect(onError).toHaveBeenCalledOnce();
     expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(SyntaxError);
+  });
+
+  it("ignores replayed SSE history and forwards only events created after subscription", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+
+    const unsubscribe = subscribeToEvents(onEvent, onError, {
+      subscribedAt: Date.parse("2026-07-31T00:00:00Z"),
+    });
+    const source = FakeEventSource.latest;
+    if (source === undefined) throw new Error("EventSource was not created");
+    source.emit("watch.created", { id: "old", created_at: "2026-07-30T23:59:59Z" });
+    source.emit("watch.updated", { id: "current", created_at: "2026-07-31T00:00:00Z" });
+    source.emit("watch.status_changed", { id: "future", created_at: "2026-07-31T00:00:01Z" });
+    source.emit("watch.reservation_result", {
+      id: "reservation",
+      created_at: "2026-07-31T00:00:02Z",
+    });
+
+    expect(onEvent.mock.calls.map(([event]) => eventId(event)))
+      .toEqual(["current", "future", "reservation"]);
+    expect(onError).not.toHaveBeenCalled();
+    unsubscribe();
+    expect(source.closed).toBe(true);
   });
 });

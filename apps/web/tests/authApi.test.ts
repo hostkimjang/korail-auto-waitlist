@@ -113,4 +113,38 @@ describe("administrator authentication API boundary", () => {
     });
     await expect(request).rejects.toBeInstanceOf(ApiError);
   });
+
+  it("uses the dedicated administrator registration endpoint without a bootstrap header", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ authenticated: true }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await registerAdmin("admin", "x".repeat(16));
+    const requestCall = fetchMock.mock.calls[0];
+    expect(requestCall).toBeDefined();
+    const [url, options] = requestCall ?? [];
+    expect(String(url)).toContain("/auth/register");
+    const headers = new Headers(options?.headers);
+    expect(headers.has("X-Bootstrap-Token")).toBe(false);
+    expect(JSON.parse(String(options?.body))).toEqual({
+      username: "admin",
+      password: expect.any(String),
+    });
+  });
+
+  it("uses the administrator password login endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ authenticated: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loginWithPassword("admin", "x".repeat(16));
+    const requestCall = fetchMock.mock.calls[0];
+    expect(requestCall).toBeDefined();
+    const [url, options] = requestCall ?? [];
+    expect(String(url)).toContain("/auth/login");
+    expect(JSON.parse(String(options?.body))).toEqual({
+      username: "admin",
+      password: expect.any(String),
+    });
+  });
 });

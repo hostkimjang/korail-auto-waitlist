@@ -60,22 +60,23 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: rail_waitlist_ci
+          POSTGRES_DB: rail_waitlist_acceptance_ci
           POSTGRES_USER: rail_waitlist_ci
           POSTGRES_PASSWORD: ci-only-postgres-password
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U rail_waitlist_ci -d rail_waitlist_ci"
+          --health-cmd "pg_isready -U rail_waitlist_ci -d rail_waitlist_acceptance_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
       DATABASE_HOST: 127.0.0.1
       DATABASE_PORT: "5432"
-      DATABASE_NAME: rail_waitlist_ci
+      DATABASE_NAME: rail_waitlist_acceptance_ci
       DATABASE_USER: rail_waitlist_ci
       DATABASE_PASSWORD: ci-only-postgres-password
+      POSTGRES_ACCEPTANCE_ISOLATED: "true"
     defaults:
       run:
         working-directory: apps/api
@@ -91,3 +92,4 @@ jobs:
       - run: uv sync --frozen --extra test
       - run: uv run --frozen alembic upgrade head
       - run: uv run --frozen python scripts/check_execution_lease_fencing_postgres.py
+      - run: uv run --frozen python scripts/check_observation_fencing_postgres.py

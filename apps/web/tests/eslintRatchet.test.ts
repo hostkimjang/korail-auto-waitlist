@@ -7,10 +7,23 @@ import {
   warningFingerprints,
 } from "../scripts/check-eslint-ratchet.mjs";
 
-const eslint = new ESLint();
+type ViolationCase = readonly [name: string, code: string, filePath: string, ruleId: string];
 
-async function lintProbe(code, filePath) {
+const eslint = new ESLint();
+const violationCases: ReadonlyArray<ViolationCase> = [
+  ["undefined JSX", "export function Broken() { return <MissingWidget />; }", "src/Broken.jsx", "react/jsx-no-undef"],
+  ["test mjs", "const unused = 1;", "tests/broken.test.mjs", "no-unused-vars"],
+  ["E2E TSX", "export function Broken() { return <MissingWidget />; }", "e2e/broken.spec.tsx", "react/jsx-no-undef"],
+  ["browser Node global", "export const broken = Buffer.from('x');", "src/broken.ts", "no-restricted-globals"],
+  ["Node script", "export const broken = MissingScriptValue;", "scripts/broken.mjs", "no-undef"],
+  ["Worker", "export default MissingWorkerBinding;", "worker/broken.js", "no-undef"],
+];
+
+async function lintProbe(code: string, filePath: string): Promise<ESLint.LintResult> {
   const [result] = await eslint.lintText(code, { filePath });
+  if (result === undefined) {
+    throw new Error(`ESLint returned no result for ${filePath}`);
+  }
   return result;
 }
 
@@ -36,14 +49,7 @@ describe("ESLint warning ratchet", () => {
     expect(compareWarningBaseline([...actual, ...actual], actual).unexpected).toHaveLength(1);
   }, 30_000);
 
-  it.each([
-    ["undefined JSX", "export function Broken() { return <MissingWidget />; }", "src/Broken.jsx", "react/jsx-no-undef"],
-    ["test mjs", "const unused = 1;", "tests/broken.test.mjs", "no-unused-vars"],
-    ["E2E TSX", "export function Broken() { return <MissingWidget />; }", "e2e/broken.spec.tsx", "react/jsx-no-undef"],
-    ["browser Node global", "export const broken = Buffer.from('x');", "src/broken.ts", "no-restricted-globals"],
-    ["Node script", "export const broken = MissingScriptValue;", "scripts/broken.mjs", "no-undef"],
-    ["Worker", "export default MissingWorkerBinding;", "worker/broken.js", "no-undef"],
-  ])("blocks %s violations in the configured scope", async (_name, code, filePath, ruleId) => {
+  it.each(violationCases)("blocks %s violations in the configured scope", async (_name, code, filePath, ruleId) => {
     const result = await lintProbe(code, filePath);
 
     expect(result.messages).toEqual(expect.arrayContaining([

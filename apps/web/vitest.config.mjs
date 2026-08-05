@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
-    setupFiles: ["./tests/setup.js"],
+    setupFiles: ["./tests/setup.ts"],
     include: ["tests/**/*.test.{js,jsx,ts,tsx}"],
     exclude: ["tests/sites-worker.test.mjs"],
   },

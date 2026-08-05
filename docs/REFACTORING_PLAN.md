@@ -1254,6 +1254,24 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
   오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물네 번째 구조 슬라이스 A
+
+- 소형 legacy test 전환: `tests/setup.js`, `eslintRatchet.test.js`, `sw.test.js`를 각각 strict `.ts`로
+  전환하고 Vitest `setupFiles`를 `./tests/setup.ts`로 원자적으로 갱신했습니다. production source와
+  배포 경계의 실제 `public/sw.js`는 변경하지 않았습니다.
+- 계약 보존: ESLint ratchet은 3개 선언·`it.each` 6행을 포함한 8개 실행과 가상 JSX/MJS/TSX/TS/JS
+  경로·rule ID를 그대로 유지합니다. service worker test는 VM에서 실제 runtime script를 실행하고
+  backend message/official URL과 explicit title/body/URL의 두 push 계약을 유지합니다.
+- strict 경계: `ESLint.LintResult`의 빈 결과, unknown service-worker listener, `waitUntil`의
+  `Promise<unknown>`을 명시적으로 guard합니다. `any`, type/non-null assertion, suppression은 추가하지
+  않았고 setup의 cleanup·window scroll/open mock은 본문 그대로 이동했습니다.
+- 확인된 검증: 대상 focused 2개 파일·10건, 유일한 남은 legacy `App.test.jsx` 32건, ESLint 오류 0개·
+  고정된 legacy warning 12개, strict typecheck, 전체 Vitest 79개 파일·571건, production build와
+  `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: test/config/docs-only 슬라이스이므로 Sites·기본 E2E·Compose 재배포는 반복하지
+  않았습니다. `allowJs=true`, `checkJs=false`, Vitest JSX include는 29개 선언·32개 실행을 가진
+  `App.test.jsx`가 남아 있어 아직 제거하지 않습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

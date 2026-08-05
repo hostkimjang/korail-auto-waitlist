@@ -131,8 +131,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: `App.jsx`를 forwarding shim 없이 strict `App.tsx`로 전환하고 selected timetable·watch
      snapshot·page caller 계약을 정적으로 검증
    - 완료: `api.test.js`의 마지막 auth/events 계약을 strict owner로 이동하고 파일 삭제
-   - 남음: `setup.js`, `eslintRatchet.test.js`, `App.test.jsx`, `sw.test.js`와
-     DTO·도메인·ViewModel 경계 전환
+   - 완료: Vitest setup, ESLint ratchet, service worker 계약 테스트를 strict `.ts`로 전환하고
+     setup 경로·3개 선언/8개 실행·2개 SW 실행을 보존
+   - 남음: `App.test.jsx`와 DTO·도메인·ViewModel 경계 전환
 6. shell과 테스트
    - 완료: top-level `app/useAppNavigation.ts`가 view·settings section state와 smooth scroll을,
      `app/AppShell.tsx`가 sidebar·mobile header·bottom nav·overlay exact DOM을 strict contract로 소유

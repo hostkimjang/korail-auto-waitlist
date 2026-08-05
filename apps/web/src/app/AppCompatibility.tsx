@@ -10,8 +10,11 @@ import { NewWaitPage, type NewWaitPageProps } from "../features/new-wait/NewWait
 import { OfficialHandoff } from "../features/official-handoff/OfficialHandoff";
 import {
   ReservationsPage,
-  type ReservationsPageProps,
 } from "../features/reservations/ReservationsPage";
+import {
+  mapLegacyReservationWatch,
+  type LegacyReservationListWatch,
+} from "../features/reservations/reservationViewModel";
 import { renderHomeSeatFoundAction } from "./HomeSeatFoundOfficialHandoff";
 
 export interface PaymentHeroProps {
@@ -75,9 +78,9 @@ export function NewWait(props: NewWaitCompatibilityProps): ReactElement {
 }
 
 export interface ReservationsCompatibilityProps {
-  watches: ReservationsPageProps["watches"];
+  watches: ReadonlyArray<LegacyReservationListWatch>;
   onNavigate: (view: "new") => void;
-  onDelete?: NonNullable<ReservationsPageProps["onDelete"]>;
+  onDelete?: (watchId: string) => void;
 }
 
 const ignoreDelete = (_watchId: string): void => undefined;
@@ -89,7 +92,7 @@ export function Reservations({
 }: ReservationsCompatibilityProps): ReactElement {
   return (
     <ReservationsPage
-      watches={watches}
+      watches={watches.map(mapLegacyReservationWatch)}
       onCreate={() => onNavigate("new")}
       onDelete={onDelete}
     />

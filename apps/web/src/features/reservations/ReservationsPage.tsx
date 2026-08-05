@@ -2,22 +2,20 @@ import { Plus } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 
 import { PageHeader } from "../../shared/ui/PageHeader";
-import {
-  ReservationList,
-  type ReservationListWatch,
-} from "./ReservationList";
+import { ReservationList } from "./ReservationList";
 import { ReservationSummary } from "./ReservationSummary";
+import type { ReservationWatchViewModel } from "./reservationViewModel";
 
 export interface ReservationsPageProps {
-  watches: ReadonlyArray<ReservationListWatch>;
+  watches: ReadonlyArray<ReservationWatchViewModel>;
   onCreate: () => void;
   onDelete?: (watchId: string) => void;
 }
 
 const ignoreDelete = (_watchId: string): void => undefined;
 
-function openOfficialReservation(watch: ReservationListWatch): void {
-  const officialUrl = watch.official_booking_url;
+function openOfficialReservation(watch: ReservationWatchViewModel): void {
+  const officialUrl = watch.officialBookingUrl;
   if (!officialUrl) return;
   window.open(officialUrl, "_blank", "noopener,noreferrer");
 }

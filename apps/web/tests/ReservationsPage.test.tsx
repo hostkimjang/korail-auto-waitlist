@@ -5,8 +5,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Reservations } from "../src/App";
 import type { ReservationListWatch } from "../src/features/reservations/ReservationList";
 import { ReservationsPage } from "../src/features/reservations/ReservationsPage";
+import type { ReservationWatchViewModel } from "../src/features/reservations/reservationViewModel";
 
-const watches: ReadonlyArray<ReservationListWatch> = [
+const legacyWatch: ReservationListWatch = {
+  id: "legacy-scheduled",
+  status: "scheduled",
+  statusLabel: "대기 등록됨",
+  route: "서울 → 부산",
+  train: "KTX 085",
+  date: "8월 1일",
+  departure: "14:11",
+  payment_deadline: null,
+  official_booking_url: "https://www.letskorail.com",
+};
+const legacyWatches: ReadonlyArray<ReservationListWatch> = [legacyWatch];
+
+const watches: ReadonlyArray<ReservationWatchViewModel> = [
   {
     id: "scheduled",
     status: "scheduled",
@@ -15,7 +29,8 @@ const watches: ReadonlyArray<ReservationListWatch> = [
     train: "KTX 085",
     date: "8월 1일",
     departure: "14:11",
-    official_booking_url: "https://www.letskorail.com",
+    paymentDeadline: null,
+    officialBookingUrl: "https://www.letskorail.com",
   },
   {
     id: "payment",
@@ -25,7 +40,8 @@ const watches: ReadonlyArray<ReservationListWatch> = [
     train: "SRT 327",
     date: "8월 1일",
     departure: "14:30",
-    official_booking_url: "https://etk.srail.kr",
+    paymentDeadline: null,
+    officialBookingUrl: "https://etk.srail.kr",
   },
   {
     id: "done",
@@ -35,7 +51,8 @@ const watches: ReadonlyArray<ReservationListWatch> = [
     train: "KTX 001",
     date: "7월 30일",
     departure: "09:00",
-    official_booking_url: null,
+    paymentDeadline: null,
+    officialBookingUrl: null,
   },
 ];
 
@@ -47,12 +64,33 @@ describe("reservations page", () => {
   it("adapts the legacy App navigation contract to the concrete create action", async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
-    render(<Reservations watches={[]} onNavigate={onNavigate} />);
+    render(
+      <Reservations
+        watches={legacyWatches}
+        onNavigate={onNavigate}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "서울 → 부산" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "새 대기" }));
 
     expect(onNavigate).toHaveBeenCalledTimes(1);
     expect(onNavigate).toHaveBeenCalledWith("new");
+  });
+
+  it("does not render an official CTA for an unsafe legacy compatibility URL", () => {
+    render(
+      <Reservations
+        watches={[{
+          ...legacyWatch,
+          official_booking_url: "https://attacker.example/ticket",
+        }]}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /공식 예매 열기/ })).toBeNull();
   });
 
   it("calls the concrete create action exactly once", async () => {
@@ -105,8 +143,8 @@ describe("reservations page", () => {
               train: "SRT 370",
               date: "8월 4일",
               departure: "22:06",
-              payment_deadline: "2026-08-01T23:59:59Z",
-              official_booking_url: "https://etk.srail.kr",
+              paymentDeadline: "2026-08-01T23:59:59Z",
+              officialBookingUrl: "https://etk.srail.kr",
             },
           ]}
           onCreate={vi.fn()}
@@ -138,6 +176,8 @@ describe("reservations page", () => {
             train: "KTX 085",
             date: "8월 1일",
             departure: "14:11",
+            paymentDeadline: null,
+            officialBookingUrl: null,
           },
           {
             id: "completed",
@@ -147,6 +187,8 @@ describe("reservations page", () => {
             train: "KTX 001",
             date: "8월 1일",
             departure: "09:00",
+            paymentDeadline: null,
+            officialBookingUrl: null,
           },
         ]}
         onCreate={vi.fn()}

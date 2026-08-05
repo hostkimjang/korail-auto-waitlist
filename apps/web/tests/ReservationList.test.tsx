@@ -5,14 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ReservationList,
   sortReservationWatches,
-  type ReservationListWatch,
 } from "../src/features/reservations/ReservationList";
+import type {
+  ReservationDisplayStatus,
+  ReservationWatchViewModel,
+} from "../src/features/reservations/reservationViewModel";
 
 function watch(
   id: string,
-  status: string,
+  status: ReservationDisplayStatus,
   paymentDeadline: string | null = null,
-): ReservationListWatch {
+): ReservationWatchViewModel {
   return {
     id,
     status,
@@ -21,8 +24,8 @@ function watch(
     train: `KTX ${id}`,
     date: "8월 2일",
     departure: "10:00",
-    payment_deadline: paymentDeadline,
-    official_booking_url: "https://www.korail.com/ticket/search/general",
+    paymentDeadline,
+    officialBookingUrl: "https://www.korail.com/ticket/search/general",
   };
 }
 
@@ -64,6 +67,19 @@ describe("reservation list", () => {
     expect(screen.getByText("결제기한 미제공")).toBeTruthy();
     expect(container.querySelector("time")).toBeNull();
     expect(screen.queryByText(/15분 내 결제/)).toBeNull();
+  });
+
+  it("treats a timezone-naive deadline as missing instead of inventing an instant", () => {
+    const { container } = render(
+      <ReservationList
+        watches={[watch("naive", "payment_required", "2099-08-02T10:10:00")]}
+        onCreate={vi.fn()}
+        onOpenOfficial={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("결제기한 미제공")).toBeTruthy();
+    expect(container.querySelector("time")).toBeNull();
   });
 
   it("opens an official page only after the user selects the matching payment row", async () => {

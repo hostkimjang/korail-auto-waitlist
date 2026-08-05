@@ -8,46 +8,39 @@ import {
 import { usePaymentDeadlineClock } from "../../hooks/usePaymentDeadlineClock";
 import { PaymentDeadlineStatus } from "../../shared/ui/PaymentDeadlineStatus";
 import { StatusPill } from "../../shared/ui/StatusPill";
+import type { ReservationWatchViewModel } from "./reservationViewModel";
 
-export interface ReservationListWatch {
-  id: string;
-  status: string;
-  statusLabel: string;
-  route: string;
-  train: string;
-  date: string;
-  departure: string;
-  payment_deadline?: string | null;
-  official_booking_url?: string | null;
-}
+export type {
+  LegacyReservationListWatch as ReservationListWatch,
+} from "./reservationViewModel";
 
 export interface ReservationListProps {
-  watches: ReadonlyArray<ReservationListWatch>;
+  watches: ReadonlyArray<ReservationWatchViewModel>;
   onCreate: () => void;
-  onOpenOfficial: (watch: ReservationListWatch) => void;
+  onOpenOfficial: (watch: ReservationWatchViewModel) => void;
   onDelete?: (watchId: string) => void;
 }
 
 export function sortReservationWatches(
-  watches: ReadonlyArray<ReservationListWatch>,
+  watches: ReadonlyArray<ReservationWatchViewModel>,
   now = Date.now(),
-): ReservationListWatch[] {
+): ReservationWatchViewModel[] {
   return watches
     .map((watch, index) => ({ watch, index }))
     .sort((left, right) => {
       const leftPayment = left.watch.status === "payment_required";
       const rightPayment = right.watch.status === "payment_required";
       const leftElapsed = leftPayment
-        && paymentDeadlineState(left.watch.payment_deadline, now) === "elapsed";
+        && paymentDeadlineState(left.watch.paymentDeadline, now) === "elapsed";
       const rightElapsed = rightPayment
-        && paymentDeadlineState(right.watch.payment_deadline, now) === "elapsed";
+        && paymentDeadlineState(right.watch.paymentDeadline, now) === "elapsed";
       const leftRank = leftPayment ? (leftElapsed ? 2 : 0) : 1;
       const rightRank = rightPayment ? (rightElapsed ? 2 : 0) : 1;
       if (leftRank !== rightRank) return leftRank - rightRank;
       if (!leftPayment || leftElapsed) return left.index - right.index;
 
-      const leftDeadline = paymentDeadlineInstant(left.watch.payment_deadline);
-      const rightDeadline = paymentDeadlineInstant(right.watch.payment_deadline);
+      const leftDeadline = paymentDeadlineInstant(left.watch.paymentDeadline);
+      const rightDeadline = paymentDeadlineInstant(right.watch.paymentDeadline);
       if (leftDeadline === null && rightDeadline !== null) return 1;
       if (leftDeadline !== null && rightDeadline === null) return -1;
       if (leftDeadline !== null && rightDeadline !== null && leftDeadline !== rightDeadline) {
@@ -59,7 +52,7 @@ export function sortReservationWatches(
 }
 
 export function ReservationList({ watches, onCreate, onOpenOfficial, onDelete }: ReservationListProps) {
-  const now = usePaymentDeadlineClock(watches.map((watch) => watch.payment_deadline));
+  const now = usePaymentDeadlineClock(watches.map((watch) => watch.paymentDeadline));
   const sortedWatches = useMemo(() => sortReservationWatches(watches, now), [now, watches]);
 
   return (
@@ -75,9 +68,9 @@ export function ReservationList({ watches, onCreate, onOpenOfficial, onDelete }:
       {sortedWatches.map((watch) => {
         const isPayment = watch.status === "payment_required";
         const isElapsedPayment = isPayment
-          && paymentDeadlineState(watch.payment_deadline, now) === "elapsed";
+          && paymentDeadlineState(watch.paymentDeadline, now) === "elapsed";
         const showOfficialLink = Boolean(
-          (isPayment || watch.status === "scheduled") && watch.official_booking_url,
+          (isPayment || watch.status === "scheduled") && watch.officialBookingUrl,
         );
         const canDelete = ["draft", "expired", "failed"].includes(watch.status);
         return (
@@ -96,7 +89,7 @@ export function ReservationList({ watches, onCreate, onOpenOfficial, onDelete }:
             </div>
             {isPayment ? (
               <div className="reservation-payment-deadline">
-                <PaymentDeadlineStatus value={watch.payment_deadline} now={now} />
+                <PaymentDeadlineStatus value={watch.paymentDeadline} now={now} />
               </div>
             ) : null}
             {showOfficialLink ? (

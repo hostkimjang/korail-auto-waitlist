@@ -1,27 +1,23 @@
 import { paymentDeadlineState } from "../../domain/paymentDeadline";
 import { usePaymentDeadlineClock } from "../../hooks/usePaymentDeadlineClock";
-
-export interface ReservationSummaryWatch {
-  status: string;
-  payment_deadline?: string | null;
-}
+import type { ReservationWatchViewModel } from "./reservationViewModel";
 
 export interface ReservationSummaryProps {
-  watches: ReadonlyArray<ReservationSummaryWatch>;
+  watches: ReadonlyArray<ReservationWatchViewModel>;
 }
 
 export function ReservationSummary({ watches }: ReservationSummaryProps) {
-  const now = usePaymentDeadlineClock(watches.map((watch) => watch.payment_deadline));
+  const now = usePaymentDeadlineClock(watches.map((watch) => watch.paymentDeadline));
   const activeCount = watches.filter(
     (watch) => !["payment_required", "completed", "expired", "failed"].includes(watch.status),
   ).length;
   const paymentCount = watches.filter(
     (watch) => watch.status === "payment_required"
-      && paymentDeadlineState(watch.payment_deadline, now) !== "elapsed",
+      && paymentDeadlineState(watch.paymentDeadline, now) !== "elapsed",
   ).length;
   const elapsedPaymentCount = watches.filter(
     (watch) => watch.status === "payment_required"
-      && paymentDeadlineState(watch.payment_deadline, now) === "elapsed",
+      && paymentDeadlineState(watch.paymentDeadline, now) === "elapsed",
   ).length;
   const completedCount = watches.filter((watch) => watch.status === "completed").length;
 

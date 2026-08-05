@@ -33,6 +33,10 @@ import {
   type PaymentRequiredViewModel,
 } from "./features/home/paymentRequiredViewModel";
 import { ReservationsPage } from "./features/reservations/ReservationsPage";
+import {
+  mapLegacyReservationWatch,
+  mapReservationWatch,
+} from "./features/reservations/reservationViewModel";
 import { NewWaitPage } from "./features/new-wait/NewWaitPage";
 import { seatClassNames } from "./features/new-wait/TrainResultCard";
 import type { SeatWatchRegistrationCompletion } from "./features/new-wait/useSeatWatchRegistration";
@@ -223,9 +227,10 @@ export function App(): ReactElement {
   const activeWatches = watches.filter(isActiveWatch).map((watch) => (
     mapActiveWatch(watch, accountAuthStatusFor(watch.provider))
   ));
-  const reservationWatches = auth.demo && !watches.some((watch) => watch.id === demoPaymentWatch.id)
-    ? [demoPaymentWatch, ...watches]
-    : watches;
+  const reservationWatches = watches.map(mapReservationWatch);
+  if (auth.demo && !watches.some((watch) => watch.id === demoPaymentWatch.id)) {
+    reservationWatches.unshift(mapLegacyReservationWatch(demoPaymentWatch));
+  }
   return (
     <AppAuthenticationBoundary
       status={auth}

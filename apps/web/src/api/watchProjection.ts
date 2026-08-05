@@ -22,6 +22,7 @@ import {
   awareTimestamp,
   normalizedRegistrationEvidenceId,
   normalizeSeatClass,
+  safeOfficialChannelUrl,
   safeOfficialUrl,
 } from "./seatClasses";
 import { timetableTimeLabel } from "./timetables";
@@ -32,6 +33,8 @@ import {
 } from "./watchReadDto";
 
 type UnknownRecord = Record<string, unknown>;
+
+export { safeOfficialChannelUrl };
 
 export interface MappedWatchCandidate {
   id: string;

@@ -114,6 +114,14 @@ export function safeOfficialUrl(value: unknown, provider: unknown): string | nul
   }
 }
 
+export function safeOfficialChannelUrl(value: unknown): string | null {
+  for (const provider of ["KORAIL", "SRT"]) {
+    const safeUrl = safeOfficialUrl(value, provider);
+    if (safeUrl !== null) return safeUrl;
+  }
+  return null;
+}
+
 function unknownSeatClass(
   seatClass: SeatClassId,
   officialBookingUrl: unknown,

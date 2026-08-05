@@ -128,14 +128,30 @@ describe("App compatibility facade", () => {
     const onNavigate = vi.fn();
     const onDelete = vi.fn();
     render(
-      <Reservations watches={[]} onNavigate={onNavigate} onDelete={onDelete} />,
+      <Reservations
+        watches={[{
+          id: "legacy-expired",
+          status: "expired",
+          statusLabel: "만료",
+          route: "서울 → 부산",
+          train: "KTX 085",
+          date: "8월 1일",
+          departure: "14:11",
+          payment_deadline: null,
+          official_booking_url: null,
+        }]}
+        onNavigate={onNavigate}
+        onDelete={onDelete}
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: "새 대기" }));
+    await user.click(screen.getByRole("button", { name: /기록 삭제/ }));
 
     expect(onNavigate).toHaveBeenCalledOnce();
     expect(onNavigate).toHaveBeenCalledWith("new");
-    expect(onDelete).not.toHaveBeenCalled();
+    expect(onDelete).toHaveBeenCalledOnce();
+    expect(onDelete).toHaveBeenCalledWith("legacy-expired");
   });
 
   it("keeps PaymentHero as a single-watch zero-argument callback adapter", async () => {

@@ -201,6 +201,40 @@ describe("module dependency boundaries", () => {
     );
   });
 
+  it("keeps the Reservations ViewModel in one feature owner", () => {
+    const declarationPattern = /\bexport\s+interface\s+(ReservationWatchViewModel)\b/g;
+    const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
+      [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
+        `${sourcePath(filePath)}:${match[1]}`
+      ))
+    ));
+    const reservationList = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/reservations/ReservationList.tsx"),
+      "utf8",
+    );
+    const reservationSummary = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/reservations/ReservationSummary.tsx"),
+      "utf8",
+    );
+    const reservationsPage = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/reservations/ReservationsPage.tsx"),
+      "utf8",
+    );
+
+    expect(declarations).toEqual([
+      "features/reservations/reservationViewModel.ts:ReservationWatchViewModel",
+    ]);
+    expect(reservationList).not.toMatch(/payment_deadline|official_booking_url/);
+    expect(reservationSummary).not.toMatch(/payment_deadline|official_booking_url/);
+    expect(reservationsPage).not.toMatch(/payment_deadline|official_booking_url/);
+    expect(reservationList).toMatch(
+      /LegacyReservationListWatch\s+as\s+ReservationListWatch/,
+    );
+    expect(edges.map(edgeName)).toContain(
+      "features/reservations/reservationViewModel.ts -> api/watchProjection",
+    );
+  });
+
   it("keeps watch DTO parsing upstream of projection and CRUD", () => {
     const watchEdges = edges
       .filter(({ importer }) => [

@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { buildLiveReservationNotice } from "../src/features/app/liveReservationNotice";
 import type { WatchSnapshot } from "../src/features/app/watchSnapshots";
+import type { WatchLifecycleSnapshot } from "../src/features/app/watchLifecycleSnapshot";
 
-const watch: WatchSnapshot = {
+const watch: WatchLifecycleSnapshot = {
   id: "watch-korail-9248",
   status: "watching",
   provider: "KORAIL",
@@ -13,6 +14,8 @@ const watch: WatchSnapshot = {
   date: "8월 4일 (화)",
   departure: "17:50",
   arrival: "18:58",
+  latestReservationAttempt: null,
+  paymentDeadline: null,
   reservationPolicy: "reserve_once_before_payment",
   reservationCandidateContexts: {
     candidate: {
@@ -23,9 +26,47 @@ const watch: WatchSnapshot = {
       arrival: "18:58",
     },
   },
+  seatFoundObservation: null,
+  updatedAt: null,
 };
 
 describe("live reservation notices", () => {
+  it("adapts and trims candidate context from the legacy public snapshot path", () => {
+    const legacy: WatchSnapshot = {
+      id: "legacy-live",
+      status: "watching",
+      provider: "KORAIL",
+      route: "대전 → 서울",
+      train: "KTX 038",
+      seatClassLabel: "일반실",
+      date: "8월 3일 (월)",
+      departure: "14:35",
+      arrival: "15:39",
+      reservationCandidateContexts: {
+        candidate: {
+          train: "  KTX 240  ",
+          seatClassLabel: "   ",
+          date: "  8월 4일 (화)  ",
+          departure: "  15:11  ",
+          arrival: "   ",
+        },
+      },
+    };
+
+    const notice = buildLiveReservationNotice({
+      id: "legacy-attempt",
+      event_type: "watch.reservation_attempted",
+      aggregate_id: legacy.id,
+      created_at: "2026-08-03T12:09:45Z",
+      payload: { watch_id: legacy.id, candidate_id: "candidate" },
+    }, [legacy]);
+
+    expect(notice).toMatchObject({
+      meta: "KORAIL · KTX 240 · 일반실",
+      description: "8월 4일 (화) · 대전 → 서울 · 15:11 → 15:39",
+    });
+  });
+
   it("builds reserving directly from the attempted SSE without a REST reserving snapshot", () => {
     const notice = buildLiveReservationNotice({
       id: "attempt-event",
@@ -187,10 +228,10 @@ describe("live reservation notices", () => {
       ...watch,
       status: "watching",
       latestReservationAttempt: {
-        outcome: "payment_required",
         startedAt: "2026-08-03T12:09:45.851Z",
         finishedAt: "2026-08-03T12:09:48.250Z",
         paymentHoldEndedAt: "2026-08-03T12:20:01.100Z",
+        paymentHoldEndReason: "confirmed_payment_deadline_elapsed",
       },
     }]);
 

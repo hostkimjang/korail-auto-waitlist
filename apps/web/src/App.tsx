@@ -24,6 +24,7 @@ import {
 import { useAuthState } from "./features/auth/useAuthState";
 import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
 import { useWatchCollection } from "./features/app/useWatchCollection";
+import { mapWatchLifecycleSnapshot } from "./features/app/watchLifecycleSnapshot";
 import { useWatchMutations } from "./features/app/useWatchMutations";
 import { HomePage } from "./features/home/HomePage";
 import { mapActiveWatch } from "./features/home/activeWatchViewModel";
@@ -137,6 +138,7 @@ export function App(): ReactElement {
     initialWatches: initialWatchCollection,
     pollIntervalSeconds: uiPreferences.timetableRefreshIntervalSeconds,
     loadWatches: fetchWatches,
+    snapshotOf: mapWatchLifecycleSnapshot,
     onAuthenticationExpired: markUnauthenticated,
     onProviderAuthenticationTransition: handleProviderAuthenticationTransition,
     pushNotifications,

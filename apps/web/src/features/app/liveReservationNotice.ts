@@ -9,8 +9,12 @@ import type {
   ReservationProgressStage,
   ReservationProgressStageName,
   WatchActionTransition,
-  WatchSnapshot,
 } from "./watchSnapshots";
+import {
+  mapCompatibleWatchLifecycleSnapshot,
+  type LegacyWatchSnapshot,
+  type WatchLifecycleSnapshot,
+} from "./watchLifecycleSnapshot";
 
 interface LiveEventRecord {
   event_type?: unknown;
@@ -60,23 +64,17 @@ function reservationProgress(value: unknown): ReadonlyArray<ReservationProgressS
 }
 
 function candidateContext(
-  watch: WatchSnapshot,
+  watch: WatchLifecycleSnapshot,
   candidateId: string | null,
 ): Partial<WatchActionTransition> {
-  if (candidateId === null || !isRecord(watch.reservationCandidateContexts)) return {};
+  if (candidateId === null) return {};
   const candidate = watch.reservationCandidateContexts[candidateId];
-  if (!isRecord(candidate)) return {};
-  const result: Partial<WatchActionTransition> = {};
-  for (const field of ["train", "seatClassLabel", "date", "departure", "arrival"] as const) {
-    const value = text(candidate[field]);
-    if (value !== null) result[field] = value;
-  }
-  return result;
+  return candidate ?? {};
 }
 
 function transitionFromEvent(
   event: LiveEventRecord,
-  watches: ReadonlyArray<WatchSnapshot>,
+  watches: ReadonlyArray<WatchLifecycleSnapshot>,
   status: WatchActionTransition["status"],
 ): WatchActionTransition | null {
   if (!isRecord(event.payload)) return null;
@@ -87,29 +85,25 @@ function transitionFromEvent(
   const candidateId = text(event.payload.candidate_id);
   const revisionAt = eventInstant(event.created_at);
   const revision = text(event.id) ?? revisionAt ?? `${status}:${watchId}`;
-  const observation = isRecord(watch.seatFoundObservation)
-    ? eventInstant(watch.seatFoundObservation.observedAt)
-    : null;
-  const attempt = isRecord(watch.latestReservationAttempt)
-    ? watch.latestReservationAttempt
-    : null;
+  const observation = watch.seatFoundObservation?.observedAt ?? null;
+  const attempt = watch.latestReservationAttempt;
   const startedAt = eventInstant(event.payload.attempt_started_at)
-    ?? eventInstant(attempt?.startedAt);
+    ?? attempt?.startedAt
+    ?? null;
   const finishedAt = eventInstant(event.payload.attempt_finished_at)
-    ?? eventInstant(attempt?.finishedAt);
+    ?? attempt?.finishedAt
+    ?? null;
   const progress = reservationProgress(event.payload.progress_stages);
   return {
     id: watchId,
-    provider: watch.provider ?? "철도",
-    route: watch.route ?? "여정 정보 없음",
-    train: watch.train ?? "열차 정보 없음",
-    seatClassLabel: watch.seatClassLabel ?? "좌석",
-    date: watch.date ?? "날짜 미정",
-    departure: watch.departure ?? "--:--",
-    arrival: watch.arrival ?? "--:--",
-    reservationPolicy: typeof watch.reservationPolicy === "string"
-      ? watch.reservationPolicy
-      : "notify_only",
+    provider: watch.provider,
+    route: watch.route,
+    train: watch.train,
+    seatClassLabel: watch.seatClassLabel,
+    date: watch.date,
+    departure: watch.departure,
+    arrival: watch.arrival,
+    reservationPolicy: watch.reservationPolicy,
     paymentDeadline: text(event.payload.payment_deadline),
     ...candidateContext(watch, candidateId),
     status,
@@ -140,9 +134,9 @@ function recoveryResult(payload: Record<string, unknown>): ReservationRecoveryRe
   };
 }
 
-export function buildLiveReservationNotice(
+function buildLiveReservationNoticeFromLifecycle(
   value: unknown,
-  watches: ReadonlyArray<WatchSnapshot>,
+  watches: ReadonlyArray<WatchLifecycleSnapshot>,
 ): AppNotificationInput | null {
   if (!isRecord(value)) return null;
   const event = value as LiveEventRecord;
@@ -205,4 +199,22 @@ export function buildLiveReservationNotice(
   if (result === null) return null;
   const transition = transitionFromEvent(event, watches, "monitoring_resumed");
   return transition === null ? null : buildReservationRecoveryToast(transition, result);
+}
+
+export function buildLiveReservationNotice(
+  value: unknown,
+  watches: ReadonlyArray<WatchLifecycleSnapshot>,
+): AppNotificationInput | null;
+export function buildLiveReservationNotice(
+  value: unknown,
+  watches: ReadonlyArray<LegacyWatchSnapshot>,
+): AppNotificationInput | null;
+export function buildLiveReservationNotice(
+  value: unknown,
+  watches: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+): AppNotificationInput | null {
+  return buildLiveReservationNoticeFromLifecycle(
+    value,
+    watches.map(mapCompatibleWatchLifecycleSnapshot),
+  );
 }

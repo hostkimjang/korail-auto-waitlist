@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { LatestReservationAttempt } from "../src/domain/reservationAttempt";
+import type { WatchStatus } from "../src/domain/watch";
 import {
   detectSeatAvailabilityLostTransitions,
   detectSeatFoundTransitions,
@@ -7,8 +9,24 @@ import {
   reconcileWatchSnapshots,
   type WatchSnapshot,
 } from "../src/features/app/watchSnapshots";
+import type { WatchLifecycleSnapshot } from "../src/features/app/watchLifecycleSnapshot";
 
-function watch(id: string, status: string): WatchSnapshot {
+function attempt(
+  values: Partial<LatestReservationAttempt>,
+): LatestReservationAttempt {
+  return {
+    outcome: "pending",
+    startedAt: "2026-08-03T12:09:45Z",
+    finishedAt: null,
+    retryable: false,
+    manualCheckRequired: false,
+    retryCondition: null,
+    paymentHoldEndedAt: null,
+    ...values,
+  };
+}
+
+function watch(id: string, status: WatchStatus): WatchLifecycleSnapshot {
   return {
     id,
     status,
@@ -19,16 +37,49 @@ function watch(id: string, status: string): WatchSnapshot {
     date: "8월 3일 (월)",
     departure: "14:35",
     arrival: "15:39",
-    ...(status === "seat_found" ? {
-      seatFoundObservation: {
+    latestReservationAttempt: null,
+    paymentDeadline: null,
+    reservationCandidateContexts: {},
+    reservationPolicy: "notify_only",
+    seatFoundObservation: status === "seat_found"
+      ? {
         kind: "official_provider",
+        source: "korail-pydoll-reservation",
         observedAt: "2026-07-31T12:00:00+09:00",
-      },
-    } : {}),
+        observedLabel: "최근 확인 12:00",
+      }
+      : null,
+    updatedAt: null,
   };
 }
 
 describe("watch snapshot reconciliation", () => {
+  it("keeps every public transition detector compatible with legacy snapshots", () => {
+    const watching: WatchSnapshot = {
+      id: "legacy-transition",
+      status: "watching",
+      provider: "KORAIL",
+      train: "KTX 085",
+    };
+    const seatFound: WatchSnapshot = {
+      ...watching,
+      status: "seat_found",
+      seatFoundObservation: { observedAt: "2026-08-01T03:45:00Z" },
+    };
+    const reserving: WatchSnapshot = {
+      ...watching,
+      status: "reserving",
+      updated_at: "2026-08-01T03:46:00Z",
+    };
+
+    expect(detectSeatFoundTransitions([watching], [seatFound]))
+      .toMatchObject([{ id: "legacy-transition" }]);
+    expect(detectSeatAvailabilityLostTransitions([seatFound], [watching]))
+      .toMatchObject([{ id: "legacy-transition" }]);
+    expect(detectWatchActionTransitions([seatFound], [reserving]))
+      .toMatchObject([{ id: "legacy-transition", status: "reserving" }]);
+  });
+
   it("ignores initial seat-found rows and reports only later watching-family transitions", () => {
     const initial = [watch("old", "seat_found"), watch("one", "watching"), watch("two", "scheduled")];
     expect(detectSeatFoundTransitions([], initial)).toEqual([]);
@@ -40,7 +91,7 @@ describe("watch snapshot reconciliation", () => {
 
   it("does not announce an automatic seat discovery before a reservation attempt is claimed", () => {
     const previous = [watch("auto", "watching")];
-    const next = [{
+    const next: WatchLifecycleSnapshot[] = [{
       ...watch("auto", "seat_found"),
       reservationPolicy: "reserve_once_before_payment",
     }];
@@ -61,11 +112,13 @@ describe("watch snapshot reconciliation", () => {
   });
 
   it("reports an availability loss only on the actionable-to-unavailable edge", () => {
-    const available = {
+    const available: WatchLifecycleSnapshot = {
       ...watch("one", "seat_found"),
       seatFoundObservation: {
         kind: "official_provider",
+        source: "korail-pydoll-reservation",
         observedAt: "2026-07-31T12:00:00+09:00",
+        observedLabel: "최근 확인 12:00",
       },
     };
     const unavailable = watch("one", "watching");
@@ -100,11 +153,11 @@ describe("watch snapshot reconciliation", () => {
     const previous = [watch("reserve-time", "seat_found")];
     const reserving = {
       ...watch("reserve-time", "reserving"),
-      updated_at: "2026-08-03T12:09:46Z",
-      latestReservationAttempt: {
+      updatedAt: "2026-08-03T12:09:46Z",
+      latestReservationAttempt: attempt({
         startedAt: "2026-08-03T12:09:45Z",
         finishedAt: "2026-08-03T12:09:48Z",
-      },
+      }),
     };
 
     expect(detectWatchActionTransitions(previous, [reserving]))
@@ -122,11 +175,11 @@ describe("watch snapshot reconciliation", () => {
     const previous = [watch("resume", "auth_required")];
     const recovered = {
       ...watch("resume", "watching"),
-      updated_at: "2026-08-03T12:12:00Z",
-      latestReservationAttempt: {
+      updatedAt: "2026-08-03T12:12:00Z",
+      latestReservationAttempt: attempt({
         startedAt: "2026-08-03T11:00:00Z",
         finishedAt: "2026-08-03T11:00:03Z",
-      },
+      }),
     };
 
     expect(detectWatchActionTransitions(previous, [watch("resume", "scheduled")]))
@@ -143,17 +196,18 @@ describe("watch snapshot reconciliation", () => {
     const previous = [watch("payment", "payment_required")];
     const resumedWithoutEvidence = [watch("payment", "watching")];
     const holdEndedAt = "2026-08-03T12:20:01Z";
-    const confirmedHoldEnded: WatchSnapshot = {
+    const confirmedHoldEnded: WatchLifecycleSnapshot = {
       ...watch("payment", "watching"),
-      latestReservationAttempt: {
+      latestReservationAttempt: attempt({
+        outcome: "payment_required",
         startedAt: "2026-08-03T12:09:45Z",
         finishedAt: "2026-08-03T12:09:48Z",
         paymentHoldEndedAt: holdEndedAt,
         paymentHoldEndReason: "confirmed_payment_deadline_elapsed",
-      },
+      }),
     };
     const resumed = [confirmedHoldEnded];
-    const oneOffExpired = [{
+    const oneOffExpired: WatchLifecycleSnapshot[] = [{
       ...confirmedHoldEnded,
       status: "expired",
     }];

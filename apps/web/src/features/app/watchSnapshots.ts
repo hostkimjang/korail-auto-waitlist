@@ -1,20 +1,10 @@
-export interface WatchSnapshot {
-  id: string;
-  status: string;
-  provider?: string;
-  route?: string;
-  train?: string;
-  seatClassLabel?: string;
-  date?: string;
-  departure?: string;
-  arrival?: string;
-  latestReservationAttempt?: unknown;
-  payment_deadline?: string | null;
-  reservationCandidateContexts?: unknown;
-  reservationPolicy?: string;
-  seatFoundObservation?: unknown;
-  updated_at?: string | null;
-}
+import {
+  mapCompatibleWatchLifecycleSnapshot,
+  type LegacyWatchSnapshot,
+  type WatchLifecycleSnapshot,
+} from "./watchLifecycleSnapshot";
+
+export type { LegacyWatchSnapshot as WatchSnapshot } from "./watchLifecycleSnapshot";
 
 export interface SeatFoundTransition {
   id: string;
@@ -65,87 +55,71 @@ export interface WatchActionTransition extends SeatFoundTransition {
 
 type TransitionStage = "seat_found" | "availability_lost" | WatchActionTransition["status"];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function attemptTimestamp(
-  watch: WatchSnapshot,
+  watch: WatchLifecycleSnapshot,
   field: "startedAt" | "finishedAt" | "paymentHoldEndedAt",
 ): string | undefined {
   const attempt = watch.latestReservationAttempt;
-  if (!isRecord(attempt)) return undefined;
-  const value = attempt[field];
-  return typeof value === "string" && value ? value : undefined;
+  if (attempt === null) return undefined;
+  return attempt[field] ?? undefined;
 }
 
 function attemptPaymentHoldEndReason(
-  watch: WatchSnapshot,
+  watch: WatchLifecycleSnapshot,
 ): WatchActionTransition["paymentHoldEndReason"] | undefined {
-  const attempt = watch.latestReservationAttempt;
-  if (!isRecord(attempt)) return undefined;
-  const value = attempt.paymentHoldEndReason;
-  return value === "confirmed_payment_deadline_elapsed"
-    || value === "confirmed_payment_hold_no_longer_present"
-    ? value
-    : undefined;
+  return watch.latestReservationAttempt?.paymentHoldEndReason ?? undefined;
 }
 
 function transitionRevisionAt(
-  watch: WatchSnapshot,
+  watch: WatchLifecycleSnapshot,
   stage: TransitionStage,
 ): string | undefined {
   if (stage === "seat_found") {
-    const observation = watch.seatFoundObservation;
-    if (typeof observation === "object" && observation !== null && "observedAt" in observation) {
-      const observedAt = observation.observedAt;
-      if (typeof observedAt === "string" && observedAt) return observedAt;
-    }
+    return watch.seatFoundObservation?.observedAt ?? undefined;
   }
   if (stage === "reserving") {
     return attemptTimestamp(watch, "startedAt")
-      ?? (typeof watch.updated_at === "string" && watch.updated_at ? watch.updated_at : undefined);
+      ?? watch.updatedAt
+      ?? undefined;
   }
   if (stage === "payment_hold_ended") {
     return attemptTimestamp(watch, "paymentHoldEndedAt")
-      ?? (typeof watch.updated_at === "string" && watch.updated_at ? watch.updated_at : undefined);
+      ?? watch.updatedAt
+      ?? undefined;
   }
   if (["payment_required", "auth_required", "failed"].includes(stage)) {
     return attemptTimestamp(watch, "finishedAt")
       ?? attemptTimestamp(watch, "startedAt")
-      ?? (typeof watch.updated_at === "string" && watch.updated_at ? watch.updated_at : undefined);
+      ?? watch.updatedAt
+      ?? undefined;
   }
-  return typeof watch.updated_at === "string" && watch.updated_at ? watch.updated_at : undefined;
+  return watch.updatedAt ?? undefined;
 }
 
-function transitionContext(watch: WatchSnapshot, stage: TransitionStage): SeatFoundTransition {
+function transitionContext(
+  watch: WatchLifecycleSnapshot,
+  stage: TransitionStage,
+): SeatFoundTransition {
   const revisionAt = transitionRevisionAt(watch, stage);
-  const observation = isRecord(watch.seatFoundObservation)
-    ? watch.seatFoundObservation.observedAt
-    : undefined;
-  const detectedAt = typeof observation === "string" && observation ? observation : undefined;
+  const detectedAt = watch.seatFoundObservation?.observedAt ?? undefined;
   const startedAt = attemptTimestamp(watch, "startedAt");
   const finishedAt = attemptTimestamp(watch, "finishedAt");
   return {
     id: watch.id,
-    provider: watch.provider ?? "철도",
-    route: watch.route ?? "여정 정보 없음",
-    train: watch.train ?? "열차 정보 없음",
-    seatClassLabel: watch.seatClassLabel ?? "좌석",
-    date: watch.date ?? "날짜 미정",
-    departure: watch.departure ?? "--:--",
-    arrival: watch.arrival ?? "--:--",
+    provider: watch.provider,
+    route: watch.route,
+    train: watch.train,
+    seatClassLabel: watch.seatClassLabel,
+    date: watch.date,
+    departure: watch.departure,
+    arrival: watch.arrival,
     revision: `${stage}:${revisionAt ?? "current"}`,
     ...(revisionAt === undefined ? {} : { revisionAt }),
     ...(detectedAt === undefined ? {} : { detectedAt }),
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(finishedAt === undefined ? {} : { finishedAt }),
-    reservationPolicy: typeof watch.reservationPolicy === "string"
-      ? watch.reservationPolicy
-      : "notify_only",
-    paymentDeadline: typeof watch.payment_deadline === "string"
-      ? watch.payment_deadline
-      : null,
+    reservationPolicy: watch.reservationPolicy,
+    paymentDeadline: watch.paymentDeadline,
   };
 }
 
@@ -156,9 +130,9 @@ const watchingStatuses: ReadonlySet<string> = new Set([
   "cooldown",
 ]);
 
-export function detectSeatFoundTransitions(
-  previous: ReadonlyArray<WatchSnapshot>,
-  next: ReadonlyArray<WatchSnapshot>,
+function detectSeatFoundLifecycleTransitions(
+  previous: ReadonlyArray<WatchLifecycleSnapshot>,
+  next: ReadonlyArray<WatchLifecycleSnapshot>,
 ): SeatFoundTransition[] {
   const previousById = new Map(previous.map((watch) => [watch.id, watch]));
   return next.flatMap((watch) => {
@@ -174,14 +148,31 @@ export function detectSeatFoundTransitions(
   });
 }
 
-function hasCurrentSeatAvailability(watch: WatchSnapshot): boolean {
-  return typeof watch.seatFoundObservation === "object"
-    && watch.seatFoundObservation !== null;
+export function detectSeatFoundTransitions(
+  previous: ReadonlyArray<WatchLifecycleSnapshot>,
+  next: ReadonlyArray<WatchLifecycleSnapshot>,
+): SeatFoundTransition[];
+export function detectSeatFoundTransitions(
+  previous: ReadonlyArray<LegacyWatchSnapshot>,
+  next: ReadonlyArray<LegacyWatchSnapshot>,
+): SeatFoundTransition[];
+export function detectSeatFoundTransitions(
+  previous: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+  next: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+): SeatFoundTransition[] {
+  return detectSeatFoundLifecycleTransitions(
+    previous.map(mapCompatibleWatchLifecycleSnapshot),
+    next.map(mapCompatibleWatchLifecycleSnapshot),
+  );
 }
 
-export function detectSeatAvailabilityLostTransitions(
-  previous: ReadonlyArray<WatchSnapshot>,
-  next: ReadonlyArray<WatchSnapshot>,
+function hasCurrentSeatAvailability(watch: WatchLifecycleSnapshot): boolean {
+  return watch.seatFoundObservation !== null;
+}
+
+function detectSeatAvailabilityLostLifecycleTransitions(
+  previous: ReadonlyArray<WatchLifecycleSnapshot>,
+  next: ReadonlyArray<WatchLifecycleSnapshot>,
 ): SeatAvailabilityLostTransition[] {
   const nextById = new Map(next.map((watch) => [watch.id, watch]));
   return previous.flatMap((watch) => {
@@ -196,6 +187,24 @@ export function detectSeatAvailabilityLostTransitions(
   });
 }
 
+export function detectSeatAvailabilityLostTransitions(
+  previous: ReadonlyArray<WatchLifecycleSnapshot>,
+  next: ReadonlyArray<WatchLifecycleSnapshot>,
+): SeatAvailabilityLostTransition[];
+export function detectSeatAvailabilityLostTransitions(
+  previous: ReadonlyArray<LegacyWatchSnapshot>,
+  next: ReadonlyArray<LegacyWatchSnapshot>,
+): SeatAvailabilityLostTransition[];
+export function detectSeatAvailabilityLostTransitions(
+  previous: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+  next: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+): SeatAvailabilityLostTransition[] {
+  return detectSeatAvailabilityLostLifecycleTransitions(
+    previous.map(mapCompatibleWatchLifecycleSnapshot),
+    next.map(mapCompatibleWatchLifecycleSnapshot),
+  );
+}
+
 const actionStatuses: ReadonlySet<WatchActionTransition["status"]> = new Set([
   "reserving",
   "payment_required",
@@ -208,9 +217,9 @@ const authenticationRecoveredStatuses: ReadonlySet<string> = new Set([
   "watching",
 ]);
 
-export function detectWatchActionTransitions(
-  previous: ReadonlyArray<WatchSnapshot>,
-  next: ReadonlyArray<WatchSnapshot>,
+function detectWatchActionLifecycleTransitions(
+  previous: ReadonlyArray<WatchLifecycleSnapshot>,
+  next: ReadonlyArray<WatchLifecycleSnapshot>,
 ): WatchActionTransition[] {
   const previousById = new Map(previous.map((watch) => [watch.id, watch]));
   return next.flatMap((watch) => {
@@ -248,11 +257,29 @@ export function detectWatchActionTransitions(
   });
 }
 
-function sameSnapshot(left: WatchSnapshot, right: WatchSnapshot): boolean {
+export function detectWatchActionTransitions(
+  previous: ReadonlyArray<WatchLifecycleSnapshot>,
+  next: ReadonlyArray<WatchLifecycleSnapshot>,
+): WatchActionTransition[];
+export function detectWatchActionTransitions(
+  previous: ReadonlyArray<LegacyWatchSnapshot>,
+  next: ReadonlyArray<LegacyWatchSnapshot>,
+): WatchActionTransition[];
+export function detectWatchActionTransitions(
+  previous: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+  next: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+): WatchActionTransition[] {
+  return detectWatchActionLifecycleTransitions(
+    previous.map(mapCompatibleWatchLifecycleSnapshot),
+    next.map(mapCompatibleWatchLifecycleSnapshot),
+  );
+}
+
+function sameSnapshot<T>(left: T, right: T): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function reconcileWatchSnapshots<T extends WatchSnapshot>(
+export function reconcileWatchSnapshots<T extends { id: string }>(
   previous: ReadonlyArray<T>,
   next: ReadonlyArray<T>,
 ): ReadonlyArray<T> {

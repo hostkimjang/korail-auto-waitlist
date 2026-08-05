@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/api/client";
-import type { WatchSnapshot } from "../src/features/app/watchSnapshots";
+import type { WatchLifecycleSnapshot } from "../src/features/app/watchLifecycleSnapshot";
 
 const eventApi = vi.hoisted(() => ({
   subscribeToEvents: vi.fn((_handler: (event: unknown) => void) => () => undefined),
@@ -15,8 +15,32 @@ vi.mock("../src/api/events", async (importOriginal) => {
 
 import { useWatchCollection } from "../src/features/app/useWatchCollection";
 
-interface TestWatch extends WatchSnapshot {
+interface TestWatch {
+  id: string;
+  status: "watching" | "seat_found";
   reservationPolicy: "notify_only" | "reserve_once_before_payment";
+}
+
+function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
+  return {
+    id: value.id,
+    status: value.status,
+    provider: "KORAIL",
+    route: "서울 → 부산",
+    train: "KTX 085",
+    seatClassLabel: "일반실",
+    date: "8월 1일 (토)",
+    departure: "14:11",
+    arrival: "16:52",
+    latestReservationAttempt: null,
+    paymentDeadline: null,
+    reservationCandidateContexts: {},
+    reservationPolicy: value.reservationPolicy,
+    seatFoundObservation: value.status === "seat_found"
+      ? { observedAt: "2026-08-01T03:45:00Z" }
+      : null,
+    updatedAt: null,
+  };
 }
 
 function deferred<T>(): {
@@ -37,10 +61,13 @@ function deferred<T>(): {
   };
 }
 
-function watch(reservationPolicy: TestWatch["reservationPolicy"]): TestWatch {
+function watch(
+  reservationPolicy: TestWatch["reservationPolicy"],
+  status: TestWatch["status"] = "watching",
+): TestWatch {
   return {
     id: "watch-one",
-    status: "watching",
+    status,
     reservationPolicy,
   };
 }
@@ -48,6 +75,98 @@ function watch(reservationPolicy: TestWatch["reservationPolicy"]): TestWatch {
 describe("useWatchCollection", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("projects lifecycle snapshots without replacing an unchanged actual watch", async () => {
+    const initial = watch("notify_only");
+    const loadWatches = vi.fn().mockResolvedValue([{ ...initial }]);
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    const { result, unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+    await waitFor(() => expect(result.current.watches[0]).toBe(initial));
+
+    unmount();
+  });
+
+  it("keeps one subscription and uses the latest inline projector for SSE and REST", async () => {
+    const initial = watch("notify_only");
+    const firstReload = deferred<ReadonlyArray<TestWatch>>();
+    const seatFound = watch("notify_only", "seat_found");
+    const loadWatches = vi.fn()
+      .mockReturnValueOnce(firstReload.promise)
+      .mockResolvedValue([seatFound]);
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    const { rerender, unmount } = renderHook(
+      ({ trainLabel }) => useWatchCollection({
+        authenticated: true,
+        demo: false,
+        initialWatches: [initial],
+        pollIntervalSeconds: 300,
+        loadWatches,
+        snapshotOf: (value) => ({ ...snapshotOf(value), train: trainLabel }),
+        onAuthenticationExpired,
+        onProviderAuthenticationTransition,
+        pushNotifications,
+      }),
+      { initialProps: { trainLabel: "OLD 085" } },
+    );
+
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+    expect(eventApi.subscribeToEvents).toHaveBeenCalledOnce();
+
+    rerender({ trainLabel: "LATEST 085" });
+
+    expect(loadWatches).toHaveBeenCalledOnce();
+    expect(eventApi.subscribeToEvents).toHaveBeenCalledOnce();
+
+    act(() => {
+      onEvent?.({
+        id: "inline-attempt",
+        event_type: "watch.reservation_attempted",
+        aggregate_id: initial.id,
+        created_at: "2026-08-01T03:44:59Z",
+        payload: { watch_id: initial.id, outcome: "pending" },
+      });
+    });
+    expect(pushNotifications).toHaveBeenCalledWith([
+      expect.objectContaining({
+        kind: "reserving",
+        meta: "KORAIL · LATEST 085 · 일반실",
+      }),
+    ]);
+
+    await act(async () => {
+      firstReload.resolve([seatFound]);
+      await firstReload.promise;
+    });
+    await waitFor(() => expect(pushNotifications.mock.calls.flatMap(([items]) => items))
+      .toContainEqual(expect.objectContaining({
+        kind: "seat_found",
+        meta: "KORAIL · LATEST 085 · 일반실",
+      })));
+
+    expect(eventApi.subscribeToEvents).toHaveBeenCalledOnce();
+    unmount();
   });
 
   it("rejects a canonical GET snapshot that crosses a reservation-policy mutation", async () => {
@@ -109,6 +228,7 @@ describe("useWatchCollection", () => {
         initialWatches: [watch("notify_only")],
         pollIntervalSeconds,
         loadWatches,
+        snapshotOf,
         onAuthenticationExpired,
         onProviderAuthenticationTransition,
         pushNotifications,
@@ -165,6 +285,7 @@ describe("useWatchCollection", () => {
         initialWatches: [] as TestWatch[],
         pollIntervalSeconds: 300,
         loadWatches,
+        snapshotOf,
         onAuthenticationExpired,
         onProviderAuthenticationTransition,
         pushNotifications,

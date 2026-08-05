@@ -24,8 +24,12 @@ import {
   detectSeatFoundTransitions,
   detectWatchActionTransitions,
   reconcileWatchSnapshots,
-  type WatchSnapshot,
 } from "./watchSnapshots";
+import {
+  mapLegacyWatchLifecycleSnapshot,
+  type LegacyWatchSnapshot,
+  type WatchLifecycleSnapshot,
+} from "./watchLifecycleSnapshot";
 
 const queuedReservationEventTypes: ReadonlySet<string> = new Set([
   "watch.reservation_attempted",
@@ -40,18 +44,19 @@ interface WatchRefreshState {
   lastRefreshedAt: Date | null;
 }
 
-interface UseWatchCollectionOptions<TWatch extends WatchSnapshot> {
+interface UseWatchCollectionOptions<TWatch extends LegacyWatchSnapshot> {
   authenticated: boolean;
   demo: boolean;
   initialWatches: ReadonlyArray<TWatch>;
   pollIntervalSeconds: number;
   loadWatches: () => Promise<ReadonlyArray<TWatch>>;
+  snapshotOf?: (watch: TWatch) => WatchLifecycleSnapshot;
   onAuthenticationExpired: () => void;
   onProviderAuthenticationTransition: () => void;
   pushNotifications: (notifications: ReadonlyArray<AppNotificationInput>) => void;
 }
 
-export interface WatchCollectionController<TWatch extends WatchSnapshot> {
+export interface WatchCollectionController<TWatch extends LegacyWatchSnapshot> {
   watches: ReadonlyArray<TWatch>;
   commitWatches: Dispatch<SetStateAction<ReadonlyArray<TWatch>>>;
   refreshState: WatchRefreshState;
@@ -71,12 +76,13 @@ function eventType(value: unknown): string | null {
   return typeof value.event_type === "string" ? value.event_type : null;
 }
 
-export function useWatchCollection<TWatch extends WatchSnapshot>({
+export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
   authenticated,
   demo,
   initialWatches,
   pollIntervalSeconds,
   loadWatches,
+  snapshotOf,
   onAuthenticationExpired,
   onProviderAuthenticationTransition,
   pushNotifications,
@@ -87,6 +93,9 @@ export function useWatchCollection<TWatch extends WatchSnapshot>({
     lastRefreshedAt: null,
   });
   const watchesRef = useRef<ReadonlyArray<TWatch>>(watches);
+  const snapshotOfRef = useRef<(watch: TWatch) => WatchLifecycleSnapshot>(
+    snapshotOf ?? mapLegacyWatchLifecycleSnapshot,
+  );
   const pendingLiveReservationEventsRef = useRef<unknown[]>([]);
   const reloadCoordinatorRef = useRef<LiveDataReloadCoordinator | null>(null);
   const lifecycleEpochRef = useRef(0);
@@ -97,6 +106,10 @@ export function useWatchCollection<TWatch extends WatchSnapshot>({
     startedAt: 0,
     stopTimerId: null,
   });
+
+  useEffect(() => {
+    snapshotOfRef.current = snapshotOf ?? mapLegacyWatchLifecycleSnapshot;
+  }, [snapshotOf]);
 
   const commitWatches = useCallback<Dispatch<SetStateAction<ReadonlyArray<TWatch>>>>((updater) => {
     setWatches((current) => {
@@ -129,13 +142,18 @@ export function useWatchCollection<TWatch extends WatchSnapshot>({
         return;
       }
       const previous = watchesRef.current;
-      const transitions = detectSeatFoundTransitions(previous, watchItems);
-      const availabilityLosses = detectSeatAvailabilityLostTransitions(previous, watchItems);
-      const actionTransitions = detectWatchActionTransitions(previous, watchItems);
+      const previousSnapshots = previous.map((watch) => snapshotOfRef.current(watch));
+      const nextSnapshots = watchItems.map((watch) => snapshotOfRef.current(watch));
+      const transitions = detectSeatFoundTransitions(previousSnapshots, nextSnapshots);
+      const availabilityLosses = detectSeatAvailabilityLostTransitions(
+        previousSnapshots,
+        nextSnapshots,
+      );
+      const actionTransitions = detectWatchActionTransitions(previousSnapshots, nextSnapshots);
       const pendingLiveEvents = pendingLiveReservationEventsRef.current;
       pendingLiveReservationEventsRef.current = [];
       const liveReservationNotices = pendingLiveEvents.flatMap((event) => {
-        const notice = buildLiveReservationNotice(event, watchItems);
+        const notice = buildLiveReservationNotice(event, nextSnapshots);
         return notice === null ? [] : [notice];
       });
       const reconciled = reconcileWatchSnapshots(previous, watchItems);
@@ -215,7 +233,10 @@ export function useWatchCollection<TWatch extends WatchSnapshot>({
     const unsubscribe = subscribeToEvents(
       (event) => {
         if (activeLifecycleEpochRef.current !== lifecycleEpoch) return;
-        const liveNotice = buildLiveReservationNotice(event, watchesRef.current);
+        const liveNotice = buildLiveReservationNotice(
+          event,
+          watchesRef.current.map((watch) => snapshotOfRef.current(watch)),
+        );
         if (liveNotice !== null) {
           pushNotifications([liveNotice]);
         } else {

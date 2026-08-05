@@ -235,6 +235,39 @@ describe("module dependency boundaries", () => {
     );
   });
 
+  it("keeps the app watch lifecycle snapshot in one typed feature owner", () => {
+    const declarationPattern = /\bexport\s+interface\s+(WatchLifecycleSnapshot)\b/g;
+    const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
+      [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
+        `${sourcePath(filePath)}:${match[1]}`
+      ))
+    ));
+    const watchSnapshots = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/app/watchSnapshots.ts"),
+      "utf8",
+    );
+    const liveReservationNotice = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/app/liveReservationNotice.ts"),
+      "utf8",
+    );
+
+    expect(declarations).toEqual([
+      "features/app/watchLifecycleSnapshot.ts:WatchLifecycleSnapshot",
+    ]);
+    expect(watchSnapshots).not.toMatch(/watch\.(?:payment_deadline|updated_at)/);
+    expect(watchSnapshots).not.toMatch(
+      /latestReservationAttempt\?:\s*unknown|reservationCandidateContexts\?:\s*unknown|seatFoundObservation\?:\s*unknown/,
+    );
+    expect(watchSnapshots).toContain(
+      "export type { LegacyWatchSnapshot as WatchSnapshot }",
+    );
+    expect(liveReservationNotice).not.toMatch(/isRecord\(watch\./);
+    expect(liveReservationNotice).not.toMatch(/eventInstant\(attempt\?/);
+    expect(edges.map(edgeName)).toContain(
+      "features/app/watchLifecycleSnapshot.ts -> api/watchProjection",
+    );
+  });
+
   it("keeps watch DTO parsing upstream of projection and CRUD", () => {
     const watchEdges = edges
       .filter(({ importer }) => [

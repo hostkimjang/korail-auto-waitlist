@@ -338,6 +338,9 @@
 - [x] UI preference 저장·전역 관측 간격 변경 뒤 idle 활성 작업 재스케줄을 FastAPI 비의존 `ui_preferences/application.py`로 이동하고 HTTP는 관리자 계정 `FOR UPDATE`·transport, application은 provider lease 조회→후보 eager load 활성 작업 잠금→due·cooldown 제외→commit/refresh를 소유하도록 분리. `services.py`는 동일 함수 객체 compatibility export만 유지
 - [x] 스물한 번째 구조 슬라이스 A의 compatibility identity, leased·idle·이미 due·미래 cooldown·후보 상태·후보 없는 KST fallback·legacy split payload·timezone 계약을 포함한 focused pytest 84건, API 전체 pytest 1,073건, Ruff `E/F/I`, format ratchet 60개, 독립 재감사 P0~P3 회귀 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
 - [x] 스물한 번째 구조 슬라이스 A의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] `domain/seatClasses.ts`가 좌석 등급·normalized provenance/action 모델의 canonical owner가 되고 `api/seatClasses.ts`는 외부 `unknown`·URL·TTL·evidence·action fail-closed mapper와 canonical 타입 compatibility re-export만 소유하도록 분리. 시간표 API·열차 결과 UI는 도메인 타입을 직접 import하고 feature→좌석 mapper 타입 의존 재도입을 boundary gate로 차단
+- [x] `api.test.js`의 좌석 정규화 12개 선언·14개 실행 케이스를 strict `seatClassesApi.test.ts`로 이동하고 두 파일의 테스트 선언 합계 54개 및 canonical/compatibility 타입 동일성 보존. 최종 focused Vitest 77건, 전체 80개 파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build, Sites 4건, 기본 E2E 14건과 `git diff --check` 통과
+- [x] 스물한 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -347,7 +350,7 @@
 - [ ] 철도 계정 초기·인증 전이·runtime polling·저장/삭제 요청에 session/request epoch와 runtime latest-wins를 적용하고 mutation 401 인증 만료 전달, provider별 복수 pending 상태를 별도 안전성 슬라이스로 구현
 - [ ] UI preference initial GET·save·logout 교차와 복수 save에 request/session epoch·latest-wins를 적용하고 mutation 401 인증 만료 전달을 별도 안전성 슬라이스로 구현
 - [ ] Settings 화면에서 같은 Settings nav 재선택 시 mount-only 표시 section과 runtime polling active section을 동기화하고, `aria-current`·reduced-motion scroll·URL/history/deep-link·mobile 알림 행동은 각각 제품·접근성 계약을 정한 뒤 별도 슬라이스로 구현
-- [ ] 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 legacy JS/JSX 테스트 전환
+- [ ] 좌석 normalized domain 타입 owner 분리 완료 위에서 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 provenance/action/status 판별 union과 legacy JS/JSX 테스트 전환
 - [x] OfficialHandoff·Auth 조립, App의 페이지 props·등록·logout 경계를 strict `.tsx`로 전환하고 `App.jsx` 제거
 - [ ] 기존 JS/JSX 테스트를 owner별 strict TSX로 전환한 뒤 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증

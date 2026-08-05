@@ -74,6 +74,15 @@ Web Push 상태 갱신과 listener 정리, 저장·활성화·시험·기기 연
 `features/new-wait/useStationCatalog.ts`가 맡으며, TAGO 역 카탈로그를 운영사별 실제 운행이나 좌석
 재고 근거로 승격하지 않습니다.
 
+좌석 정규화 결과의 `SeatClassId`, provenance·action과 `NormalizedSeatClass` 타입은
+`domain/seatClasses.ts`가 소유합니다. `api/seatClasses.ts`는 외부 `unknown` payload의 status·provenance,
+공식 URL allowlist, 사용자 확인 TTL, 등록 evidence와 action을 fail-closed로 검증·정규화하는 mapper만
+소유하며 기존 공개 import를 위해 canonical `NormalizedSeatClass`를 같은 타입으로 다시 export합니다.
+시간표 API와 열차 결과 UI는 도메인 타입을 직접 소비하며 feature가 mapper 모듈을 타입 저장소처럼
+import하지 못하도록 boundary gate가 보호합니다. 현재 normalized 객체가 원본 추가 필드를
+보존하는 `Record<string, unknown>`·raw spread 계약은 유지하며, provenance·action을 더 좁은 판별 union으로
+강화하는 작업은 별도 행동·타입 슬라이스로 다룹니다.
+
 strict `features/settings/NotificationChannelSettings.tsx`는 알림 종류별 표시·편집·시험·활성화와
 Web Push 기기 상태를 소유합니다. 채널별 pending key를 독립적으로 관리해 한 작업의 종료가 다른
 저장·연결 상태를 지우지 않으며, 비밀 입력은 읽기 응답에서 복원하지 않고 성공·취소 때 지웁니다.

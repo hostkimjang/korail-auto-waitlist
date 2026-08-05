@@ -1,6 +1,13 @@
 import { normalizeSeatObservationReason } from "../domain/seatDiagnostics";
+import type {
+  NormalizedSeatAction,
+  NormalizedSeatClass,
+  SeatClassId,
+} from "../domain/seatClasses";
 
-const SEAT_CLASS_IDS = ["standard", "first"] as const;
+export type { NormalizedSeatClass } from "../domain/seatClasses";
+
+const SEAT_CLASS_IDS: readonly SeatClassId[] = ["standard", "first"];
 const SEAT_STATUSES: ReadonlySet<string> = new Set([
   "unavailable",
   "unknown",
@@ -36,24 +43,7 @@ const OBSERVED_SEAT_STATUSES: ReadonlySet<string> = new Set([
 const MAX_USER_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 const REGISTRATION_EVIDENCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
 
-type SeatClassId = (typeof SEAT_CLASS_IDS)[number];
 type UnknownRecord = Record<string, unknown>;
-
-interface SeatAction extends UnknownRecord {
-  kind: string;
-  url: string | null;
-}
-
-export interface NormalizedSeatClass extends UnknownRecord {
-  seat_class: SeatClassId;
-  status: string;
-  fare: number | null;
-  fare_currency: "KRW";
-  provenance: UnknownRecord;
-  registration_evidence_id: string | null;
-  registration_evidence_error: string | null;
-  actions: SeatAction[];
-}
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -159,9 +149,9 @@ function unknownSeatClass(
   };
 }
 
-function normalizedActions(raw: UnknownRecord, provider: unknown): SeatAction[] {
+function normalizedActions(raw: UnknownRecord, provider: unknown): NormalizedSeatAction[] {
   if (!Array.isArray(raw.actions)) return [];
-  return raw.actions.flatMap((value): SeatAction[] => {
+  return raw.actions.flatMap((value): NormalizedSeatAction[] => {
     if (!isRecord(value) || typeof value.kind !== "string") return [];
     if (value.kind.startsWith("official_")) {
       const url = safeOfficialUrl(value.url, provider);

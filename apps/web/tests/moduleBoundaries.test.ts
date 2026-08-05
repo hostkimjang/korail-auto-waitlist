@@ -125,6 +125,17 @@ describe("module dependency boundaries", () => {
     );
   });
 
+  it("keeps normalized seat domain consumers independent from the API mapper", () => {
+    expect(
+      edges
+        .filter(({ importer, imported }) => (
+          importer.startsWith("features/") && imported === "api/seatClasses"
+        ))
+        .map(edgeName)
+        .sort(),
+    ).toEqual([]);
+  });
+
   it("keeps domain and shared/lib independent from React, network, and features", () => {
     const boundarySources = edges.filter(({ importer }) => (
       importer.startsWith("domain/") || importer.startsWith("shared/lib/")

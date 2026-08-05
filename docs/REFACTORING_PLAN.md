@@ -983,6 +983,29 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   같은 작은 helper를 유지해 무관한 정책 이동을 섞지 않았습니다. 남은 API router·schema와
   `services.py` use case, UI preference의 요청 epoch·401 안전성은 후속 슬라이스입니다.
 
+### 2026-08-05 스물한 번째 구조 슬라이스 B
+
+- 좌석 도메인 타입 owner: `SeatClassId`, normalized provenance·action·좌석 등급 모델을
+  `domain/seatClasses.ts`로 이동했습니다. API mapper와 시간표 API, 열차 결과 카드가 같은 타입을
+  직접 공유하되 화면 feature는 API mapper를 타입 저장소로 import하지 않습니다. 기존
+  `api/seatClasses.ts`의 공개 타입 경로는 canonical 타입의 compatibility re-export로 유지했습니다.
+- API 경계 보존: `api/seatClasses.ts`에는 외부 `unknown` 판별, status/provenance 검증, 공식 URL allowlist,
+  사용자 확인 TTL, registration evidence와 action 정규화를 그대로 유지했습니다. normalized 객체의
+  `Record<string, unknown>` 확장과 raw field spread도 바꾸지 않아 기존 추가 필드 보존 계약이 같습니다.
+- strict 테스트 owner: `api.test.js`에 섞여 있던 좌석 정규화 12개 선언·14개 실행 케이스를
+  `seatClassesApi.test.ts`로 이동했습니다. 원본 파일과 새 파일의 테스트 선언 합계 54개를 유지했고,
+  feature→`api/seatClasses` 타입 역의존 재도입을 boundary 테스트로 차단했습니다. canonical과 compatibility
+  타입 동일성도 strict `expectTypeOf` 계약으로 고정했습니다.
+- 확인된 검증: ESLint 오류 0개·고정된 legacy warning 12개, strict typecheck, 최종 focused Vitest 77건,
+  전체 Vitest 80개 파일·571건, production build, Sites 4건, 기본 Playwright E2E 14건과
+  `git diff --check`를 통과했습니다. build의 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: runtime 정규화 로직과 공개 반환값은 바꾸지 않은 타입·테스트 소유권 이동입니다.
+  provenance kind, action kind, seat status의 더 좁은 판별 union과 `api.test.js`의 나머지 42개 선언은
+  후속 strict TypeScript 슬라이스로 남겼습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

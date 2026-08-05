@@ -4,8 +4,8 @@ import {
   awareTimestamp,
   normalizeSeatClasses,
   safeOfficialUrl,
-  type NormalizedSeatClass,
 } from "./seatClasses";
+import type { NormalizedSeatClass } from "../domain/seatClasses";
 
 type UnknownRecord = Record<string, unknown>;
 type WeekdayValue = number | string;

@@ -2,7 +2,7 @@ import { memo, useEffect, useState, type ComponentType } from "react";
 import { ArrowRight } from "@phosphor-icons/react";
 
 import type { Timetable, TimetableSource } from "../../api/timetables";
-import type { NormalizedSeatClass } from "../../api/seatClasses";
+import type { NormalizedSeatClass } from "../../domain/seatClasses";
 import { seatObservationReasonMeta } from "../../domain/seatDiagnostics";
 import { hasObservedSeatEvidence } from "../../domain/seatEvidence";
 import {

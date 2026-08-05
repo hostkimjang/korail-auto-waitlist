@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "aiosqlite>=0.20,<1",
+  "mypy>=1.20,<2",
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.25,<1",
 ]
@@ -43,6 +44,20 @@ packages = ["src/rail_waitlist"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+show_error_codes = true
+files = [
+  "src/rail_waitlist/provider_contracts.py",
+  "src/rail_waitlist/provider_adapters/base.py",
+  "src/rail_waitlist/provider_adapters/execution.py",
+  "src/rail_waitlist/provider_adapters/experimental.py",
+  "src/rail_waitlist/provider_adapters/korail_execution.py",
+  "src/rail_waitlist/provider_adapters/timetable.py",
+  "src/rail_waitlist/provider_registry/application.py",
+]
 
 [tool.ruff]
 target-version = "py312"

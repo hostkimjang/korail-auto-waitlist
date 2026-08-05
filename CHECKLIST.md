@@ -343,6 +343,9 @@
 - [x] 스물한 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] `features.css` 끝의 toast·실시간 알림 center·인증/복구/loading 480행과 `toast-step-spin`·`toast-in`을 selector·선언·상대 순서 그대로 `styles/app-surfaces.css`로 이동하고 전역 import를 `tokens → base → shell → features → app-surfaces → responsive` 여섯 경계로 확장. operations skeleton reduced-motion은 feature owner에 유지
 - [x] 스물한 번째 구조 슬라이스 C의 CSS owner 집중 Vitest 5개 파일·48건, 전체 80개 파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build, Sites 4건, 기본 E2E 14건과 `git diff --check` 통과. CSS·구조 테스트·문서만 변경해 Compose 재배포는 생략
+- [x] test extra의 mypy 1.20.2와 Python 3.12 strict 설정으로 `provider_contracts.py`, provider base·execution·experimental·KORAIL execution·timetable adapter, registry application의 오류 0인 7개 파일만 첫 정적 타입 ratchet으로 고정. suppression 없이 registry Protocol witness를 검사하고 전체 legacy 48개 파일·302오류는 미완료 범위로 명시
+- [x] Makefile·PowerShell `verify-api` 첫 단계에 `uv lock --check`를 두고 마지막에 frozen mypy를 연결해 stale lock의 선행 자동 갱신을 차단. provider focused pytest 30건, API 전체 1,073건, Ruff `E/F/I`, format ratchet 60개, mypy 오류 0, lock check·PowerShell parser·Make recipe 순서·`git diff --check` 통과
+- [x] 스물한 번째 구조 슬라이스 D의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -366,7 +369,7 @@
 - [ ] Mock 전용 node ID partial·same·unknown·name mismatch를 parameterized 회귀로 고정하고 capability note·전체 node/city fixture·정확한 5분 freshness·20분 결제 기한 간격을 직접 검증
 - [x] provider 공통 base·fail-closed·timetable support·TAGO singleton·Official·Mock·운영사 execution·Experimental·registry를 canonical 모듈로 물리 분리하고 `providers.py`를 생산 코드가 의존하지 않는 identity 호환 facade로 축소
 - [ ] provider 물리 분리 완료 위에서 가짜 timetable/station 기본 stub 제거와 capability 교집합·부분 실패 fail-closed를 별도 행동 슬라이스로 검증
-- [ ] API Python Protocol signature drift를 자동 검출할 mypy 또는 pyright 정적 타입 gate의 도입 범위와 legacy 격리 기준 확정
+- [x] API Python Protocol signature drift를 자동 검출하는 strict mypy gate를 오류 0인 provider 경계 7개 파일부터 도입하고 전체 legacy 오류는 파일별 0개 달성 뒤 allowlist를 확장하는 격리 기준 확정
 - [ ] 웹·API의 저위험 수직 슬라이스가 안정된 뒤 KORAIL browser sidecar의 lifecycle·DOM·검색·인증·예약 책임 분리
 - [x] KORAIL Pydoll·SRT 로그인 세션 재사용형 에피소드당 1회 자동 예약 adapter, exact 열차·시각·좌석 등급 판정, 결제 직전 중단, credential version invalidation과 결과 정규화 구현
 - [x] startup prewarm이 활성 `auth_required` 계정도 현재 credential generation으로 재검증하고 성공만 영속 인증 복구·관련 작업 재무장에 반영하며, 실패·차단·동시 credential 교체는 기존 성공 상태를 오염시키지 않는 회귀 계약

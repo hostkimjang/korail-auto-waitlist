@@ -81,6 +81,13 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
   목록에 없는 새 미포맷 파일, 수정됐지만 아직 미포맷인 기존 파일, 이미 포맷돼 불필요해진 목록
   항목은 모두 format ratchet 실패로 처리합니다. 기존 파일을 수정할 때는 목록의 해시를 갱신하지
   않고 해당 파일을 포맷한 뒤 항목을 제거합니다.
+- mypy는 `strict=true`와 Python 3.12로 실행하며, 현재 오류 0인 `provider_contracts.py`,
+  provider base·execution·experimental·KORAIL execution·timetable adapter와 registry application
+  7개 파일을 명시적 ratchet으로 검사합니다. `ignore_missing_imports`, 전역 오류 코드 비활성화,
+  광범위한 `type: ignore`로 통과시키지 않습니다. 새 owner는 오류 0을 만든 뒤 대상 목록에
+  추가하고 전체 legacy package가 이미 strict라고 표현하지 않습니다.
+- API 검증은 첫 단계에서 `uv lock --check`를 실행해 pyproject와 커밋된 lock 불일치를 테스트 전에
+  차단하고, mypy는 `uv run --frozen --extra test mypy`로 같은 lock을 사용합니다.
 - FastAPI route는 인증, 요청·응답 검증, 트랜잭션 진입, application 오류의 HTTP 변환만 담당합니다.
 - Pydantic schema는 transport 계약이고 도메인 객체를 대신하지 않습니다. 외부 provider 응답도 경계에서 검증한 뒤 내부 결과로 변환합니다.
 - application service는 도메인 오류를 반환하거나 발생시키며 `HTTPException`에 의존하지 않습니다.

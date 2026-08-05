@@ -360,6 +360,14 @@ canonical registry와 provider 예외를 직접 import하며 `providers.py`는 �
 다시 export하는 호환 facade 역할만 합니다. module-boundary gate가 production→facade와
 adapter→registry/facade 역의존을 차단합니다.
 
+provider 역할 계약의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
+`provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
+공식 timetable adapter와 registry application의 7개 오류 0 파일만 대상입니다. registry 반환 타입은
+`TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
+됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
+TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로
+0개가 된 뒤 이 목록을 확장합니다.
+
 외부 provider 관측 그룹은 `provider_execution_leases`의 `provider + account_scope` 복합 키로
 직렬화합니다. 획득할 때마다 fencing token을 증가시키고, worker는 공식 호출 직전과 관측 결과
 기록 직전에 현재 소유자·token·만료 시각을 다시 검증합니다. 임대가 만료되거나 다른 worker가

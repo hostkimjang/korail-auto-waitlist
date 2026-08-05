@@ -1024,6 +1024,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 운영 검증 범위: CSS·구조 테스트·문서만 바뀐 슬라이스이므로 저장소 규칙에 따라 Compose 이미지
   재빌드·재생성은 수행하지 않았습니다. 나머지 4,476행 feature CSS의 실제 기능 owner 분리는 후속입니다.
 
+### 2026-08-05 스물한 번째 구조 슬라이스 D
+
+- strict mypy ratchet: test extra에 `mypy>=1.20,<2`를 추가하고 lock의 mypy 1.20.2로 Python 3.12
+  `strict=true`를 실행합니다. 최초 대상은 오류 0인 `provider_contracts.py`, provider base·execution·
+  experimental·KORAIL execution·timetable adapter와 registry application 7개 파일입니다.
+- 범위 원칙: registry의 `TimetableProvider`·`ExecutionProvider` 반환 분기가 concrete adapter의
+  Protocol 구조 적합성을 정적으로 증명합니다. `ignore_missing_imports`, 오류 코드 비활성화,
+  `type: ignore` 같은 suppression은 추가하지 않았습니다. 전체 API strict dry-run은 48개 파일
+  302개 오류이므로 이번 완료 범위는 provider 경계 7개 파일뿐입니다.
+- 재현 가능한 검증: Makefile과 PowerShell `verify-api`가 가장 먼저 `uv lock --check`를 실행해
+  stale lock을 테스트 전에 차단하고, 마지막에 `uv run --frozen --extra test mypy`를 실행합니다.
+  Makefile은 기존 pytest → Ruff `E/F/I` → format ratchet 순서를 유지합니다. mypy는 test extra에만
+  있어 production API·browser Compose 이미지의 설치 dependency를 늘리지 않습니다.
+- 확인된 검증: `uv lock --check`, strict mypy 7개 파일 오류 0, provider focused pytest 30건,
+  API 전체 pytest 1,073건, Ruff `E/F/I`, format ratchet 60개, PowerShell parser와 Make recipe
+  tab·명령 순서, `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은
+  유지됐고 Windows 환경에 `make`가 없어 실제 `make -n` 대신 recipe를 정적으로 검증했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 독립 리뷰: 선행 non-frozen pytest가 stale lock을 갱신한 뒤 마지막 frozen mypy가 통과할 수 있다는
+  P2를 발견해 두 verify 경로의 첫 단계에 lock check를 추가했습니다. 그 밖의 P0/P1/P3 회귀는 없었습니다.
+- 남은 범위: Mock의 넓은 상태·URL 타입, SRT executor 공통 gateway Protocol, TAGO JSON `Any` 경계,
+  timetable support URL 타입을 owner별 오류 0 슬라이스로 고친 뒤 ratchet 목록을 확장합니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |
@@ -1061,9 +1086,11 @@ npm run build
 npm run test:sites
 
 cd ../api
+uv lock --check
 python -m pytest
 uvx --from ruff==0.12.12 ruff check --select E,F,I .
 uv run --extra test python scripts/check_ruff_format_ratchet.py
+uv run --frozen --extra test mypy
 
 cd ../..
 docker compose config --quiet

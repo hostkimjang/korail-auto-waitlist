@@ -38,6 +38,10 @@ function Invoke-ApiVerification {
     }
     Push-Location (Join-Path $PSScriptRoot '..\apps\api')
     try {
+        & uv lock --check
+        if ($LASTEXITCODE -ne 0) {
+            throw "API lock check failed with exit code $LASTEXITCODE"
+        }
         & uv run --extra test pytest
         if ($LASTEXITCODE -ne 0) {
             throw "API pytest failed with exit code $LASTEXITCODE"
@@ -45,6 +49,10 @@ function Invoke-ApiVerification {
         & uvx --from ruff==0.12.12 ruff check .
         if ($LASTEXITCODE -ne 0) {
             throw "API Ruff check failed with exit code $LASTEXITCODE"
+        }
+        & uv run --frozen --extra test mypy
+        if ($LASTEXITCODE -ne 0) {
+            throw "API mypy check failed with exit code $LASTEXITCODE"
         }
     }
     finally {

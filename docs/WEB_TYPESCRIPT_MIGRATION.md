@@ -68,7 +68,10 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `api/watches.ts`로 이동하고 `api.js`에는 동일 함수 객체 compatibility re-export 유지
    - 완료: `domain/watch.ts`가 provider·status·seat class·observation mode 값 타입과 guard를 단일
      소유하고 `api/watchReadDto.ts`가 외부 watch/candidate identity를 `unknown`에서 explicit DTO로 검증.
-     `api/watches.ts`의 기존 타입 path는 compatibility re-export하고 `MappedWatch`·payload·transport는 유지
+     `api/watches.ts`의 기존 타입 path는 compatibility re-export하고 payload·transport는 유지
+   - 완료: 432줄 `api/watchProjection.ts`가 `MappedWatch` 계열 read model·상태/좌석 label·최신 관측·
+     evidence·operational·reservation attempt 투영과 `mapWatch`를 소유. `api/watches.ts`는 729→324줄의
+     create payload/CRUD 경계로 줄이고 기존 타입·함수 path와 exact 함수 identity를 compatibility export
    - 완료: 좌석 재조회는 `api/timetables.ts`, demo runtime gate는 `shared/lib/runtimeConfig.ts`로
      이동하고 모든 production·test caller를 실제 owner import로 전환한 뒤 `api.js` barrel 제거
    - 완료: production graph에서 접근할 수 없던 Browser Companion 패널과 dead snapshot/provider

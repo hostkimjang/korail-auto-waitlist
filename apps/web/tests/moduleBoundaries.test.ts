@@ -128,6 +128,38 @@ describe("module dependency boundaries", () => {
     ]);
   });
 
+  it("keeps watch projection contracts in one application read-model owner", () => {
+    const declarationPattern = /\bexport\s+interface\s+(MappedWatchCandidate|SeatFoundObservation|ReservationCandidateContext|MappedWatch)\b/g;
+    const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
+      [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
+        `${sourcePath(filePath)}:${match[1]}`
+      ))
+    ));
+
+    expect(declarations).toEqual([
+      "api/watchProjection.ts:MappedWatchCandidate",
+      "api/watchProjection.ts:SeatFoundObservation",
+      "api/watchProjection.ts:ReservationCandidateContext",
+      "api/watchProjection.ts:MappedWatch",
+    ]);
+  });
+
+  it("keeps watch DTO parsing upstream of projection and CRUD", () => {
+    const watchEdges = edges
+      .filter(({ importer }) => [
+        "api/watchReadDto.ts",
+        "api/watchProjection.ts",
+        "api/watches.ts",
+      ].includes(importer))
+      .map(edgeName);
+
+    expect(watchEdges).toContain("api/watchProjection.ts -> api/watchReadDto");
+    expect(watchEdges).toContain("api/watches.ts -> api/watchProjection");
+    expect(watchEdges).not.toContain("api/watchReadDto.ts -> api/watchProjection");
+    expect(watchEdges).not.toContain("api/watchProjection.ts -> api/watches");
+    expect(watchEdges).not.toContain("api/watchProjection.ts -> api/client");
+  });
+
   it("does not restore the deleted legacy API barrel", () => {
     expect(existsSync(path.join(SOURCE_DIRECTORY, "api.js"))).toBe(false);
   });

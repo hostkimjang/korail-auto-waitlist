@@ -1454,6 +1454,26 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
   최근 안전한 오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 F
+
+- watch projection owner: 432줄 `api/watchProjection.ts`가 `MappedWatchCandidate`·
+  `SeatFoundObservation`·`ReservationCandidateContext`·`MappedWatch`와 DTO→공용 application read model
+  투영을 소유합니다. 상태·좌석 label, 최신 관측 source/freshness, 등록 evidence, operational·reservation
+  attempt, 후보 우선순위와 공식 URL fail-closed 정책을 본문 변경 없이 이동했습니다.
+- transport·호환 경계: `api/watches.ts`는 729→324줄로 줄고 create payload·멱등 키·CRUD transport만
+  유지합니다. 기존 `api/watches`의 타입과 `mapWatch` export path는 같은 함수 객체를 다시 export해
+  App·NewWait·Home·mutation·fixture 호출자와 Vitest mock 경로를 보존합니다. `MappedWatch`를 Home 전용
+  ViewModel로 내리거나 구조적으로만 호환되던 handoff 타입을 합치는 변경은 후속 단계로 분리했습니다.
+- 의존성·회귀: owner 선언 단일성과 `watchReadDto → watchProjection → watches CRUD` 방향, 역방향·feature
+  의존 부재와 compatibility 함수 identity를 구조 테스트로 고정했습니다. 독립 리뷰는 이동 전후
+  `mapWatch` 본문 동일성과 공개 계약을 확인했고 P0~P3 지적은 없었습니다.
+- 확인된 검증: focused Vitest 6개 파일·59건, 전체 Vitest 81개 파일·579건, ESLint 오류 0개·고정
+  legacy warning 12개, strict typecheck, production build, Sites 4건, 기본 Playwright E2E 14건과
+  `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고만 유지됐습니다.
+- 운영 검증: 같은 작업의 API 코드 슬라이스와 함께 `experimental-rail` 전체 이미지를 build한 뒤 volume
+  삭제 없이 force-recreate했습니다. migration·log-init exit 0, 장기 서비스 11개 healthy, API
+  health·ready와 proxy health 200, 재생성 뒤 최근 안전한 오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

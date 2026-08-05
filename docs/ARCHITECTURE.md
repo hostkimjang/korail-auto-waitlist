@@ -188,11 +188,14 @@ cooldown 상태만 노출합니다.
 웹 watch의 provider·13개 status·seat class·observation mode 값 계약은 `domain/watch.ts`가 단일
 소유합니다. 외부 read payload의 필수 identity·실제 달력 날짜와 후보 identity·timezone-aware 시각·
 priority는 `api/watchReadDto.ts`가 `unknown`에서 명시적 필드로 검증하며 임의 server key를 버립니다.
-`api/watches.ts`는 기존 watch 생성 payload·멱등 키·CRUD endpoint와 DTO→`MappedWatch` ViewModel 투영을
-계속 소유합니다. 최신 좌석 관측은 source와 `observed_at < fresh_until` 계약이 모두 확인될 때만 공식
-또는 mock 관측으로 투영합니다. 후보의 evidence·latest observation/attempt·operational nested 값은 이번
-checkpoint에서 `unknown`으로 보존한 뒤 기존 projector가 fail-closed로 해석하며, normalized snapshot과
-feature ViewModel을 더 분리하는 작업은 후속 슬라이스입니다. `features/app/useWatchCollection.ts`는
+432줄 `api/watchProjection.ts`가 DTO→공용 `MappedWatch` read model과 상태·좌석 표시 label, 최신 관측·
+evidence·operational·reservation attempt 투영을 소유합니다. 최신 좌석 관측은 source와
+`observed_at < fresh_until` 계약이 모두 확인될 때만 공식 또는 mock 관측으로 투영합니다. 후보의
+evidence·latest observation/attempt·operational nested 값은 `unknown`으로 받은 뒤 각 canonical
+projector가 fail-closed로 해석합니다. `api/watches.ts`는 watch 생성 payload·멱등 키와 CRUD transport만
+소유하고 324줄로 줄었으며, 기존 `MappedWatch` 타입과 `mapWatch` 함수 경로를 같은 identity로 다시
+export합니다. normalized domain snapshot과 feature별 ViewModel 분리는 후속 슬라이스입니다.
+`features/app/useWatchCollection.ts`는
 canonical REST snapshot, SSE burst
 병합, 예약정책 변경과 교차한 stale GET 차단, 인증·구독 lifecycle 세대 격리와 상태 전이 알림을
 소유합니다. pause·resume·cancel·delete와 예약정책 변경은 strict

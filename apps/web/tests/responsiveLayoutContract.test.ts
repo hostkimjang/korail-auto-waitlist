@@ -2,25 +2,28 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const styleFileNames = [
-  "tokens.css",
-  "base.css",
-  "shell.css",
-  "features.css",
-  "operations.css",
-  "app-surfaces.css",
-  "responsive.css",
+const styleImports = [
+  "./styles/tokens.css",
+  "./styles/base.css",
+  "./styles/shell.css",
+  "./styles/features.css",
+  "./styles/operations.css",
+  "./styles/app-surfaces.css",
+  "./features/new-wait/officialSeatConfirmation.css",
+  "./styles/responsive.css",
 ] as const;
-const styleDirectory = resolve(process.cwd(), "src/styles");
-const readStyleFile = (fileName: (typeof styleFileNames)[number]): string =>
-  readFileSync(resolve(styleDirectory, fileName), "utf8");
-const tokensStyles = readStyleFile("tokens.css");
-const baseStyles = readStyleFile("base.css");
-const shellStyles = readStyleFile("shell.css");
-const featureStyles = readStyleFile("features.css");
-const operationsStyles = readStyleFile("operations.css");
-const appSurfaceStyles = readStyleFile("app-surfaces.css");
-const responsiveStyles = readStyleFile("responsive.css");
+const readStyleFile = (styleImport: (typeof styleImports)[number]): string =>
+  readFileSync(resolve(process.cwd(), "src", styleImport.slice(2)), "utf8");
+const tokensStyles = readStyleFile("./styles/tokens.css");
+const baseStyles = readStyleFile("./styles/base.css");
+const shellStyles = readStyleFile("./styles/shell.css");
+const featureStyles = readStyleFile("./styles/features.css");
+const operationsStyles = readStyleFile("./styles/operations.css");
+const appSurfaceStyles = readStyleFile("./styles/app-surfaces.css");
+const officialSeatConfirmationStyles = readStyleFile(
+  "./features/new-wait/officialSeatConfirmation.css",
+);
+const responsiveStyles = readStyleFile("./styles/responsive.css");
 const styles = [
   tokensStyles,
   baseStyles,
@@ -28,6 +31,7 @@ const styles = [
   featureStyles,
   operationsStyles,
   appSurfaceStyles,
+  officialSeatConfirmationStyles,
   responsiveStyles,
 ].join("");
 
@@ -87,16 +91,16 @@ function extractCssBlock(source: string, header: string, fromIndex = 0): CssBloc
 }
 
 describe("global CSS structure", () => {
-  it("loads the seven style boundaries in their cascade order", () => {
+  it("loads the eight style boundaries in their cascade order", () => {
     const entryStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
-    const expectedImports = `${styleFileNames
-      .map((fileName) => `@import "./styles/${fileName}";`)
+    const expectedImports = `${styleImports
+      .map((styleImport) => `@import "${styleImport}";`)
       .join("\n")}\n`;
 
     expect(entryStyles).toBe(expectedImports);
   });
 
-  it("keeps tokens, base, shell, feature, operations, app surface, and responsive rules in their owners", () => {
+  it("keeps global and official confirmation rules in their owners", () => {
     expect(tokensStyles.trimStart()).toMatch(/^:root\s*\{/);
     expect(tokensStyles).toContain("--shadow:");
 
@@ -110,6 +114,7 @@ describe("global CSS structure", () => {
     expect(featureStyles).toContain("container-name: train-results");
     expect(extractCssBlock(featureStyles, "@container train-results (min-width: 920px)").body)
       .toContain(".train-result-card");
+    expect(featureStyles).not.toContain(".official-confirmation-");
     expect(featureStyles.trimEnd()).toMatch(/\.system-grid strong\s*\{[\s\S]*color:\s*#17776f;[\s\S]*\}$/);
 
     expect(operationsStyles.trimStart()).toMatch(/^\.operations-dashboard\s*\{/);
@@ -132,7 +137,23 @@ describe("global CSS structure", () => {
     expect(toastIn.body).toContain("from { opacity: 0; transform: translateY(10px); }");
     expect(appSurfaceStyles.slice(toastIn.end).trim()).toBe("");
 
+    expect(officialSeatConfirmationStyles.trimStart())
+      .toMatch(/^\.official-confirmation-trigger\s*\{/);
+    expect(officialSeatConfirmationStyles).toContain(".official-confirmation-layer");
+    const mobileConfirmation = extractCssBlock(
+      officialSeatConfirmationStyles,
+      "@media (max-width: 760px)",
+    );
+    expect(mobileConfirmation.body).toContain(".official-confirmation-actions");
+    const narrowConfirmation = extractCssBlock(
+      officialSeatConfirmationStyles,
+      "@media (max-width: 340px)",
+    );
+    expect(narrowConfirmation.body).toContain("grid-template-columns: 1fr");
+    expect(officialSeatConfirmationStyles.slice(narrowConfirmation.end).trim()).toBe("");
+
     expect(responsiveStyles.trimStart()).toMatch(/^@media \(max-width: 980px\)/);
+    expect(responsiveStyles).not.toContain(".official-confirmation-");
     const reducedMotion = extractCssBlock(responsiveStyles, "@media (prefers-reduced-motion: reduce)");
     expect(reducedMotion.body).toContain("animation-duration: 0.01ms !important");
     expect(responsiveStyles.slice(reducedMotion.end).trim()).toBe("");

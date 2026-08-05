@@ -1342,6 +1342,26 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
   최근 안전한 오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 A
+
+- 단일 CSS owner: `features.css`의 trigger 18줄·dialog 174줄과 `responsive.css`의 760px 57줄·340px
+  9줄을 값·순서 변경 없이 263줄 `features/new-wait/officialSeatConfirmation.css`로 이동했습니다.
+  `features.css`는 4,029→3,837줄, `responsive.css`는 1,384→1,318줄로 줄었습니다.
+- 소비·공용 경계: `official-confirmation-*` 14개 class는 `OfficialSeatConfirmation.tsx`만 소비합니다.
+  `.copy-status`, `.provider-chip`, `.icon-button`·`.button` primitive는 각각 기존 surface/token/shell
+  owner에 남겼습니다. 이 컴포넌트는 현재 production graph에 조립되지 않은 dormant feature이므로
+  실제 사용자 화면에서 dialog가 검증됐다고 표현하지 않습니다.
+- cascade 계약: 전역 import를 `tokens → base → shell → features → operations → app-surfaces →
+  officialSeatConfirmation → responsive` 여덟 경계로 확장했습니다. 구조 테스트가 새 owner의 시작,
+  760px/340px media, legacy owner 잔존 0과 exact import order를 고정합니다. HEAD 네 원본 구간과 새
+  owner의 행 단위 비교는 263/263 일치했습니다.
+- 확인된 검증: owner·CSS 구조 focused Vitest 2개 파일·10건, 전체 Vitest 79개 파일·571건,
+  ESLint 오류 0개·고정 legacy warning 12개, strict typecheck, production build, Sites 4건, 기본
+  Playwright E2E 14건과 `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고만 유지됐습니다.
+- 운영 검증 범위: CSS·구조 테스트·문서만 변경해 Compose 재배포는 생략했습니다. 기본 E2E는 전역
+  cascade와 기존 1,440px·320px·720px reflow를 확인했으며 dormant dialog 자체의 geometry를 직접 열어
+  검증한 것은 아닙니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

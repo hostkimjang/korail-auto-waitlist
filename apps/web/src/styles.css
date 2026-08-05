@@ -4,4 +4,5 @@
 @import "./styles/features.css";
 @import "./styles/operations.css";
 @import "./styles/app-surfaces.css";
+@import "./features/new-wait/officialSeatConfirmation.css";
 @import "./styles/responsive.css";

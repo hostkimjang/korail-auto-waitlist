@@ -383,6 +383,9 @@
 - [x] 98줄 `watch_management/transition_policy.py`에 no-op/rejected/allowed 판별 union, 13×13 상태표 결정, next-check preserve/clear/SCHEDULED 재무장과 transition identity를 분리. replay 선행·provider 지연 조회·status/UTC/cooldown 순서·reason·history→idempotency→status outbox→알림·public facade/UoW를 회귀 테스트로 고정
 - [x] transition policy owner의 runtime/transport/DB·async/clock/transaction 역의존을 차단하고 strict mypy ratchet 12→13개 파일 확장. 인접 pytest 406건·API 전체 1,481건·Ruff `E/F/I`·format ratchet 60개·mypy 오류 0·lock check·독립 리뷰 P0~P3 없음·`git diff --check` 통과
 - [x] 스물네 번째 구조 슬라이스 D의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] `OfficialSeatConfirmation` 단일 소비 selector 14개의 기본 192줄과 760px/340px 반응형 66줄을 값·순서 변경 없이 263줄 `features/new-wait/officialSeatConfirmation.css`로 이동. `.copy-status`·`.provider-chip`·button primitive는 기존 공용 owner에 유지하고 `features.css` 4,029→3,837줄·`responsive.css` 1,384→1,318줄로 축소
+- [x] CSS import를 여덟 경계로 확장하고 새 owner 시작/media·legacy owner 잔존 0을 구조 테스트로 고정하며 원본 네 구간과 새 owner의 263/263 행 동등성을 별도 비교로 확인. focused 2파일 10건·전체 Vitest 79파일 571건·ESLint 오류 0/legacy warning 12·strict typecheck·build·Sites 4건·기본 E2E 14건·`git diff --check` 통과
+- [x] 스물다섯 번째 구조 슬라이스 A는 CSS/구조/문서만 변경해 Compose 재배포를 생략. `OfficialSeatConfirmation`은 현재 production graph 미조립이므로 기본 E2E가 전역 cascade·기존 reflow를 검증한 범위와 dormant dialog 자체 미검증을 구분해 기록
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

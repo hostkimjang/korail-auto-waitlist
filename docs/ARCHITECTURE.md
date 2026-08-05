@@ -55,13 +55,15 @@ stream인 `/events`는 알림 채널 CRUD와 수명주기가 다르므로 `event
 소유합니다. 중앙 `api.py`는 제거됐으며 아래 기능 router를 `main.py`가 명시적으로 조립합니다. 공개
 endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. 웹 진입 조립은 strict
 `App.tsx`로 전환됐고, provider 물리 경계와 UI preference 저장 application도 분리됐습니다. API
-`services.py`의 나머지 use case, `worker.py`의 runtime 조립 정리와 잔여 JS/JSX 테스트의 추가 분리는
-계속 남아 있습니다.
+`services.py`의 나머지 use case, `worker.py`의 runtime 조립 정리와 웹 DTO·도메인·ViewModel의 추가
+분리는 계속 남아 있습니다. Vitest가 탐색하는 legacy JS/JSX 테스트와 `allowJs`는 제거됐습니다.
 
 웹 전역 CSS 진입점 `styles.css`는 일반 규칙을 직접 소유하지 않고 `tokens -> base -> shell ->
-features -> operations -> app-surfaces -> responsive` 순서의 일곱 경계를 import합니다. 초기 다섯 경계
+features -> operations -> app-surfaces -> features/new-wait/officialSeatConfirmation -> responsive` 순서의
+여덟 경계를 import합니다. 초기 다섯 경계
 구조 분리는 기존 6,648줄의 selector·규칙·media/container query·keyframes 순서를 바꾸지 않은
-기계적 이동이었습니다.
+기계적 이동이었습니다. `OfficialSeatConfirmation`의 trigger·dialog·760px/340px 규칙은 단일 컴포넌트
+owner에 함께 두며 `.copy-status`, `.provider-chip`, button primitive는 기존 공용 owner에 남깁니다.
 후속 분리에서 `features.css` 끝의 toast·실시간 알림 surface·인증/loading 480행을 selector·선언·상대
 순서 그대로 `app-surfaces.css`로 이동했습니다. `toast-step-spin`과 `toast-in`도 사용하는 surface와 함께
 이동했습니다. 이어 settings의 운영 상태 대시보드 전용 tail 447줄과 `operations-shimmer`·reduced-motion

@@ -152,6 +152,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      responsive spec을 기본 `test:e2e`/`verify`에 연결
    - 완료: settings 운영 상태 대시보드 전용 `.operations-dashboard`부터 EOF 447줄을
      `styles/operations.css`로 이동하고 `operations-shimmer`·reduced-motion·cascade 순서를 보존
+   - 완료: dormant `OfficialSeatConfirmation` 단일 소비 selector 14개의 기본 192줄과 760px/340px
+     반응형 66줄을 `features/new-wait/officialSeatConfirmation.css`에 함께 이동. 공용 `.copy-status`·
+     `.provider-chip`·button primitive는 기존 owner에 남기고 여덟 import 경계와 원본 263행 동등성을 고정
    - 남음: `features.css`를 실제 기능 소유 경계로 더 나누고 중복 selector 정리는 별도 동작 변경
      슬라이스에서 수행
    - 완료: 모든 소스·Vitest 테스트 전환 후 `allowJs` 제거, Vitest JS/JSX include 제거. 배포 경계의

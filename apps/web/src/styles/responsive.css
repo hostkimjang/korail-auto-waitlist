@@ -1155,63 +1155,6 @@
     align-self: start;
   }
 
-  .official-confirmation-trigger {
-    width: 44px;
-    padding-inline: 5px;
-    overflow: hidden;
-    color: transparent;
-    white-space: nowrap;
-  }
-
-  .official-confirmation-trigger::before {
-    content: "입력";
-    color: #08766f;
-  }
-
-  .official-confirmation-layer {
-    place-items: end stretch;
-    padding: 0;
-  }
-
-  .official-confirmation-panel {
-    width: 100%;
-    max-height: calc(100dvh - 24px);
-    padding: 14px 18px max(20px, env(safe-area-inset-bottom));
-    border-right: 0;
-    border-bottom: 0;
-    border-left: 0;
-    border-radius: 20px 20px 0 0;
-    box-shadow: 0 -12px 45px rgba(11, 35, 69, 0.24);
-  }
-
-  .official-confirmation-header {
-    margin-top: 8px;
-  }
-
-  .official-confirmation-summary {
-    grid-template-columns: 1fr;
-    gap: 6px;
-    margin-top: 16px;
-  }
-
-  .official-confirmation-summary > div {
-    padding-block: 9px;
-  }
-
-  .official-confirmation-fields {
-    grid-template-columns: 1fr;
-  }
-
-  .official-confirmation-actions {
-    position: sticky;
-    bottom: -1px;
-    margin: 16px -18px 0;
-    padding: 12px 18px max(14px, env(safe-area-inset-bottom));
-    background: var(--surface);
-    border-top: 1px solid var(--line);
-    box-shadow: 0 -10px 24px rgba(11, 35, 69, 0.08);
-  }
-
   .step-three-date-selector {
     grid-template-columns: 1fr;
     padding: 10px;
@@ -1363,15 +1306,6 @@
   /* Keep each action readable and comfortably tappable on a 320px device. */
   .seat-class-actions { grid-template-columns: 1fr; }
 
-  .official-confirmation-panel {
-    padding-inline: 14px;
-  }
-
-  .official-confirmation-actions {
-    grid-template-columns: 1fr;
-    margin-inline: -14px;
-    padding-inline: 14px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

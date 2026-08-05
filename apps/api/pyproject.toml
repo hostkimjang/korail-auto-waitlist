@@ -71,6 +71,7 @@ files = [
   "src/rail_waitlist/korail_sidecar/runtime.py",
   "src/rail_waitlist/korail_sidecar/http.py",
   "src/rail_waitlist/korail_pydoll_browser.py",
+  "src/rail_waitlist/korail_pydoll_auth_actor.py",
   "src/rail_waitlist/korail_pydoll_confirmation_reader.py",
   "src/rail_waitlist/korail_pydoll_contracts.py",
   "src/rail_waitlist/korail_pydoll_http_replay.py",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import ipaddress
 import logging
 import os
@@ -33,6 +32,26 @@ from .korail_http_replay import (
     KorailHttpReplayClient,
     KorailHttpReplayPlan,
     build_http_replay_plan,
+)
+from .korail_pydoll_auth_actor import (
+    ActivePydollAuthenticationSession as _ActivePydollSession,
+)
+from .korail_pydoll_auth_actor import (
+    KorailCredentialInput as AuthKorailCredentialInput,
+)
+from .korail_pydoll_auth_actor import (
+    KorailLoginMethod as AuthKorailLoginMethod,
+)
+from .korail_pydoll_auth_actor import (
+    KorailSessionActorSnapshot as AuthKorailSessionActorSnapshot,
+)
+from .korail_pydoll_auth_actor import (
+    KorailSessionActorState as AuthKorailSessionActorState,
+)
+from .korail_pydoll_auth_actor import (
+    PydollAuthenticationSessionActor,
+    PydollAuthenticationSessionLease,
+    credential_fingerprint,
 )
 from .korail_pydoll_confirmation_reader import (
     _parse_korail_payment_deadline,
@@ -77,6 +96,13 @@ _PROTECTION_SURFACE_SELECTOR = (
 _KORAIL_RESERVATION_LIST_URL = "https://www.korail.com/ticket/reservation/list"
 logger = logging.getLogger(__name__)
 
+_PydollSessionLease = PydollAuthenticationSessionLease
+_credential_fingerprint = credential_fingerprint
+KorailCredentialInput = AuthKorailCredentialInput
+KorailLoginMethod = AuthKorailLoginMethod
+KorailSessionActorSnapshot = AuthKorailSessionActorSnapshot
+KorailSessionActorState = AuthKorailSessionActorState
+
 
 class KorailReservationSeatClass(StrEnum):
     GENERAL = "general"
@@ -87,30 +113,6 @@ class KorailReservationSeatClass(StrEnum):
         return "일반실" if self is self.GENERAL else "특실"
 
 
-class KorailLoginMethod(StrEnum):
-    MEMBERSHIP_NUMBER = "membership_number"
-    EMAIL = "email"
-    PHONE = "phone"
-
-    @property
-    def tab_selector(self) -> str:
-        return {
-            self.MEMBERSHIP_NUMBER: "button#memberNo[type='button']",
-            self.EMAIL: "button#email[type='button']",
-            self.PHONE: "button#phone[type='button']",
-        }[self]
-
-    @property
-    def identity_selector(self) -> str:
-        return {
-            self.MEMBERSHIP_NUMBER: (
-                "input#id[name='id'][type='text'][title='회원번호'][maxlength='10']"
-            ),
-            self.EMAIL: "input#id[name='id'][type='email'][title='이메일 주소']",
-            self.PHONE: ("input#id[name='id'][type='text'][title='휴대폰 번호'][maxlength='11']"),
-        }[self]
-
-
 class KorailReservationOutcome(StrEnum):
     PAYMENT_REQUIRED = "payment_required"
     AUTH_REQUIRED = "auth_required"
@@ -119,49 +121,6 @@ class KorailReservationOutcome(StrEnum):
     PROVIDER_BLOCKED = "provider_blocked"
     UNAVAILABLE = "unavailable"
     FAILED = "failed"
-
-
-class KorailSessionActorState(StrEnum):
-    COLD = "cold"
-    AUTHENTICATING = "authenticating"
-    READY = "ready"
-    STALE = "stale"
-    AUTH_REQUIRED = "auth_required"
-    BLOCKED = "blocked"
-
-
-@dataclass(frozen=True)
-class KorailSessionActorSnapshot:
-    state: KorailSessionActorState
-    credential_generation: str | None
-    created_at_monotonic: float | None
-    last_verified_at_monotonic: float | None
-    last_used_at_monotonic: float | None
-    local_reuse_until_monotonic: float | None
-    locally_reusable: bool
-
-
-@dataclass(frozen=True, repr=False)
-class KorailCredentialInput:
-    login_id: str = field(repr=False)
-    password: str = field(repr=False)
-    version: str
-    login_method: KorailLoginMethod = KorailLoginMethod.MEMBERSHIP_NUMBER
-
-
-def _credential_fingerprint(credential: KorailCredentialInput) -> bytes:
-    """Return a domain-separated, unambiguous digest without retaining credential text."""
-
-    digest = hashlib.sha256(b"rail-waitlist:korail-pydoll-credential:v1\0")
-    for value in (
-        credential.login_method.value,
-        credential.login_id,
-        credential.password,
-    ):
-        encoded = value.encode("utf-8")
-        digest.update(len(encoded).to_bytes(8, "big"))
-        digest.update(encoded)
-    return digest.digest()
 
 
 @dataclass(frozen=True)
@@ -296,29 +255,6 @@ def _default_pydoll_session_factory(
     return _PydollSessionContext(_PydollSession(page_url, timeout_ms, headless))
 
 
-@dataclass
-class _ActivePydollSession:
-    context: PydollSessionContext
-    session: PydollBrowserSession
-    created_at: float
-    last_used_at: float
-    searches_started: int = 0
-    credential_version: str | None = None
-    authenticated_credential_version: str | None = None
-    authenticated_credential_fingerprint: bytes | None = field(default=None, repr=False)
-
-
-@dataclass(frozen=True)
-class _PydollSessionLease:
-    context: PydollSessionContext
-    session: PydollBrowserSession
-    created_at: float
-    searches_started: int
-    persistent: bool
-    reused: bool
-    authenticated: bool
-
-
 async def _finish_owned_cleanup(cleanup: Awaitable[object]) -> None:
     """Finish Chromium cleanup even when the owning task is cancelled repeatedly."""
     pending_cancellation: asyncio.CancelledError | None = None
@@ -396,13 +332,18 @@ class PydollKorailBrowserClient:
         self._session_reuse_ttl_seconds = session_reuse_ttl_seconds
         self._session_reuse_max_searches = session_reuse_max_searches
         self._monotonic = monotonic
-        self._session_lock = asyncio.Lock()
-        self._active_session: _ActivePydollSession | None = None
-        self._session_actor_state = KorailSessionActorState.COLD
-        self._session_actor_generation: str | None = None
-        self._session_actor_created_at: float | None = None
-        self._session_actor_last_verified_at: float | None = None
-        self._session_actor_last_used_at: float | None = None
+        self._auth_actor = PydollAuthenticationSessionActor[PydollBrowserSession](
+            page_url=self.page_url,
+            timeout_ms=self.timeout_ms,
+            headless=self.headless,
+            session_factory=self._session_factory,
+            session_reuse_ttl_seconds=self._session_reuse_ttl_seconds,
+            session_reuse_max_searches=self._session_reuse_max_searches,
+            monotonic=self._monotonic,
+            cleanup=_finish_owned_cleanup,
+            response_safety_guard=self._assert_response_allowed,
+            fingerprint=_credential_fingerprint,
+        )
         # Capture module-level compatibility seams at construction time before handing
         # read-only lifecycle ownership to the search actor.
         self._search_actor = PydollReadOnlySearchActor(
@@ -420,6 +361,63 @@ class PydollKorailBrowserClient:
             http_replay_route_cache_size=_HTTP_REPLAY_ROUTE_CACHE_SIZE,
             event_logger=logger,
         )
+
+    @property
+    def _session_lock(self) -> asyncio.Lock:
+        """Compatibility view of the authentication actor serialization boundary."""
+
+        return self._auth_actor.lock
+
+    @property
+    def _active_session(self) -> _ActivePydollSession[PydollBrowserSession] | None:
+        return self._auth_actor.active_session
+
+    @_active_session.setter
+    def _active_session(
+        self,
+        value: _ActivePydollSession[PydollBrowserSession] | None,
+    ) -> None:
+        self._auth_actor.active_session = value
+
+    @property
+    def _session_actor_state(self) -> KorailSessionActorState:
+        return self._auth_actor.state
+
+    @_session_actor_state.setter
+    def _session_actor_state(self, value: KorailSessionActorState) -> None:
+        self._auth_actor.state = value
+
+    @property
+    def _session_actor_generation(self) -> str | None:
+        return self._auth_actor.generation
+
+    @_session_actor_generation.setter
+    def _session_actor_generation(self, value: str | None) -> None:
+        self._auth_actor.generation = value
+
+    @property
+    def _session_actor_created_at(self) -> float | None:
+        return self._auth_actor.created_at
+
+    @_session_actor_created_at.setter
+    def _session_actor_created_at(self, value: float | None) -> None:
+        self._auth_actor.created_at = value
+
+    @property
+    def _session_actor_last_verified_at(self) -> float | None:
+        return self._auth_actor.last_verified_at
+
+    @_session_actor_last_verified_at.setter
+    def _session_actor_last_verified_at(self, value: float | None) -> None:
+        self._auth_actor.last_verified_at = value
+
+    @property
+    def _session_actor_last_used_at(self) -> float | None:
+        return self._auth_actor.last_used_at
+
+    @_session_actor_last_used_at.setter
+    def _session_actor_last_used_at(self, value: float | None) -> None:
+        self._auth_actor.last_used_at = value
 
     def _validate_page_url(
         self,
@@ -469,22 +467,9 @@ class PydollKorailBrowserClient:
             # Detached timetable replay belongs to the read-only search actor.
             # Reservation never consumes or retires it and therefore cannot wait for
             # an in-flight timetable search before acting on the authenticated session.
-            active = self._active_session
-            credential_fingerprint = _credential_fingerprint(request.credential)
-            if active is not None and (
-                (
-                    active.credential_version is not None
-                    and active.credential_version != request.credential.version
-                )
-                or (
-                    active.authenticated_credential_version is not None
-                    and active.authenticated_credential_fingerprint != credential_fingerprint
-                )
-            ):
-                self._session_actor_state = KorailSessionActorState.STALE
-                await self._discard_active_session()
+            await self._auth_actor.discard_if_credential_changed(request.credential)
 
-            lease: _PydollSessionLease | None = None
+            lease: _PydollSessionLease[PydollBrowserSession] | None = None
             stage = "browser_launch"
             seat_clicked = False
             reservation_clicked = False
@@ -541,20 +526,17 @@ class PydollKorailBrowserClient:
                     KorailReservationOutcome.AUTH_REQUIRED,
                     KorailReservationOutcome.PROVIDER_BLOCKED,
                 }:
-                    await self._discard_active_session()
-                    self._session_actor_state = (
+                    await self._auth_actor.discard_with_state(
                         KorailSessionActorState.AUTH_REQUIRED
                         if result.outcome is KorailReservationOutcome.AUTH_REQUIRED
-                        else KorailSessionActorState.BLOCKED
+                        else KorailSessionActorState.BLOCKED,
                     )
                 return replace(result, session_ready_at=session_ready_at)
             except asyncio.CancelledError:
-                await self._discard_active_session()
-                self._session_actor_state = KorailSessionActorState.STALE
+                await self._auth_actor.discard_with_state(KorailSessionActorState.STALE)
                 raise
             except (BrowserProtectionDetected, BrowserRateLimited):
-                await self._discard_active_session()
-                self._session_actor_state = KorailSessionActorState.BLOCKED
+                await self._auth_actor.discard_with_state(KorailSessionActorState.BLOCKED)
                 return KorailReservationResult(
                     outcome=KorailReservationOutcome.PROVIDER_BLOCKED,
                     reason="provider_access_restricted",
@@ -599,45 +581,7 @@ class PydollKorailBrowserClient:
 
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
         """Authenticate once without submitting a timetable search or reservation."""
-
-        async with self._session_lock:
-            # Account editing must prove the newly supplied credential. A fresh
-            # context prevents an already-authenticated reusable session from
-            # accepting a different ID/password merely because logout is visible.
-            if self._active_session is not None:
-                self._session_actor_state = KorailSessionActorState.STALE
-            await self._discard_active_session()
-
-            lease: _PydollSessionLease | None = None
-            stage = "browser_launch"
-            try:
-                lease = await self._acquire_session(credential_version=credential.version)
-                session = lease.session
-                stage = "load_page"
-                self._assert_response_allowed(await session.open(), stage)
-                stage = "authenticate"
-                return await self._ensure_authenticated_session(session, credential)
-            except asyncio.CancelledError:
-                await self._discard_active_session()
-                self._session_actor_state = KorailSessionActorState.STALE
-                raise
-            except (BrowserProtectionDetected, BrowserRateLimited):
-                await self._discard_active_session()
-                self._session_actor_state = KorailSessionActorState.BLOCKED
-                raise
-            except BrowserSourceUnavailable as error:
-                await self._discard_active_session()
-                self._session_actor_state = KorailSessionActorState.STALE
-                if error.stage == "unspecified":
-                    raise BrowserSourceUnavailable(stage) from error
-                raise
-            except Exception as error:
-                await self._discard_active_session()
-                self._session_actor_state = KorailSessionActorState.STALE
-                raise BrowserSourceUnavailable(stage) from error
-            finally:
-                if lease is not None and not lease.persistent:
-                    await lease.context.__aexit__(None, None, None)
+        return await self._auth_actor.verify_credentials(credential)
 
     async def read_reservation_detail(
         self,
@@ -668,52 +612,11 @@ class PydollKorailBrowserClient:
 
     async def prewarm_credentials(self, credential: KorailCredentialInput) -> bool:
         """Create or reuse a locally valid authenticated session without booking work."""
-
-        async with self._session_lock:
-            active = self._active_session
-            fingerprint = _credential_fingerprint(credential)
-            now = self._monotonic()
-            if (
-                active is not None
-                and active.authenticated_credential_version == credential.version
-                and active.authenticated_credential_fingerprint == fingerprint
-                and now - active.last_used_at < self._session_reuse_ttl_seconds
-                and active.searches_started < self._session_reuse_max_searches
-                and self._session_actor_state is KorailSessionActorState.READY
-            ):
-                active.last_used_at = now
-                self._session_actor_last_used_at = now
-                return True
-
-        return await self.verify_credentials(credential)
+        return await self._auth_actor.prewarm_credentials(credential)
 
     def session_snapshot(self) -> KorailSessionActorSnapshot:
         """Return non-secret process-local authentication actor telemetry."""
-
-        now = self._monotonic()
-        active = self._active_session
-        state = self._session_actor_state
-        local_reuse_until = None
-        locally_reusable = False
-        if active is not None and active.authenticated_credential_version is not None:
-            local_reuse_until = active.last_used_at + self._session_reuse_ttl_seconds
-            locally_reusable = (
-                self._session_reuse_enabled
-                and now < local_reuse_until
-                and active.searches_started < self._session_reuse_max_searches
-                and state is KorailSessionActorState.READY
-            )
-            if state is KorailSessionActorState.READY and not locally_reusable:
-                state = KorailSessionActorState.STALE
-        return KorailSessionActorSnapshot(
-            state=state,
-            credential_generation=self._session_actor_generation,
-            created_at_monotonic=self._session_actor_created_at,
-            last_verified_at_monotonic=self._session_actor_last_verified_at,
-            last_used_at_monotonic=self._session_actor_last_used_at,
-            local_reuse_until_monotonic=local_reuse_until,
-            locally_reusable=locally_reusable,
-        )
+        return self._auth_actor.snapshot()
 
     async def close(self) -> None:
         """Close the bounded in-memory browser sessions owned by this client."""
@@ -723,8 +626,7 @@ class PydollKorailBrowserClient:
         # other actor's lock, so shutdown cannot form a lock-order cycle.
         async with self._session_lock:
             await self._search_actor.close()
-            await self._discard_active_session()
-            self._session_actor_state = KorailSessionActorState.COLD
+            await self._auth_actor.close_locked()
 
     @property
     def _active_http_replays(self) -> Mapping[tuple[str, str], object]:
@@ -742,128 +644,22 @@ class PydollKorailBrowserClient:
         self,
         *,
         credential_version: str | None = None,
-    ) -> _PydollSessionLease:
-        if not self._session_reuse_enabled:
-            created_at = self._monotonic()
-            context = self._session_factory(self.page_url, self.timeout_ms, self.headless)
-            session = await context.__aenter__()
-            return _PydollSessionLease(
-                context=context,
-                session=session,
-                created_at=created_at,
-                searches_started=1,
-                persistent=False,
-                reused=False,
-                authenticated=False,
-            )
-
-        now = self._monotonic()
-        active = self._active_session
-        if active is not None and (
-            now - active.last_used_at >= self._session_reuse_ttl_seconds
-            or active.searches_started >= self._session_reuse_max_searches
-        ):
-            if active.authenticated_credential_version is not None:
-                self._session_actor_state = KorailSessionActorState.STALE
-            await self._discard_active_session()
-            active = None
-        reused = active is not None
-        if active is None:
-            context = self._session_factory(self.page_url, self.timeout_ms, self.headless)
-            session = await context.__aenter__()
-            active = _ActivePydollSession(
-                context=context,
-                session=session,
-                created_at=now,
-                last_used_at=now,
-                credential_version=credential_version,
-            )
-            self._active_session = active
-            if credential_version is not None:
-                self._session_actor_generation = credential_version
-                self._session_actor_created_at = now
-                self._session_actor_last_used_at = now
-        elif credential_version is not None and active.credential_version is None:
-            active.credential_version = credential_version
-            self._session_actor_generation = credential_version
-            self._session_actor_created_at = active.created_at
-        active.searches_started += 1
-        active.last_used_at = now
-        if credential_version is not None:
-            self._session_actor_last_used_at = now
-        return _PydollSessionLease(
-            context=active.context,
-            session=active.session,
-            created_at=active.created_at,
-            searches_started=active.searches_started,
-            persistent=True,
-            reused=reused,
-            authenticated=active.authenticated_credential_version is not None,
-        )
+    ) -> _PydollSessionLease[PydollBrowserSession]:
+        return await self._auth_actor.acquire_session(credential_version=credential_version)
 
     async def _ensure_authenticated_session(
         self,
         session: PydollBrowserSession,
         credential: KorailCredentialInput,
     ) -> bool:
-        """Authenticate a persistent browser once per credential version and fingerprint.
-
-        The caller holds ``_session_lock``. Authentication material stays in the browser
-        context only; this state records a version, a one-way in-memory credential digest,
-        and monotonic timestamps, not an ID, password, cookie, or browser storage value.
-        """
-
-        active = self._active_session
-        if active is None or active.session is not session:
-            now = self._monotonic()
-            self._session_actor_state = KorailSessionActorState.AUTHENTICATING
-            self._session_actor_generation = credential.version
-            self._session_actor_created_at = now
-            self._session_actor_last_used_at = now
-            authenticated = await session.ensure_authenticated(credential)
-            if authenticated:
-                verified_at = self._monotonic()
-                self._session_actor_last_verified_at = verified_at
-                self._session_actor_last_used_at = verified_at
-            self._session_actor_state = (
-                KorailSessionActorState.STALE
-                if authenticated
-                else KorailSessionActorState.AUTH_REQUIRED
-            )
-            return authenticated
-        credential_fingerprint = _credential_fingerprint(credential)
-        if (
-            active.authenticated_credential_version == credential.version
-            and active.authenticated_credential_fingerprint == credential_fingerprint
-        ):
-            active.last_used_at = self._monotonic()
-            self._session_actor_last_used_at = active.last_used_at
-            self._session_actor_state = KorailSessionActorState.READY
-            return True
-        self._session_actor_state = KorailSessionActorState.AUTHENTICATING
-        self._session_actor_generation = credential.version
-        authenticated = await session.ensure_authenticated(credential)
-        if not authenticated:
-            await self._discard_active_session()
-            self._session_actor_state = KorailSessionActorState.AUTH_REQUIRED
-            return False
-        active.authenticated_credential_version = credential.version
-        active.authenticated_credential_fingerprint = credential_fingerprint
-        active.last_used_at = self._monotonic()
-        self._session_actor_last_verified_at = active.last_used_at
-        self._session_actor_last_used_at = active.last_used_at
-        self._session_actor_state = KorailSessionActorState.READY
-        return True
+        return await self._auth_actor.ensure_authenticated_session(session, credential)
 
     async def _discard_active_session(self) -> None:
-        active = self._active_session
-        self._active_session = None
-        if active is not None:
-            await _finish_owned_cleanup(active.context.__aexit__(None, None, None))
+        await self._auth_actor.discard_active_session()
 
     @property
     def _session_reuse_enabled(self) -> bool:
-        return self._session_reuse_ttl_seconds > 0 and self._session_reuse_max_searches > 1
+        return self._auth_actor.reuse_enabled
 
     @staticmethod
     async def _assert_reservation_identity(

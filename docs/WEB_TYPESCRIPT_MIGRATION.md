@@ -6,7 +6,11 @@
 
 2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열아홉 번째 B 수직 슬라이스를 마친 현재 `api.js`와 `App.jsx`는 제거됐고 strict `App.tsx`는 246줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 설정 resource orchestration, app navigation·shell·authentication·logout·compatibility, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표·철도 계정·runtime도 production ViewModel 계약을 사용합니다. App에는 페이지/controller props와 등록 완료 조립만 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
-현재 `main.tsx`, strict `App.tsx`와 typecheck gate는 적용되어 있습니다. `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff, reservations, settings의 leaf 컴포넌트·hook·순수 함수가 분리되어 있습니다. `api.js` barrel과 확인된 feature 간 역방향 import는 제거됐지만, 이는 모든 DTO/mapper 경계와 전체 JS/JSX 테스트 전환이 끝났다는 뜻은 아닙니다.
+현재 `main.tsx`, strict `App.tsx`와 typecheck gate가 적용되어 있고 Vitest가 탐색하는 모든 테스트도
+strict `.ts`·`.tsx`로 전환됐습니다. `allowJs`·`checkJs`와 Vitest의 JS/JSX include는 제거했습니다.
+`domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff,
+reservations, settings의 leaf 컴포넌트·hook·순수 함수가 분리되어 있습니다. `api.js` barrel과 확인된
+feature 간 역방향 import는 제거됐지만, 이는 모든 DTO/mapper 경계가 끝났다는 뜻은 아닙니다.
 
 ## 목표 구조
 
@@ -39,8 +43,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: 새 역방향 import와 feature 간 내부 의존 증가를 막는 module-boundary ratchet test
    - 완료: ESLint를 `src`·`tests`·`e2e`·`scripts`·`worker`에 연결하고 런타임 전역을 분리해 새
      오류를 차단. 전환 전 effect/ref 경고 27건만 위치·소스 행 해시 지문으로 고정해 신규·변경·stale
-     경고를 모두 실패 처리. 구조 슬라이스에서 실제 부채를 제거할 때마다 줄여 현재 18건만 격리
-   - 전환 기간에만 `allowJs=true`, `checkJs=false` 유지
+     경고를 모두 실패 처리. 구조 슬라이스에서 실제 부채를 제거할 때마다 줄여 현재 12건만 격리
+   - 완료: `App.test.tsx` 전환 뒤 `allowJs`·`checkJs`를 제거하고 Vitest discovery를 TS/TSX로 고정
 2. 도메인 타입과 순수 함수
    - 완료: 결제기한 순수 정책을 `domain/paymentDeadline.ts`로 이동
    - provider 표시 코드와 API provider 값을 별도 union으로 정의
@@ -133,13 +137,14 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: `api.test.js`의 마지막 auth/events 계약을 strict owner로 이동하고 파일 삭제
    - 완료: Vitest setup, ESLint ratchet, service worker 계약 테스트를 strict `.ts`로 전환하고
      setup 경로·3개 선언/8개 실행·2개 SW 실행을 보존
-   - 남음: `App.test.jsx`와 DTO·도메인·ViewModel 경계 전환
+   - 완료: `App.test.jsx`의 29개 선언·32개 실행·120개 assertion을 strict `App.test.tsx`로 전환
+   - 남음: 잔여 DTO·도메인·ViewModel 경계 전환
 6. shell과 테스트
    - 완료: top-level `app/useAppNavigation.ts`가 view·settings section state와 smooth scroll을,
      `app/AppShell.tsx`가 sidebar·mobile header·bottom nav·overlay exact DOM을 strict contract로 소유
    - 완료: `App.tsx` 전환과 auth/logout/official handoff/compatibility owner 테스트 17건 추가
-   - 진행: 새 대기 행동 28건을 `NewWaitPage.test.tsx`가 소유하고 App 조립·호환 계약은
-     `App.test.jsx`에도 유지. 남은 JS/JSX 테스트는 owner별 strict TSX로 분리한 뒤 전환
+   - 완료: 새 대기 행동 28건을 `NewWaitPage.test.tsx`가 소유하고 App 조립·호환 계약은 strict
+     `App.test.tsx`에 유지. 모든 Vitest 테스트를 owner별 strict TS/TSX로 전환
 7. CSS와 JavaScript 제거
    - 완료: class·규칙·cascade 순서를 그대로 유지하고 `styles.css`를 import-only 진입점,
      `styles/{tokens,base,shell,features,responsive}.css` 1차 경계로 분리. 원본 Git blob과 다섯 파일
@@ -149,7 +154,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `styles/operations.css`로 이동하고 `operations-shimmer`·reduced-motion·cascade 순서를 보존
    - 남음: `features.css`를 실제 기능 소유 경계로 더 나누고 중복 selector 정리는 별도 동작 변경
      슬라이스에서 수행
-   - 모든 소스·테스트 전환 후 `allowJs` 제거, Vitest JS/JSX include 제거
+   - 완료: 모든 소스·Vitest 테스트 전환 후 `allowJs` 제거, Vitest JS/JSX include 제거. 배포 경계의
+     `public/sw.js`, `worker/index.js`, Sites worker test와 빌드·ESLint 설정 `.mjs`는 런타임 형식을 유지
 
 각 단계에서 컴포넌트 이동과 동작 변경을 섞지 않습니다. 먼저 import만 바뀌는 이동을 완료하고 테스트한 뒤 타입·정책 개선을 별도 단계로 적용합니다.
 

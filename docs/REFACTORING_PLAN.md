@@ -1301,6 +1301,24 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
   오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물네 번째 구조 슬라이스 C
+
+- 마지막 Vitest JS/JSX 경계: `App.test.jsx`를 strict `App.test.tsx`로 전환하고 공개 props 타입 기반
+  fixture와 배열·DOM·clipboard·`window.open` guard를 추가했습니다. 테스트 이름·순서와 이동 전후
+  29개 선언·32개 실행·120개 assertion은 그대로 유지했습니다.
+- TypeScript gate: `check-eslint-ratchet.mjs`의 실제 세 export를 표현하는 `.d.mts` 선언 경계를 추가하고
+  `allowJs`·`checkJs`를 제거했습니다. Vitest discovery는 `tests/**/*.test.{ts,tsx}`만 포함하며 별도
+  `test:sites`가 소유하는 Sites worker와 실제 service worker·worker·빌드/ESLint `.js`·`.mjs` 런타임
+  경계는 기존 형식과 lint 범위를 유지합니다.
+- 안전한 strict 전환: `any`, type/non-null assertion, suppression 없이 nullable DOM과 fixture 누락을
+  fail-fast helper로 좁혔습니다. production source·ESLint warning baseline·service worker·Sites 산출물은
+  변경하지 않았습니다.
+- 확인된 검증: App focused 32건, ESLint ratchet focused 8건, 전체 Vitest 79개 파일·571건,
+  ESLint 오류 0개·고정된 legacy warning 12개, strict typecheck, production build, Sites 4건과
+  `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: test/typecheck discovery/docs-only 슬라이스로 사용자 동작과 배포 runtime을 바꾸지
+  않아 기본 E2E와 Compose 재배포는 반복하지 않았습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

@@ -3,14 +3,18 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App, Home, NewWait, OfficialHandoff, PaymentHero, WatchRow, hasObservedSeatEvidence, isActiveWatch } from "../src/App";
 import { normalizeSeatClasses } from "../src/api/seatClasses";
+import type { Timetable } from "../src/api/timetables";
+import type { NormalizedSeatClass } from "../src/domain/seatClasses";
+import type { ActiveWatch } from "../src/features/home/ActiveWatchList";
 import { SeatClassPanel } from "../src/features/new-wait/TrainResultCard";
 import {
   AppToast,
   IMPORTANT_TOAST_AUTO_CLOSE_MS,
   TOAST_AUTO_CLOSE_MS,
+  type AppToastNotice,
 } from "../src/shared/ui/AppToast";
 
-function strictKorailSearchUrl() {
+function strictKorailSearchUrl(): string {
   const params = new URLSearchParams({
     srtCheckYn: "N", ebizCrossCheck: "N", adjStnScdlOfrFlg: "N",
     adjStnScdlOfrFlg2: "N", rtYn: "N", txtMenuId: "11", radJobId: "1",
@@ -24,9 +28,94 @@ function strictKorailSearchUrl() {
   return `https://www.korail.com/ticket/search/list?${params.toString()}`;
 }
 
-function seatWaitButton(trainName, seatName = "일반실로 대기") {
+function seatWaitButton(trainName: string, seatName = "일반실로 대기"): HTMLElement {
   const card = screen.getByRole("article", { name: trainName });
   return within(card).getByRole("button", { name: seatName });
+}
+
+function firstElement(elements: readonly HTMLElement[], description: string): HTMLElement {
+  const element = elements[0];
+  if (element === undefined) throw new Error(`${description} element was not rendered`);
+  return element;
+}
+
+function htmlElement(element: Element | null, description: string): HTMLElement {
+  if (!(element instanceof HTMLElement)) {
+    throw new Error(`${description} HTML element was not rendered`);
+  }
+  return element;
+}
+
+function buttonElement(element: HTMLElement, description: string): HTMLButtonElement {
+  if (!(element instanceof HTMLButtonElement)) {
+    throw new Error(`${description} button was not rendered`);
+  }
+  return element;
+}
+
+function clearWindowOpenMock() {
+  const openWindow = vi.mocked(window.open);
+  openWindow.mockClear();
+  return openWindow;
+}
+
+function activeWatchFixture(overrides: Partial<ActiveWatch> = {}): ActiveWatch {
+  return {
+    id: "watch-fixture",
+    provider: "KORAIL",
+    route: "서울 → 부산",
+    train: "KTX 085",
+    date: "8월 1일",
+    departure: "14:11",
+    arrival: "16:52",
+    status: "watching",
+    statusLabel: "감시 중",
+    seatClass: "standard",
+    seatClassLabel: "일반실",
+    seatEvidenceLabel: "일반실 · 연동 안 됨",
+    ...overrides,
+  };
+}
+
+function timetableFixture(overrides: Partial<Timetable> = {}): Timetable {
+  return {
+    id: "KORAIL:26:2026-08-02T12:00:00+09:00",
+    provider: "KORAIL",
+    train_number: "00026",
+    train_type: "KTX",
+    name: "KTX 26",
+    origin: "대전",
+    destination: "서울",
+    departure_at: "2026-08-02T12:00:00+09:00",
+    arrival_at: "2026-08-02T13:04:00+09:00",
+    departure: "12:00",
+    arrival: "13:04",
+    duration: "1시간 4분",
+    adult_fare: null,
+    fare_currency: "KRW",
+    timetable_source: "official_provider",
+    timetable_retrieved_at: null,
+    seat_classes: [],
+    official_booking_url: null,
+    official_search_url: null,
+    ...overrides,
+  };
+}
+
+function seatClassFixture(
+  overrides: Partial<NormalizedSeatClass> = {},
+): NormalizedSeatClass {
+  return {
+    seat_class: "standard",
+    status: "sold_out",
+    fare: null,
+    fare_currency: "KRW",
+    provenance: {},
+    registration_evidence_id: null,
+    registration_evidence_error: null,
+    actions: [],
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -69,7 +158,7 @@ describe("RailWait responsive core flow", () => {
     vi.useFakeTimers();
     try {
       const onClose = vi.fn();
-      const notice = {
+      const notice: AppToastNotice = {
         id: "reservation-progress",
         title: "예매를 진행하고 있습니다",
         meta: "KORAIL · KTX 038 · 일반실",
@@ -80,6 +169,9 @@ describe("RailWait responsive core flow", () => {
           { label: "결과 확인", state: "pending" },
         ],
       };
+      if (notice.meta === undefined || notice.description === undefined) {
+        throw new Error("Reservation progress fixture is incomplete");
+      }
       const view = render(<AppToast notice={notice} onClose={onClose} />);
       expect(screen.getByText(notice.meta)).toBeTruthy();
       expect(screen.getByText(notice.description)).toBeTruthy();
@@ -112,6 +204,11 @@ describe("RailWait responsive core flow", () => {
         },
       }],
     });
+    if (confirmed === undefined) throw new Error("Confirmed seat fixture was not normalized");
+    const observedAt = confirmed.provenance.observed_at;
+    if (typeof observedAt !== "string") {
+      throw new Error("Confirmed seat fixture has no observed_at timestamp");
+    }
 
     expect(hasObservedSeatEvidence(confirmed)).toBe(true);
     monotonic.mockReturnValue(300_999);
@@ -119,7 +216,7 @@ describe("RailWait responsive core flow", () => {
     monotonic.mockReturnValue(301_000);
     expect(hasObservedSeatEvidence(confirmed)).toBe(false);
     expect(hasObservedSeatEvidence({
-      provenance: { ...confirmed.provenance, fresh_until: confirmed.provenance.observed_at },
+      provenance: { ...confirmed.provenance, fresh_until: observedAt },
     })).toBe(false);
     expect(hasObservedSeatEvidence({
       provenance: { ...confirmed.provenance, source: "arbitrary-client-source" },
@@ -129,7 +226,7 @@ describe("RailWait responsive core flow", () => {
   it("changes an authenticated active ticket between monitoring and one-time reservation", async () => {
     const user = userEvent.setup();
     const onChangeReservationPolicy = vi.fn();
-    const watch = {
+    const watch: ActiveWatch = {
       id: "watch-policy-1",
       provider: "KORAIL",
       train: "KTX 26",
@@ -210,9 +307,9 @@ describe("RailWait responsive core flow", () => {
       />,
     );
 
-    expect(screen.getByRole("switch", {
+    expect(buttonElement(screen.getByRole("switch", {
       name: "SRT 312 일반실 좌석 재발견마다 자동 예매 설정",
-    }).disabled).toBe(true);
+    }), "Automatic reservation policy").disabled).toBe(true);
     expect(screen.getByRole("button", { name: "로그인 필요" })).toBeTruthy();
   });
 
@@ -242,9 +339,9 @@ describe("RailWait responsive core flow", () => {
       />,
     );
 
-    const policySwitch = screen.getByRole("switch", {
+    const policySwitch = buttonElement(screen.getByRole("switch", {
       name: "KTX 101 일반실 좌석 재발견마다 자동 예매 설정",
-    });
+    }), "Locked reservation policy");
     expect(policySwitch.disabled).toBe(true);
     expect(policySwitch.title).toContain("예약 시도가 시작된 뒤");
   });
@@ -253,7 +350,7 @@ describe("RailWait responsive core flow", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole("button", { name: "설정" })[0]);
+    await user.click(firstElement(screen.getAllByRole("button", { name: "설정" }), "Settings"));
     await user.click(screen.getByRole("button", { name: /보안/ }));
 
     expect(screen.getByText("관리자 ID·비밀번호 로그인 활성화")).toBeTruthy();
@@ -292,7 +389,7 @@ describe("RailWait responsive core flow", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole("button", { name: "새 대기" })[0]);
+    await user.click(firstElement(screen.getAllByRole("button", { name: "새 대기" }), "New wait"));
     expect(screen.getByRole("heading", { name: "어디로 떠나세요?" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: /다음/ }));
@@ -308,16 +405,19 @@ describe("RailWait responsive core flow", () => {
     expect(screen.getByRole("button", { name: "시간표 새로고침" })).toBeTruthy();
     await user.click(train);
     expect(await screen.findByRole("button", { name: "일반실 대기 취소" })).toBeTruthy();
-    await user.click(screen.getAllByRole("button", { name: "홈" })[0]);
+    await user.click(firstElement(screen.getAllByRole("button", { name: "홈" }), "Home"));
     expect(screen.getByText("활동 중인 대기")).toBeTruthy();
     expect(screen.getByLabelText("전체 2건 모두 표시 중")).toBeTruthy();
 
-    await user.click(screen.getAllByRole("button", { name: "새 대기" })[0]);
+    await user.click(firstElement(screen.getAllByRole("button", { name: "새 대기" }), "New wait"));
     await user.click(screen.getByRole("button", { name: /다음/ }));
     await user.click(screen.getByRole("button", { name: /다음/ }));
     const persistedCancel = await screen.findByRole("button", { name: "일반실 대기 취소" });
     expect(persistedCancel.getAttribute("aria-pressed")).toBe("true");
-    expect(persistedCancel.closest(".seat-class-panel").className).toContain("is-selected");
+    expect(htmlElement(
+      persistedCancel.closest(".seat-class-panel"),
+      "Persisted seat class panel",
+    ).className).toContain("is-selected");
 
     await user.click(persistedCancel);
     await waitFor(() => expect(seatWaitButton("KTX 033").getAttribute("aria-pressed")).toBe("false"));
@@ -331,9 +431,8 @@ describe("RailWait responsive core flow", () => {
   });
 
   it("does not render actions for a not-offered seat class", () => {
-    const train = {
+    const train = timetableFixture({
       id: "KORAIL:KTX 404:2026-08-01T14:11:00+09:00",
-      provider: "KORAIL",
       name: "KTX 404",
       origin: "서울",
       destination: "부산",
@@ -341,15 +440,15 @@ describe("RailWait responsive core flow", () => {
       arrival: "16:52",
       departure_at: "2026-08-01T14:11:00+09:00",
       seat_classes: [],
-    };
-    const seat = {
+    });
+    const seat = seatClassFixture({
       seat_class: "first",
       status: "not_offered",
       provenance: { kind: "mock", source: "mock", observed_at: "2026-08-01T00:00:00Z" },
       actions: [{ kind: "official_check", url: "https://www.korail.com/ticket/search" }],
-    };
+    });
 
-    render(<SeatClassPanel train={train} seat={seat} registration={{ status: "idle" }} onChooseSeat={vi.fn()} onRetryProvider={vi.fn()} />);
+    render(<SeatClassPanel train={train} seat={seat} registration={{ status: "idle" }} onChooseSeat={vi.fn()} />);
 
     expect(screen.getByText("미운영")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
@@ -357,16 +456,15 @@ describe("RailWait responsive core flow", () => {
 
   it("does not promote an official action without a string URL to the fallback handoff", () => {
     render(<SeatClassPanel
-      train={{
+      train={timetableFixture({
         id: "KORAIL:26:2026-08-02T12:00:00+09:00",
-        provider: "KORAIL",
         name: "KTX 26",
         origin: "대전",
         destination: "서울",
         departure: "12:00",
         arrival: "13:04",
-      }}
-      seat={{
+      })}
+      seat={seatClassFixture({
         seat_class: "standard",
         status: "available",
         provenance: {
@@ -374,8 +472,8 @@ describe("RailWait responsive core flow", () => {
           source: "korail-official-page-browser",
           observed_at: "2026-08-01T12:53:00Z",
         },
-        actions: [{ kind: "official_check" }],
-      }}
+        actions: [{ kind: "official_check", url: null }],
+      })}
       registration={{ status: "idle" }}
       onChooseSeat={vi.fn()}
       officialHandoffComponent={OfficialHandoff}
@@ -388,16 +486,15 @@ describe("RailWait responsive core flow", () => {
   it("registers an authenticated available seat for one-time reservation instead of handoff", async () => {
     const user = userEvent.setup();
     const onChooseSeat = vi.fn();
-    const train = {
+    const train = timetableFixture({
       id: "KORAIL:26:2026-08-02T12:00:00+09:00",
-      provider: "KORAIL",
       name: "KTX 26",
       origin: "대전",
       destination: "서울",
       departure: "12:00",
       arrival: "13:04",
-    };
-    const seat = {
+    });
+    const seat = seatClassFixture({
       seat_class: "standard",
       status: "available",
       provenance: {
@@ -407,9 +504,9 @@ describe("RailWait responsive core flow", () => {
       },
       actions: [
         { kind: "official_check", url: "https://www.korail.com/ticket/search" },
-        { kind: "add_to_watch" },
+        { kind: "add_to_watch", url: null },
       ],
-    };
+    });
 
     render(<SeatClassPanel
       train={train}
@@ -427,16 +524,15 @@ describe("RailWait responsive core flow", () => {
 
   it("shows the persisted one-time policy when an active seat registration is restored", () => {
     render(<SeatClassPanel
-      train={{
+      train={timetableFixture({
         id: "KORAIL:26:2026-08-02T12:00:00+09:00",
-        provider: "KORAIL",
         name: "KTX 26",
         origin: "대전",
         destination: "서울",
         departure: "12:00",
         arrival: "13:04",
-      }}
-      seat={{
+      })}
+      seat={seatClassFixture({
         seat_class: "standard",
         status: "sold_out",
         provenance: {
@@ -444,8 +540,8 @@ describe("RailWait responsive core flow", () => {
           source: "korail-official-page-browser",
           observed_at: "2026-08-01T12:53:00Z",
         },
-        actions: [{ kind: "add_to_watch" }],
-      }}
+        actions: [{ kind: "add_to_watch", url: null }],
+      })}
       registration={{
         status: "active",
         watchId: "watch-26-standard",
@@ -473,8 +569,9 @@ describe("RailWait responsive core flow", () => {
       departure_at: "2026-08-01T14:11:00+09:00",
       official_booking_url: "https://example.invalid/untrusted",
     };
-    window.open.mockClear();
+    const openWindow = clearWindowOpenMock();
     const { container } = render(<div className="app-shell"><OfficialHandoff train={train} onCopy={onCopy} /></div>);
+    const appShell = htmlElement(container.querySelector(".app-shell"), "Application shell");
 
     const trigger = screen.getByRole("button", { name: "KTX 085 공식 좌석 확인 전 안내 열기" });
     await user.click(trigger);
@@ -487,14 +584,14 @@ describe("RailWait responsive core flow", () => {
     expect(dialog.textContent).toContain("새 탭에서 열립니다");
     expect(dialog.textContent).toContain("접근 제한 화면이 나타나면 자동 재시도하지 않습니다");
     expect(dialog.textContent).toContain("나중에 공식 앱이나 홈페이지에서 직접 확인");
-    expect(container.querySelector(".app-shell").inert).toBe(true);
+    expect(appShell.inert).toBe(true);
 
     await user.click(within(dialog).getByRole("button", { name: "여정 복사" }));
     expect(onCopy).toHaveBeenCalledWith(train);
     expect(within(dialog).getByRole("status").textContent).toContain("여정 정보를 복사했습니다");
 
     await user.click(within(dialog).getByRole("button", { name: /공식 페이지 열기/ }));
-    expect(window.open).toHaveBeenCalledWith("https://www.korail.com/ticket/search/general", "_blank", "noopener,noreferrer");
+    expect(openWindow).toHaveBeenCalledWith("https://www.korail.com/ticket/search/general", "_blank", "noopener,noreferrer");
     expect(screen.getByRole("dialog", { name: "KTX 085 공식 좌석 확인 전 안내" })).toBeTruthy();
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
   });
@@ -510,8 +607,9 @@ describe("RailWait responsive core flow", () => {
       departure: "14:30",
       departure_at: "2026-08-01T14:30:00+09:00",
     };
-    window.open.mockClear();
+    const openWindow = clearWindowOpenMock();
     const { container } = render(<div className="app-shell"><OfficialHandoff train={train} onCopy={vi.fn()} /></div>);
+    const appShell = htmlElement(container.querySelector(".app-shell"), "Application shell");
 
     const trigger = screen.getByRole("button", { name: "SRT 327 공식 좌석 확인 전 안내 열기" });
     await user.click(trigger);
@@ -526,7 +624,7 @@ describe("RailWait responsive core flow", () => {
     expect(document.activeElement).toBe(close);
 
     await user.click(official);
-    expect(window.open).toHaveBeenCalledWith(
+    expect(openWindow).toHaveBeenCalledWith(
       "https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000",
       "_blank",
       "noopener,noreferrer",
@@ -535,8 +633,8 @@ describe("RailWait responsive core flow", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "SRT 327 공식 좌석 확인 전 안내" })).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
-    expect(container.querySelector(".app-shell").inert).toBe(false);
-    expect(container.querySelector(".app-shell").getAttribute("aria-hidden")).toBeNull();
+    expect(appShell.inert).toBe(false);
+    expect(appShell.getAttribute("aria-hidden")).toBeNull();
     expect(document.body.style.overflow).toBe("");
   });
 
@@ -554,7 +652,7 @@ describe("RailWait responsive core flow", () => {
       departure_at: "2026-08-01T14:11:00+09:00",
       official_search_url: searchUrl,
     };
-    window.open.mockClear();
+    const openWindow = clearWindowOpenMock();
     render(<OfficialHandoff train={train} onCopy={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "KTX 085 공식 좌석 확인 전 안내 열기" }));
@@ -563,7 +661,7 @@ describe("RailWait responsive core flow", () => {
     expect(dialog.textContent).toContain("특정 열차 선택·좌석 확보·예매 성공을 뜻하지 않습니다");
 
     await user.click(within(dialog).getByRole("button", { name: /조건 입력하고 공식 페이지 열기/ }));
-    expect(window.open).toHaveBeenCalledWith(searchUrl, "_blank", "noopener,noreferrer");
+    expect(openWindow).toHaveBeenCalledWith(searchUrl, "_blank", "noopener,noreferrer");
   });
 
   it("labels a mock seat-found handoff as demo data", async () => {
@@ -587,7 +685,6 @@ describe("RailWait responsive core flow", () => {
         triggerLabel="예매"
         seatFoundObservation={{
           kind: "mock",
-          observedAt: null,
           observedLabel: "최근 확인 기록 없음",
         }}
       />,
@@ -616,7 +713,7 @@ describe("RailWait responsive core flow", () => {
         { seat_class: "first", provenance: { kind: "not_observed", reason: "public_api_not_available" } },
       ],
     };
-    window.open.mockClear();
+    const openWindow = clearWindowOpenMock();
     render(<OfficialHandoff train={train} selectedSeatClass="first" onCopy={vi.fn()} actionUrl="https://evil.example/phishing" />);
 
     await user.click(screen.getByRole("button", { name: "KTX 033 특실 공식 좌석 확인 전 안내 열기" }));
@@ -624,7 +721,7 @@ describe("RailWait responsive core flow", () => {
     expect(dialog.textContent).toContain("좌석 상태는 아직 확인되지 않았습니다");
     expect(dialog.textContent).not.toContain("허가된 좌석 출처의 관측값입니다");
     await user.click(within(dialog).getByRole("button", { name: /공식 페이지 열기/ }));
-    expect(window.open).toHaveBeenCalledWith("https://www.korail.com/ticket/search/general", "_blank", "noopener,noreferrer");
+    expect(openWindow).toHaveBeenCalledWith("https://www.korail.com/ticket/search/general", "_blank", "noopener,noreferrer");
   });
 
   it("keeps a readable journey summary inside the dialog when clipboard copy fails", async () => {
@@ -675,8 +772,8 @@ describe("RailWait responsive core flow", () => {
 
   it("ignores a stale clipboard result after the dialog is closed and reopened", async () => {
     const user = userEvent.setup();
-    let resolveFirstCopy;
-    const firstCopy = new Promise((resolve) => {
+    let resolveFirstCopy: ((value: boolean) => void) | undefined;
+    const firstCopy = new Promise<boolean>((resolve) => {
       resolveFirstCopy = resolve;
     });
     const onCopy = vi.fn()
@@ -698,7 +795,10 @@ describe("RailWait responsive core flow", () => {
     await user.click(trigger);
     let dialog = screen.getByRole("dialog", { name: "KTX 033 공식 좌석 확인 전 안내" });
     await user.click(within(dialog).getByRole("button", { name: "여정 복사" }));
-    expect(within(dialog).getByRole("button", { name: "복사 중…" }).disabled).toBe(true);
+    expect(buttonElement(
+      within(dialog).getByRole("button", { name: "복사 중…" }),
+      "Pending copy",
+    ).disabled).toBe(true);
     expect(screen.getAllByRole("button", { name: "공식 좌석 확인 안내 닫기" })).toHaveLength(1);
 
     await user.click(within(dialog).getByRole("button", { name: "공식 좌석 확인 안내 닫기" }));
@@ -707,6 +807,7 @@ describe("RailWait responsive core flow", () => {
     await user.click(within(dialog).getByRole("button", { name: "여정 복사" }));
     expect((await within(dialog).findByRole("status")).textContent).toContain("여정 정보를 복사했습니다");
 
+    if (resolveFirstCopy === undefined) throw new Error("Clipboard resolver was not initialized");
     resolveFirstCopy(false);
     await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("여정 정보를 복사했습니다"));
     expect(within(dialog).queryByRole("alert")).toBeNull();
@@ -714,7 +815,7 @@ describe("RailWait responsive core flow", () => {
 
 
   it("renders actual status details and only offers pause for pausable watches", () => {
-    const base = { id: "watch-1", provider: "KORAIL", route: "서울 → 부산", train: "KTX 085", date: "8월 1일", departure: "14:11", arrival: "16:52", seatClass: "standard", seatClassLabel: "일반실", seatEvidenceLabel: "일반실 · 연동 안 됨" };
+    const base = activeWatchFixture({ id: "watch-1" });
     const { rerender } = render(<WatchRow watch={{ ...base, status: "scheduled", statusLabel: "대기 등록됨" }} onPause={vi.fn()} onResume={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByText(/대기 등록됨/).closest(".status-pill")?.className).toContain("status-scheduled");
     expect(screen.getByText("일반실 · 연동 안 됨")).toBeTruthy();
@@ -730,7 +831,14 @@ describe("RailWait responsive core flow", () => {
     const user = userEvent.setup();
     const onResume = vi.fn();
     const onCancel = vi.fn();
-    const watch = { id: "paused", provider: "KORAIL", route: "서울 → 부산", train: "KTX 085", date: "8월 1일", departure: "14:11", arrival: "16:52", status: "paused", statusLabel: "일시정지", seatClass: "first", seatClassLabel: "특실", seatEvidenceLabel: "특실 · 등록 근거 없음" };
+    const watch = activeWatchFixture({
+      id: "paused",
+      status: "paused",
+      statusLabel: "일시정지",
+      seatClass: "first",
+      seatClassLabel: "특실",
+      seatEvidenceLabel: "특실 · 등록 근거 없음",
+    });
     render(<WatchRow watch={watch} onPause={vi.fn()} onResume={onResume} onCancel={onCancel} />);
 
     await user.click(screen.getByRole("button", { name: "대기 재개" }));
@@ -742,9 +850,8 @@ describe("RailWait responsive core flow", () => {
 
   it("opens the existing official handoff from a seat-found home row only", async () => {
     const user = userEvent.setup();
-    const seatFound = {
+    const seatFound = activeWatchFixture({
       id: "seat-found",
-      provider: "KORAIL",
       origin: "대전",
       destination: "부산",
       route: "대전 → 부산",
@@ -764,15 +871,15 @@ describe("RailWait responsive core flow", () => {
         observedAt: "2026-08-01T03:45:00Z",
         observedLabel: "최근 확인 12:45",
       },
-    };
-    const watching = {
+    });
+    const watching: ActiveWatch = {
       ...seatFound,
       id: "watching",
       train: "KTX 087",
       status: "watching",
       statusLabel: "감시 중",
     };
-    window.open.mockClear();
+    const openWindow = clearWindowOpenMock();
 
     render(
       <div className="app-shell">
@@ -804,18 +911,21 @@ describe("RailWait responsive core flow", () => {
     expect(within(dialog).getByRole("button", { name: "여정 복사" })).toBeTruthy();
 
     await user.click(within(dialog).getByRole("button", { name: /공식 페이지 열기/ }));
-    expect(window.open).toHaveBeenCalledWith("https://www.korail.com/ticket/search/general", "_blank", "noopener,noreferrer");
+    expect(openWindow).toHaveBeenCalledWith("https://www.korail.com/ticket/search/general", "_blank", "noopener,noreferrer");
   });
 
   it("navigates from the app shell to the reservations page", async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole("button", { name: "내 예약" })[0]);
+    await user.click(firstElement(screen.getAllByRole("button", { name: "내 예약" }), "Reservations"));
 
     const reservationsHeading = screen.getByRole("heading", { name: "내 예약", level: 1 });
     expect(reservationsHeading).toBeTruthy();
-    expect(within(reservationsHeading.closest(".page")).getByRole("button", { name: "새 대기" })).toBeTruthy();
+    expect(within(htmlElement(
+      reservationsHeading.closest(".page"),
+      "Reservations page",
+    )).getByRole("button", { name: "새 대기" })).toBeTruthy();
   });
 
   it("keeps system diagnostics outside the consumer home screen", async () => {
@@ -823,7 +933,7 @@ describe("RailWait responsive core flow", () => {
     render(<App />);
 
     expect(screen.queryByRole("heading", { name: "로그·진행 상태" })).toBeNull();
-    await user.click(screen.getAllByRole("button", { name: "설정" })[0]);
+    await user.click(firstElement(screen.getAllByRole("button", { name: "설정" }), "Settings"));
     await user.click(screen.getByRole("button", { name: /로그·진행 상태/ }));
     expect(screen.getByRole("heading", { name: "로그·진행 상태" })).toBeTruthy();
     expect(screen.getByText("데모 데이터")).toBeTruthy();

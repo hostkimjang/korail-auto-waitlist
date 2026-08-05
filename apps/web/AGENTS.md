@@ -49,7 +49,9 @@
 ## TypeScript와 코드 분리
 
 - 신규·수정 React 컴포넌트는 `.tsx`, JSX가 없는 도메인 타입·API·hook·utility는 `.ts`로 작성한다. 기존 `.jsx`·`.js`에 기능을 계속 쌓지 않고 수정하는 책임부터 TypeScript 모듈로 옮긴다.
-- 현재 `main.tsx`와 strict `App.tsx`, TypeScript 파이프라인이 적용되어 있다. `api.js`와 `App.jsx`는 제거됐으며, 잔여 JS/JSX 테스트 전환 기간에만 `allowJs=true`, `checkJs=false`를 유지한 뒤 JavaScript 허용을 제거한다.
+- 현재 `main.tsx`, strict `App.tsx`와 전체 Vitest TS/TSX 테스트 파이프라인이 적용되어 있다. `api.js`,
+  `App.jsx`, legacy JS/JSX 테스트는 제거됐고 `allowJs` 없이 typecheck한다. service worker·Sites worker·
+  빌드/ESLint 설정처럼 런타임이 요구하는 `.js`·`.mjs` 경계는 별도 lint·계약 테스트를 유지한다.
 - App의 화면·인증·SSE·작업 상태는 `domain types → API mapper → leaf UI → feature hook/page → App shell` 수직 슬라이스로 이미 분리했다. 후속 작업은 `app -> features -> api/domain/shared` 방향과 authentication boundary 위의 controller hook 수명주기, 공개 compatibility export identity를 보존한다.
 - 목표 경계는 `app/`, `domain/`, `api/`, `features/`, `shared/ui/`, `shared/lib/`, `fixtures/`이다. 기능 전용 코드는 feature에 함께 두고, 계약이 같은 두 기능 이상에서 사용할 때만 shared로 올린다.
 - API DTO, 정규화된 도메인 모델, 화면 ViewModel을 분리하고 외부 JSON은 `unknown`에서 검증한다. 좌석 provenance/status/action과 watch status는 판별 가능한 union으로 표현한다.

@@ -82,6 +82,37 @@ function activeWatch(): Record<string, unknown> {
   };
 }
 
+function elapsedPaymentWatch(): Record<string, unknown> {
+  return {
+    id: "responsive-payment-watch",
+    provider: "korail",
+    origin: "서울",
+    destination: "부산",
+    travel_date: "2026-08-08",
+    time_from: "10:00:00",
+    time_to: "13:00:00",
+    train_numbers: ["KTX 099"],
+    seat_class: "standard",
+    status: "payment_required",
+    reservation_policy: "reserve_once_before_payment",
+    payment_deadline: timestamp(-60_000),
+    created_at: timestamp(-120_000),
+    updated_at: timestamp(-60_000),
+    official_booking_url: "https://www.korail.com/ticket/search/general",
+    candidates: [
+      {
+        id: "responsive-payment-candidate",
+        train_number: "KTX 099",
+        departure_at: "2026-08-08T10:00:00+09:00",
+        arrival_at: "2026-08-08T12:30:00+09:00",
+        seat_class: "standard",
+        priority: 1,
+        state: "payment_required",
+      },
+    ],
+  };
+}
+
 function json(route: Route, body: unknown, status = 200): Promise<void> {
   return route.fulfill({
     status,
@@ -182,7 +213,7 @@ async function installMockApi(page: Page, telemetry: BrowserTelemetry): Promise<
     }
     if (path.endsWith("/watches") && request.method() === "GET") {
       telemetry.handledApiPaths.add(path);
-      await json(route, [activeWatch()]);
+      await json(route, [activeWatch(), elapsedPaymentWatch()]);
       return;
     }
 
@@ -299,6 +330,54 @@ async function expectOfficialHandoffWithinBounds(
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();
   await expect(appShell).toHaveJSProperty("inert", false);
+}
+
+async function expectReservationsWithinBounds(
+  page: Page,
+  viewport: ViewportCase,
+): Promise<void> {
+  const navigation = page.locator(
+    viewport.width <= 720 ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
+  ).filter({ hasText: "내 예약" });
+  await navigation.click();
+
+  await expect(page.getByRole("heading", { name: "내 예약" })).toBeVisible();
+  for (const selector of [
+    ".page",
+    ".reservation-summary",
+    ".reservation-list",
+  ]) {
+    await expectWithinViewport(page.locator(selector), viewport.width);
+  }
+  const reservationItems = page.locator(".reservation-item");
+  await expect(reservationItems).toHaveCount(2);
+  for (let index = 0; index < await reservationItems.count(); index += 1) {
+    await expectWithinViewport(reservationItems.nth(index), viewport.width);
+  }
+  await expectWithinViewport(page.locator(".reservation-payment-deadline"), viewport.width);
+  await expectVisibleActionTarget(
+    page.locator(".reservation-item > .button").filter({ hasText: "공식 확인 열기" }),
+    "elapsed payment official action",
+  );
+  const createAction = viewport.width <= 720
+    ? page.locator(".bottom-nav .bottom-item").filter({ hasText: "새 대기" })
+    : page.getByRole("main").getByRole("button", { name: "새 대기" });
+  await expectVisibleActionTarget(createAction, "reservation create action");
+
+  const summaryCards = page.locator(".reservation-summary > div");
+  expect(await summaryCards.count()).toBeGreaterThanOrEqual(3);
+  for (let index = 0; index < await summaryCards.count(); index += 1) {
+    await expectWithinViewport(summaryCards.nth(index), viewport.width);
+  }
+
+  const rootWidths = await page.evaluate(() => ({
+    documentClient: document.documentElement.clientWidth,
+    documentScroll: document.documentElement.scrollWidth,
+    bodyClient: document.body.clientWidth,
+    bodyScroll: document.body.scrollWidth,
+  }));
+  expect(rootWidths.documentScroll).toBeLessThanOrEqual(rootWidths.documentClient);
+  expect(rootWidths.bodyScroll).toBeLessThanOrEqual(rootWidths.bodyClient);
 }
 
 async function expectWatchRegionsDoNotOverlap(page: Page): Promise<void> {
@@ -449,6 +528,7 @@ for (const viewport of viewportCases) {
       await expectMobileReadingOrder(page, viewport.height);
     }
     await expectOfficialHandoffWithinBounds(page, viewport);
+    await expectReservationsWithinBounds(page, viewport);
     await expectHomeApiAndBrowserClean(telemetry);
   });
 }

@@ -1474,6 +1474,27 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   삭제 없이 force-recreate했습니다. migration·log-init exit 0, 장기 서비스 11개 healthy, API
   health·ready와 proxy health 200, 재생성 뒤 최근 안전한 오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 G
+
+- 예약 화면 CSS owner: `features.css`의 `.reservation-summary`·`.reservation-list`·
+  `.reservation-item`·`.reservation-payment-deadline` 기본 90줄과 `responsive.css`의 760px 27줄을
+  값·선언·순서 변경 없이 118줄 `features/reservations/reservations.css`로 이동했습니다. 공용
+  `.countdown`, `.button`, `.status-pill`은 기존 owner에 남겼고 `features.css`는 3,650→3,560줄,
+  `responsive.css`는 1,270→1,243줄로 줄었습니다.
+- cascade·실화면 회귀: 전역 import를 `tokens → base → shell → features → operations → app-surfaces →
+  reservations → officialHandoff → officialSeatConfirmation → responsive` 열 경계로 확장했습니다. 구조
+  테스트는 새 owner 시작·760px media·legacy 잔존 0과 exact import order를 고정하고, 원본 기본 90줄·
+  반응형 27줄과 새 owner의 행 단위 동등성을 확인했습니다.
+- E2E 보강: 처음에는 `seat_found` 한 건만 있어 결제기한과 항목 행동을 렌더링하지 않는 P2 공백이
+  있었습니다. 홈 활성 목록에는 섞이지 않는 기한 경과 `payment_required` fixture를 추가해 두 예약 항목,
+  `.reservation-payment-deadline`, `공식 확인 열기` 44px 행동과 page/root overflow를
+  1,440px·320px·720px 두 브라우저 프로젝트에서 직접 확인했고 재리뷰 P0~P3 잔여가 없습니다.
+- 확인된 검증: CSS owner 구조 Vitest 1개 파일·5건, 전체 Vitest 81개 파일·579건, ESLint 오류 0개·
+  고정 legacy warning 12개, strict typecheck, production build, Sites 4건, responsive E2E 6건과 기본
+  Playwright E2E 14건, `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고만 유지됐습니다.
+- 운영 검증 범위: CSS 이동 자체에는 별도 Compose 재배포가 필요하지 않지만, 같은 작업의 코드
+  슬라이스와 함께 최신 통합 tree를 전체 build·force-recreate해 health를 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

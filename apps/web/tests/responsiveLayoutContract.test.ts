@@ -9,6 +9,7 @@ const styleImports = [
   "./styles/features.css",
   "./styles/operations.css",
   "./styles/app-surfaces.css",
+  "./features/reservations/reservations.css",
   "./features/official-handoff/officialHandoff.css",
   "./features/new-wait/officialSeatConfirmation.css",
   "./styles/responsive.css",
@@ -21,6 +22,7 @@ const shellStyles = readStyleFile("./styles/shell.css");
 const featureStyles = readStyleFile("./styles/features.css");
 const operationsStyles = readStyleFile("./styles/operations.css");
 const appSurfaceStyles = readStyleFile("./styles/app-surfaces.css");
+const reservationStyles = readStyleFile("./features/reservations/reservations.css");
 const officialHandoffStyles = readStyleFile(
   "./features/official-handoff/officialHandoff.css",
 );
@@ -35,6 +37,7 @@ const styles = [
   featureStyles,
   operationsStyles,
   appSurfaceStyles,
+  reservationStyles,
   officialHandoffStyles,
   officialSeatConfirmationStyles,
   responsiveStyles,
@@ -96,7 +99,7 @@ function extractCssBlock(source: string, header: string, fromIndex = 0): CssBloc
 }
 
 describe("global CSS structure", () => {
-  it("loads the nine style boundaries in their cascade order", () => {
+  it("loads the ten style boundaries in their cascade order", () => {
     const entryStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     const expectedImports = `${styleImports
       .map((styleImport) => `@import "${styleImport}";`)
@@ -120,6 +123,8 @@ describe("global CSS structure", () => {
     expect(extractCssBlock(featureStyles, "@container train-results (min-width: 920px)").body)
       .toContain(".train-result-card");
     expect(featureStyles).toContain(".official-handoff-note");
+    expect(featureStyles).not.toContain(".reservation-summary");
+    expect(featureStyles).not.toContain(".reservation-payment-deadline");
     expect(featureStyles).not.toContain(".official-handoff-layer");
     expect(featureStyles).not.toContain(".official-confirmation-");
     expect(featureStyles.trimEnd()).toMatch(/\.system-grid strong\s*\{[\s\S]*color:\s*#17776f;[\s\S]*\}$/);
@@ -143,6 +148,15 @@ describe("global CSS structure", () => {
     const toastIn = extractCssBlock(appSurfaceStyles, "@keyframes toast-in");
     expect(toastIn.body).toContain("from { opacity: 0; transform: translateY(10px); }");
     expect(appSurfaceStyles.slice(toastIn.end).trim()).toBe("");
+
+    expect(reservationStyles.trimStart()).toMatch(/^\.reservation-summary\s*\{/);
+    expect(reservationStyles).toContain(".reservation-payment-deadline");
+    const mobileReservations = extractCssBlock(
+      reservationStyles,
+      "@media (max-width: 760px)",
+    );
+    expect(mobileReservations.body).toContain(".reservation-item > .button");
+    expect(reservationStyles.slice(mobileReservations.end).trim()).toBe("");
 
     expect(officialHandoffStyles.trimStart()).toMatch(/^\.official-handoff-layer\s*\{/);
     expect(officialHandoffStyles).toContain(".official-handoff-copy-error");
@@ -170,6 +184,8 @@ describe("global CSS structure", () => {
 
     expect(responsiveStyles.trimStart()).toMatch(/^@media \(max-width: 980px\)/);
     expect(responsiveStyles).toContain(".official-handoff-note");
+    expect(responsiveStyles).not.toContain(".reservation-summary");
+    expect(responsiveStyles).not.toContain(".reservation-payment-deadline");
     expect(responsiveStyles).not.toContain(".official-handoff-layer");
     expect(responsiveStyles).not.toContain(".official-confirmation-");
     const reducedMotion = extractCssBlock(responsiveStyles, "@media (prefers-reduced-motion: reduce)");

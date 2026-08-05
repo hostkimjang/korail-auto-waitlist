@@ -1,0 +1,118 @@
+.reservation-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 26px;
+}
+
+.reservation-summary > div {
+  display: grid;
+  gap: 9px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.reservation-summary span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.reservation-summary strong {
+  font-size: 30px;
+}
+
+.reservation-summary strong.orange {
+  color: var(--orange);
+}
+
+.reservation-list {
+  display: grid;
+  gap: 10px;
+}
+
+.reservation-item {
+  min-height: 88px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(190px, auto) auto auto;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.reservation-item.is-payment {
+  border-color: #f0cdb8;
+  background: #fffaf7;
+}
+
+.reservation-item.is-payment-expired {
+  border-color: #ded7cd;
+  background: #fbfaf8;
+}
+
+.reservation-item.is-payment-expired .reservation-payment-deadline > strong {
+  color: #7a4c22;
+}
+
+.reservation-item h2 {
+  margin: 0 0 5px;
+  font-size: 18px;
+}
+
+.reservation-item div > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.reservation-payment-deadline {
+  display: grid;
+  gap: 3px;
+  min-width: 190px;
+}
+
+.reservation-payment-deadline > strong {
+  color: var(--orange);
+  font-size: 15px;
+}
+
+.reservation-payment-deadline > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.reservation-payment-deadline > .countdown {
+  margin: 4px 0 0;
+  font-size: 22px;
+}
+
+@media (max-width: 760px) {
+  .reservation-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .reservation-summary > div {
+    padding: 13px;
+  }
+
+  .reservation-summary strong {
+    font-size: 24px;
+  }
+
+  .reservation-item {
+    grid-template-columns: auto 1fr;
+    gap: 11px;
+  }
+
+  .reservation-payment-deadline {
+    grid-column: 1 / -1;
+  }
+
+  .reservation-item > .button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}

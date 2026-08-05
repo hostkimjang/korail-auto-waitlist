@@ -615,33 +615,6 @@
     padding-inline: 16px;
   }
 
-  .reservation-summary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 7px;
-  }
-
-  .reservation-summary > div {
-    padding: 13px;
-  }
-
-  .reservation-summary strong {
-    font-size: 24px;
-  }
-
-  .reservation-item {
-    grid-template-columns: auto 1fr;
-    gap: 11px;
-  }
-
-  .reservation-payment-deadline {
-    grid-column: 1 / -1;
-  }
-
-  .reservation-item > .button {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-
   .settings-layout {
     display: block;
   }

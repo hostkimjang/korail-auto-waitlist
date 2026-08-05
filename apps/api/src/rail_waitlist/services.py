@@ -76,10 +76,14 @@ from .schemas import (
 from .ui_preferences.application import (
     update_admin_ui_preferences as update_admin_ui_preferences,
 )
+from .watch_management.transition_application import (
+    WatchTransitionDependencies,
+    WatchTransitionRejected,
+)
+from .watch_management.transition_application import (
+    apply_watch_transition as apply_watch_transition_application,
+)
 from .watch_management.transition_policy import (
-    NextCheckPolicy,
-    NoOpWatchTransition,
-    RejectedWatchTransition,
     build_watch_transition_identity,
     decide_watch_transition,
 )
@@ -330,64 +334,29 @@ async def apply_watch_transition(
     observation: SeatObservation | None = None,
 ) -> Watch:
     """Apply a transition and its durable audit/outbox records without committing."""
-    payload_hash = request_hash({"watch_id": watch.id, "target": target.value})
-    scope = f"watch.transition.{target.value}"
-    existing_id = await get_idempotent_resource(session, scope, idempotency_key, payload_hash)
-    if existing_id:
-        existing = await session.get(Watch, existing_id)
-        if existing:
-            return existing
-    decision = decide_watch_transition(watch.status, target)
-    if isinstance(decision, NoOpWatchTransition):
-        return watch
-    if isinstance(decision, RejectedWatchTransition):
-        raise HTTPException(409, decision.detail)
-    watch.status = decision.target_status
-    transition_at = datetime.now(UTC)
-    watch.updated_at = transition_at
-    if decision.clear_cooldown:
-        watch.cooldown_until = None
-    if decision.next_check_policy is NextCheckPolicy.TRANSITION_AT_IF_SEAT_MONITORING:
-        execution_capabilities = get_execution_provider(watch.provider).capabilities()
-        watch.next_check_at = transition_at if execution_capabilities.seat_monitoring else None
-    elif decision.next_check_policy is NextCheckPolicy.CLEAR:
-        watch.next_check_at = None
-    identity = build_watch_transition_identity(
-        decision,
-        watch_id=watch.id,
-        transition_at=transition_at,
-        reason=reason,
+    dependencies = WatchTransitionDependencies(
+        request_hash=request_hash,
+        get_idempotent_resource=get_idempotent_resource,
+        decide_watch_transition=decide_watch_transition,
+        get_execution_provider=get_execution_provider,
+        build_watch_transition_identity=build_watch_transition_identity,
+        remember_idempotency=remember_idempotency,
+        add_outbox_event=add_outbox_event,
+        add_watch_notifications=add_watch_notifications,
+        now=lambda: datetime.now(UTC),
     )
-    session.add(
-        WatchTransitionHistory(
-            watch=watch,
-            from_status=decision.previous_status,
-            to_status=decision.target_status,
-            reason=identity.reason,
+    try:
+        return await apply_watch_transition_application(
+            session,
+            watch,
+            target,
+            idempotency_key,
+            reason=reason,
             observation=observation,
+            dependencies=dependencies,
         )
-    )
-    await remember_idempotency(session, scope, idempotency_key, watch.id, payload_hash)
-    await add_outbox_event(
-        session,
-        aggregate_type="watch",
-        aggregate_id=watch.id,
-        event_type="watch.status_changed",
-        payload={
-            "watch_id": watch.id,
-            "from": decision.previous_status.value,
-            "to": decision.target_status.value,
-        },
-        dedupe_key=identity.status_event_dedupe_key,
-    )
-    await add_watch_notifications(
-        session,
-        watch,
-        decision.target_status,
-        identity.transition_token,
-        reason=identity.reason,
-    )
-    return watch
+    except WatchTransitionRejected as error:
+        raise HTTPException(409, str(error)) from None
 
 
 async def transition_watch(

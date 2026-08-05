@@ -120,6 +120,10 @@ def _is_watch_transition_policy(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/watch_management/transition_policy.py"
 
 
+def _is_watch_transition_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/watch_management/transition_application.py"
+
+
 def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
@@ -298,6 +302,26 @@ BOUNDARY_RULES = (
                 "schemas",
                 "services",
                 "sqlalchemy",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="watch transition application receives transport and runtime dependencies",
+        matches=_is_watch_transition_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "notification_management",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "services",
                 "worker",
             }
         ),
@@ -517,6 +541,20 @@ def test_watch_transition_policy_imports_only_pure_domain_dependencies() -> None
     }
     assert called_attributes.isdisjoint(
         {"begin", "commit", "now", "rollback", "utcnow", "with_for_update"}
+    )
+
+
+def test_watch_transition_application_joins_the_callers_unit_of_work() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "watch_management" / "transition_application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert called_attributes.isdisjoint(
+        {"begin", "commit", "refresh", "rollback", "with_for_update"}
     )
 
 

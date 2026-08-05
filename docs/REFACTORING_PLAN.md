@@ -1362,6 +1362,32 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   cascade와 기존 1,440px·320px·720px reflow를 확인했으며 dormant dialog 자체의 geometry를 직접 열어
   검증한 것은 아닙니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 B
+
+- watch transition application: 198줄 `watch_management/transition_application.py`가 아홉 typed port와
+  `WatchTransitionDependencies`, FastAPI 비의존 `WatchTransitionRejected`, transition artifact orchestration을
+  소유합니다. dependency 조립만으로 provider를 조회하지 않고 application도 lock·commit·refresh·rollback을
+  호출하지 않습니다.
+- facade·transport 경계: `services.apply_watch_transition`은 기존 signature와
+  `rail_waitlist.services` 함수 identity를 유지하는 wrapper입니다. 호출 시점의 request hash·idempotency·
+  policy·provider·clock·outbox·notification globals를 캡처해 기존 monkeypatch seam을 보존하고,
+  `WatchTransitionRejected`만 exact detail의 HTTP 409로 변환합니다. idempotency/provider/DB 예외는 그대로
+  전파하며 `transition_watch`의 `FOR UPDATE`·404·commit·refresh는 변경하지 않았습니다.
+- 실행 계약: replay → missing resource fall-through → policy, no-op/rejected 조기 종료, allowed status →
+  UTC clock 1회 → updated/cooldown → SCHEDULED capability 1회, next-check preserve/clear/재무장과 observation
+  history → idempotency → status outbox → notification 순서·reason/token/dedupe를 그대로 유지했습니다.
+  services는 1,399줄에서 1,368줄로 줄었습니다.
+- 테스트·경계: 순수 13×13/identity는 103줄 policy 테스트에 남기고 orchestration은 361줄 application
+  owner 테스트로 이동했습니다. 이동 전 351회 상당을 policy 343 + application 10으로 보존·보강했고
+  missing replay와 transport-independent rejection을 추가했습니다. boundary gate는 FastAPI·runtime
+  역의존과 transaction/lock/refresh 소유를 차단하며 strict mypy ratchet은 13→14개 파일입니다.
+- 확인된 검증: 인접 focused pytest 499건, API 전체 pytest 1,484건, Ruff `E/F/I`, format ratchet 60개,
+  strict mypy 14개 파일 오류 0, `uv lock --check`, 독립 리뷰 P0~P3 지적 없음과 `git diff --check`를
+  통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
+  최근 안전한 오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

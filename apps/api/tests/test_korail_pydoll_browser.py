@@ -33,6 +33,7 @@ from rail_waitlist.korail_pydoll_browser import (
     PydollPageSnapshot,
     PydollSeatBox,
     PydollTrainRow,
+    _configure_chromium_options,
     _merge_page_snapshots,
     _PydollSession,
     _set_chromium_binary,
@@ -1399,6 +1400,37 @@ def test_pydoll_uses_explicit_container_chromium_binary(
 
     _set_chromium_binary(options)
 
+    assert options.binary_location == str(binary)
+
+
+def test_pydoll_disables_password_manager_surfaces(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "chrome"
+    binary.write_bytes(b"fixture")
+    monkeypatch.setenv("KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH", str(binary))
+
+    class Options:
+        def __init__(self) -> None:
+            self.headless: bool | None = None
+            self.browser_preferences: dict[str, bool] = {}
+            self.arguments: list[str] = []
+            self.binary_location: str | None = None
+
+        def add_argument(self, argument: str) -> None:
+            self.arguments.append(argument)
+
+    options = Options()
+    _configure_chromium_options(options, headless=False)
+
+    assert options.headless is False
+    assert options.browser_preferences == {
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+        "profile.password_manager_leak_detection": False,
+    }
+    assert "--disable-save-password-bubble" in options.arguments
     assert options.binary_location == str(binary)
 
 

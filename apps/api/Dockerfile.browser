@@ -9,7 +9,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Playwright image's older bundled Chromium; Pydoll still controls it directly
 # over CDP and no WebDriver layer is introduced.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        novnc \
+        openbox \
+        scrot \
+        websockify \
+        x11-utils \
+        x11vnc \
+        xauth \
+        xvfb \
     && curl -fsSLo /tmp/google-chrome-stable.deb \
         https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
     && apt-get install -y --no-install-recommends /tmp/google-chrome-stable.deb \
@@ -19,18 +29,22 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir ".[browser]"
+RUN pip install --no-cache-dir --ignore-installed ".[browser]"
 
 FROM browser-base AS test
 
 USER root
 COPY tests ./tests
-RUN pip install --no-cache-dir ".[browser,test]"
+RUN pip install --no-cache-dir --ignore-installed ".[browser,test]"
 USER pwuser
-CMD ["pytest", "tests/test_korail_browser_automation.py", "tests/test_korail_direct_cdp.py", "tests/test_korail_pydoll_browser.py", "-q", "-p", "no:cacheprovider"]
+CMD ["pytest", "tests/test_korail_browser_automation.py", "tests/test_korail_browser_mode_smoke.py", "tests/test_korail_direct_cdp.py", "tests/test_korail_pydoll_browser.py", "tests/test_korail_sidecar_runtime.py", "-q", "-p", "no:cacheprovider"]
 
 FROM browser-base AS runtime
 
+USER root
+COPY scripts/start-korail-browser-runtime.sh /usr/local/bin/start-korail-browser-runtime
+RUN chmod 0755 /usr/local/bin/start-korail-browser-runtime
 USER pwuser
-EXPOSE 8001
+EXPOSE 8001 6080
+ENTRYPOINT ["/usr/local/bin/start-korail-browser-runtime"]
 CMD ["uvicorn", "rail_waitlist.korail_browser_adapter_service:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]

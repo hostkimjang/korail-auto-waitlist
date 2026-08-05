@@ -241,7 +241,7 @@ async def _finish_owned_cleanup(cleanup: Awaitable[object]) -> None:
         raise pending_cancellation
 
 
-async def probe_pydoll_chromium() -> None:
+async def probe_pydoll_chromium(*, headless: bool = True) -> None:
     """Start and close Pydoll Chromium without making an external request."""
     try:
         from pydoll.browser import Chrome
@@ -252,8 +252,7 @@ async def probe_pydoll_chromium() -> None:
     try:
         chromium_options_factory: Any = ChromiumOptions
         options = chromium_options_factory()
-        options.headless = True
-        _set_chromium_binary(options)
+        _configure_chromium_options(options, headless=headless)
         browser = Chrome(options=options)
         await browser.__aenter__()
         await browser.start()
@@ -681,8 +680,7 @@ class _PydollSession:
         try:
             chromium_options_factory: Any = ChromiumOptions
             options = chromium_options_factory()
-            options.headless = self.headless
-            _set_chromium_binary(options)
+            _configure_chromium_options(options, headless=self.headless)
             self._browser = Chrome(options=options)
             await self._browser.__aenter__()
             self._tab = await self._browser.start()
@@ -1827,3 +1825,14 @@ def _set_chromium_binary(options: Any) -> None:
     candidates = sorted(playwright_root.glob("chromium-*/chrome-linux/chrome"), reverse=True)
     if candidates:
         options.binary_location = str(candidates[0])
+
+
+def _configure_chromium_options(options: Any, *, headless: bool) -> None:
+    options.headless = headless
+    options.browser_preferences = {
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+        "profile.password_manager_leak_detection": False,
+    }
+    options.add_argument("--disable-save-password-bubble")
+    _set_chromium_binary(options)

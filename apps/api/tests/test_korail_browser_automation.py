@@ -203,7 +203,10 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
         async def search(self, data: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
             return result()
 
-    probe = FakeReadinessProbe()
+    probe_calls: list[bool] = []
+
+    async def probe(*, headless: bool = True) -> None:
+        probe_calls.append(headless)
     monkeypatch.setitem(
         sys.modules,
         "rail_waitlist.korail_pydoll_browser",
@@ -228,12 +231,64 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
         {
             "page_url": OFFICIAL_KORAIL_SEARCH_URL,
             "timeout_seconds": 25,
+            "headless": True,
             "allow_fullstack_fixture": False,
             "session_reuse_ttl_seconds": 1800,
             "session_reuse_max_searches": 100,
         }
     ]
-    assert selected_probe is probe
+    asyncio.run(selected_probe())
+    assert probe_calls == [True]
+
+
+def test_pydoll_gui_mode_uses_headed_client_and_readiness_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_calls: list[dict[str, object]] = []
+    probe_calls: list[bool] = []
+
+    class FakePydollClient:
+        def __init__(self, **kwargs: object) -> None:
+            init_calls.append(kwargs)
+
+    async def probe(*, headless: bool = True) -> None:
+        probe_calls.append(headless)
+
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "true")
+    monkeypatch.setitem(
+        sys.modules,
+        "rail_waitlist.korail_pydoll_browser",
+        SimpleNamespace(
+            PydollKorailBrowserClient=FakePydollClient,
+            probe_pydoll_chromium=probe,
+        ),
+    )
+
+    adapter_service._build_browser_client(
+        KorailBrowserEngine.PYDOLL,
+        page_url=OFFICIAL_KORAIL_SEARCH_URL,
+        timeout_seconds=25,
+        allow_fullstack_fixture=False,
+    )
+    selected_probe = adapter_service._readiness_probe_for_engine(KorailBrowserEngine.PYDOLL)
+    asyncio.run(selected_probe())
+
+    assert init_calls[0]["headless"] is False
+    assert probe_calls == [False]
+
+
+def test_gui_mode_rejects_the_legacy_playwright_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "true")
+
+    with pytest.raises(RuntimeError, match="GUI mode requires the pydoll engine"):
+        adapter_service._build_browser_client(
+            KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP,
+            page_url=OFFICIAL_KORAIL_SEARCH_URL,
+            timeout_seconds=25,
+            allow_fullstack_fixture=False,
+        )
 
 
 def test_browser_automation_cache_defaults_to_one_second(
@@ -249,6 +304,8 @@ def test_browser_automation_cache_defaults_to_one_second(
 def test_pydoll_engine_readiness_uses_selected_probe_without_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    probe_calls: list[bool] = []
+
     class FakePydollClient:
         def __init__(self, **kwargs: object) -> None:
             pass
@@ -256,7 +313,9 @@ def test_pydoll_engine_readiness_uses_selected_probe_without_network(
         async def search(self, data: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
             return result()
 
-    probe = FakeReadinessProbe()
+    async def probe(*, headless: bool = True) -> None:
+        probe_calls.append(headless)
+
     monkeypatch.setenv("KORAIL_BROWSER_ENGINE", "pydoll")
     monkeypatch.setitem(
         sys.modules,
@@ -273,7 +332,7 @@ def test_pydoll_engine_readiness_uses_selected_probe_without_network(
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
-    assert probe.calls == 1
+    assert probe_calls == [True]
 
 
 def test_direct_cdp_engine_keeps_existing_client_and_probe() -> None:

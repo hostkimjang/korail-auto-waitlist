@@ -1,0 +1,16 @@
+services:
+  korail-browser-adapter:
+    environment:
+      KORAIL_BROWSER_GUI_ENABLED: "true"
+      KORAIL_NOVNC_PASSWORD_FILE: /run/secrets/korail_novnc_password
+      KORAIL_VNC_GEOMETRY: ${KORAIL_VNC_GEOMETRY:-1440x1000}
+      DISPLAY: :99
+      XAUTHORITY: /tmp/korail-gui/Xauthority
+    ports:
+      - "127.0.0.1:${KORAIL_NOVNC_PORT:-6080}:6080"
+    secrets:
+      - korail_novnc_password
+
+secrets:
+  korail_novnc_password:
+    file: ./secrets/korail-novnc-password.txt

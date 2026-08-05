@@ -16,6 +16,27 @@ def test_sidecar_service_reexports_the_canonical_runtime_objects() -> None:
     assert compatibility_service.build_automation is runtime.build_automation
 
 
+def test_boolean_setting_accepts_only_explicit_true_or_false(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("KORAIL_BROWSER_GUI_ENABLED", raising=False)
+    assert runtime.boolean_setting("KORAIL_BROWSER_GUI_ENABLED", False) is False
+
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", " true ")
+    assert runtime.boolean_setting("KORAIL_BROWSER_GUI_ENABLED", False) is True
+
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "false")
+    assert runtime.boolean_setting("KORAIL_BROWSER_GUI_ENABLED", True) is False
+
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "1")
+    try:
+        runtime.boolean_setting("KORAIL_BROWSER_GUI_ENABLED", False)
+    except RuntimeError as error:
+        assert str(error) == "KORAIL_BROWSER_GUI_ENABLED must be true or false"
+    else:
+        raise AssertionError("invalid boolean setting must fail closed")
+
+
 def test_sidecar_runtime_does_not_reverse_depend_on_http_or_the_compatibility_facade() -> None:
     module_path = (
         Path(__file__).parents[1] / "src" / "rail_waitlist" / "korail_sidecar" / "runtime.py"

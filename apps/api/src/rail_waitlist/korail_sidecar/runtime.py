@@ -75,6 +75,18 @@ def browser_engine_setting() -> KorailBrowserEngine:
         raise RuntimeError(f"KORAIL_BROWSER_ENGINE must be one of: {allowed}") from error
 
 
+def boolean_setting(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise RuntimeError(f"{name} must be true or false")
+
+
 def integer_setting(name: str, default: int, *, minimum: int, maximum: int) -> int:
     try:
         value = int(os.getenv(name, str(default)))
@@ -102,7 +114,10 @@ def build_browser_client(
     timeout_seconds: float,
     allow_fullstack_fixture: bool,
 ) -> BrowserClient:
+    gui_enabled = boolean_setting("KORAIL_BROWSER_GUI_ENABLED", False)
     if engine is KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP:
+        if gui_enabled:
+            raise RuntimeError("KORAIL browser GUI mode requires the pydoll engine")
         return PlaywrightKorailBrowserClient(
             page_url=page_url,
             timeout_seconds=timeout_seconds,
@@ -114,6 +129,7 @@ def build_browser_client(
     return PydollKorailBrowserClient(
         page_url=page_url,
         timeout_seconds=timeout_seconds,
+        headless=not gui_enabled,
         allow_fullstack_fixture=allow_fullstack_fixture,
         station_identity_resolver=(
             None
@@ -140,9 +156,14 @@ def readiness_probe_for_engine(
     if engine is KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP:
         return probe_chromium
 
-    from ..korail_pydoll_browser import probe_pydoll_chromium
+    async def probe_selected_pydoll_mode() -> None:
+        from ..korail_pydoll_browser import probe_pydoll_chromium
 
-    return probe_pydoll_chromium
+        await probe_pydoll_chromium(
+            headless=not boolean_setting("KORAIL_BROWSER_GUI_ENABLED", False)
+        )
+
+    return probe_selected_pydoll_mode
 
 
 def build_automation(

@@ -85,8 +85,10 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
   provider base·execution·experimental·KORAIL execution·timetable adapter와 registry application
   및 observation operational projection·reservation payment-hold·watch transition notification
   application, observation cycle·idempotency application·watch transition policy/application·watch
-  update application·reservation attempt policy/claim/result application·KORAIL sidecar runtime의 19개
-  파일을 명시적 ratchet으로 검사합니다.
+  update application·reservation attempt policy/claim/result application·reservation reconciliation
+  policy/state application·KORAIL sidecar runtime/HTTP·Pydoll browser/confirmation reader/HTTP replay
+  manager의 25개 파일을
+  명시적 ratchet으로 검사합니다.
   `ignore_missing_imports`, 전역 오류 코드 비활성화,
   광범위한 `type: ignore`로 통과시키지 않습니다. 새 owner는 오류 0을 만든 뒤 대상 목록에
   추가하고 전체 legacy package가 이미 strict라고 표현하지 않습니다.
@@ -104,6 +106,8 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
 - 트랜잭션 경계는 application 유스케이스가 소유하고 route와 worker entrypoint는 이를 호출합니다. repository 메서드마다 임의 commit하지 않습니다.
 - 상태 변경과 해당 outbox 이벤트는 같은 트랜잭션에 기록합니다. 외부 알림 전송은 commit 이후 outbox 소비자가 담당합니다.
 - 외부 provider 호출 동안 불필요한 DB 트랜잭션이나 row lock을 유지하지 않습니다. 다만 호출 전·결과 기록 전 lease와 fencing token 소유권은 다시 확인합니다.
+- reconciliation의 retry 간격·상한은 순수 policy, confirmation 결과를 DB 상태·outbox로 반영하는 일은
+  state application에 둡니다. 상위 application은 due 선택·lease·인증 actor lifecycle만 조립합니다.
 - 계정과 watch를 함께 잠글 때는 `provider account -> watch` 순서를 유지합니다.
 - 멱등 키, 후보 unique, availability episode fence, credential generation CAS, provider/account lease를 우회하지 않습니다.
 - timezone-aware datetime과 KST 서비스 날짜를 구분합니다. naive datetime을 새로 만들거나 UTC와 서비스 날짜를 암묵적으로 변환하지 않습니다.

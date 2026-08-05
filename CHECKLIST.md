@@ -415,7 +415,8 @@
 - [x] 스물다섯 번째 구조 슬라이스 K의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
-- [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
+- [x] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행. 독립 session과 spawn한
+  holder·takeover process가 guarded lock 대기, commit 뒤 fencing token +1, stale epoch 거부를 확인
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
 - [ ] 개발 demo의 Telegram·Webhook editor 저장을 로컬 metadata simulation으로 제공할지 비활성화할지 확정하고, demo에서 live create/update API를 호출하지 않는 계약을 별도 행동 변경 슬라이스로 구현
 - [ ] 알림 채널 저장·toggle·시험·Web Push 연결 mutation의 401을 인증 만료로 전달하고, logout/reset 뒤 완료되는 늦은 mutation이 채널 상태·toast를 되살리지 않도록 request epoch fence를 별도 행동 변경 슬라이스로 구현
@@ -431,7 +432,9 @@
 - [ ] UI preference application 분리 완료 위에서 API의 나머지 router·schema·application 경계를 분리하고 application의 HTTP 오류 의존 제거
 - [x] 예약 결과의 재시도·수동 확인 투영을 `reservations/domain.py` 순수 정책과 전체 outcome 표 테스트로 분리
 - [x] watch transition 정책을 프레임워크 비의존 결정 함수로 추출하고 13×13 상태표·provider 지연 조회·DB UoW 불변식 회귀 검증
-- [ ] reservation episode·reconciliation의 남은 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
+- [x] reservation episode의 기존 순수 policy와 reconciliation retry 상한·간격을
+  `reservations/reconciliation_policy.py`로, confirmation 결과의 상태·outbox 적용을
+  `reconciliation_state_application.py`로 분리하고 기존 DB 불변식·worker wiring 회귀 검증
 - [x] worker의 reservation execution을 application으로 분리하고 얇은 runtime 조립, claim/result UoW·잠금 순서·outbox 원자성·credential CAS 회귀 테스트 완성
 - [x] worker의 watch-group observation을 application으로 분리하고 얇은 Celery/runtime 조립, lease fencing·동일 조회 병합·상태 요약·rollback·PostgreSQL lock SQL 회귀 테스트 완성
 - [ ] Mock 전용 node ID partial·same·unknown·name mismatch를 parameterized 회귀로 고정하고 capability note·전체 node/city fixture·정확한 5분 freshness·20분 결제 기한 간격을 직접 검증
@@ -544,6 +547,26 @@
 - [x] 2026-07-31 당시 `playwright_direct_cdp` 이미지의 대전→서울 12:00–18:00 단발에서 비동기 역·날짜·시간 선택과 공식 표시 입력 exact read-back, 최종 조회 1회 제출까지 통과한 뒤 `wait_result/marker_code_8003`을 sidecar HTTP 423·API `provider_access_restricted`로 정규화해 변환 계층 문제가 아님을 확인
 - [x] sidecar 재빌드 뒤 `/ticket/search/general` 시작 URL과 가시 `txtGoStart`·`txtGoEnd`·`총 1명` pre-submit read-back을 대전→서울 09:00–12:00 실제 단발에서 통과하고, 시간표 16개 정상 반환 뒤 `wait_result/marker_code_8003`을 sidecar 423 및 API HTTP 200의 `unknown/not_observed` fail-closed로 확인 (추가 재시도·좌석 성공 주장 없음)
 - [x] KORAIL sidecar 기본 엔진을 WebDriver 없는 Pydoll CDP로 연결하고 `KORAIL_BROWSER_ENGINE=playwright_direct_cdp`를 명시한 경우에만 기존 직접 Chromium·loopback CDP 엔진을 선택하도록 구성 검증
+- [x] KORAIL sidecar의 HTTP route·lifespan·internal bearer·DTO 정규화를 `korail_sidecar/http.py`로 이동하고
+  기존 service facade의 monkeypatch·logger compatibility와 reserve/confirmation HTTP 회귀 계약 보존
+- [x] KORAIL 동일 인증 세션 보류 확인을 좁은 snapshot Protocol의
+  `korail_pydoll_confirmation_reader.py`로 이동하고 상세→공식 목록 fallback, exact identity·보호·인증
+  fail-closed 계약을 검증
+- [x] KORAIL read-only HTTP replay의 route별 lease·TTL·횟수·LRU·capture/install·보호 폐기·close를
+  strict `korail_pydoll_http_replay.py` manager로 이동하고 검색 session 정리 뒤 finalize 순서와 인증 actor
+  격리를 검증
+- [x] 홈 활동 중 대기 행의 정책·상태·공식 인계 presentation을 strict
+  `features/home/activeWatchViewModel.ts`로 이동하고 `ActiveWatchList.tsx`는 typed rendering·행동 조립만 유지
+- [x] 홈 결제 필요 목록의 production watch와 legacy snake_case 입력을 strict
+  `features/home/paymentRequiredViewModel.ts`의 camelCase 표시 계약으로 변환하고 Home/목록의 raw alias 의존 제거
+- [x] 활동 중 대기 예약 정책 control의 기본·760px responsive CSS를
+  `features/new-wait/reservationPolicyControl.css` owner로 이동하고 selector 순서·44px 행동 영역·320px/200%
+  회귀를 검증
+- [x] 스물여섯 번째 구조 슬라이스의 웹 Vitest 83파일·593건, lint 오류 0/기존 warning 12,
+  typecheck·build·Sites 4건·기본 E2E 14건과 API pytest 1,566건·Ruff `E/F/I`·format ratchet 59개·strict
+  mypy 25파일·lock check, 독립 리뷰 보정 뒤 P0~P3 잔여 없음과 `git diff --check` 통과
+- [x] 스물여섯 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init
+  exit 0, 장기 서비스 11/11 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] Pydoll의 pre-submit 역·날짜·시각·성인 1명 exact readback, 결과 화면에서 역 입력이 사라진 경우 날짜·시각·인원과 결과 행 구간 exact match, KTX 계열 전용 좌석 정규화 계약 구현
 - [x] Slick 시간 picker의 현재 `slick-current` 창과 인접 사전 렌더링 창이 함께 가시·active로 읽혀도 현재 창의 활성 control만 선택하고, 소유가 확인된 fixture 화살표가 있으면 한 번만 누르며 실제 공식 무화살표 `.slideWrap`은 가시 `.slick-list`를 CDP pointer drag한 뒤 창 signature 변경을 확인하고 무진전·반복은 fail-closed하는 외부 호출 없는 Chromium fixture 회귀 검증
 - [x] 공식 UI가 현재 시간 창에서 이미 선택한 `05시`만 soft `aria-disabled=true`로 노출할 때 요청 날짜 day 클릭·picker 전 시각 일치·요청 시각 단일 후보·나머지 현재 창 시각 전부 활성 조건에서만 클릭을 생략하고, 적용 뒤 날짜·시각 exact readback 불일치와 기존 시각 불일치·disabled 속성/class는 거부하는 Chromium fixture 회귀 검증

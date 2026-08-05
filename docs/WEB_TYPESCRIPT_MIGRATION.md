@@ -4,13 +4,19 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 열아홉 번째 B 수직 슬라이스를 마친 현재 `api.js`와 `App.jsx`는 제거됐고 strict `App.tsx`는 246줄이며, `styles.css`는 `tokens/base/shell/features/responsive`를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 설정 resource orchestration, app navigation·shell·authentication·logout·compatibility, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표·철도 계정·runtime도 production ViewModel 계약을 사용합니다. App에는 페이지/controller props와 등록 완료 조립만 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 현재 `api.js`와 `App.jsx`는 제거됐고 strict `App.tsx`는 246줄이며, `styles.css`는 기능 CSS owner를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 설정 resource orchestration, app navigation·shell·authentication·logout·compatibility, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 홈 활동 중 대기 행의 표시 판단은 `features/home/activeWatchViewModel.ts`로 분리하고, `ActiveWatchList.tsx`는 표시·행동 조립만 남겼습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표·철도 계정·runtime도 production ViewModel 계약을 사용합니다. App에는 페이지/controller props와 등록 완료 조립만 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict `App.tsx`와 typecheck gate가 적용되어 있고 Vitest가 탐색하는 모든 테스트도
 strict `.ts`·`.tsx`로 전환됐습니다. `allowJs`·`checkJs`와 Vitest의 JS/JSX include는 제거했습니다.
 `domain/`, `api/`, `features/`, `shared/` 아래에도 auth, home, new-wait, official-handoff,
 reservations, settings의 leaf 컴포넌트·hook·순수 함수가 분리되어 있습니다. `api.js` barrel과 확인된
 feature 간 역방향 import는 제거됐지만, 이는 모든 DTO/mapper 경계가 끝났다는 뜻은 아닙니다.
+
+결제 필요 목록은 `features/home/paymentRequiredViewModel.ts`가 production watch와 legacy snake_case
+호환 입력을 camelCase 표시 계약으로 변환하며 Home과 `PaymentRequiredSection`은 raw API alias를 읽지
+않습니다. `reservationPolicyControl.css`는 새 대기 2단계의 예약 방식 option·설명·760px 반응형 규칙을
+독립 owner로 소유합니다. 2026-08-05 최종 웹 검증은 Vitest 83개 파일·593건, ESLint 오류 0개(기존 baseline
+warning 12개), strict typecheck, production build, Sites 4건, 기본 E2E 14건을 통과했습니다.
 
 ## 목표 구조
 

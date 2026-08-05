@@ -97,6 +97,10 @@ API 시작 시 DB에서 `enabled=true`인 저장 계정을 마지막 상태가 `
 
 운영 화면에서 과거 `좌석 임시 확보 · 결제 필요`가 계속 보이면 후보의 최신 attempt에서 `confirmation_outcome=NOT_FOUND`와 `post_deadline_reconciled_at`이 함께 반환되는지 확인합니다. 두 값이 모두 확인된 자동 예매 작업은 홈에서 `결제 보류 종료 확인 · 감시 계속`으로 표시되어야 하며, 같은 에피소드를 즉시 재예약하지 않고 다음 확정 비가용→행동 가능 관측을 기다려야 합니다. marker가 없으면 최종 보류 소실을 뜻하지 않으므로 결제 필요 또는 공식 내역 확인 상태를 임의로 바꾸지 않습니다.
 
+retry schedule은 `reservations/reconciliation_policy.py`, confirmation 결과의 상태·outbox 적용은
+`reservations/reconciliation_state_application.py`가 소유합니다. 따라서 운영 점검은 기존 HTTP 응답만이
+아니라 저장된 attempt 필드와 outbox 결과를 기준으로 합니다.
+
 로그인 중 웹 알림은 단일 `실시간 알림` surface에서 결제·수동 확인·인증·좌석 발견을 우선하고 진행·복구·일반 알림을 뒤에 둡니다. 동일 watch는 최신 revision 한 장만 유지하며 같은 revision이나 더 오래된 `revisionAt`을 다시 안내하지 않습니다. 종류별 건수·펼치기·그룹 닫기가 있고 surface 접기는 확인이나 삭제가 아닙니다. 접힌 동안 카드가 언마운트되지 않아 일반 30초와 완료된 단계형 복구 60초 타이머가 계속 흐릅니다. 진행 중 예매와 행동 필요 알림은 최종 result revision으로 교체되거나 사용자가 닫기 전에는 자동으로 닫지 않습니다. KORAIL result event에는 인증 세션 확인·대상 재확인·좌석 선택·예약 요청 중 실제 도달한 단계의 시각만 들어가며, 웹은 이를 KST 시각과 단계 사이 처리시간으로 표시합니다.
 
 ## 알림 채널 설정
@@ -323,6 +327,13 @@ docker compose --profile experimental-rail run --rm --no-deps `
   --volume "${PWD}/apps/api/scripts/check_execution_lease_fencing_postgres.py:/tmp/check.py:ro" `
   api python /tmp/check.py
 ```
+
+이 검사는 독립 session뿐 아니라 spawn한 holder·takeover 두 OS process와 별도 PostgreSQL backend PID를
+사용합니다. takeover가 guarded row lock에서 실제 대기한 것을 `pg_stat_activity`·`pg_locks`로 확인한 뒤
+commit 후 token이 정확히 1 증가하고 stale epoch가 거부되는지 검사합니다. GitHub Actions의
+`postgres-execution-lease-fencing` job은 격리 PostgreSQL 16 service에 migration을 적용한 뒤 같은 script를
+상시 실행합니다. 이는 CI 실행 임대 fencing 보증이며, 다중 watch·credential 교체·관찰 저장까지 포함한
+전체 경합 시나리오는 별도 운영 검증 항목입니다.
 
 sidecar는 host 포트를 열지 않고 API 내부망과 별도 egress network에만 연결합니다. read-only root filesystem에서도 이미지의 `pwuser` UID/GID 1001이 쓸 수 있는 전용 HOME tmpfs와 `/tmp`를 제공합니다. `/healthz`는 프로세스 liveness만 나타내고, Compose healthcheck가 사용하는 `/readyz`는 공식 페이지를 열지 않은 채 선택한 엔진의 Chromium launch/close probe를 통과한 뒤에만 `200`을 반환합니다. startup probe가 일시적으로 실패하면 `/readyz`는 준비 전까지 `503`으로 닫고, 5초 간격·동시 1개·30초 제한으로 재probe해 성공을 캐시하므로 컨테이너 수동 재시작 없이 회복할 수 있습니다. API가 sidecar 전체 응답을 기다리는 기본 제한은 90초, sidecar의 각 UI 대기는 25초로 분리합니다.
 

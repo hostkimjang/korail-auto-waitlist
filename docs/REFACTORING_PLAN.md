@@ -1589,6 +1589,40 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 Phase 8 범위: sidecar HTTP/lifespan owner, Pydoll DOM driver/parser, read-only 검색·replay lifecycle,
   인증 actor와 예약·확인 application은 후속 수직 슬라이스에서 의존 방향과 fixture gate를 함께 고정합니다.
 
+### 2026-08-05 스물여섯 번째 구조 슬라이스
+
+- 활동 중 대기 행: `ActiveWatchList.tsx`의 API/domain 해석을 strict
+  `features/home/activeWatchViewModel.ts`로 옮겼습니다. owner는 정책 switch 가능 여부, 인증 요약,
+  결제 보류 종료·수동 확인·공식 인계의 표시 판단을 소유하고 목록 컴포넌트는 typed presentation과
+  사용자 행동만 조립합니다. 결제 필요 목록은 `features/home/paymentRequiredViewModel.ts`에서 production
+  watch와 legacy snake_case 입력을 camelCase 표시 계약으로 정규화해 Home과 목록 컴포넌트에 전달합니다.
+  `ReservationPolicyControl`의 기본·760px 반응형 selector는 별도 CSS owner로 이동했으며, 공용 selector와
+  cascade 순서는 유지했습니다.
+- 예약 정합화: `reservations/reconciliation_policy.py`가 bounded retry 상한·간격을, FastAPI·Celery
+  비의존 `reconciliation_state_application.py`가 confirmation 결과의 상태 전이·outbox 적용을 소유합니다.
+  상위 reconciliation application은 due 선택, execution lease, credential generation 확인과 provider actor
+  lifecycle만 조립합니다. 기존 service facade·worker task·HTTP 계약은 호환 경계로 보존했습니다.
+- KORAIL sidecar: FastAPI route·lifespan·internal bearer·DTO 정규화는 `korail_sidecar/http.py`로 이동했고,
+  service facade는 compatibility dependency를 호출 시점에 조립합니다. Pydoll 동일 세션 보류 판독은
+  `korail_pydoll_confirmation_reader.py`가 좁은 snapshot Protocol과 상세→공식 목록 fallback을 소유합니다.
+  보호·인증·복수/불완전 일치는 fail-closed이며 예약·취소·결제 호출은 만들지 않습니다. 읽기 전용
+  route별 replay lease·TTL·횟수·LRU·capture/install·폐기·close는 strict
+  `korail_pydoll_http_replay.py` manager로 이동하고 Pydoll client에는 검색/session actor 조립만 남겼습니다.
+- PostgreSQL fencing: acceptance script가 독립 session뿐 아니라 spawn한 holder·takeover process, 별도
+  backend PID, 실제 lock wait, commit 뒤 fencing token +1과 stale epoch 거부를 확인하도록 확장했습니다.
+  격리 PostgreSQL 16 service를 사용하는 `postgres-execution-lease-fencing` CI job이 migration 뒤 이를
+  상시 실행합니다. 이는 execution lease에 한정하며 watch/candidate/circuit 전체 경합은 아직 별도 범위입니다.
+- 확인된 검증: 웹은 Vitest 83개 파일·593건, ESLint 오류 0·기존 baseline warning 12개, strict typecheck,
+  production build, Sites 4건, 기본 E2E 14건을 통과했습니다. API는 focused owner·boundary 회귀, Ruff
+  `E/F/I`, format ratchet 59개, strict mypy 25개 파일, `uv lock --check`와 전체 pytest 1,566건을
+  통과했습니다. 기존 Starlette/httpx deprecation warning 1건은 유지됐습니다.
+- 통합 운영 검증: `experimental-rail`에서 `config --quiet` → 전체 build → `up -d --force-recreate`를
+  수행했고 migration·log-init 2개 정상 종료, 장기 서비스 11/11 healthy, API health·ready와 proxy health
+  200, 재생성 뒤 최근 안전한 오류 표식 0건을 확인했습니다.
+- 남은 Phase 8 범위: sidecar DOM driver·parser와 read-only UI 검색 orchestration, 인증 actor와 단발
+  예약 workflow의 더 작은 owner 분리는 계속 미완료입니다. 이 상태를 HTTP·confirmation reader·replay
+  manager 분리만으로 완료라고 표현하지 않습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

@@ -55,13 +55,20 @@ stream인 `/events`는 알림 채널 CRUD와 수명주기가 다르므로 `event
 소유합니다. 중앙 `api.py`는 제거됐으며 아래 기능 router를 `main.py`가 명시적으로 조립합니다. 공개
 endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습니다. 웹 진입 조립은 strict
 `App.tsx`로 전환됐고, provider 물리 경계와 UI preference 저장 application도 분리됐습니다. API
-`services.py`의 나머지 use case, `worker.py`의 runtime 조립 정리와 웹 DTO·도메인·ViewModel의 추가
-분리는 계속 남아 있습니다. Vitest가 탐색하는 legacy JS/JSX 테스트와 `allowJs`는 제거됐습니다.
+홈의 활동 중 대기 행은 `features/home/activeWatchViewModel.ts`가 API/domain 값에서 접근 가능한 이름,
+정책 전환 가능 여부, 결제 보류·수동 확인·공식 인계의 표시 계약을 계산하고,
+`ActiveWatchList.tsx`는 typed row presentation과 사용자 행동만 조립합니다. 결제 필요 목록은
+`features/home/paymentRequiredViewModel.ts`가 API projection과 legacy snake_case 입력을
+camelCase 표시 계약으로 바꾸며, `PaymentRequiredSection`과 `HomePage`는 이 ViewModel만 소비합니다.
+API `services.py`의 나머지 use case, `worker.py`의 runtime 조립 정리와 웹 DTO·도메인·ViewModel의 추가
+분리는 계속 남아 있습니다.
+Vitest가 탐색하는 legacy JS/JSX 테스트와 `allowJs`는 제거됐습니다.
 
 웹 전역 CSS 진입점 `styles.css`는 일반 규칙을 직접 소유하지 않고 `tokens -> base -> shell ->
 features -> operations -> app-surfaces -> features/reservations/reservations ->
-features/settings/timetableRefreshSettings -> features/official-handoff/officialHandoff ->
-features/new-wait/officialSeatConfirmation -> responsive` 순서의 열한 경계를 import합니다. 초기 다섯 경계
+features/new-wait/reservationPolicyControl -> features/settings/timetableRefreshSettings ->
+features/official-handoff/officialHandoff -> features/new-wait/officialSeatConfirmation -> responsive` 순서의
+열두 경계를 import합니다. 초기 다섯 경계
 구조 분리는 기존 6,648줄의 selector·규칙·media/container query·keyframes 순서를 바꾸지 않은
 기계적 이동이었습니다. production graph의 `OfficialHandoff` modal/sheet 기본·760px 규칙 237줄은
 `features/official-handoff/officialHandoff.css`가 소유하고, dormant `OfficialSeatConfirmation`의
@@ -73,6 +80,8 @@ owner에 남깁니다.
 화면 시간표 갱신·좌석 관측 간격 form의 `.refresh-preference-*` 기본 selector와 760px override는 181줄
 `features/settings/timetableRefreshSettings.css`가 소유합니다. 여러 설정이 공유하는 `.setting-row*`와
 새 대기 단계의 `.step-three-*`는 이동하지 않습니다.
+새 대기 2단계의 `.reservation-policy-*` 기본·760px 반응형 규칙은
+`features/new-wait/reservationPolicyControl.css`가 소유합니다.
 후속 분리에서 `features.css` 끝의 toast·실시간 알림 surface·인증/loading 480행을 selector·선언·상대
 순서 그대로 `app-surfaces.css`로 이동했습니다. `toast-step-spin`과 `toast-in`도 사용하는 surface와 함께
 이동했습니다. 이어 settings의 운영 상태 대시보드 전용 tail 447줄과 `operations-shimmer`·reduced-motion
@@ -137,9 +146,11 @@ wrapper만 남았습니다. 여러 기능이 공유하는 outbox idempotency pri
 기존 at-least-once 성격이며, claim transaction과 전달 결과 transaction을 분리하려면 crash recovery와
 중복 수신 정책을 함께 설계해야 하는 후속 부채입니다.
 
-예약 시도 읽기 전용 정합화의 due 선택·공식 확인·credential generation 재검증·상태/outbox 적용은
-FastAPI·Celery 비의존 `reservations/reconciliation_application.py`가 소유합니다. worker는 기존 task
-이름과 `rail` queue, runtime dependency 조립만 유지합니다. 상태 적용 transaction은 실행 임대 행부터
+예약 시도 읽기 전용 정합화의 due 선택·공식 확인·credential generation 재검증은 FastAPI·Celery 비의존
+`reservations/reconciliation_application.py`가 소유합니다. 빠른·지연 확인 횟수와 간격은 순수
+`reservations/reconciliation_policy.py`, confirmation 결과의 상태·outbox 적용은
+`reservations/reconciliation_state_application.py`가 소유합니다. worker는 기존 task 이름과 `rail` queue,
+runtime dependency 조립만 유지합니다. 상태 적용 transaction은 실행 임대 행부터
 `account -> watch -> candidate -> attempt` 순서로 잠그고, 도메인 잠금 뒤 같은 owner·scope·fencing
 token·미만료 조건을 다시 확인합니다. 두 번째 확인 직후의 새 UTC 시각으로 due와 결제기한을
 재평가하고 상태와 outbox를 함께 commit합니다. 잠금 대기 중 임대 epoch나 결제기한이 바뀐 늦은
@@ -420,6 +431,17 @@ API lifespan은 station catalog preload와 별도로 상주 provider session man
 
 KORAIL read-only 시간표 검색은 인증 actor가 READY여도 별도 ephemeral browser lease를 획득하고, 성공한 공개 검색의 HTTP replay pool도 인증 session과 분리합니다. SRT sidecar도 `source`와 `executor`를 별도 객체로 보유합니다. 따라서 background 검색이 인증 actor의 generation·cookie를 빌려 쓰거나 폐기하지 않으며, 인증 actor는 로그인 검증·단발 예약·공식 보류 확인만 직렬화합니다. KORAIL warm 인증 actor는 credential generation·fingerprint와 로컬 재사용 기한이 일치할 때만 같은 Chromium context의 새 탭에서 strict 결과 URL로 바로 이동해 중복 공개 검색 화면 왕복을 줄입니다. 새 탭 격리와 exact target·좌석·단발 click latch는 유지하며 read-only HTTP replay나 예약 POST 재전송은 사용하지 않습니다.
 
+KORAIL sidecar의 HTTP route·internal Bearer 검증·DTO 정규화·lifespan은
+`korail_sidecar/http.py`가 소유하고, `korail_browser_adapter_service.py`는 호출 시점 compatibility
+dependency를 조립하는 얇은 facade로 남습니다. lifecycle·DOM·검색·인증·예약 전체 분리가 끝난 것은
+아닙니다. Pydoll의 동일 인증 세션 보류 확인은 `korail_pydoll_confirmation_reader.py`가 좁은 snapshot
+Protocol만 통해 현재 상세를 읽고 exact 근거가 없을 때만 공식 예약 목록을 읽습니다. 보호·인증·복수
+일치·불완전 정보는 성공으로 추정하지 않으며 이 reader는 예약·취소·결제 동작을 호출하지 않습니다.
+읽기 전용 HTTP replay의 route별 lease·TTL·횟수·LRU·capture/install·보호 응답 폐기와 취소 안전한
+정리는 `korail_pydoll_http_replay.py`의 manager가 소유합니다. Pydoll client는 검색/session actor와
+replay 설치 뒤 persistent 검색 session 폐기 순서만 조립하고, 인증 actor의 session·cookie를 replay에
+전달하지 않습니다.
+
 Migration `0020_reservation_reconciliation`은 `ReservationAttempt`에 실제 호출 credential generation과 정규화한 공식 확인 outcome·source·observed time·reconciled time을 추가합니다. `0021`은 일반 확인 횟수와 다음 확인 시각을, `0022`는 기한 경과 후 최종 확인 marker와 index를 추가합니다. worker는 provider/account 실행 임대와 fencing 아래 같은 credential generation의 인증 actor만 사용합니다. `PAYMENT_REQUIRED`는 빠른 확인 최대 3회와 marker 없는 결제기한 경과 보류의 최종 확인 1회를 유지하고, 이전 버전이 과거 기한 exact 행에 marker만 남긴 경우 호환성 정리 read를 한 번 허용합니다. `UNKNOWN + INCONCLUSIVE`는 빠른 3회 뒤 5분·15분·60분 지연 확인을 더해 총 6회까지 읽기 전용으로 확인합니다. KORAIL은 동일 인증 session의 현재 상세 화면, SRT는 예약 목록을 정확한 열차·구간·서비스일·출발시각·좌석 등급에 맞춥니다. 정확히 하나의 미결제 보류와 미래 결제기한이 확인된 경우에만 `payment_required` handoff를 복구합니다. `NOT_FOUND` 또는 exact 행의 공식 기한이 최종 확인 시각 이하인 결과는 정책별 종료·감시 복귀로 처리하지만 기존 episode를 직접 재무장하지 않습니다. `INCONCLUSIVE`·기한 없는 exact 행·인증·차단·확인 호출 실패는 상태를 추정하거나 episode를 재무장하지 않습니다. 최초 `UNKNOWN`의 exact `NOT_FOUND`만 같은 연속 가용 구간에서 `confirmed-absent-retry:<attempt.id>`로 한 번 재무장하며, 재무장된 `UNKNOWN`은 더 이상 예약 호출하지 않습니다. reconciliation task는 예매·취소·결제 동작을 호출하지 않습니다.
 
 Migration `0019_candidate_operational_state`는 `scheduled_departure_at`, `estimated_departure_at`, `actual_departure_at`, `delay_minutes`, 운행·예매창 상태와 provenance를 분리합니다. KORAIL `BrowserTrainSnapshot`은 정확한 `N분 지연 예상` 문구를, HTTP replay는 `h_expn_dpt_dlay_tnum`을 `delay_minutes`로 정규화합니다. 이 투영은 scheduled identity를 보존하고 `estimated_departure_at`만 갱신합니다. `sold_out`은 좌석 재고 관측이므로 예매창 `closed`로 승격하지 않습니다. fresh terminal provenance가 있는 출발·취소·예매창 종료만 즉시 만료시킵니다. 이 판정 전에 `Watch.travel_date`로 후보를 제외하지 않으므로 KST 자정 직전 다음 서비스일 열차도 신선한 공식 `closed` 근거를 즉시 반영합니다. fresh 지연·탑승·열린 예매창은 예정시각 경과보다 우선합니다. 상태가 unknown이거나 terminal 근거가 stale이면 예정 출발 뒤 최대 15분 동안만 제한 재평가하고, 그때까지 신선한 계속 운행 근거가 없으면 절대 horizon에서 fail-closed 만료합니다. 이는 앞선 `departure_at` 기반 호환 identity·시간창 설명보다 우선하는 현재 만료 계약입니다.
@@ -491,9 +513,9 @@ adapter→registry/facade 역의존을 차단합니다.
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
 공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
 payment-hold·reservation attempt policy/claim/result application·watch transition notification
-application·watch transition policy/application·watch update application·KORAIL sidecar runtime의
-19개 오류 0
-파일만 대상입니다. registry 반환 타입은
+application·watch transition policy/application·watch update application·reservation reconciliation
+policy/state application·KORAIL sidecar runtime/HTTP·Pydoll browser/confirmation reader/HTTP replay
+manager의 오류 0인 25개 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로

@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .domain import Provider
 from .models import StationCatalogCache
-from .providers import ProviderUnavailable, TagoClient
+from .provider_adapters.tago import TagoClient
+from .provider_contracts import ProviderUnavailable
 from .schemas import StationCatalog, StationItem
 from .station_visibility import (
     KORAIL_STATION_DATA_URL,
@@ -92,15 +93,9 @@ class StationCatalogRepository:
                 raw_identity_stations = row.payload.get("stations")
                 raw_display_stations = row.payload.get("display_stations")
                 visibility = row.payload.get("visibility")
-                identity_stations = _station_list_adapter.validate_python(
-                    raw_identity_stations
-                )
-                display_stations = _station_list_adapter.validate_python(
-                    raw_display_stations
-                )
-                visibility_retrieved_at = datetime.fromisoformat(
-                    visibility["retrieved_at"]
-                )
+                identity_stations = _station_list_adapter.validate_python(raw_identity_stations)
+                display_stations = _station_list_adapter.validate_python(raw_display_stations)
+                visibility_retrieved_at = datetime.fromisoformat(visibility["retrieved_at"])
             except (AttributeError, KeyError, TypeError, ValidationError, ValueError):
                 return None
             if (
@@ -130,9 +125,7 @@ class StationCatalogRepository:
                 refresh_after=_aware_utc(row.refresh_after),
             )
 
-    async def try_acquire_lease(
-        self, owner: str, now: datetime, lease_until: datetime
-    ) -> bool:
+    async def try_acquire_lease(self, owner: str, now: datetime, lease_until: datetime) -> bool:
         await self.ensure_canonical_row()
         async with self._session_factory() as session:
             result = await session.execute(
@@ -176,12 +169,8 @@ class StationCatalogRepository:
         ):
             return False
         payload = {
-            "stations": [
-                station.model_dump(mode="json") for station in identity_stations
-            ],
-            "display_stations": [
-                station.model_dump(mode="json") for station in display_stations
-            ],
+            "stations": [station.model_dump(mode="json") for station in identity_stations],
+            "display_stations": [station.model_dump(mode="json") for station in display_stations],
             "visibility": {
                 "source": "korail_station_guide",
                 "url": self._visibility_url,
@@ -233,9 +222,7 @@ class StationCatalogRepository:
             return result.rowcount == 1
 
 
-def _catalog_from_snapshot(
-    snapshot: StationCatalogSnapshot, provider: Provider
-) -> StationCatalog:
+def _catalog_from_snapshot(snapshot: StationCatalogSnapshot, provider: Provider) -> StationCatalog:
     stations = snapshot.display_stations
     return StationCatalog(
         provider=provider,
@@ -321,9 +308,7 @@ class StationCatalogService:
     async def _refresh_or_wait(self) -> StationCatalogSnapshot | None:
         owner = uuid.uuid4().hex
         now = datetime.now(UTC)
-        acquired = await self.repository.try_acquire_lease(
-            owner, now, now + REFRESH_LEASE
-        )
+        acquired = await self.repository.try_acquire_lease(owner, now, now + REFRESH_LEASE)
         if not acquired:
             return await self._wait_for_other_owner()
         try:
@@ -332,9 +317,7 @@ class StationCatalogService:
                 visibility_roster = await self.station_visibility.load_roster()
             if not catalog.stations:
                 raise ValueError("empty station catalog")
-            display_stations = filter_station_items(
-                catalog.stations, visibility_roster
-            )
+            display_stations = filter_station_items(catalog.stations, visibility_roster)
             completed_at = datetime.now(UTC)
             retrieved_at = min(
                 catalog.retrieved_at.astimezone(UTC),

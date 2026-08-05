@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from .domain import Provider
-from .providers import OFFICIAL_BOOKING_URLS
+from .provider_adapters.base import OFFICIAL_BOOKING_URLS
 from .schemas import (
     SeatAvailability,
     SeatAvailabilityAction,

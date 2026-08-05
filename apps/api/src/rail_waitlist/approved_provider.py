@@ -10,7 +10,9 @@ from typing import Protocol
 
 from .domain import Provider
 from .metrics import PROVIDER_OPERATION_DURATION, PROVIDER_OPERATIONS
-from .providers import OfficialTimetableAdapter, ProviderUnavailable, RailProviderAdapter
+from .provider_adapters.base import RailProviderAdapter
+from .provider_adapters.timetable import OfficialTimetableAdapter
+from .provider_contracts import ProviderUnavailable
 from .schemas import (
     ProviderCapabilities,
     ReservationRequest,
@@ -85,9 +87,7 @@ class ApprovedProviderTransport(Protocol):
         self, request: SeatObservationRequest
     ) -> ApprovedObservationEnvelope: ...
 
-    async def reserve_once(
-        self, request: ReservationRequest
-    ) -> ApprovedReservationEnvelope: ...
+    async def reserve_once(self, request: ReservationRequest) -> ApprovedReservationEnvelope: ...
 
 
 class ApprovedProviderTransportError(RuntimeError):
@@ -116,9 +116,7 @@ class ApprovedProviderAdapter(RailProviderAdapter):
             raise ValueError("approved transport source must be a public, normalized identifier")
 
     def capabilities(self) -> ProviderCapabilities:
-        seat_monitoring = (
-            self._grant.seat_monitoring and self._transport.supports_seat_monitoring
-        )
+        seat_monitoring = self._grant.seat_monitoring and self._transport.supports_seat_monitoring
         reservation_once = (
             seat_monitoring
             and self._grant.reservation_once
@@ -132,9 +130,7 @@ class ApprovedProviderAdapter(RailProviderAdapter):
             seat_monitoring=seat_monitoring,
             reservation_once=reservation_once,
             enabled=True,
-            note=(
-                "정식 명세 transport와 별도 승인 근거가 모두 확인된 capability만 활성화합니다."
-            ),
+            note=("정식 명세 transport와 별도 승인 근거가 모두 확인된 capability만 활성화합니다."),
         )
 
     async def timetable(
@@ -158,9 +154,7 @@ class ApprovedProviderAdapter(RailProviderAdapter):
     async def stations(self) -> StationCatalog:
         return await self._timetable_adapter.stations()
 
-    async def _observe_seats(
-        self, request: SeatObservationRequest
-    ) -> list[SeatObservationResult]:
+    async def _observe_seats(self, request: SeatObservationRequest) -> list[SeatObservationResult]:
         started = time.perf_counter()
         try:
             envelope = await self._transport.observe_seats(request)

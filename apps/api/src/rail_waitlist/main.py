@@ -35,10 +35,10 @@ from .models import OutboxEvent
 from .notification_management.http import router as notification_management_router
 from .operation_summary.http import router as operation_summary_router
 from .provider_account_management.http import router as provider_account_management_router
+from .provider_adapters.tago import TagoClient
 from .provider_login_verification import ProviderLoginVerifier
 from .provider_registry.http import router as provider_registry_router
 from .provider_runtime import ProviderRuntimePrewarmRegistry, run_provider_session_manager
-from .providers import TagoClient
 from .schemas import HealthResponse
 from .seat_status_cooldown import RedisCooldownStore
 from .seat_status_operations.http import router as seat_status_operations_router

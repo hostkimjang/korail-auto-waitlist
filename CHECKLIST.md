@@ -323,6 +323,9 @@
 - [x] `provider_adapters/timetable_support.py`로 역명·KST 출발 시간창·공식 미관측 좌석 투영을, `provider_adapters/tago.py`로 immutable page와 TAGO envelope·pagination fail-closed parser를 이동하고 `providers.py`가 동일 함수·class 객체를 직접 re-export. TagoClient cache·singleflight·singleton은 이동하지 않아 수명주기 보존
 - [x] 스무 번째 구조 슬라이스 B의 facade/canonical identity와 기존 parser·KST·좌석 투영 회귀, focused pytest 110건, API 전체 pytest 1,062건, Ruff `E/F/I`, format ratchet 63개, 독립 재감사 P0~P3 회귀·필수 테스트 공백 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
 - [x] 스무 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] `provider_adapters/tago.py`로 `TagoClient`·process singleton·역 카탈로그 TTL·raw-day cache/singleflight를, `provider_adapters/timetable.py`로 SRT roster 선검증을 포함한 `OfficialTimetableAdapter`를 행동 변경 없이 이동. `providers.py`는 public 객체만 동일 identity로 re-export하고 private singleton은 노출하지 않으며 production 소비자는 canonical owner를 직접 import
+- [x] 스무 번째 구조 슬라이스 C의 facade/canonical class·factory identity, canonical singleton reset과 KORAIL·SRT 공유, 명시적 client 주입 우회, 기존 TAGO·SRT route 회귀를 포함한 focused pytest 151건, API 전체 pytest 1,063건, Ruff `E/F/I`, format ratchet 61개, 독립 재감사 P0~P3 회귀 없음과 `git diff --check` 통과. 수정한 legacy 파일 2개를 formatter로 정리해 allowlist 63→61개 축소, 기존 Starlette/httpx deprecation 경고 1건
+- [x] 스무 번째 구조 슬라이스 C의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -343,7 +346,7 @@
 - [ ] watch transition·reservation episode·reconciliation 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
 - [x] worker의 reservation execution을 application으로 분리하고 얇은 runtime 조립, claim/result UoW·잠금 순서·outbox 원자성·credential CAS 회귀 테스트 완성
 - [x] worker의 watch-group observation을 application으로 분리하고 얇은 Celery/runtime 조립, lease fencing·동일 조회 병합·상태 요약·rollback·PostgreSQL lock SQL 회귀 테스트 완성
-- [ ] 완료된 provider 공통 base·fail-closed 경계 위에서 timetable support·TAGO singleton·Official/Mock·운영사 execution·registry를 단계별로 물리 분리하고, 가짜 timetable/station stub 제거와 capability 교집합·부분 실패 fail-closed를 별도 행동 슬라이스로 검증
+- [ ] 완료된 provider 공통 base·fail-closed·timetable support·TAGO singleton·Official 경계 위에서 Mock·운영사 execution·registry를 단계별로 물리 분리하고, 가짜 timetable/station stub 제거와 capability 교집합·부분 실패 fail-closed를 별도 행동 슬라이스로 검증
 - [ ] API Python Protocol signature drift를 자동 검출할 mypy 또는 pyright 정적 타입 gate의 도입 범위와 legacy 격리 기준 확정
 - [ ] 웹·API의 저위험 수직 슬라이스가 안정된 뒤 KORAIL browser sidecar의 lifecycle·DOM·검색·인증·예약 책임 분리
 - [x] KORAIL Pydoll·SRT 로그인 세션 재사용형 에피소드당 1회 자동 예약 adapter, exact 열차·시각·좌석 등급 판정, 결제 직전 중단, credential version invalidation과 결과 정규화 구현

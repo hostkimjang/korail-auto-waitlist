@@ -838,6 +838,35 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: TagoClient와 process singleton·Official timetable adapter, Mock adapter, 운영사
   execution adapter, registry application의 단계별 이동과 실행 전용 역할 base·정적 타입 gate입니다.
 
+### 2026-08-05 스무 번째 구조 슬라이스 C
+
+- TAGO runtime 소유권: `provider_adapters/tago.py`가 parser에 이어 `STATION_CITY_HINTS`, `TagoClient`,
+  private singleton binding과 `default_tago_client()`를 소유합니다. network 요청, 역 카탈로그 TTL,
+  raw-day 시간표 cache·singleflight와 KTX/SRT 필터 동작은 정책 변경 없이 그대로 이동했습니다.
+- 공식 시간표 소유권: `provider_adapters/timetable.py`가 `OfficialTimetableAdapter`를 소유하며 SRT
+  roster 선검증·미지원 노선 빈 결과·roster 장애의 canonical `ProviderUnavailable`·공식 URL 인계를
+  유지합니다. 기본 client는 module-qualified canonical factory에서 받고 명시적 client 주입은
+  factory를 호출하지 않습니다.
+- compatibility facade와 의존성: `providers.py`는 `TagoClient`, public factory와 공식 시간표 class를
+  wrapper 없이 직접 re-export하되 private singleton을 복제하지 않습니다. production의 API bootstrap,
+  역 카탈로그와 Approved·시간표 application은 canonical owner를 직접 import하고 registry만 facade에
+  남겼습니다. adapter→facade 역의존은 0건이며 `providers.py`는 1,043줄에서 504줄로 줄었습니다.
+- 수명주기 회귀: canonical singleton reset 뒤 owner·facade factory와 KORAIL·SRT registry가 같은 객체를
+  공유하고, 명시적 client가 기본 factory를 우회하는 계약을 owner 테스트로 고정했습니다. 기존 raw-day
+  cache·singleflight, TAGO malformed/pagination, 역 카탈로그, SRT route 회귀도 함께 통과했습니다.
+- 확인된 검증: 관련 focused pytest 151건, API 전체 pytest 1,063건, Ruff `E/F/I`, format ratchet
+  61개와 `git diff --check`를 통과했습니다. 수정한 legacy 파일 2개를 formatter로 정리해 ratchet
+  allowlist를 63개에서 61개로 줄였습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐고
+  독립 재감사와 추가 회귀 21건·identity/boundary 14건에서 P0~P3 회귀는 발견되지 않았습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: canonical class의 `__module__` 경로는 의도대로 바뀌었지만 저장소에 pickle·qualname
+  의존 사용처는 없습니다. Mock·운영사 실행 adapter와 registry를 이동하거나 가짜 기본 stub를
+  제거하는 행동 변경은 이번 물리 이동에 섞지 않았습니다.
+- 남은 핵심 부채: Mock adapter, KORAIL/SRT execution adapter, provider registry application의 단계별
+  물리 이동과 실행 전용 역할 base·Python 정적 타입 gate입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

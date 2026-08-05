@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..auth import require_admin
 from ..domain import Provider
-from ..providers import OfficialTimetableAdapter, ProviderUnavailable, get_timetable_provider
+from ..provider_adapters.timetable import OfficialTimetableAdapter
+from ..provider_contracts import ProviderUnavailable
+from ..providers import get_timetable_provider
 from ..schemas import StationCatalog
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])

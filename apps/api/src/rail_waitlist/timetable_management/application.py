@@ -10,7 +10,8 @@ from ..domain import Provider
 from ..korail_browser_bridge import overlay_korail_browser_snapshots
 from ..korail_browser_seat_source import KorailBrowserTimetableUnavailable
 from ..official_page_confirmations import overlay_official_page_confirmations
-from ..providers import OfficialTimetableAdapter, get_execution_provider, get_timetable_provider
+from ..provider_adapters.timetable import OfficialTimetableAdapter
+from ..providers import get_execution_provider, get_timetable_provider
 from ..schemas import TimetableItem
 from ..srt_live_timetable import map_srt_live_timetable
 from ..srt_provider_adapter import SrtProviderAdapterUnavailable

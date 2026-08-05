@@ -85,7 +85,7 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
   provider base·execution·experimental·KORAIL execution·timetable adapter와 registry application
   및 observation operational projection·reservation payment-hold·watch transition notification
   application, observation cycle·idempotency application·watch transition policy/application·watch
-  update application·reservation attempt policy/claim application의 17개
+  update application·reservation attempt policy/claim/result application의 18개
   파일을 명시적 ratchet으로 검사합니다.
   `ignore_missing_imports`, 전역 오류 코드 비활성화,
   광범위한 `type: ignore`로 통과시키지 않습니다. 새 owner는 오류 0을 만든 뒤 대상 목록에

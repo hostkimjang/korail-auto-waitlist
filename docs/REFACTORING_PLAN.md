@@ -1540,6 +1540,30 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 운영 검증 범위: CSS 이동 자체에는 별도 Compose 재배포가 필요하지 않지만, 같은 작업의 코드
   슬라이스와 함께 최신 통합 tree를 전체 build·force-recreate해 health를 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 J
+
+- reservation attempt result application: 285줄 `reservations/attempt_result_application.py`가 다섯
+  typed dependency와 FastAPI 비의존 `ReservationAttemptAlreadyCompleted`를 소유합니다. attempt의
+  outcome·credential·완료 시각·confirmation, 기한 경과 UNKNOWN fence, 정상 보류·낮은 우선순위 후보
+  억제, 감시 재개·auth/blocked/failed 전이와 기존 outbox payload/dedupe를 같은 순서로 이동했습니다.
+- facade·UoW: `services.complete_reservation_attempt`은 호출 시점의 transition·outbox·clock·result
+  policy·confirmation recorder를 조립하고 이미 끝난 attempt만 exact `reservation attempt was already
+  completed` HTTP 409로 변환합니다. application은 caller transaction에 참여하며 lock·commit·rollback·
+  refresh를 소유하지 않습니다. `record_reservation_confirmation`은 같은 canonical 함수 객체로
+  re-export하고 provider/URL/timezone 오류 타입과 문구를 유지했습니다. `services.py`는
+  1,131→956줄로 줄었습니다.
+- 정적 wiring 보정: 첫 Protocol의 가변 `*args/**kwargs`가 실제 service signature 호환성을 가릴 수 있다는
+  P3를 반영해 idempotency key·reason·observation 선택 인자를 정확히 명시하고, services 조립 전용 strict
+  mypy witness를 추가했습니다. owner/UoW boundary와 strict mypy ratchet은 17→18개 파일로 확장됐고
+  재리뷰 P0~P3 잔여가 없습니다.
+- 확인된 검증: owner 11건, 최신 owner·module-boundary pytest 29건, 관련 reservation 68건·worker 핵심
+  6건, API 전체 pytest 1,530건, Ruff `E/F/I`, format ratchet 60개, strict mypy 18개 파일과 wiring witness
+  오류 0, `uv lock --check`, `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고
+  1건은 유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
+  최근 안전한 오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

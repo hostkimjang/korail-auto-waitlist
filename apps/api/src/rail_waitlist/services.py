@@ -45,7 +45,7 @@ from .observations.operational_projection_application import (
 from .observations.operational_projection_application import (
     apply_operational_projection as apply_operational_projection,
 )
-from .outbox import add_outbox_event
+from .outbox import add_outbox_event as add_outbox_event
 from .policy import build_watch_dedupe_key
 from .provider_registry.application import get_execution_provider, get_timetable_provider
 from .reservation_confirmation import (
@@ -64,8 +64,20 @@ from .reservations.attempt_policy import (
 from .reservations.attempt_policy import (
     is_confirmed_absent_retry_source as is_confirmed_absent_retry_source,
 )
+from .reservations.attempt_result_application import (
+    ReservationAttemptAlreadyCompleted,
+    ReservationAttemptResultDependencies,
+)
+from .reservations.attempt_result_application import (
+    complete_reservation_attempt as complete_reservation_attempt_application,
+)
+from .reservations.attempt_result_application import (
+    record_reservation_confirmation as record_reservation_confirmation,
+)
 from .reservations.domain import ReservationAttemptResultPolicy as ReservationAttemptResultPolicy
-from .reservations.domain import reservation_attempt_result_policy
+from .reservations.domain import (
+    reservation_attempt_result_policy as reservation_attempt_result_policy,
+)
 from .reservations.payment_hold_application import _utc_instant as _utc_instant
 from .reservations.payment_hold_application import (
     is_payment_hold_ended as is_payment_hold_ended,
@@ -617,212 +629,25 @@ async def complete_reservation_attempt(
     result: ReservationResult,
     confirmation: ReservationConfirmationResult | None = None,
 ) -> None:
-    if attempt.outcome != ReservationOutcome.PENDING:
-        raise HTTPException(409, "reservation attempt was already completed")
-    attempt.outcome = result.outcome
-    if result.credential_version is not None:
-        attempt.credential_version = result.credential_version
-    if confirmation is not None:
-        if confirmation.provider != watch.provider:
-            raise ValueError("reservation confirmation provider does not match watch")
-        record_reservation_confirmation(attempt, confirmation)
-    completed_at = datetime.now(UTC)
-    attempt.finished_at = max(result.observed_at, completed_at)
-    attempt.payment_deadline = result.payment_deadline
-    attempt.official_handoff_url = (
-        str(result.official_handoff_url) if result.official_handoff_url is not None else None
+    dependencies = ReservationAttemptResultDependencies(
+        apply_watch_transition=apply_watch_transition,
+        add_outbox_event=add_outbox_event,
+        now=lambda: datetime.now(UTC),
+        result_policy=reservation_attempt_result_policy,
+        record_reservation_confirmation=record_reservation_confirmation,
     )
-
-    successful_hold = result.outcome in {
-        ReservationOutcome.PAYMENT_REQUIRED,
-        ReservationOutcome.RESERVED,
-    }
-    if (
-        successful_hold
-        and result.payment_deadline is not None
-        and result.payment_deadline <= completed_at
-    ):
-        attempt.outcome = ReservationOutcome.UNKNOWN
-        attempt.payment_deadline = None
-        attempt.official_handoff_url = None
-        # The provider reported a successful hold whose deadline was already unusable.
-        # That is an ambiguous reservation result, not evidence that authentication
-        # failed. Keep observing, while the ambiguous attempt remains a durable
-        # fence. A later availability edge cannot make this result safe to replay.
-        candidate.state = "observed"
-        if watch.status == WatchStatus.RESERVING:
-            await apply_watch_transition(
-                session,
-                watch,
-                WatchStatus.WATCHING,
-                reason="reservation_result_deadline_already_elapsed",
-            )
-        await add_outbox_event(
+    try:
+        await complete_reservation_attempt_application(
             session,
-            aggregate_type="watch",
-            aggregate_id=watch.id,
-            event_type="watch.reservation_result_requires_manual_check",
-            payload={
-                "watch_id": watch.id,
-                "candidate_id": candidate.id,
-                "reason": "payment_deadline_already_elapsed",
-            },
-            dedupe_key=f"reservation-result-expired-deadline:{attempt.id}",
+            watch,
+            candidate,
+            attempt,
+            result,
+            confirmation,
+            dependencies=dependencies,
         )
-        return
-    if successful_hold:
-        candidate.state = "payment_required"
-        watch.payment_deadline = result.payment_deadline
-        if result.official_handoff_url is None:
-            raise RuntimeError("successful reservation result requires an official handoff URL")
-        watch.official_booking_url = str(result.official_handoff_url)
-        if watch.status == WatchStatus.RESERVING:
-            await apply_watch_transition(
-                session,
-                watch,
-                WatchStatus.PAYMENT_REQUIRED,
-                reason="reservation_requires_user_payment",
-            )
-        lower_candidates = list(
-            (
-                await session.scalars(
-                    select(WatchCandidate).where(
-                        WatchCandidate.watch_id == watch.id,
-                        WatchCandidate.priority > candidate.priority,
-                        WatchCandidate.state.in_(["active", "observed", "seat_found"]),
-                    )
-                )
-            ).all()
-        )
-        for lower in lower_candidates:
-            lower.state = "suppressed_by_priority"
-            lower.suppressed_by_candidate_id = candidate.id
-            await add_outbox_event(
-                session,
-                aggregate_type="watch",
-                aggregate_id=watch.id,
-                event_type="watch.candidate_suppressed",
-                payload={
-                    "watch_id": watch.id,
-                    "candidate_id": lower.id,
-                    "suppressed_by_candidate_id": candidate.id,
-                    "reason": "higher_priority_payment_required",
-                },
-                dedupe_key=f"candidate-suppressed:{lower.id}:{candidate.id}",
-            )
-    else:
-        monitoring_resumed = result.outcome in {
-            ReservationOutcome.NOT_AVAILABLE,
-            ReservationOutcome.UNKNOWN,
-            ReservationOutcome.FAILED,
-        }
-        if monitoring_resumed:
-            # Availability can disappear, or the provider can require a manual action
-            # or fail without proving that monitoring itself is unsafe. Keep observing
-            # until departure. Only NOT_AVAILABLE proves there is no hold and may be
-            # re-armed after a later sold-out -> actionable availability edge.
-            candidate.state = "observed"
-            target = WatchStatus.WATCHING
-        else:
-            candidate.state = "failed"
-            target = (
-                WatchStatus.AUTH_REQUIRED
-                if result.outcome
-                in {
-                    ReservationOutcome.AUTH_REQUIRED,
-                    ReservationOutcome.PROVIDER_BLOCKED,
-                }
-                else WatchStatus.FAILED
-            )
-        if watch.status == WatchStatus.RESERVING:
-            transition_reason = (
-                "reservation_failed_monitoring_resumed"
-                if result.outcome is ReservationOutcome.FAILED
-                else f"reservation_{result.outcome.value}"
-            )
-            await apply_watch_transition(
-                session,
-                watch,
-                target,
-                reason=transition_reason,
-            )
-
-        if result.outcome is ReservationOutcome.FAILED:
-            await add_outbox_event(
-                session,
-                aggregate_type="watch",
-                aggregate_id=watch.id,
-                event_type="watch.reservation_failed_monitoring_resumed",
-                payload={
-                    "watch_id": watch.id,
-                    "candidate_id": candidate.id,
-                    "outcome": result.outcome.value,
-                    "reason": "reservation_failed_monitoring_resumed",
-                    "monitoring_resumed": True,
-                },
-                dedupe_key=f"reservation-failed-monitoring-resumed:{attempt.id}",
-            )
-
-    result_policy = reservation_attempt_result_policy(result.outcome)
-    await add_outbox_event(
-        session,
-        aggregate_type="watch",
-        aggregate_id=watch.id,
-        event_type="watch.reservation_result",
-        payload={
-            "watch_id": watch.id,
-            "candidate_id": candidate.id,
-            "attempt_sequence": attempt.attempt_sequence,
-            "attempt_started_at": attempt.started_at.isoformat(),
-            "attempt_finished_at": (
-                attempt.finished_at.isoformat() if attempt.finished_at is not None else None
-            ),
-            "outcome": result.outcome.value,
-            "payment_deadline": (
-                result.payment_deadline.isoformat() if result.payment_deadline is not None else None
-            ),
-            "monitoring_resumed": result.outcome
-            in {
-                ReservationOutcome.NOT_AVAILABLE,
-                ReservationOutcome.UNKNOWN,
-                ReservationOutcome.FAILED,
-            },
-            "retryable": result_policy.retryable,
-            "manual_check_required": result_policy.manual_check_required,
-            "retry_condition": result_policy.retry_condition,
-            **(
-                {
-                    "progress_stages": [
-                        {
-                            "stage": progress.stage,
-                            "occurred_at": progress.occurred_at.isoformat(),
-                        }
-                        for progress in result.progress_stages
-                    ]
-                }
-                if result.progress_stages
-                else {}
-            ),
-        },
-        dedupe_key=f"reservation-result:{attempt.id}",
-    )
-
-
-def record_reservation_confirmation(
-    attempt: ReservationAttempt,
-    confirmation: ReservationConfirmationResult,
-    *,
-    reconciled_at: datetime | None = None,
-) -> None:
-    """Persist normalized confirmation evidence without provider transport material."""
-
-    attempt.confirmation_outcome = confirmation.outcome
-    attempt.confirmation_source = confirmation.source
-    attempt.confirmation_observed_at = confirmation.observed_at
-    if reconciled_at is not None:
-        if reconciled_at.tzinfo is None or reconciled_at.utcoffset() is None:
-            raise ValueError("reconciled_at must include a timezone")
-        attempt.last_reconciled_at = max(reconciled_at, confirmation.observed_at)
+    except ReservationAttemptAlreadyCompleted as error:
+        raise HTTPException(409, "reservation attempt was already completed") from error
 
 
 async def apply_reservation_reconciliation(

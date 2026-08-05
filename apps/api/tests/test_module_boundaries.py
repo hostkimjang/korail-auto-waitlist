@@ -144,6 +144,10 @@ def _is_reservation_attempt_claim_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/attempt_claim_application.py")
 
 
+def _is_reservation_attempt_result_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == ("rail_waitlist/reservations/attempt_result_application.py")
+
+
 def _is_watch_transition_notification_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == (
         "rail_waitlist/notification_management/watch_transition_application.py"
@@ -422,6 +426,26 @@ BOUNDARY_RULES = (
         ),
     ),
     BoundaryRule(
+        name="reservation attempt result application receives runtime side effects",
+        matches=_is_reservation_attempt_result_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "notification_management",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "services",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
         name="watch transition notification application stays runtime independent",
         matches=_is_watch_transition_notification_application,
         forbidden_import_roots=frozenset(
@@ -661,6 +685,26 @@ def test_reservation_attempt_claim_application_joins_the_callers_unit_of_work() 
     assert "begin_nested" in called_attributes
     assert "flush" in called_attributes
     assert called_attributes.isdisjoint({"begin", "commit", "refresh", "rollback"})
+
+
+def test_reservation_attempt_result_application_joins_the_callers_unit_of_work() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "reservations" / "attempt_result_application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "HTTPException" not in called_names
+    assert called_attributes.isdisjoint(
+        {"begin", "begin_nested", "commit", "flush", "refresh", "rollback", "with_for_update"}
+    )
 
 
 def test_observation_group_imports_only_the_canonical_reservation_attempt_policy() -> None:

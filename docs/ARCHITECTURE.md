@@ -326,6 +326,18 @@ commit·rollback·refresh하지 않으며 `services.begin_reservation_attempt` w
 outbox·payment-hold·policy dependency를 조립해 기존 signature·module identity·monkeypatch seam을
 보존합니다.
 
+예약 결과 상태 반영의 canonical owner는 285줄 `reservations/attempt_result_application.py`입니다.
+provider 결과와 같은 credential version·완료 시각·confirmation evidence를 attempt에 기록하고, 이미
+기한이 지난 보류는 `UNKNOWN` 수동 확인 fence로 닫습니다. 정상 보류는 후보와 watch를
+`payment_required`로 만들고 더 낮은 우선순위 후보를 억제하며, 비가용·불확정·실패는 감시를 재개하고
+인증·provider 차단은 `auth_required`로 전이합니다. outcome policy, 진행 단계, monitoring/retry/manual
+check를 포함한 기존 outbox payload와 dedupe key를 그대로 유지합니다. confirmation provider 불일치,
+공식 handoff URL 누락, timezone 없는 reconciliation 시각은 기존 ValueError/RuntimeError를 유지합니다.
+application은 caller가 잠근 entity를 수정하고 조회·outbox만 추가하며 lock·commit·rollback·refresh는
+소유하지 않습니다. `services.complete_reservation_attempt` wrapper는 호출 시점의 transition·outbox·clock·
+result policy·confirmation recorder를 조립하고 `ReservationAttemptAlreadyCompleted`만 기존 exact 문구의
+HTTP 409로 변환합니다. `services.record_reservation_confirmation`은 canonical 함수 객체를 다시 export합니다.
+
 상태 전이에 따른 사용자 알림 message·대상 채널 조회·dispatch outbox 생성의 canonical owner는
 `notification_management/watch_transition_application.py`입니다. 단일 관리자 전역 설정에서 현재
 `enabled=true`인 채널만 `created_at, id` 순으로 선택하며, watch에 남은 채널 snapshot은 전달 권한으로
@@ -468,8 +480,8 @@ adapter→registry/facade 역의존을 차단합니다.
 오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
 공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
-payment-hold·reservation attempt policy/claim application·watch transition notification application·
-watch transition policy/application·watch update application의 17개 오류 0
+payment-hold·reservation attempt policy/claim/result application·watch transition notification
+application·watch transition policy/application·watch update application의 18개 오류 0
 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.

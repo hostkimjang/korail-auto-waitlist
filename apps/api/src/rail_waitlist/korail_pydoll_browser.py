@@ -24,15 +24,9 @@ from .korail_browser_automation import (
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
-    BrowserTrainSnapshot,
     is_rate_limit_response,
-    parse_expected_delay_minutes,
-    parse_official_train_type,
-    parse_unambiguous_adult_fare,
     protection_trigger_from_http_response,
     protection_trigger_from_text,
-    service_datetimes,
-    status_from_seat_box,
 )
 from .korail_http_replay import (
     HttpReplayInvalidCapture,
@@ -44,24 +38,29 @@ from .korail_pydoll_confirmation_reader import (
     _parse_korail_payment_deadline,
     read_korail_same_session_confirmation,
 )
-from .korail_pydoll_http_replay import (
-    DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE,
-    PydollHttpReplayManager,
+from .korail_pydoll_contracts import (
+    KORAIL_ROUTE_HEADING as _ROUTE_HEADING,
 )
+from .korail_pydoll_contracts import (
+    PydollPageSnapshot,
+    PydollSeatBox,
+    PydollTrainRow,
+    normalize_korail_train_number,
+)
+from .korail_pydoll_contracts import (
+    normalize_korail_station as _normalize_station,
+)
+from .korail_pydoll_http_replay import DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE
+from .korail_pydoll_search_actor import PydollReadOnlySearchActor
 from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
 from .korail_reservation_controls import booking_seat_control_key
 from .korail_search_bootstrap import (
     KorailStationIdentityResolver,
-    KorailStationIdentityUnavailable,
-    build_korail_general_search_url,
+    build_korail_general_search_url,  # noqa: F401 -- compatibility module export.
     validate_korail_general_search_url,
 )
 from .reservation_confirmation import ReservationConfirmationTarget
 
-_ROUTE_HEADING = re.compile(
-    r"^(.+?)\s*→\s*(.+?)\s*\(\s*(\d{2}:\d{2})\s*~\s*(\d{2}:\d{2})\s*\)"
-    r"(?:\s*소요시간\s*:\s*.+)?$"
-)
 _GENERIC_PROTECTION_TRIGGERS = frozenset({"marker_abnormal_access", "marker_unauthorized_tool"})
 _MAX_MORE_RESULT_ACTIONS = 19
 # Compatibility seam: focused tests patch this facade value before construction;
@@ -72,32 +71,6 @@ _PROTECTION_SURFACE_SELECTOR = (
 )
 _KORAIL_RESERVATION_LIST_URL = "https://www.korail.com/ticket/reservation/list"
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class PydollSeatBox:
-    text: str
-    classes: frozenset[str]
-
-
-@dataclass(frozen=True)
-class PydollTrainRow:
-    kind_text: str
-    train_number: str
-    route_text: str
-    seats: tuple[PydollSeatBox, ...]
-    full_text: str = ""
-
-
-@dataclass(frozen=True)
-class PydollPageSnapshot:
-    body_text: str
-    rows: tuple[PydollTrainRow, ...]
-    protection_texts: tuple[str, ...] = ()
-    network_responses: tuple[tuple[int, str], ...] = ()
-    url: str = ""
-    title: str = ""
-    reservation_rows: tuple[str, ...] = ()
 
 
 class KorailReservationSeatClass(StrEnum):
@@ -417,28 +390,29 @@ class PydollKorailBrowserClient:
         )
         self._session_reuse_ttl_seconds = session_reuse_ttl_seconds
         self._session_reuse_max_searches = session_reuse_max_searches
-        self._station_identity_resolver = station_identity_resolver
         self._monotonic = monotonic
         self._session_lock = asyncio.Lock()
-        self._search_lock = asyncio.Lock()
         self._active_session: _ActivePydollSession | None = None
-        self._active_search_session: _ActivePydollSession | None = None
         self._session_actor_state = KorailSessionActorState.COLD
         self._session_actor_generation: str | None = None
         self._session_actor_created_at: float | None = None
         self._session_actor_last_verified_at: float | None = None
         self._session_actor_last_used_at: float | None = None
-        # Capture the module-level factory at construction time. Existing focused tests
-        # replace this name before creating the facade, and production never exposes the
-        # replay client's captured cookies or request material.
-        self._http_replay_manager = PydollHttpReplayManager(
-            timeout_seconds=max(1, self.timeout_ms / 1000),
-            reuse_ttl_seconds=self._session_reuse_ttl_seconds,
-            reuse_max_searches=self._session_reuse_max_searches,
-            route_cache_size=_HTTP_REPLAY_ROUTE_CACHE_SIZE,
+        # Capture module-level compatibility seams at construction time before handing
+        # read-only lifecycle ownership to the search actor.
+        self._search_actor = PydollReadOnlySearchActor(
+            page_url=self.page_url,
+            timeout_ms=self.timeout_ms,
+            headless=self.headless,
+            session_factory=self._session_factory,
+            session_reuse_ttl_seconds=self._session_reuse_ttl_seconds,
+            session_reuse_max_searches=self._session_reuse_max_searches,
+            station_identity_resolver=station_identity_resolver,
             monotonic=self._monotonic,
-            client_factory=KorailHttpReplayClient,
             cleanup=_finish_owned_cleanup,
+            response_safety_guard=self._assert_response_allowed,
+            http_replay_client_factory=KorailHttpReplayClient,
+            http_replay_route_cache_size=_HTTP_REPLAY_ROUTE_CACHE_SIZE,
             event_logger=logger,
         )
 
@@ -472,128 +446,7 @@ class PydollKorailBrowserClient:
         raise ValueError("Pydoll browser page URL must be the official KORAIL HTTPS host")
 
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
-        if request.passenger_count != 1:
-            raise BrowserSourceUnavailable("passenger_count_not_supported")
-        async with self._search_lock:
-            replayed = await self._http_replay_manager.try_search(request)
-            if replayed is not None:
-                return replayed
-            direct_url = await self._direct_search_url(
-                request.origin,
-                request.destination,
-                request.travel_date,
-                request.departure_from,
-            )
-            cold_recovery_used = False
-            while True:
-                stage = "browser_launch"
-                lease: _PydollSessionLease | None = None
-                try:
-                    lease = await self._acquire_search_session()
-                    session = lease.session
-                    if direct_url is None:
-                        stage = "load_page"
-                        self._assert_response_allowed(await session.open(), stage)
-                        stage = "choose_origin"
-                        await session.choose_station("departure", request.origin)
-                        stage = "choose_destination"
-                        await session.choose_station("arrival", request.destination)
-                        stage = "choose_departure"
-                        await session.choose_schedule(
-                            request.travel_date,
-                            request.departure_from.hour,
-                        )
-                        stage = "pre_submit_identity_check"
-                        await self._assert_identity(session, request, stage)
-                        capture_started = (
-                            False
-                            if lease.authenticated
-                            else await self._http_replay_manager.begin_capture(session)
-                        )
-                        stage = "submit_search"
-                        await session.submit_once()
-                    else:
-                        # Navigation itself starts the one official business lookup.
-                        # Capture first, and never retry through the UI after this point.
-                        capture_started = await self._http_replay_manager.begin_capture(session)
-                        stage = "direct_navigation"
-                        self._assert_response_allowed(await session.navigate(direct_url), stage)
-                    stage = "wait_result"
-                    snapshot = await session.wait_for_result()
-                    self._assert_response_allowed(snapshot, stage)
-                    stage = "expand_results"
-                    snapshot = await session.expand_results(snapshot, _MAX_MORE_RESULT_ACTIONS)
-                    self._assert_response_allowed(snapshot, stage)
-                    stage = "result_identity_check"
-                    await self._assert_result_identity(session, request)
-                    stage = "read_result"
-                    result = self._read_result(snapshot, request).model_copy(
-                        update={"official_search_url": direct_url}
-                    )
-                    if capture_started:
-                        installed = await self._http_replay_manager.install_capture(
-                            session=session,
-                            request=request,
-                            created_at=lease.created_at,
-                            searches_started=lease.searches_started,
-                        )
-                        if installed and lease.persistent:
-                            try:
-                                await self._discard_active_search_session()
-                            except BaseException:
-                                await self._http_replay_manager.discard(
-                                    self._http_replay_manager.route_key(request)
-                                )
-                                raise
-                        if installed:
-                            await self._http_replay_manager.finalize_install(request)
-                    return result
-                except asyncio.CancelledError:
-                    if lease is not None and lease.persistent:
-                        await self._discard_active_search_session()
-                    raise
-                except (BrowserProtectionDetected, BrowserRateLimited):
-                    if lease is not None and lease.persistent:
-                        await self._discard_active_search_session()
-                    raise
-                except BrowserSourceUnavailable as error:
-                    should_reinitialize = (
-                        not cold_recovery_used
-                        and lease is not None
-                        and lease.reused
-                        and stage
-                        in {
-                            "load_page",
-                            "choose_origin",
-                            "choose_destination",
-                            "choose_departure",
-                            "pre_submit_identity_check",
-                        }
-                    )
-                    if lease is not None and lease.persistent:
-                        await self._discard_active_search_session()
-                    if should_reinitialize:
-                        # A reused browser context can outlive the official page's
-                        # in-memory search/session state. The failure happened before
-                        # submit, so a single cold initialization does not duplicate an
-                        # upstream train-search request.
-                        logger.info(
-                            "KORAIL Pydoll event=cold_reinit source=browser "
-                            "reason=warm_pre_submit_state stage=%s",
-                            stage,
-                        )
-                        cold_recovery_used = True
-                        continue
-                    if error.stage == "unspecified":
-                        raise BrowserSourceUnavailable(stage) from error
-                    raise
-                except Exception as error:
-                    if lease is not None and lease.persistent:
-                        await self._discard_active_search_session()
-                    raise BrowserSourceUnavailable(stage) from error
-                finally:
-                    if lease is not None and not lease.persistent:
-                        await lease.context.__aexit__(None, None, None)
+        return await self._search_actor.search(request)
 
     async def reserve_once(
         self,
@@ -732,18 +585,11 @@ class PydollKorailBrowserClient:
         travel_date: date,
         departure_time: clock_time,
     ) -> str | None:
-        resolver = self._station_identity_resolver
-        if resolver is None:
-            return None
-        try:
-            origin_identity, destination_identity = await resolver.resolve_pair(origin, destination)
-        except KorailStationIdentityUnavailable:
-            return None
-        return build_korail_general_search_url(
-            origin=origin_identity,
-            destination=destination_identity,
-            travel_date=travel_date,
-            departure_time=departure_time,
+        return await self._search_actor.direct_search_url(
+            origin,
+            destination,
+            travel_date,
+            departure_time,
         )
 
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
@@ -870,9 +716,8 @@ class PydollKorailBrowserClient:
         # The only operation that needs both actor locks always takes authenticated
         # session -> read-only search. No search or authentication path takes the
         # other actor's lock, so shutdown cannot form a lock-order cycle.
-        async with self._session_lock, self._search_lock:
-            await self._http_replay_manager.discard()
-            await self._discard_active_search_session()
+        async with self._session_lock:
+            await self._search_actor.close()
             await self._discard_active_session()
             self._session_actor_state = KorailSessionActorState.COLD
 
@@ -880,7 +725,13 @@ class PydollKorailBrowserClient:
     def _active_http_replays(self) -> Mapping[tuple[str, str], object]:
         """Read-only compatibility inspection for focused replay lifecycle tests."""
 
-        return self._http_replay_manager.active_leases
+        return self._search_actor.active_http_replays
+
+    @property
+    def _active_search_session(self) -> object | None:
+        """Read-only compatibility inspection for search-session cleanup tests."""
+
+        return self._search_actor.active_session
 
     async def _acquire_session(
         self,
@@ -945,54 +796,6 @@ class PydollKorailBrowserClient:
             authenticated=active.authenticated_credential_version is not None,
         )
 
-    async def _acquire_search_session(self) -> _PydollSessionLease:
-        """Lease a browser owned exclusively by the read-only search actor."""
-
-        if not self._session_reuse_enabled:
-            created_at = self._monotonic()
-            context = self._session_factory(self.page_url, self.timeout_ms, self.headless)
-            session = await context.__aenter__()
-            return _PydollSessionLease(
-                context=context,
-                session=session,
-                created_at=created_at,
-                searches_started=1,
-                persistent=False,
-                reused=False,
-                authenticated=False,
-            )
-
-        now = self._monotonic()
-        active = self._active_search_session
-        if active is not None and (
-            now - active.last_used_at >= self._session_reuse_ttl_seconds
-            or active.searches_started >= self._session_reuse_max_searches
-        ):
-            await self._discard_active_search_session()
-            active = None
-        reused = active is not None
-        if active is None:
-            context = self._session_factory(self.page_url, self.timeout_ms, self.headless)
-            session = await context.__aenter__()
-            active = _ActivePydollSession(
-                context=context,
-                session=session,
-                created_at=now,
-                last_used_at=now,
-            )
-            self._active_search_session = active
-        active.searches_started += 1
-        active.last_used_at = now
-        return _PydollSessionLease(
-            context=active.context,
-            session=active.session,
-            created_at=active.created_at,
-            searches_started=active.searches_started,
-            persistent=True,
-            reused=reused,
-            authenticated=False,
-        )
-
     async def _ensure_authenticated_session(
         self,
         session: PydollBrowserSession,
@@ -1053,51 +856,9 @@ class PydollKorailBrowserClient:
         if active is not None:
             await _finish_owned_cleanup(active.context.__aexit__(None, None, None))
 
-    async def _discard_active_search_session(self) -> None:
-        active = self._active_search_session
-        self._active_search_session = None
-        if active is not None:
-            await _finish_owned_cleanup(active.context.__aexit__(None, None, None))
-
     @property
     def _session_reuse_enabled(self) -> bool:
         return self._session_reuse_ttl_seconds > 0 and self._session_reuse_max_searches > 1
-
-    @staticmethod
-    async def _assert_identity(
-        session: PydollBrowserSession,
-        request: BrowserSeatSearchRequest,
-        stage: str,
-    ) -> None:
-        origin = _normalize_station(await session.current_station("departure"))
-        destination = _normalize_station(await session.current_station("arrival"))
-        selected_date, selected_hour = await session.current_schedule()
-        passenger = " ".join((await session.current_passenger()).split())
-        origin_matches = origin == request.origin
-        destination_matches = destination == request.destination
-        departure_date_matches = selected_date == request.travel_date
-        departure_hour_matches = selected_hour == request.departure_from.hour
-        passenger_matches = passenger == "총 1명"
-        if not all(
-            (
-                origin_matches,
-                destination_matches,
-                departure_date_matches,
-                departure_hour_matches,
-                passenger_matches,
-            )
-        ):
-            logger.warning(
-                "KORAIL Pydoll identity mismatch stage=%s origin=%s destination=%s "
-                "date=%s hour=%s passenger=%s",
-                stage,
-                origin_matches,
-                destination_matches,
-                departure_date_matches,
-                departure_hour_matches,
-                passenger_matches,
-            )
-            raise BrowserSourceUnavailable(stage)
 
     @staticmethod
     async def _assert_reservation_identity(
@@ -1119,26 +880,6 @@ class PydollKorailBrowserClient:
             )
         ):
             raise BrowserSourceUnavailable(stage)
-
-    @staticmethod
-    async def _assert_result_identity(
-        session: PydollBrowserSession,
-        request: BrowserSeatSearchRequest,
-    ) -> None:
-        selected_date, selected_hour = await session.current_schedule()
-        passenger = " ".join((await session.current_passenger()).split())
-        if (
-            selected_date != request.travel_date
-            or selected_hour != request.departure_from.hour
-            or passenger != "총 1명"
-        ):
-            logger.warning(
-                "KORAIL Pydoll result identity mismatch date=%s hour=%s passenger=%s",
-                selected_date == request.travel_date,
-                selected_hour == request.departure_from.hour,
-                passenger == "총 1명",
-            )
-            raise BrowserSourceUnavailable("result_identity_check")
 
     @staticmethod
     def _assert_response_allowed(snapshot: PydollPageSnapshot, stage: str) -> None:
@@ -1170,56 +911,7 @@ class PydollKorailBrowserClient:
         snapshot: PydollPageSnapshot,
         request: BrowserSeatSearchRequest,
     ) -> BrowserSeatSearchResult:
-        trains: list[BrowserTrainSnapshot] = []
-        for row in snapshot.rows:
-            train_type = parse_official_train_type(row.kind_text)
-            if train_type is None:
-                continue
-            route = _ROUTE_HEADING.match(" ".join(row.route_text.split()))
-            if route is None:
-                raise BrowserSourceUnavailable("read_result")
-            if (
-                _normalize_station(route.group(1)) != request.origin
-                or _normalize_station(route.group(2)) != request.destination
-            ):
-                raise BrowserSourceUnavailable("read_result")
-            departure_time = clock_time.fromisoformat(route.group(3))
-            if not request.departure_from <= departure_time <= request.departure_to:
-                continue
-            arrival_time = clock_time.fromisoformat(route.group(4))
-            if len(row.seats) != 2:
-                raise BrowserSourceUnavailable("read_result")
-            standard = status_from_seat_box(row.seats[0].text, set(row.seats[0].classes))
-            first = status_from_seat_box(row.seats[1].text, set(row.seats[1].classes))
-            if standard is None or first is None:
-                raise BrowserSourceUnavailable("read_result")
-            departure_at, arrival_at = service_datetimes(
-                request.travel_date,
-                departure_time,
-                arrival_time,
-            )
-            trains.append(
-                BrowserTrainSnapshot(
-                    train_number=_normalize_train_number(row.train_number),
-                    train_type=train_type,
-                    departure_at=departure_at,
-                    arrival_at=arrival_at,
-                    adult_fare=parse_unambiguous_adult_fare(row.seats[0].text),
-                    standard=standard,
-                    first=first,
-                    expected_delay_minutes=parse_expected_delay_minutes(row.full_text),
-                )
-            )
-        if not trains:
-            raise BrowserSourceUnavailable("read_result")
-        return BrowserSeatSearchResult(
-            origin=request.origin,
-            destination=request.destination,
-            travel_date=request.travel_date,
-            passenger_count=1,
-            observed_at=datetime.now(UTC),
-            trains=trains,
-        )
+        return PydollReadOnlySearchActor.read_result(snapshot, request)
 
 
 class _PydollSession:
@@ -3215,10 +2907,6 @@ class _PydollSessionContext:
         return None
 
 
-def _normalize_station(value: str) -> str:
-    return " ".join(value.split()).removesuffix("역")
-
-
 def _log_protection_snapshot(
     snapshot: PydollPageSnapshot,
     stage: str,
@@ -3306,11 +2994,10 @@ def _snapshot_requires_expansion_stop(snapshot: PydollPageSnapshot) -> bool:
 
 
 def _normalize_train_number(value: str) -> str:
-    normalized = re.sub(r"[^0-9A-Za-z-]", "", " ".join(value.split()))
-    if not normalized or len(normalized) > 40:
-        raise BrowserSourceUnavailable("read_result")
-    digits = "".join(character for character in normalized if character.isdigit())
-    return digits.lstrip("0") or "0"
+    try:
+        return normalize_korail_train_number(value)
+    except ValueError as error:
+        raise BrowserSourceUnavailable("read_result") from error
 
 
 def _snapshot_has_unique_reservation_target(

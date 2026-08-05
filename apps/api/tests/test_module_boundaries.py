@@ -108,6 +108,10 @@ def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
 
+def _is_payment_hold_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == ("rail_waitlist/reservations/payment_hold_application.py")
+
+
 def _is_provider_contract(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/provider_contracts.py"
 
@@ -218,6 +222,24 @@ BOUNDARY_RULES = (
         name="reservation reconciliation application depends on provider roles",
         matches=_is_reservation_reconciliation_application,
         forbidden_import_roots=PROVIDER_APPLICATION_FORBIDDEN_IMPORT_ROOTS,
+    ),
+    BoundaryRule(
+        name="payment hold application stays a persistence-read policy",
+        matches=_is_payment_hold_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "fastapi",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "schemas",
+                "services",
+                "sqlalchemy",
+                "worker",
+            }
+        ),
     ),
     BoundaryRule(
         name="provider contracts are independent from runtime integrations",

@@ -1114,6 +1114,34 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   E2E와 Compose 재배포는 반복하지 않았습니다. legacy API에는 watch 21개·auth 2개·events 1개 선언이
   남아 있으며 시간표 DTO·domain·ViewModel 물리 분리는 별도 production 슬라이스입니다.
 
+### 2026-08-05 스물두 번째 구조 슬라이스 D
+
+- payment-hold application: `services.py`의 `_utc_instant`, `payment_hold_end_reason`,
+  `is_payment_hold_ended`를 본문·타입 변경 없이 `reservations/payment_hold_application.py`로
+  이동했습니다. services는 private helper와 두 public 함수를 직접 alias해 confirmation·reconciliation의
+  timezone 처리와 기존 public import identity를 보존합니다.
+- canonical 소비와 범위: `watch_management/read_model.py`는 보류 종료 reason을 canonical owner에서
+  직접 import합니다. reconciliation interval, confirmed-absent/retry-edge, begin reservation,
+  confirmation·reconciliation DB write와 transition/outbox는 services에 남았습니다. services는
+  1,632줄에서 1,606줄, 새 owner는 40줄입니다.
+- 정책 matrix: 비결제 outcome, marker 누락, exact `NOT_FOUND`, confirmed payment hold의 기한=marker·
+  미래 기한, 무관한 confirmation, naive/aware UTC 동일 instant, boolean helper와 services identity를
+  고정했습니다. 기존 watch read/API payload, 만료 보류 retry-edge·outbox 회귀도 유지했습니다.
+- 의존성·타입 gate: 새 owner는 domain·ORM entity·confirmation enum만 읽고 FastAPI·schema·SQLAlchemy
+  API·outbox·services·worker·provider runtime을 import하지 않습니다. strict 오류 0을 확인해 mypy
+  ratchet을 8개에서 9개 파일로 즉시 확장했습니다.
+- 확인된 검증: payment hold·read model·reservation execution/reconciliation/API focused pytest 89건,
+  API 전체 pytest 1,091건, Ruff `E/F/I`, format ratchet 60개, strict mypy 9개 파일 오류 0,
+  `uv lock --check`와 `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고
+  1건은 유지됐고 독립 AST·identity·timezone 재감사에서 P0~P3 지적이 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: 새 policy는 DB write·lock·transaction을 옮기지 않았으므로 account → watch → candidate →
+  circuit lock → hold 판정 → retry-edge 조회 → savepoint → transition/outbox → caller commit 순서는
+  같습니다. legacy services symbol을 임의 monkeypatch해 canonical 내부 호출까지 바꾼다는 새 seam은
+  지원하지 않으며 현재 그런 production/test 소비자는 없습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

@@ -50,6 +50,13 @@ from .reservation_confirmation import (
 )
 from .reservations.domain import ReservationAttemptResultPolicy as ReservationAttemptResultPolicy
 from .reservations.domain import reservation_attempt_result_policy
+from .reservations.payment_hold_application import _utc_instant as _utc_instant
+from .reservations.payment_hold_application import (
+    is_payment_hold_ended as is_payment_hold_ended,
+)
+from .reservations.payment_hold_application import (
+    payment_hold_end_reason as payment_hold_end_reason,
+)
 from .schemas import (
     RegistrationEvidenceConflictDetail,
     ReservationResult,
@@ -78,39 +85,6 @@ _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS = {
 
 def unknown_reconciliation_retry_interval(completed_attempt_count: int) -> timedelta | None:
     return _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS.get(completed_attempt_count)
-
-
-def _utc_instant(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-
-
-def payment_hold_end_reason(attempt: ReservationAttempt) -> str | None:
-    """Return the exact official-read reason an unpaid hold became unusable.
-
-    Some official reservation lists retain an unpaid row briefly after its own deadline.
-    An exact row with an already elapsed official deadline is no longer an actionable
-    payment handoff, even though it is not yet absent from that list.
-    """
-
-    if (
-        attempt.outcome is not ReservationOutcome.PAYMENT_REQUIRED
-        or attempt.post_deadline_reconciled_at is None
-    ):
-        return None
-    if attempt.confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND:
-        return "confirmed_payment_hold_no_longer_present"
-    if (
-        attempt.confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-        and attempt.payment_deadline is not None
-        and _utc_instant(attempt.payment_deadline)
-        <= _utc_instant(attempt.post_deadline_reconciled_at)
-    ):
-        return "confirmed_payment_deadline_elapsed"
-    return None
-
-
-def is_payment_hold_ended(attempt: ReservationAttempt) -> bool:
-    return payment_hold_end_reason(attempt) is not None
 
 
 async def _ensure_focused_observation_capacity(

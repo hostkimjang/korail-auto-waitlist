@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import ReservationPolicy
 from ..models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from ..reservations.payment_hold_application import payment_hold_end_reason
 from ..schemas import WatchRead
-from ..services import payment_hold_end_reason, reservation_attempt_result_policy
+from ..services import reservation_attempt_result_policy
 
 
 def reservation_attempt_projection(

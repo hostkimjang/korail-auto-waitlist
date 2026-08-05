@@ -267,6 +267,14 @@ Migration `0020_reservation_reconciliation`은 실제 사용 credential version�
 
 `GET /api/v1/watches`의 후보별 `latest_reservation_attempt`는 원래 outcome과 함께 `confirmation_outcome`·`post_deadline_reconciled_at`을 반환합니다. 원래 outcome이 `PAYMENT_REQUIRED`이면서 최종 confirmation이 `NOT_FOUND`이거나, exact `CONFIRMED_PAYMENT_REQUIRED`의 저장된 공식 기한이 marker 시각 이하일 때만 read projection을 `retryable=true`, `retry_condition=new_availability_episode`로 만듭니다. 웹 JSON 경계도 이 근거들을 검증한 경우에만 보류 종료 상태를 만들고, 홈에는 `결제 보류 종료 확인 · 감시 계속`과 매진 후 재발견 조건을 표시합니다. 필드가 없거나 서로 모순되면 기존 결제 필요·수동 확인 상태를 유지해 보류 소실을 추정하지 않습니다.
 
+이 결제 보류 종료 판정의 canonical owner는 `reservations/payment_hold_application.py`입니다.
+`PAYMENT_REQUIRED`와 최종 확인 marker를 먼저 확인하고, exact `NOT_FOUND` 또는
+`CONFIRMED_PAYMENT_REQUIRED`인 공식 기한이 marker 시각 이하인 경우만 두 허용 reason 중 하나를
+반환합니다. naive 저장 시각은 기존 계약대로 UTC로 해석하고 aware 시각은 UTC instant로 비교합니다.
+이 owner는 ORM `ReservationAttempt`를 읽기만 하며 SQL·commit·outbox·provider 호출은 소유하지 않습니다.
+`services.py`는 기존 begin·confirmation·reconciliation 호출자를 위해 private UTC helper와 두 public
+함수를 같은 객체로 다시 export하고, watch read model은 canonical owner를 직접 사용합니다.
+
 outbox의 사람이 읽을 수 있는 중복 방지 키가 DB의 128자 저장 계약을 넘으면 앞부분과 전체 키의
 SHA-256을 결합한 고정 길이 키로 정규화합니다. 조회와 저장에 같은 정규화를 적용하므로 긴 상태
 전이 token도 중복 방지 의미를 유지하며, 알림 생성 실패로 좌석 관측 트랜잭션이 롤백되지 않습니다.
@@ -368,9 +376,9 @@ canonical registry와 provider 예외를 직접 import하며 `providers.py`는 �
 다시 export하는 호환 facade 역할만 합니다. module-boundary gate가 production→facade와
 adapter→registry/facade 역의존을 차단합니다.
 
-provider 역할과 observation projection의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
+오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
-공식 timetable adapter·registry application과 operational projection application의 8개 오류 0 파일만 대상입니다. registry 반환 타입은
+공식 timetable adapter·registry application, operational projection과 payment-hold application의 9개 오류 0 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로

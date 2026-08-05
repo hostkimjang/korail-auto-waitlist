@@ -669,21 +669,6 @@
     width: 100%;
   }
 
-  .reservation-policy-control {
-    grid-template-columns: minmax(0, 1fr);
-    margin-top: 20px;
-  }
-
-  .reservation-policy-control legend,
-  .reservation-policy-control > p {
-    grid-column: auto;
-  }
-
-  .reservation-policy-option {
-    min-height: 92px;
-    padding: 14px;
-  }
-
   .step-three-live-toolbar {
     align-items: center;
     flex-wrap: wrap;

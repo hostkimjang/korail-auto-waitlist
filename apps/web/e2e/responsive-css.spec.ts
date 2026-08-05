@@ -19,13 +19,14 @@ const viewportCases: readonly ViewportCase[] = [
   { name: "200% zoom equivalent", width: 720, height: 500 },
 ];
 
-const expectedHomeApiPaths = [
+const expectedResponsiveApiPaths = [
   "/api/v1/auth/status",
   "/api/v1/events",
   "/api/v1/notifications/channels",
   "/api/v1/preferences/ui",
   "/api/v1/provider-accounts",
   "/api/v1/provider-runtime-status",
+  "/api/v1/stations",
   "/api/v1/watches",
 ] as const;
 
@@ -138,7 +139,8 @@ function observeBrowser(page: Page): BrowserTelemetry {
 async function installMockApi(page: Page, telemetry: BrowserTelemetry): Promise<void> {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
-    const path = new URL(request.url()).pathname;
+    const requestUrl = new URL(request.url());
+    const path = requestUrl.pathname;
 
     if (path.endsWith("/events")) {
       telemetry.handledApiPaths.add(path);
@@ -208,6 +210,23 @@ async function installMockApi(page: Page, telemetry: BrowserTelemetry): Promise<
         timetable_refresh_interval_seconds: 30,
         seat_observation_interval_seconds: 5,
         preferences_updated_at: timestamp(-60_000),
+      });
+      return;
+    }
+    if (path.endsWith("/stations")) {
+      telemetry.handledApiPaths.add(path);
+      const provider = requestUrl.searchParams.get("provider") === "srt" ? "SRT" : "KORAIL";
+      await json(route, {
+        provider,
+        source: "TAGO",
+        retrieved_at: timestamp(-60_000),
+        catalog_scope: "intercity_station_guide_intersection",
+        provider_membership: "not_verified_by_source",
+        note: "반응형 E2E 고정 역 카탈로그",
+        stations: [
+          { node_id: "N-SEOUL", name: "서울", city_code: "11", city_name: "서울" },
+          { node_id: "N-BUSAN", name: "부산", city_code: "26", city_name: "부산" },
+        ],
       });
       return;
     }
@@ -424,6 +443,42 @@ async function expectRefreshPreferencesWithinBounds(
   );
 }
 
+async function expectReservationPolicyWithinBounds(
+  page: Page,
+  viewport: ViewportCase,
+): Promise<void> {
+  const newWaitNavigation = page.locator(
+    viewport.width <= 720 ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
+  ).filter({ hasText: "새 대기" });
+  await newWaitNavigation.click();
+  await expect(page.getByRole("heading", { name: "어디로 떠나세요?" })).toBeVisible();
+
+  await page.getByRole("checkbox", { name: /^SRT/ }).click();
+  for (const [label, station] of [["출발역", "서울"], ["도착역", "부산"]] as const) {
+    const input = page.getByRole("combobox", { name: label });
+    await expect(input).toBeEnabled();
+    await input.fill(station);
+    await page.getByRole("option", { name: new RegExp(`^${station}`) }).click();
+  }
+  await page.getByRole("button", { name: /다음/ }).click();
+  await expect(page.getByRole("heading", { name: "어떤 좌석을 찾을까요?" })).toBeVisible();
+
+  const control = page.locator(".reservation-policy-control");
+  const options = control.locator(".reservation-policy-option");
+  const warning = control.locator(".reservation-policy-warning");
+  await expectWithinViewport(control, viewport.width, "reservation policy control");
+  await expect(options).toHaveCount(2);
+  await expect(warning).toContainText("SRT");
+  await expect(warning).toHaveAttribute("id", "reservation-policy-account-help");
+  await expect(options.nth(1)).toBeDisabled();
+  await expect(options.nth(1)).toHaveAttribute("aria-describedby", "reservation-policy-account-help");
+  await expectWithinViewport(warning, viewport.width, "reservation policy warning");
+  for (let index = 0; index < 2; index += 1) {
+    await expectWithinViewport(options.nth(index), viewport.width, `reservation policy option ${index + 1}`);
+    await expectVisibleActionTarget(options.nth(index), `reservation policy option ${index + 1}`);
+  }
+}
+
 async function expectWatchRegionsDoNotOverlap(page: Page): Promise<void> {
   const regionSelectors = [
     ".watch-provider",
@@ -464,10 +519,10 @@ async function expectWatchRegionsDoNotOverlap(page: Page): Promise<void> {
 }
 
 async function expectHomeApiAndBrowserClean(telemetry: BrowserTelemetry): Promise<void> {
-  await expect.poll(() => expectedHomeApiPaths.every((path) => (
+  await expect.poll(() => expectedResponsiveApiPaths.every((path) => (
     telemetry.handledApiPaths.has(path)
   ))).toBe(true);
-  expect([...telemetry.handledApiPaths].sort()).toEqual([...expectedHomeApiPaths].sort());
+  expect([...telemetry.handledApiPaths].sort()).toEqual([...expectedResponsiveApiPaths].sort());
   expect(telemetry.unhandledApiRequests).toEqual([]);
   expect(telemetry.consoleErrors).toEqual([]);
   expect(telemetry.pageErrors).toEqual([]);
@@ -574,6 +629,7 @@ for (const viewport of viewportCases) {
     await expectOfficialHandoffWithinBounds(page, viewport);
     await expectReservationsWithinBounds(page, viewport);
     await expectRefreshPreferencesWithinBounds(page, viewport);
+    await expectReservationPolicyWithinBounds(page, viewport);
     await expectHomeApiAndBrowserClean(telemetry);
   });
 }

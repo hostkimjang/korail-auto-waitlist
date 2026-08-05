@@ -10,6 +10,7 @@ const styleImports = [
   "./styles/operations.css",
   "./styles/app-surfaces.css",
   "./features/reservations/reservations.css",
+  "./features/new-wait/reservationPolicyControl.css",
   "./features/settings/timetableRefreshSettings.css",
   "./features/official-handoff/officialHandoff.css",
   "./features/new-wait/officialSeatConfirmation.css",
@@ -24,6 +25,9 @@ const featureStyles = readStyleFile("./styles/features.css");
 const operationsStyles = readStyleFile("./styles/operations.css");
 const appSurfaceStyles = readStyleFile("./styles/app-surfaces.css");
 const reservationStyles = readStyleFile("./features/reservations/reservations.css");
+const reservationPolicyControlStyles = readStyleFile(
+  "./features/new-wait/reservationPolicyControl.css",
+);
 const timetableRefreshSettingsStyles = readStyleFile(
   "./features/settings/timetableRefreshSettings.css",
 );
@@ -42,6 +46,7 @@ const styles = [
   operationsStyles,
   appSurfaceStyles,
   reservationStyles,
+  reservationPolicyControlStyles,
   timetableRefreshSettingsStyles,
   officialHandoffStyles,
   officialSeatConfirmationStyles,
@@ -104,7 +109,7 @@ function extractCssBlock(source: string, header: string, fromIndex = 0): CssBloc
 }
 
 describe("global CSS structure", () => {
-  it("loads the eleven style boundaries in their cascade order", () => {
+  it("loads the twelve style boundaries in their cascade order", () => {
     const entryStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     const expectedImports = `${styleImports
       .map((styleImport) => `@import "${styleImport}";`)
@@ -133,6 +138,7 @@ describe("global CSS structure", () => {
     expect(featureStyles).not.toContain(".official-handoff-layer");
     expect(featureStyles).not.toContain(".official-confirmation-");
     expect(featureStyles).not.toContain(".refresh-preference-");
+    expect(featureStyles).not.toContain(".reservation-policy-");
     expect(featureStyles.trimEnd()).toMatch(/\.system-grid strong\s*\{[\s\S]*color:\s*#17776f;[\s\S]*\}$/);
 
     expect(operationsStyles.trimStart()).toMatch(/^\.operations-dashboard\s*\{/);
@@ -163,6 +169,41 @@ describe("global CSS structure", () => {
     );
     expect(mobileReservations.body).toContain(".reservation-item > .button");
     expect(reservationStyles.slice(mobileReservations.end).trim()).toBe("");
+
+    expect(reservationPolicyControlStyles.trimStart())
+      .toMatch(/^\.reservation-policy-control\s*\{/);
+    const reservationPolicyHeaders = [
+      ".reservation-policy-control {",
+      ".reservation-policy-control legend {",
+      ".reservation-policy-option {",
+      ".reservation-policy-option > svg:first-child {",
+      ".reservation-policy-option span {",
+      ".reservation-policy-option strong {",
+      ".reservation-policy-option small {",
+      ".reservation-policy-option.is-selected {",
+      ".reservation-policy-option:disabled {",
+      ".reservation-policy-control > p {",
+      ".reservation-policy-control > .reservation-policy-warning {",
+      "@media (max-width: 760px)",
+    ] as const;
+    let previousReservationPolicyHeaderIndex = -1;
+    for (const header of reservationPolicyHeaders) {
+      const headerIndex = reservationPolicyControlStyles.indexOf(
+        header,
+        previousReservationPolicyHeaderIndex + 1,
+      );
+      expect(headerIndex, `${header} must preserve its original relative order`).toBeGreaterThan(
+        previousReservationPolicyHeaderIndex,
+      );
+      previousReservationPolicyHeaderIndex = headerIndex;
+    }
+    const mobileReservationPolicy = extractCssBlock(
+      reservationPolicyControlStyles,
+      "@media (max-width: 760px)",
+    );
+    expect(mobileReservationPolicy.body).toContain(".reservation-policy-control legend,");
+    expect(mobileReservationPolicy.body).toContain(".reservation-policy-option");
+    expect(reservationPolicyControlStyles.slice(mobileReservationPolicy.end).trim()).toBe("");
 
     expect(timetableRefreshSettingsStyles.trimStart())
       .toMatch(/^\.refresh-preference-card\s*\{/);
@@ -240,6 +281,7 @@ describe("global CSS structure", () => {
     expect(responsiveStyles).not.toContain(".official-handoff-layer");
     expect(responsiveStyles).not.toContain(".official-confirmation-");
     expect(responsiveStyles).not.toContain(".refresh-preference-");
+    expect(responsiveStyles).not.toContain(".reservation-policy-");
     const reducedMotion = extractCssBlock(responsiveStyles, "@media (prefers-reduced-motion: reduce)");
     expect(reducedMotion.body).toContain("animation-duration: 0.01ms !important");
     expect(responsiveStyles.slice(reducedMotion.end).trim()).toBe("");

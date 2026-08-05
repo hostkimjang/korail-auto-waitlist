@@ -11,14 +11,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from datetime import time as clock_time
 from pathlib import Path
-from typing import Any, ClassVar, Protocol, Self
+from typing import Any, ClassVar, Protocol, Self, cast
 from urllib.parse import urlsplit
 
 from .korail_browser_automation import (
     FULLSTACK_E2E_PAGE_URL,
     OFFICIAL_KORAIL_SEARCH_URL,
-    BrowserProtectionDetected,
-    BrowserRateLimited,
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
@@ -69,6 +67,11 @@ from .korail_pydoll_contracts import (
     normalize_korail_station as _normalize_station,
 )
 from .korail_pydoll_http_replay import DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE
+from .korail_pydoll_login_driver import (
+    LoginAttemptState,
+    PydollLoginDomDriver,
+    login_step,
+)
 from .korail_pydoll_page_safety import (
     GENERIC_PROTECTION_TRIGGERS as _GENERIC_PROTECTION_TRIGGERS,
 )
@@ -588,6 +591,55 @@ class _PydollSession:
         self._network_responses: set[tuple[int, str]] = set()
         self._opened_once = False
         self._http_capture_start: int | None = None
+        self._login_driver = PydollLoginDomDriver(
+            port=self,
+            page_url=self.page_url,
+            timeout_ms=self.timeout_ms,
+            timeout_seconds=self._timeout_seconds,
+            go_to=self._login_go_to,
+            execute_script=self._login_execute_script,
+            snapshot=lambda: self._snapshot(),
+            visible_elements=lambda selector, **options: self._visible_elements(
+                selector,
+                **options,
+            ),
+            has_exact_visible=lambda selector, text: self._has_exact_visible(selector, text),
+            wait_for_exact_text=lambda selector, text: self._wait_for_exact_text(selector, text),
+            reset_search_state=self._reset_login_search_state,
+            response_safety_guard=lambda snapshot, stage: assert_pydoll_response_allowed(
+                snapshot,
+                stage,
+                event_logger=logger,
+            ),
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            event_logger=logger,
+        )
+
+    def _login_go_to(self, url: str, timeout: int) -> Awaitable[object]:
+        return cast(Awaitable[object], self._tab.go_to(url, timeout=timeout))
+
+    def _login_execute_script(
+        self,
+        script: str,
+        *,
+        return_by_value: bool,
+        await_promise: bool,
+        timeout: int,
+    ) -> Awaitable[object]:
+        return cast(
+            Awaitable[object],
+            self._tab.execute_script(
+                script,
+                return_by_value=return_by_value,
+                await_promise=await_promise,
+                timeout=timeout,
+            ),
+        )
+
+    def _reset_login_search_state(self) -> None:
+        self._submitted = False
+        self._network_responses.clear()
 
     async def __aenter__(self) -> Self:
         try:
@@ -950,246 +1002,57 @@ class _PydollSession:
 
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         """Use one explicit official login method and verify an authenticated header."""
-
-        attempt = _ReservationAttemptState()
-        if await self._login_step(
-            "login_session_probe",
-            self._has_authenticated_header(),
-        ):
-            return await self._confirm_authenticated_search(attempt)
-        await self._login_step(
-            "login_page_navigate",
-            self._tab.go_to(
-                "https://www.korail.com/ticket/login",
-                timeout=max(1, self.timeout_ms // 1000),
-            ),
-        )
-        if not await self._submit_login_form(credential):
-            return False
-        if not await self._wait_for_login_authentication(attempt):
-            return False
-        return await self._confirm_authenticated_search(attempt)
+        return await self._login_driver.ensure_authenticated(credential)
 
     async def _authenticate_in_place(
         self,
         credential: KorailCredentialInput,
-        attempt: _ReservationAttemptState | None = None,
+        attempt: LoginAttemptState | None = None,
     ) -> bool:
         """Submit the current login page once without replacing its booking history state."""
-
-        if await self._login_step(
-            "reservation_login_session_probe",
-            self._has_authenticated_header(),
-        ):
-            return True
-        if not await self._submit_login_form(credential):
-            return False
-        return await self._wait_for_login_authentication(attempt)
+        return await self._login_driver.authenticate_in_place(credential, attempt)
 
     async def _submit_login_form(self, credential: KorailCredentialInput) -> bool:
         """Fill and submit one uniquely scoped official login form."""
-
-        tab = await self._login_step(
-            "login_method_tab",
-            self._wait_for_unique_login_method_tab(credential.login_method),
-        )
-        if tab is None:
-            return False
-        await self._login_step("login_method_select", tab.click())
-        controls = await self._login_step(
-            "login_controls",
-            self._wait_for_login_controls(credential.login_method),
-        )
-        if controls is None:
-            return False
-        login_id, password, submit = controls
-
-        await self._login_step("login_identity_clear", login_id.clear())
-        await self._login_step(
-            "login_identity_input",
-            login_id.type_text(credential.login_id),
-        )
-        await self._login_step("login_password_clear", password.clear())
-        await self._login_step("login_password_input", password.type_text(credential.password))
-        await self._login_step("login_submit", submit.click())
-        return True
+        return await self._login_driver.submit_login_form(credential)
 
     async def _wait_for_login_authentication(
         self,
-        attempt: _ReservationAttemptState | None = None,
+        attempt: LoginAttemptState | None = None,
     ) -> bool:
         """Observe one submitted login without navigating away from the current route."""
-
-        submitted_at = time.monotonic()
-        deadline = submitted_at + self._timeout_seconds
-        # The official login request can establish the server session before its
-        # React header changes from ``로그인`` to ``로그아웃``.  Verify that server
-        # session independently, but keep the checks bounded so one explicit
-        # credential verification cannot become a polling loop against KORAIL.
-        attempt = attempt or _ReservationAttemptState()
-        session_probe_delay = min(0.25, self._timeout_seconds / 4)
-        while time.monotonic() < deadline:
-            snapshot = await self._login_step("login_result_snapshot", self._snapshot())
-            assert_pydoll_response_allowed(snapshot, "authenticate", event_logger=logger)
-            authenticated_header = await self._login_step(
-                "login_result_header",
-                self._has_authenticated_header(),
-            )
-            # The account-verification caller separately confirms this session on
-            # the search page. Reservation callers return here so the current tab's
-            # booking history state is not replaced by explicit navigation.
-            if authenticated_header:
-                logger.info("KORAIL login session marker stage=login_page present=true")
-                return True
-            elapsed = time.monotonic() - submitted_at
-            if not attempt.post_submit_check_attempted and elapsed >= session_probe_delay:
-                # Latch before awaiting. A failed/uncertain fetch must not trigger
-                # another official loginCheck request during this reservation.
-                attempt.post_submit_check_attempted = True
-                attempt.post_submit_authenticated = bool(
-                    await self._login_step(
-                        "login_page_session_check",
-                        self._probe_official_authenticated_session(),
-                    )
-                )
-                logger.info(
-                    "KORAIL login session marker stage=login_page_official_session "
-                    "attempt=1 present=%s",
-                    str(attempt.post_submit_authenticated).lower(),
-                )
-                if attempt.post_submit_authenticated:
-                    return True
-            await asyncio.sleep(0.1)
-        logger.info("KORAIL login session marker stage=login_page present=false")
-        return False
+        return await self._login_driver.wait_for_login_authentication(attempt)
 
     async def _confirm_authenticated_search(
         self,
-        attempt: _ReservationAttemptState,
+        attempt: LoginAttemptState,
     ) -> bool:
         """Require the authenticated header to persist on the official search page."""
-
-        await self._login_step(
-            "login_return_search",
-            self._tab.go_to(
-                self.page_url,
-                timeout=max(1, self.timeout_ms // 1000),
-            ),
-        )
-        self._submitted = False
-        self._network_responses.clear()
-        await self._login_step(
-            "login_return_search",
-            self._wait_for_exact_text("button", "열차 조회"),
-        )
-        if not attempt.post_submit_check_attempted:
-            attempt.post_submit_check_attempted = True
-            attempt.post_submit_authenticated = bool(
-                await self._login_step(
-                    "login_search_session_check",
-                    self._probe_official_authenticated_session(),
-                )
-            )
-        if attempt.post_submit_authenticated:
-            logger.info("KORAIL login session marker stage=official_session present=true")
-            return True
-        authenticated = bool(
-            await self._login_step(
-                "login_search_session_probe",
-                self._wait_for_authenticated_header(),
-            )
-        )
-        logger.info(
-            "KORAIL login session marker stage=search_page present=%s",
-            str(authenticated).lower(),
-        )
-        return authenticated
+        return await self._login_driver.confirm_authenticated_search(attempt)
 
     async def _probe_official_authenticated_session(self) -> bool:
         """Return only the official loginCheck boolean; never expose its payload."""
-
-        script = """
-            (async () => {
-              try {
-                const response = await fetch(
-                  '/ebizweb/common/loginCheck?Device=BH&Version=999999999',
-                  {
-                    method: 'GET',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: { Accept: 'application/json' },
-                  },
-                );
-                if (!response.ok) return false;
-                const payload = await response.json();
-                return payload?.strResult === 'SUCC' && !payload?.h_msg_cd;
-              } catch (_) {
-                return false;
-              }
-            })()
-        """
-        response = await self._tab.execute_script(
-            script,
-            return_by_value=True,
-            await_promise=True,
-            timeout=self.timeout_ms,
-        )
-        try:
-            return response["result"]["result"].get("value") is True
-        except (AttributeError, KeyError, TypeError):
-            return False
+        return await self._login_driver.probe_official_authenticated_session()
 
     async def _has_authenticated_header(self) -> bool:
         """Read the official desktop/mobile authenticated header controls."""
-
-        return await self._has_exact_visible(
-            "a.btnGoLogout,button.logoutBtn",
-            "로그아웃",
-        )
+        return await self._login_driver.has_authenticated_header()
 
     async def _wait_for_authenticated_header(self) -> bool:
         """Wait for the asynchronous official loginCheck hydration to finish."""
-
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            if await self._has_authenticated_header():
-                return True
-            await asyncio.sleep(0.1)
-        return False
+        return await self._login_driver.wait_for_authenticated_header()
 
     @staticmethod
     async def _login_step(stage: str, awaitable: Awaitable[Any]) -> Any:
         """Map browser-library failures to a secret-free, code-owned login stage."""
-
-        try:
-            return await awaitable
-        except (
-            BrowserProtectionDetected,
-            BrowserRateLimited,
-            BrowserSourceUnavailable,
-        ):
-            raise
-        except Exception as error:
-            raise BrowserSourceUnavailable(stage) from error
+        return await login_step(stage, awaitable)
 
     async def _wait_for_unique_login_method_tab(
         self,
         login_method: KorailLoginMethod,
     ) -> Any | None:
         """Wait for one SPA-rendered method tab without repeating navigation or clicks."""
-
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            tabs = await self._visible_elements(login_method.tab_selector)
-            if len(tabs) == 1:
-                logger.info("KORAIL login control marker stage=login_method_tab outcome=ready")
-                return tabs[0]
-            if len(tabs) > 1:
-                logger.info("KORAIL login control marker stage=login_method_tab outcome=ambiguous")
-                return None
-            await asyncio.sleep(0.1)
-        logger.info("KORAIL login control marker stage=login_method_tab outcome=timeout")
-        return None
+        return await self._login_driver.wait_for_unique_login_method_tab(login_method)
 
     async def _wait_for_login_controls(
         self,
@@ -1202,29 +1065,7 @@ class _PydollSession:
         the stable accessibility boundary shared by all three supported login methods.
         """
 
-        deadline = time.monotonic() + self._timeout_seconds
-        password_selector = "input#password[name='password'][type='password']"
-        while time.monotonic() < deadline:
-            panels = await self._visible_elements(".tabPage.active[role='tabpanel']")
-            if len(panels) == 1:
-                panel = panels[0]
-                identities = await self._visible_elements(
-                    login_method.identity_selector,
-                    scope=panel,
-                )
-                passwords = await self._visible_elements(password_selector, scope=panel)
-                submits = [
-                    control
-                    for control in await self._visible_elements(
-                        "button,[role='button']",
-                        scope=panel,
-                    )
-                    if " ".join(str(await control.text).split()) == "로그인"
-                ]
-                if len(identities) == len(passwords) == len(submits) == 1:
-                    return identities[0], passwords[0], submits[0]
-            await asyncio.sleep(0.1)
-        return None
+        return await self._login_driver.wait_for_login_controls(login_method)
 
     async def begin_http_replay_capture(self) -> None:
         if self._submitted or self._http_capture_start is not None:

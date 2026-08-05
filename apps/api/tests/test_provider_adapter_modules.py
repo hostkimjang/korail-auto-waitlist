@@ -9,6 +9,8 @@ from rail_waitlist.provider_adapters.base import RailProviderAdapter as OwnerRai
 from rail_waitlist.provider_adapters.execution import (
     FailClosedExecutionAdapter as OwnerFailClosedExecutionAdapter,
 )
+from rail_waitlist.provider_adapters.mock import MockProviderAdapter as OwnerMockProviderAdapter
+from rail_waitlist.provider_adapters.mock import mock_seat_classes as owner_mock_seat_classes
 from rail_waitlist.provider_adapters.tago import TagoClient as OwnerTagoClient
 from rail_waitlist.provider_adapters.tago import TagoPage as OwnerTagoPage
 from rail_waitlist.provider_adapters.tago import (
@@ -30,13 +32,16 @@ from rail_waitlist.provider_adapters.timetable_support import (
 from rail_waitlist.providers import (
     OFFICIAL_BOOKING_URLS,
     FailClosedExecutionAdapter,
+    MockProviderAdapter,
     OfficialTimetableAdapter,
     RailProviderAdapter,
     TagoClient,
     TagoPage,
     default_tago_client,
     get_execution_provider,
+    get_provider,
     get_timetable_provider,
+    mock_seat_classes,
     normalize_departure_window,
     normalize_station_name,
     official_unknown_seat_classes,
@@ -59,6 +64,24 @@ def test_provider_facade_reexports_timetable_objects_by_identity() -> None:
     assert normalize_station_name is owner_normalize_station_name
     assert normalize_departure_window is owner_normalize_departure_window
     assert official_unknown_seat_classes is owner_official_unknown_seat_classes
+
+
+def test_provider_facade_reexports_mock_objects_by_identity() -> None:
+    assert MockProviderAdapter is OwnerMockProviderAdapter
+    assert mock_seat_classes is owner_mock_seat_classes
+
+
+def test_canonical_mock_adapter_keeps_the_complete_executable_capability_contract() -> None:
+    capabilities = OwnerMockProviderAdapter().capabilities()
+
+    assert capabilities.provider is Provider.MOCK
+    assert capabilities.timetable is True
+    assert capabilities.official_booking_link is True
+    assert capabilities.official_waitlist_link is True
+    assert capabilities.seat_monitoring is True
+    assert capabilities.reservation_once is True
+    assert capabilities.experimental is False
+    assert capabilities.enabled is True
 
 
 def test_fail_closed_adapter_keeps_all_execution_capabilities_disabled() -> None:
@@ -87,6 +110,20 @@ def test_execution_registry_keeps_adapters_fresh_and_sources_lazy() -> None:
     assert first is not second
     assert first._source is None
     assert second._source is None
+
+
+def test_mock_registries_keep_canonical_adapters_fresh() -> None:
+    settings = Settings(_env_file=None)
+
+    adapters = [
+        get_timetable_provider(Provider.MOCK, settings),
+        get_execution_provider(Provider.MOCK, settings),
+        get_provider(Provider.MOCK, settings),
+        get_timetable_provider(Provider.MOCK, settings),
+    ]
+
+    assert all(type(adapter) is OwnerMockProviderAdapter for adapter in adapters)
+    assert len({id(adapter) for adapter in adapters}) == len(adapters)
 
 
 def test_official_timetable_registry_keeps_the_canonical_shared_tago_singleton(

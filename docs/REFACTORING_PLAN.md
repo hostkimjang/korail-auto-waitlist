@@ -867,6 +867,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: Mock adapter, KORAIL/SRT execution adapter, provider registry application의 단계별
   물리 이동과 실행 전용 역할 base·Python 정적 타입 gate입니다.
 
+### 2026-08-05 스무 번째 구조 슬라이스 D
+
+- Mock 소유권: `provider_adapters/mock.py`가 좌석 등급별 fixture helper와 `MockProviderAdapter`의
+  capability·시간표·역·관측·예약 계약을 함께 소유합니다. 외부 I/O, singleton, mutable instance
+  상태가 없는 경계만 원본 AST와 같은 동작으로 이동해 execution 수명주기 변경과 분리했습니다.
+- compatibility facade와 registry: `providers.py`는 public-looking helper와 class를 wrapper 없이 직접
+  re-export합니다. 시간표·실행·legacy registry는 모두 canonical class를 반환하고 반복·상호 호출마다
+  새 인스턴스를 만들며, 기존 facade subclass와 unbound base method 호출 identity를 유지합니다.
+  `providers.py`는 504줄에서 358줄로 줄었습니다.
+- 회귀 계약: facade/canonical helper·class identity, mock capability 전체 bit, 세 registry의 canonical
+  type과 pairwise fresh identity를 owner 테스트 3건으로 추가했습니다. 기존 40분 inclusive 시간창,
+  좌석 action·fare·provenance, 역 카탈로그, UTC 관측 시각·5분 freshness, 20분 결제 기한·공식 인계,
+  provider mismatch와 API·snapshot·worker subclass 회귀도 함께 통과했습니다.
+- 확인된 검증: 관련 focused pytest 218건, API 전체 pytest 1,066건, Ruff `E/F/I`, format ratchet
+  61개와 `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐고
+  독립 재감사에서 원본 AST 동일, 역의존·순환 import 0건과 도입 P0~P2 회귀 없음을 확인했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: node ID partial·same·unknown·name mismatch의 mock 전용 parameterized 테스트와 capability
+  note·전체 node/city fixture·정확한 5분/20분 간격 고정은 아직 없습니다. 이번 이동에서 바뀐 동작은
+  아니며 AST 동일성과 기존 관통 테스트로 보존을 확인했지만 후속 계약 강화 항목으로 남깁니다.
+- 남은 핵심 부채: Experimental, KORAIL/SRT execution adapter, provider registry application의 단계별
+  물리 이동과 실행 전용 역할 base·Python 정적 타입 gate입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

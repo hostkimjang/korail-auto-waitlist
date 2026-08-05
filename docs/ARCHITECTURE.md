@@ -325,9 +325,11 @@ envelope·pagination parser와 `TagoClient`·process singleton은 `provider_adap
 KORAIL·SRT 시간표 adapter는 `provider_adapters/timetable.py`가 canonical owner입니다. facade는 이
 함수·class·factory를 wrapper 없이 직접 import해 같은 객체로 다시 export하고 private singleton
 binding은 노출하지 않습니다. 따라서 두 운영사의 raw-day cache·singleflight·기본 client 공유와
-명시적 client 주입 경계가 유지됩니다. Mock/Experimental과 KORAIL/SRT 실행 adapter,
-registry·capability 병합은 아직 compatibility facade에 남아 있으며 task-scoped fresh 실행 adapter를
-보존하는 후속 수직 슬라이스에서 이동합니다.
+명시적 client 주입 경계가 유지됩니다. 외부 I/O 없는 mock 좌석 fixture helper와
+`MockProviderAdapter`는 `provider_adapters/mock.py`가 소유하며 facade는 같은 객체를 다시 export합니다.
+시간표·실행·legacy registry는 호출마다 새 canonical mock 인스턴스를 만들어 상태 격리를 유지합니다.
+Experimental과 KORAIL/SRT 실행 adapter, registry·capability 병합은 아직 compatibility facade에 남아
+있으며 task-scoped 실행 수명주기를 보존하는 후속 수직 슬라이스에서 이동합니다.
 
 외부 provider 관측 그룹은 `provider_execution_leases`의 `provider + account_scope` 복합 키로
 직렬화합니다. 획득할 때마다 fencing token을 증가시키고, worker는 공식 호출 직전과 관측 결과

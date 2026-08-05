@@ -1229,6 +1229,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 운영 검증 범위: CSS·구조 테스트·문서만 변경했으므로 Compose 재배포는 수행하지 않았습니다. 남은
   `features.css`의 new-wait·reservation·settings/shared selector 재소유와 중복 정리는 별도입니다.
 
+### 2026-08-05 스물세 번째 구조 슬라이스 C
+
+- observation cycle application: `services.py`의 `latest_observation_fingerprint`와
+  `finish_observation_cycle`을 `observations/cycle_application.py`로 이동했습니다. services는 두 함수를
+  wrapper 없이 같은 객체로 다시 export하고 worker dependency 조립은 canonical owner를 직접 사용합니다.
+  services는 1,493줄에서 1,417줄, 새 owner는 99줄입니다.
+- fingerprint 계약: 후보 priority 순서와 각 후보의 최신 `observed_at DESC, id DESC` 상태 vector만
+  기존 `json.dumps(sort_keys=True, separators=(",", ":"), default=str)` + SHA-256으로 hash합니다.
+  관측 timestamp만 달라진 경우 같은 fingerprint이며, Unicode·`None`·복수 후보 matrix에서 기존
+  public `request_hash`와 byte-compatible digest를 확인했습니다. public helper 자체는 이동하지 않았습니다.
+- 주기 정책: 같은 vector이면 `unchanged_runs + 1`, 변화면 0으로 초기화합니다. watching·
+  official_waitlist·seat_found만 관리자 전역 관측 간격 또는 기본 5초와 첫 활성 후보 출발시각을 사용하고,
+  후보가 없으면 KST 여행일·시각을 UTC로 바꿉니다. terminal 상태는 `next_check_at=None`으로 닫습니다.
+- UoW·경계: group application의 실행 임대 검증 → watch 잠금 → 이전 fingerprint → observation flush·
+  seat/status/notification outbox → cycle finish → commit과 예외 rollback 순서를 유지했습니다. 새 owner에는
+  lock·commit·rollback·outbox·provider/runtime 역의존이 없고, services/worker canonical identity를
+  고정했습니다. strict mypy ratchet은 10개에서 11개 파일로 확장했습니다.
+- 확인된 검증: 신규 owner·boundary focused pytest 20건, observation group·worker 인접 focused 27건,
+  독립 감사 focused 30건, API 전체 pytest 1,119건, Ruff `E/F/I`, format ratchet 60개, strict mypy
+  11개 파일 오류 0, `uv lock --check`와 `git diff --check`를 통과했습니다. 기존 Starlette/httpx
+  deprecation 경고 1건은 유지됐고 독립 리뷰 P0~P3 잔여 지적은 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

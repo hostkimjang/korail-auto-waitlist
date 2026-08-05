@@ -368,6 +368,10 @@
 - [x] 스물세 번째 구조 슬라이스 A의 이동 전 API 3 + auth 5 + events 2와 이동 후 auth 7 + events 3의 10개 실행 및 선언 합계 9개 보존, consumer 7파일·26건, 전체 Vitest 79파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build·Sites 4건·기본 E2E 14건과 `git diff --check` 통과. test/docs only라 Compose 재배포는 생략
 - [x] `features.css` 끝의 settings 운영 상태 대시보드 전용 447줄과 `operations-shimmer`·reduced-motion을 `styles/operations.css`로 이동하고 전역 import를 `tokens → base → shell → features → operations → app-surfaces → responsive` 일곱 경계로 확장. 원본 4,476줄과 분리 후 4,029+447줄의 line/blob 동일성 보존
 - [x] 최초 Home prefix 분리에서 비-Home 공용 selector 암묵 의존 P2를 발견해 전부 되돌리고 operations 전용 tail만 재분리. focused 2파일·14건, 전체 Vitest 79파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build·Sites 4건·기본 E2E 14건, 독립 재리뷰 P0~P3 없음과 `git diff --check` 통과. CSS/구조/문서만 변경해 Compose 재배포는 생략
+- [x] 상태 벡터 fingerprint와 관측 주기 마감을 99줄 `observations/cycle_application.py`로 이동하고 services가 두 함수 identity를 직접 보존하며 worker가 canonical owner를 사용. public request hash는 유지하고 priority/latest 상태 vector·timestamp 제외·Unicode/None digest 동등성, default/admin interval·KST fallback·terminal close를 고정해 services를 1,493→1,417줄로 축소
+- [x] group의 임대 검증→watch lock→이전 fingerprint→observation/status/outbox→cycle finish→commit 및 예외 rollback 순서와 같은 UoW 원자성을 유지. focused pytest 27건·신규/boundary 20건·독립 감사 30건, API 전체 1,119건, Ruff `E/F/I`, format ratchet 60개, 독립 리뷰 P0~P3 없음과 `git diff --check` 통과
+- [x] 오류 0인 observation cycle owner를 strict mypy ratchet에 추가해 대상 10→11개 파일 확장하고 `uv lock --check`·scoped mypy 오류 0 확인
+- [x] 스물세 번째 구조 슬라이스 C의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

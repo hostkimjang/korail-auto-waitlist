@@ -21,6 +21,10 @@ from .korail_execution import korail_background_monitoring_enabled
 from .metrics import WATCH_GROUPS, WORKER_RUNS
 from .models import ReservationAttempt, Watch, WatchCandidate
 from .notification_management.delivery import deliver_pending_notifications
+from .observations.cycle_application import (
+    finish_observation_cycle,
+    latest_observation_fingerprint,
+)
 from .observations.due_pipeline_application import (
     DuePipelineDependencies,
     process_due_pipeline,
@@ -59,10 +63,8 @@ from .services import (
     apply_watch_transition,
     begin_reservation_attempt,
     complete_reservation_attempt,
-    finish_observation_cycle,
     get_or_create_provider_circuit,
     is_confirmed_absent_retry_source,
-    latest_observation_fingerprint,
     record_reservation_confirmation,
     record_seat_observation,
 )

@@ -84,7 +84,7 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
 - mypy는 `strict=true`와 Python 3.12로 실행하며, 현재 오류 0인 `provider_contracts.py`,
   provider base·execution·experimental·KORAIL execution·timetable adapter와 registry application
   및 observation operational projection·reservation payment-hold·watch transition notification
-  application의 10개 파일을 명시적 ratchet으로 검사합니다.
+  application, observation cycle application의 11개 파일을 명시적 ratchet으로 검사합니다.
   `ignore_missing_imports`, 전역 오류 코드 비활성화,
   광범위한 `type: ignore`로 통과시키지 않습니다. 새 owner는 오류 0을 만든 뒤 대상 목록에
   추가하고 전체 legacy package가 이미 strict라고 표현하지 않습니다.

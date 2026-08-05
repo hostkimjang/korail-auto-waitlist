@@ -104,6 +104,10 @@ def _is_operational_projection_application(relative_path: Path) -> bool:
     )
 
 
+def _is_observation_cycle_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/observations/cycle_application.py"
+
+
 def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
@@ -220,6 +224,26 @@ BOUNDARY_RULES = (
                 "providers",
                 "services",
                 "sqlalchemy",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="observation cycle application stays inside the persistence unit of work",
+        matches=_is_observation_cycle_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "reservations",
+                "services",
                 "worker",
             }
         ),
@@ -380,6 +404,24 @@ def test_watch_transition_notification_application_does_not_own_transactions_or_
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
 
+    assert called_attributes.isdisjoint({"begin", "commit", "rollback", "with_for_update"})
+
+
+def test_observation_cycle_application_does_not_own_transactions_locks_or_outbox() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "observations" / "cycle_application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "add_outbox_event" not in called_names
     assert called_attributes.isdisjoint({"begin", "commit", "rollback", "with_for_update"})
 
 

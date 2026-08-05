@@ -341,6 +341,15 @@ runtime을 import하지 않고 `SeatObservationResult`와 최소 candidate Proto
 transaction이 rollback됩니다. 예약 retry edge 판정과 observation 영속·outbox 책임은 계속
 `services.py`에 남아 있습니다.
 
+관측 주기의 상태 벡터 fingerprint와 다음 확인 시각 계산은
+`observations/cycle_application.py`가 소유합니다. 후보 priority 순으로 각 후보의 최신
+`observed_at, id` 관측 상태만 hash하고 관측 시각 자체는 변화 판단에서 제외합니다. 같은 vector이면
+`unchanged_runs`를 늘리고 상태가 달라지면 0으로 초기화하며, 활성 watch만 첫 활성 후보 출발시각 또는
+후보 없는 KST 여정 시각과 관리자 관측 간격으로 다음 주기를 계산합니다. 이 owner는 lock·outbox·
+commit·rollback을 소유하지 않습니다. worker의 observation group은 watch lock 뒤 이전 fingerprint →
+관측·상태/outbox → cycle finish → commit 순서를 유지하고 예외 때 모두 rollback합니다. `services.py`는
+기존 소비자를 위해 두 함수를 같은 객체로 다시 export하고 worker 조립은 canonical owner를 사용합니다.
+
 ## 상태 계약
 
 공식 KORAIL·SRT의 기본 흐름은 작업 생성 직후 start 요청을 거쳐 `draft → scheduled`가 됩니다. UI의 자동 시작 자체는 조회 capability를 바꾸지 않으며, 좌석 관측 근거가 없으면 `unknown`과 안전한 미관측 사유를 표시합니다. 사용자 시간표 요청에서 `SrtLiveSeatSource`는 계정 없는 검색 한 번을, KORAIL Chromium source는 공식 페이지의 렌더된 결과 판독 한 번을 수행합니다. 같은 source를 worker에 연결하는 것은 운영사별 3중 opt-in이 모두 켜진 경우로 제한합니다. 활성화 뒤 기존 `scheduled|seat_found|official_waitlist + next_check_at=null` 작업은 worker가 한 번 재무장하고, due 작업은 DB 실행 임대를 얻은 뒤 관측합니다. `sold_out`은 `watching`과 다음 관측 시각을 유지하고, `available`·`limited`·`standing_plus_seat`는 `seat_found`, `waitlist_available`은 `official_waitlist`로 전이합니다. `seat_found`와 `official_waitlist`는 종착 상태가 아니며 동일한 상태에서도 다음 관측을 예약합니다. 주기 결과에 따라 두 상태 사이를 이동하고, 모든 후보가 확정적인 비행동 상태로 바뀌면 `watching`으로 복귀합니다. 오류·미관측만으로 기존 발견 상태를 강등하지 않으며 같은 상태 반복은 전이·알림 outbox를 만들지 않습니다. 작업 감시 기한은 마지막 관측 후보의 출발시각과 사용자가 지정한 시간창 종료 중 이른 시점입니다. KORAIL worker는 공식 UI가 요구하는 후보 출발시의 시작 시간을 사용하고 같은 구간·서비스일·인원·시작 시각 후보를 singleflight로 합친 뒤 열차번호·KST 출발시각·좌석 등급을 다시 exact match합니다. Browser Companion snapshot은 기존 데이터 호환 범위에서만 읽습니다. 시간표 stale response를 거르는 웹 query key에는 provider·구간·날짜·시간창과 승객 수를 함께 넣습니다.
@@ -389,8 +398,8 @@ adapter→registry/facade 역의존을 차단합니다.
 
 오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
-공식 timetable adapter·registry application, operational projection·payment-hold·watch transition
-notification application의 10개 오류 0 파일만 대상입니다. registry 반환 타입은
+공식 timetable adapter·registry application, operational projection·observation cycle·payment-hold·
+watch transition notification application의 11개 오류 0 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로

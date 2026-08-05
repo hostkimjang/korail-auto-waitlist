@@ -51,6 +51,12 @@ from .korail_pydoll_contracts import (
     normalize_korail_station as _normalize_station,
 )
 from .korail_pydoll_http_replay import DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE
+from .korail_pydoll_page_safety import (
+    GENERIC_PROTECTION_TRIGGERS as _GENERIC_PROTECTION_TRIGGERS,
+)
+from .korail_pydoll_page_safety import (
+    assert_pydoll_response_allowed,
+)
 from .korail_pydoll_search_actor import PydollReadOnlySearchActor
 from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
 from .korail_reservation_controls import booking_seat_control_key
@@ -61,7 +67,6 @@ from .korail_search_bootstrap import (
 )
 from .reservation_confirmation import ReservationConfirmationTarget
 
-_GENERIC_PROTECTION_TRIGGERS = frozenset({"marker_abnormal_access", "marker_unauthorized_tool"})
 _MAX_MORE_RESULT_ACTIONS = 19
 # Compatibility seam: focused tests patch this facade value before construction;
 # the canonical manager receives that value and owns the actual eviction behavior.
@@ -883,28 +888,7 @@ class PydollKorailBrowserClient:
 
     @staticmethod
     def _assert_response_allowed(snapshot: PydollPageSnapshot, stage: str) -> None:
-        for status, resource_type in snapshot.network_responses:
-            if is_rate_limit_response(status, resource_type):
-                raise BrowserRateLimited()
-            trigger = protection_trigger_from_http_response(status, resource_type)
-            if trigger == "http_403_main":
-                _log_protection_snapshot(snapshot, stage, trigger)
-                raise BrowserProtectionDetected(trigger, stage)
-        trigger = protection_trigger_from_text(snapshot.body_text)
-        if trigger is None:
-            return
-        if trigger not in _GENERIC_PROTECTION_TRIGGERS:
-            _log_protection_snapshot(snapshot, stage, trigger)
-            raise BrowserProtectionDetected(trigger, stage)
-        if (
-            any(
-                protection_trigger_from_text(text) in _GENERIC_PROTECTION_TRIGGERS
-                for text in snapshot.protection_texts
-            )
-            or not snapshot.rows
-        ):
-            _log_protection_snapshot(snapshot, stage, trigger)
-            raise BrowserProtectionDetected(trigger, stage)
+        assert_pydoll_response_allowed(snapshot, stage, event_logger=logger)
 
     @staticmethod
     def _read_result(
@@ -1378,7 +1362,7 @@ class _PydollSession:
         session_probe_delay = min(0.25, self._timeout_seconds / 4)
         while time.monotonic() < deadline:
             snapshot = await self._login_step("login_result_snapshot", self._snapshot())
-            PydollKorailBrowserClient._assert_response_allowed(snapshot, "authenticate")
+            assert_pydoll_response_allowed(snapshot, "authenticate", event_logger=logger)
             authenticated_header = await self._login_step(
                 "login_result_header",
                 self._has_authenticated_header(),
@@ -2905,26 +2889,6 @@ class _PydollSessionContext:
     ) -> bool | None:
         await self._session.__aexit__(exc_type, exc_value, traceback)
         return None
-
-
-def _log_protection_snapshot(
-    snapshot: PydollPageSnapshot,
-    stage: str,
-    trigger: str,
-) -> None:
-    marker_surface_count = sum(
-        protection_trigger_from_text(text) == trigger for text in snapshot.protection_texts
-    )
-    logger.warning(
-        "KORAIL Pydoll protection evidence stage=%s trigger=%s rows=%d "
-        "visible_surfaces=%d marker_surfaces=%d network=%s",
-        stage,
-        trigger,
-        len(snapshot.rows),
-        len(snapshot.protection_texts),
-        marker_surface_count,
-        snapshot.network_responses,
-    )
 
 
 def _sanitized_class_tokens(value: object) -> tuple[str, ...]:

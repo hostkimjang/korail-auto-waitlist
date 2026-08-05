@@ -540,6 +540,33 @@ async def test_pydoll_client_reads_fixture_once_and_keeps_strict_ktx_seats() -> 
 
 
 @pytest.mark.asyncio
+async def test_search_uses_response_safety_guard_patched_before_client_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked_stages: list[str] = []
+
+    def patched_guard(_snapshot: PydollPageSnapshot, stage: str) -> None:
+        checked_stages.append(stage)
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_response_allowed",
+        staticmethod(patched_guard),
+    )
+    session = FixtureSession(_fixture_snapshot())
+    client = PydollKorailBrowserClient(
+        page_url="http://127.0.0.1:8011/korail_browser_page.html",
+        timeout_seconds=3,
+        allow_test_loopback=True,
+        session_factory=FixtureSessionFactory(session),
+    )
+
+    await client.search(search_request())
+
+    assert checked_stages == ["load_page", "wait_result", "expand_results"]
+
+
+@pytest.mark.asyncio
 async def test_pydoll_client_reuses_one_browser_for_changed_search_conditions() -> None:
     session = FixtureSession(_fixture_snapshot())
     factory = FixtureSessionFactory(session)

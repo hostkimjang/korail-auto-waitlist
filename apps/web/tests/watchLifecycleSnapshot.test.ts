@@ -28,8 +28,10 @@ describe("watch lifecycle snapshot", () => {
         seatEvidenceLabel: "일반실 · 임시 예약",
         officialBookingUrl: "https://www.korail.com/ticket/search/general",
       }),
-      payment_deadline: "2026-08-08T12:10:00+09:00",
-      updated_at: "2026-08-08T03:01:00Z",
+      paymentDeadline: "2026-08-08T12:10:00+09:00",
+      payment_deadline: "2026-08-08T13:10:00+09:00",
+      updatedAt: "2026-08-08T03:01:00Z",
+      updated_at: "2026-08-08T04:01:00Z",
     };
 
     const snapshot = mapWatchLifecycleSnapshot(source);

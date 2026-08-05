@@ -1,4 +1,4 @@
-import type { MappedWatch } from "../../api/watchProjection";
+import type { WatchReadModel } from "../../api/watchProjection";
 import type { WatchProvider } from "../../domain/watch";
 
 export interface PaymentRequiredViewModel {
@@ -35,7 +35,7 @@ function legacyPaymentRequiredWatchId(watch: LegacyPaymentRequiredWatch): string
   return watch.id ?? `${watch.provider}-${watch.train}-${watch.date}-${watch.departure}`;
 }
 
-export function mapPaymentRequiredWatch(watch: MappedWatch): PaymentRequiredViewModel {
+export function mapPaymentRequiredWatch(watch: WatchReadModel): PaymentRequiredViewModel {
   return {
     id: watch.id,
     provider: watch.provider,
@@ -47,7 +47,7 @@ export function mapPaymentRequiredWatch(watch: MappedWatch): PaymentRequiredView
     arrival: watch.arrival,
     date: watch.date,
     seatClassLabel: watch.seatClassLabel,
-    paymentDeadline: watch.payment_deadline,
+    paymentDeadline: watch.paymentDeadline,
     officialBookingUrl: watch.officialBookingUrl,
   };
 }

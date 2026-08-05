@@ -21,7 +21,7 @@ import {
 } from "../../api/timetables";
 import { fetchCachedTimetableSnapshot } from "../../api/timetableSnapshots";
 import { DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS } from "../../api/uiPreferences";
-import type { MappedWatch } from "../../api/watches";
+import type { WatchReadModel } from "../../api/watches";
 import {
   demoNodeId,
   demoStations,
@@ -148,7 +148,7 @@ function publicTimetableErrorMessage(result: TimetableProviderError): string {
 
 export interface NewWaitPageProps {
   demo: boolean;
-  watches?: readonly MappedWatch[];
+  watches?: readonly WatchReadModel[];
   providerAccounts?: readonly ProviderAccount[];
   refreshIntervalSeconds?: number;
   onComplete: SeatWatchRegistrationCompletion;

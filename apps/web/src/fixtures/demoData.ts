@@ -1,6 +1,6 @@
 import type {
-  MappedWatch,
   MappedWatchCandidate,
+  ProjectedWatch,
 } from "../api/watches";
 import type { ProviderAccount } from "../api/providerAccounts";
 import type { ProviderRuntimeStatus } from "../api/providerRuntime";
@@ -104,7 +104,7 @@ export interface DemoWatchInput {
   candidates?: ReadonlyArray<DemoWatchCandidateInput>;
 }
 
-export function createDemoWatch(input: DemoWatchInput): MappedWatch {
+export function createDemoWatch(input: DemoWatchInput): ProjectedWatch {
   const reservationPolicy = input.reservationPolicy ?? "notify_only";
   const candidates = (input.candidates ?? []).map((candidate, index): MappedWatchCandidate => ({
     ...candidate,
@@ -131,6 +131,9 @@ export function createDemoWatch(input: DemoWatchInput): MappedWatch {
     updated_at: null,
     official_booking_url: input.officialBookingUrl ?? null,
     reservation_policy: reservationPolicy,
+    paymentDeadline: null,
+    createdAt: null,
+    updatedAt: null,
     train: input.train,
     route: input.route,
     departure: input.departure,
@@ -185,7 +188,7 @@ export const demoProviderRuntimeStatuses: ProviderRuntimeStatus[] = demoProvider
   prewarmOutcome: null,
 }));
 
-export const initialWatches: MappedWatch[] = [
+export const initialWatches: ProjectedWatch[] = [
   createDemoWatch({
     id: "watch-ktx-483",
     provider: "KORAIL",

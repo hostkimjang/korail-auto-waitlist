@@ -1,4 +1,4 @@
-import type { MappedWatch, ReservationCandidateContext } from "../../api/watchProjection";
+import type { ReservationCandidateContext, WatchReadModel } from "../../api/watchProjection";
 import type { PaymentHoldEndReason } from "../../domain/reservationAttempt";
 import { normalizeReservationPolicy, type ReservationPolicy } from "../../domain/reservationPolicy";
 import { isWatchStatus, type WatchStatus } from "../../domain/watch";
@@ -109,7 +109,7 @@ function isWatchLifecycleSnapshot(
   return "paymentDeadline" in watch && "updatedAt" in watch;
 }
 
-export function mapWatchLifecycleSnapshot(watch: MappedWatch): WatchLifecycleSnapshot {
+export function mapWatchLifecycleSnapshot(watch: WatchReadModel): WatchLifecycleSnapshot {
   const attempt = watch.latestReservationAttempt ?? null;
   return {
     id: watch.id,
@@ -129,13 +129,11 @@ export function mapWatchLifecycleSnapshot(watch: MappedWatch): WatchLifecycleSna
         paymentHoldEndedAt: attempt.paymentHoldEndedAt,
         paymentHoldEndReason: attempt.paymentHoldEndReason ?? null,
       },
-    paymentDeadline: watch.payment_deadline ?? null,
+    paymentDeadline: watch.paymentDeadline ?? null,
     reservationCandidateContexts: watch.reservationCandidateContexts ?? {},
-    reservationPolicy: normalizeReservationPolicy(
-      watch.reservationPolicy ?? watch.reservation_policy,
-    ),
+    reservationPolicy: normalizeReservationPolicy(watch.reservationPolicy),
     seatFoundObservation: watch.seatFoundObservation ?? null,
-    updatedAt: watch.updated_at ?? null,
+    updatedAt: watch.updatedAt ?? null,
   };
 }
 

@@ -1,4 +1,4 @@
-import type { MappedWatch } from "../../api/watchProjection";
+import type { WatchReadModel } from "../../api/watchProjection";
 import type { LatestReservationAttempt } from "../../domain/reservationAttempt";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
 import type { WatchProvider, WatchSeatClass, WatchStatus } from "../../domain/watch";
@@ -133,7 +133,7 @@ function reservationAttemptLabel(attempt: LatestReservationAttempt): string {
 }
 
 export function mapActiveWatch(
-  watch: MappedWatch,
+  watch: WatchReadModel,
   accountAuthStatus: RailAccountAuthStatus | null,
 ): ActiveWatch {
   return {

@@ -9,21 +9,23 @@ import {
   type WatchMutationRecord,
 } from "../src/features/app/useWatchMutations";
 
+type WatchMutationFixture = WatchMutationRecord & {
+  reservation_policy: WatchMutationRecord["reservationPolicy"];
+};
+
 function watch(
   id: string,
   status: WatchMutationRecord["status"] = "watching",
   extra: Partial<WatchMutationRecord> = {},
-): WatchMutationRecord {
+): WatchMutationFixture {
   return {
     id,
     provider: "KORAIL",
     status,
     candidates: [],
-    payment_deadline: null,
-    created_at: null,
-    updated_at: null,
-    official_booking_url: null,
-    reservation_policy: "notify_only",
+    paymentDeadline: null,
+    createdAt: null,
+    updatedAt: null,
     train: "KTX 001",
     route: "서울 → 부산",
     departure: "09:00",
@@ -46,6 +48,7 @@ function watch(
     seatFoundObservation: null,
     reservationCandidateContexts: {},
     reservationPolicy: "notify_only",
+    reservation_policy: "notify_only",
     seatObservationMode: "balanced",
     focusedObservationIntervalSeconds: 10,
     nextCheckAt: null,
@@ -68,7 +71,6 @@ function options(
     startWatchRequest: vi.fn().mockResolvedValue(watch("watch-1", "watching")),
     cancelWatchRequest: vi.fn().mockResolvedValue(watch("watch-1", "expired")),
     updateWatchRequest: vi.fn().mockResolvedValue(watch("watch-1", "watching", {
-      reservation_policy: "reserve_once_before_payment",
       reservationPolicy: "reserve_once_before_payment",
     })),
     deleteWatchRequest: vi.fn().mockResolvedValue(undefined),
@@ -123,8 +125,8 @@ describe("useWatchMutations", () => {
   });
 
   it("uses live pause and start responses as the exact replacement snapshots", async () => {
-    const paused = watch("watch-1", "paused", { updated_at: "2026-08-04T01:00:00Z" });
-    const resumed = watch("watch-1", "watching", { updated_at: "2026-08-04T01:01:00Z" });
+    const paused = watch("watch-1", "paused", { updatedAt: "2026-08-04T01:00:00Z" });
+    const resumed = watch("watch-1", "watching", { updatedAt: "2026-08-04T01:01:00Z" });
     const pauseWatchRequest = vi.fn().mockResolvedValue(paused);
     const startWatchRequest = vi.fn().mockResolvedValue(resumed);
     const { result } = renderMutationHarness({ pauseWatchRequest, startWatchRequest });
@@ -181,7 +183,7 @@ describe("useWatchMutations", () => {
     expect(demo.result.current.watches[0]).toBe(demoResult);
     expect(demo.dependencies.cancelWatchRequest).not.toHaveBeenCalled();
 
-    const liveResult = watch("watch-1", "expired", { updated_at: "2026-08-04T01:02:00Z" });
+    const liveResult = watch("watch-1", "expired", { updatedAt: "2026-08-04T01:02:00Z" });
     const cancelWatchRequest = vi.fn().mockResolvedValue(liveResult);
     const live = renderMutationHarness({ cancelWatchRequest });
     let returned: WatchCancellationResult | undefined;
@@ -249,7 +251,6 @@ describe("useWatchMutations", () => {
       return update;
     });
     const updated = watch("watch-1", "watching", {
-      reservation_policy: "reserve_once_before_payment",
       reservationPolicy: "reserve_once_before_payment",
     });
     const { result, dependencies } = renderMutationHarness({
@@ -312,8 +313,12 @@ describe("useWatchMutations", () => {
   });
 
   it("updates demo policy locally and uses the latest demo watch snapshot", async () => {
-    const first = watch("watch-1", "watching", { updated_at: "2026-08-04T01:00:00Z" });
-    const latest = watch("watch-1", "watching", { updated_at: "2026-08-04T01:01:00Z" });
+    const first = watch("watch-1", "watching", { updatedAt: "2026-08-04T01:00:00Z" });
+    const latest = {
+      ...watch("watch-1", "watching", { updatedAt: "2026-08-04T01:01:00Z" }),
+      reservationPolicy: "reserve_once_before_payment",
+      reservation_policy: "reserve_once_before_payment",
+    } satisfies WatchMutationFixture;
     const initial = options({ demo: false, watches: [first] });
     const { result, rerender } = renderHook(
       ({ value }) => useWatchMutations(value),
@@ -338,7 +343,11 @@ describe("useWatchMutations", () => {
     const updater = commitWatches.mock.calls[0]?.[0];
     expect(typeof updater).toBe("function");
     if (typeof updater === "function") {
-      expect(updater([latest])).toEqual([{ ...latest, reservationPolicy: "notify_only" }]);
+      expect(updater([latest])).toEqual([{
+        ...latest,
+        reservationPolicy: "notify_only",
+        reservation_policy: "notify_only",
+      }]);
     }
     expect(latestOptions.pushToast).toHaveBeenCalledWith(
       "자동 예매를 끄고 좌석 감시와 알림만 유지합니다.",

@@ -1,11 +1,11 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 
 import { logout } from "../api/auth";
-import type { MappedWatch } from "../api/watches";
+import type { WatchReadModel } from "../api/watches";
 
 export interface UseAppLogoutOptions {
   demo: boolean;
-  commitWatches: Dispatch<SetStateAction<ReadonlyArray<MappedWatch>>>;
+  commitWatches: Dispatch<SetStateAction<ReadonlyArray<WatchReadModel>>>;
   resetNotificationChannels: () => void;
   resetProviderAccounts: () => void;
   resetUiPreferences: () => void;

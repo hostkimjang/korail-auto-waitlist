@@ -129,7 +129,7 @@ describe("module dependency boundaries", () => {
   });
 
   it("keeps watch projection contracts in one application read-model owner", () => {
-    const declarationPattern = /\bexport\s+interface\s+(MappedWatchCandidate|SeatFoundObservation|ReservationCandidateContext|MappedWatch)\b/g;
+    const declarationPattern = /\bexport\s+(?:interface|type)\s+(MappedWatchCandidate|SeatFoundObservation|ReservationCandidateContext|WatchReadModel|MappedWatch|ProjectedWatch)\b/g;
     const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
       [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
         `${sourcePath(filePath)}:${match[1]}`
@@ -140,8 +140,16 @@ describe("module dependency boundaries", () => {
       "api/watchProjection.ts:MappedWatchCandidate",
       "api/watchProjection.ts:SeatFoundObservation",
       "api/watchProjection.ts:ReservationCandidateContext",
+      "api/watchProjection.ts:WatchReadModel",
       "api/watchProjection.ts:MappedWatch",
+      "api/watchProjection.ts:ProjectedWatch",
     ]);
+
+    const projection = readFileSync(
+      path.join(SOURCE_DIRECTORY, "api/watchProjection.ts"),
+      "utf8",
+    );
+    expect(projection).toMatch(/type ProjectedWatch = WatchReadModel & MappedWatch/);
   });
 
   it("keeps Home active-watch presentation contracts in the feature owner", () => {

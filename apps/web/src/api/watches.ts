@@ -12,15 +12,17 @@ import {
   validateTravelDate,
   type TimetableSearchForm,
 } from "./timetables";
-import { mapWatch, type MappedWatch } from "./watchProjection";
+import { mapWatch, type ProjectedWatch } from "./watchProjection";
 
 export type { WatchProvider, WatchSeatClass, WatchStatus } from "../domain/watch";
 export {
   mapWatch,
   type MappedWatch,
   type MappedWatchCandidate,
+  type ProjectedWatch,
   type ReservationCandidateContext,
   type SeatFoundObservation,
+  type WatchReadModel,
 } from "./watchProjection";
 
 type UnknownRecord = Record<string, unknown>;
@@ -235,7 +237,7 @@ export function buildWatchCreatePayloads(
   return providers.flatMap((provider) => payloadsByProvider.get(provider) ?? []);
 }
 
-export async function fetchWatches(): Promise<MappedWatch[]> {
+export async function fetchWatches(): Promise<ProjectedWatch[]> {
   const payload = await request("/watches");
   if (!Array.isArray(payload)) throw new ApiError("대기 작업 목록 응답 형식을 확인할 수 없습니다.");
   return payload.map(mapWatch);
@@ -257,11 +259,11 @@ function watchCreateIdempotencyKey(payload: WatchCreatePayload | UnknownRecord):
   return crypto.randomUUID();
 }
 
-export function createWatch(payload: WatchCreatePayload): Promise<MappedWatch>;
-export function createWatch(payload: UnknownRecord): Promise<MappedWatch>;
+export function createWatch(payload: WatchCreatePayload): Promise<ProjectedWatch>;
+export function createWatch(payload: UnknownRecord): Promise<ProjectedWatch>;
 export async function createWatch(
   payload: WatchCreatePayload | UnknownRecord,
-): Promise<MappedWatch> {
+): Promise<ProjectedWatch> {
   try {
     const value = await request("/watches", {
       method: "POST",
@@ -277,7 +279,7 @@ export async function createWatch(
   }
 }
 
-export async function startWatch(id: string): Promise<MappedWatch> {
+export async function startWatch(id: string): Promise<ProjectedWatch> {
   const normalizedId = watchId(id);
   try {
     return mapWatch(await request(`/watches/${normalizedId}/start`, {
@@ -290,7 +292,7 @@ export async function startWatch(id: string): Promise<MappedWatch> {
   }
 }
 
-export async function updateWatch(id: string, payload: UnknownRecord): Promise<MappedWatch> {
+export async function updateWatch(id: string, payload: UnknownRecord): Promise<ProjectedWatch> {
   const normalizedId = watchId(id);
   try {
     return mapWatch(await request(`/watches/${normalizedId}`, {
@@ -303,7 +305,7 @@ export async function updateWatch(id: string, payload: UnknownRecord): Promise<M
   }
 }
 
-export async function pauseWatch(id: string): Promise<MappedWatch> {
+export async function pauseWatch(id: string): Promise<ProjectedWatch> {
   const normalizedId = watchId(id);
   return mapWatch(await request(`/watches/${normalizedId}/pause`, {
     method: "POST",
@@ -311,7 +313,7 @@ export async function pauseWatch(id: string): Promise<MappedWatch> {
   }));
 }
 
-export async function cancelWatch(id: string): Promise<MappedWatch> {
+export async function cancelWatch(id: string): Promise<ProjectedWatch> {
   const normalizedId = watchId(id);
   return mapWatch(await request(`/watches/${normalizedId}/cancel`, {
     method: "POST",

@@ -51,14 +51,14 @@ import { isActiveWatch } from "./features/app/watchSelectors";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
 import { DEMO_MODE } from "./shared/lib/runtimeConfig";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
-import type { MappedWatch } from "./api/watches";
+import type { WatchReadModel } from "./api/watches";
 import {
   createDemoWatch,
   demoPaymentWatch,
   initialWatches,
 } from "./fixtures/demoData";
 
-const initialWatchCollection: MappedWatch[] = DEMO_MODE ? initialWatches : [];
+const initialWatchCollection: WatchReadModel[] = DEMO_MODE ? initialWatches : [];
 
 export { WatchRow } from "./features/home/ActiveWatchList";
 export { Home, NewWait, PaymentHero, Reservations, isActiveWatch };
@@ -166,7 +166,7 @@ export function App(): ReactElement {
   });
 
   const completeWizard: SeatWatchRegistrationCompletion = async ({ form, selectedTrains }) => {
-    let createdWatches: MappedWatch[];
+    let createdWatches: WatchReadModel[];
     if (auth.demo) {
       createdWatches = selectedTrains.map((item, index) => {
         const seatClass = item.selected_seat_class || "any";

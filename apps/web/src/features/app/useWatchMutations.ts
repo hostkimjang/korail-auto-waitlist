@@ -1,9 +1,9 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 
-import type { MappedWatch } from "../../api/watches";
+import type { WatchReadModel } from "../../api/watches";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
 
-export type WatchMutationRecord = MappedWatch;
+export type WatchMutationRecord = WatchReadModel;
 
 export interface MissingDemoWatchCancellation {
   id: string;
@@ -57,6 +57,17 @@ function replaceWatch(
   replacement: WatchMutationRecord,
 ): ReadonlyArray<WatchMutationRecord> {
   return watches.map((watch) => watch.id === id ? replacement : watch);
+}
+
+function withReservationPolicy(
+  watch: WatchMutationRecord,
+  reservationPolicy: ReservationPolicy,
+): WatchMutationRecord & { reservation_policy: ReservationPolicy } {
+  return {
+    ...watch,
+    reservationPolicy,
+    reservation_policy: reservationPolicy,
+  };
 }
 
 export function useWatchMutations({
@@ -152,7 +163,7 @@ export function useWatchMutations({
       let updated: WatchMutationRecord | null;
       if (demo) {
         const current = watches.find((watch) => watch.id === id);
-        updated = current ? { ...current, reservationPolicy } : null;
+        updated = current ? withReservationPolicy(current, reservationPolicy) : null;
       } else {
         updated = await updateWatchRequest(id, {
           reservation_policy: reservationPolicy,

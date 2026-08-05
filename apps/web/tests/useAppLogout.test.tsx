@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { Dispatch, SetStateAction } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { MappedWatch } from "../src/api/watches";
+import type { WatchReadModel } from "../src/api/watches";
 import {
   useAppLogout,
   type UseAppLogoutOptions,
@@ -10,7 +10,7 @@ import {
 
 interface LogoutHarness {
   events: string[];
-  committedValues: Array<SetStateAction<ReadonlyArray<MappedWatch>>>;
+  committedValues: Array<SetStateAction<ReadonlyArray<WatchReadModel>>>;
   logoutRequest: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
   options: UseAppLogoutOptions;
 }
@@ -20,12 +20,12 @@ function logoutHarness(
   request: () => Promise<unknown> = async () => null,
 ): LogoutHarness {
   const events: string[] = [];
-  const committedValues: Array<SetStateAction<ReadonlyArray<MappedWatch>>> = [];
+  const committedValues: Array<SetStateAction<ReadonlyArray<WatchReadModel>>> = [];
   const logoutRequest = vi.fn<() => Promise<unknown>>(async () => {
     events.push("logoutRequest");
     return request();
   });
-  const commitWatches = vi.fn<Dispatch<SetStateAction<ReadonlyArray<MappedWatch>>>>(
+  const commitWatches = vi.fn<Dispatch<SetStateAction<ReadonlyArray<WatchReadModel>>>>(
     (value) => {
       events.push("commitWatches");
       committedValues.push(value);

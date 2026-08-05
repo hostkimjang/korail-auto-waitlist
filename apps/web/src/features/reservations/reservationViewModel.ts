@@ -1,6 +1,6 @@
 import {
   safeOfficialChannelUrl,
-  type MappedWatch,
+  type WatchReadModel,
 } from "../../api/watchProjection";
 import { isWatchStatus, type WatchStatus } from "../../domain/watch";
 
@@ -30,7 +30,7 @@ export interface LegacyReservationListWatch {
   official_booking_url?: string | null;
 }
 
-export function mapReservationWatch(watch: MappedWatch): ReservationWatchViewModel {
+export function mapReservationWatch(watch: WatchReadModel): ReservationWatchViewModel {
   return {
     id: watch.id,
     status: watch.status,
@@ -39,7 +39,7 @@ export function mapReservationWatch(watch: MappedWatch): ReservationWatchViewMod
     train: watch.train,
     date: watch.date,
     departure: watch.departure,
-    paymentDeadline: watch.payment_deadline,
+    paymentDeadline: watch.paymentDeadline,
     officialBookingUrl: watch.officialBookingUrl,
   };
 }

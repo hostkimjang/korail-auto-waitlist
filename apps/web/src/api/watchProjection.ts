@@ -65,16 +65,11 @@ export interface ReservationCandidateContext {
   arrival: string;
 }
 
-export interface MappedWatch {
+interface WatchReadModelBase {
   id: string;
   provider: WatchProvider;
   status: WatchStatus;
   candidates: MappedWatchCandidate[];
-  payment_deadline: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-  official_booking_url: string | null;
-  reservation_policy: ReservationPolicy;
   train: string;
   route: string;
   departure: string;
@@ -101,6 +96,25 @@ export interface MappedWatch {
   focusedObservationIntervalSeconds: number;
   nextCheckAt: string | null;
 }
+
+export interface WatchReadModel extends WatchReadModelBase {
+  paymentDeadline: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface MappedWatch extends WatchReadModelBase {
+  payment_deadline: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  official_booking_url: string | null;
+  reservation_policy: ReservationPolicy;
+  paymentDeadline?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export type ProjectedWatch = WatchReadModel & MappedWatch;
 
 const STATUS_LABELS: Readonly<Record<WatchStatus, string>> = {
   draft: "초안",
@@ -242,7 +256,7 @@ function optionalAwareTimestamp(value: unknown): string | null {
   return awareTimestamp(value) ? value : null;
 }
 
-export function mapWatch(value: unknown): MappedWatch {
+export function mapWatch(value: unknown): ProjectedWatch {
   const watch = parseWatchReadDto(value);
   const prioritizedCandidates = watch.candidates
     .flatMap((item): ValidWatchCandidate[] => {
@@ -384,16 +398,22 @@ export function mapWatch(value: unknown): MappedWatch {
   )));
   const officialBookingUrl = safeOfficialUrl(watch.official_booking_url, normalizedProvider);
   const reservationPolicy = normalizeReservationPolicy(watch.reservation_policy);
+  const paymentDeadline = optionalAwareTimestamp(watch.payment_deadline);
+  const createdAt = optionalAwareTimestamp(watch.created_at);
+  const updatedAt = optionalAwareTimestamp(watch.updated_at);
   return {
     id: watch.id,
     provider: normalizedProvider,
     status: watch.status,
     candidates: prioritizedCandidates.map(({ mapped }) => mapped),
-    payment_deadline: optionalAwareTimestamp(watch.payment_deadline),
-    created_at: optionalAwareTimestamp(watch.created_at),
-    updated_at: optionalAwareTimestamp(watch.updated_at),
+    payment_deadline: paymentDeadline,
+    created_at: createdAt,
+    updated_at: updatedAt,
     official_booking_url: officialBookingUrl,
     reservation_policy: reservationPolicy,
+    paymentDeadline,
+    createdAt,
+    updatedAt,
     train: mappedCandidate !== null
       ? mappedCandidate.train_number
       : Array.isArray(watch.train_numbers) && typeof watch.train_numbers[0] === "string"

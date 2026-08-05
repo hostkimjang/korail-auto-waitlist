@@ -27,7 +27,8 @@ describe("reservation view model", () => {
         seatEvidenceLabel: "일반실 · 임시 예약",
         officialBookingUrl: "https://www.korail.com/ticket/search/general",
       }),
-      payment_deadline: "2026-08-08T12:10:00+09:00",
+      paymentDeadline: "2026-08-08T12:10:00+09:00",
+      payment_deadline: "2026-08-08T13:10:00+09:00",
       official_booking_url: "https://attacker.invalid/pay",
     };
 

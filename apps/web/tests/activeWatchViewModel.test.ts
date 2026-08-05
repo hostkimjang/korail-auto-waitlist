@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MappedWatch } from "../src/api/watchProjection";
+import type { ProjectedWatch } from "../src/api/watchProjection";
 import {
   activeWatchRefreshLabel,
   mapActiveWatch,
@@ -8,7 +8,7 @@ import {
   type ActiveWatch,
 } from "../src/features/home/activeWatchViewModel";
 
-function mappedWatch(overrides: Partial<MappedWatch> = {}): MappedWatch {
+function mappedWatch(overrides: Partial<ProjectedWatch> = {}): ProjectedWatch {
   return {
     id: "watch-1",
     provider: "KORAIL",
@@ -19,6 +19,9 @@ function mappedWatch(overrides: Partial<MappedWatch> = {}): MappedWatch {
     updated_at: null,
     official_booking_url: "https://www.korail.com/ticket/search/general",
     reservation_policy: "notify_only",
+    paymentDeadline: null,
+    createdAt: null,
+    updatedAt: null,
     train: "KTX 101",
     route: "서울 → 부산",
     departure: "12:00",

@@ -299,11 +299,16 @@ describe("watch API boundary", () => {
 
     expect(Object.hasOwn(mapped, "arbitrary_server_field")).toBe(false);
     expect(mapped).toMatchObject({
+      paymentDeadline: null,
+      createdAt: "2026-08-07T15:00:00Z",
+      updatedAt: null,
+      officialBookingUrl: "https://www.korail.com/ticket/search",
+      reservationPolicy: "notify_only",
       payment_deadline: null,
       created_at: "2026-08-07T15:00:00Z",
       updated_at: null,
+      official_booking_url: "https://www.korail.com/ticket/search",
       reservation_policy: "notify_only",
-      reservationPolicy: "notify_only",
       candidates: [{
         id: "candidate-1",
         train_number: "KTX 001",
@@ -313,6 +318,11 @@ describe("watch API boundary", () => {
         priority: 1,
       }],
     });
+    expect(mapped.paymentDeadline).toBe(mapped.payment_deadline);
+    expect(mapped.createdAt).toBe(mapped.created_at);
+    expect(mapped.updatedAt).toBe(mapped.updated_at);
+    expect(mapped.officialBookingUrl).toBe(mapped.official_booking_url);
+    expect(mapped.reservationPolicy).toBe(mapped.reservation_policy);
     expect(Object.hasOwn(mapped.candidates[0] ?? {}, "arbitrary_candidate_field")).toBe(false);
   });
 

@@ -144,6 +144,33 @@ describe("module dependency boundaries", () => {
     ]);
   });
 
+  it("keeps Home active-watch presentation contracts in the feature owner", () => {
+    const declarationPattern = /\bexport\s+(?:type|interface)\s+(RailAccountAuthStatus|SeatFoundObservationContext|ActiveWatch|ActiveWatchRowPresentation)\b/g;
+    const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
+      [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
+        `${sourcePath(filePath)}:${match[1]}`
+      ))
+    ));
+
+    expect(declarations).toEqual([
+      "features/home/activeWatchViewModel.ts:RailAccountAuthStatus",
+      "features/home/activeWatchViewModel.ts:SeatFoundObservationContext",
+      "features/home/activeWatchViewModel.ts:ActiveWatch",
+      "features/home/activeWatchViewModel.ts:ActiveWatchRowPresentation",
+    ]);
+  });
+
+  it("retains the ActiveWatchList WatchStatus compatibility export", () => {
+    const activeWatchList = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/home/ActiveWatchList.tsx"),
+      "utf8",
+    );
+
+    expect(activeWatchList).toContain(
+      'export type { WatchStatus } from "../../domain/watch";',
+    );
+  });
+
   it("keeps watch DTO parsing upstream of projection and CRUD", () => {
     const watchEdges = edges
       .filter(({ importer }) => [

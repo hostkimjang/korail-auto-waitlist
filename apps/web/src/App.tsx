@@ -26,6 +26,7 @@ import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
 import { useWatchCollection } from "./features/app/useWatchCollection";
 import { useWatchMutations } from "./features/app/useWatchMutations";
 import { HomePage } from "./features/home/HomePage";
+import { mapActiveWatch } from "./features/home/activeWatchViewModel";
 import type { PaymentRequiredWatch } from "./features/home/PaymentRequiredSection";
 import { ReservationsPage } from "./features/reservations/ReservationsPage";
 import { NewWaitPage } from "./features/new-wait/NewWaitPage";
@@ -213,10 +214,9 @@ export function App(): ReactElement {
     (watch) => watch.status === "payment_required",
   );
   if (auth.demo && paymentWatches.length === 0) paymentWatches.push(demoPaymentWatch);
-  const activeWatches = watches.filter(isActiveWatch).map((watch) => {
-    const accountAuthStatus = accountAuthStatusFor(watch.provider);
-    return { ...watch, accountAuthStatus };
-  });
+  const activeWatches = watches.filter(isActiveWatch).map((watch) => (
+    mapActiveWatch(watch, accountAuthStatusFor(watch.provider))
+  ));
   const reservationWatches = auth.demo && !watches.some((watch) => watch.id === demoPaymentWatch.id)
     ? [demoPaymentWatch, ...watches]
     : watches;

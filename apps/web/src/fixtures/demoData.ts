@@ -1,14 +1,12 @@
 import type {
   MappedWatch,
   MappedWatchCandidate,
-  WatchProvider,
-  WatchSeatClass,
-  WatchStatus,
 } from "../api/watches";
 import type { ProviderAccount } from "../api/providerAccounts";
 import type { ProviderRuntimeStatus } from "../api/providerRuntime";
 import { mapTimetable, type Timetable } from "../api/timetables";
 import type { ReservationPolicy } from "../domain/reservationPolicy";
+import type { WatchProvider, WatchSeatClass, WatchStatus } from "../domain/watch";
 
 type DemoRailProvider = "KORAIL" | "SRT";
 type DemoSeatClassId = "standard" | "first";

@@ -180,10 +180,15 @@ revision과 공식 화면 confirmation은 `timetable_management/official_evidenc
 시간표 요청과 수명주기가 다른 `/seat-status/status`는 `seat_status_operations/http.py`가 source
 cooldown 상태만 노출합니다.
 
-웹의 watch 생성 payload·멱등 키·CRUD endpoint와 외부 응답 검증·ViewModel 투영은
-`api/watches.ts`가 소유합니다. provider·status·날짜·후보 identity·선택적 시각·공식 URL을 경계에서
-검증하고, 최신 좌석 관측은 source와 `observed_at < fresh_until` 계약이 모두 확인될 때만 공식 또는
-mock 관측으로 투영합니다. `features/app/useWatchCollection.ts`는 canonical REST snapshot, SSE burst
+웹 watch의 provider·13개 status·seat class·observation mode 값 계약은 `domain/watch.ts`가 단일
+소유합니다. 외부 read payload의 필수 identity·실제 달력 날짜와 후보 identity·timezone-aware 시각·
+priority는 `api/watchReadDto.ts`가 `unknown`에서 명시적 필드로 검증하며 임의 server key를 버립니다.
+`api/watches.ts`는 기존 watch 생성 payload·멱등 키·CRUD endpoint와 DTO→`MappedWatch` ViewModel 투영을
+계속 소유합니다. 최신 좌석 관측은 source와 `observed_at < fresh_until` 계약이 모두 확인될 때만 공식
+또는 mock 관측으로 투영합니다. 후보의 evidence·latest observation/attempt·operational nested 값은 이번
+checkpoint에서 `unknown`으로 보존한 뒤 기존 projector가 fail-closed로 해석하며, normalized snapshot과
+feature ViewModel을 더 분리하는 작업은 후속 슬라이스입니다. `features/app/useWatchCollection.ts`는
+canonical REST snapshot, SSE burst
 병합, 예약정책 변경과 교차한 stale GET 차단, 인증·구독 lifecycle 세대 격리와 상태 전이 알림을
 소유합니다. pause·resume·cancel·delete와 예약정책 변경은 strict
 `features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를

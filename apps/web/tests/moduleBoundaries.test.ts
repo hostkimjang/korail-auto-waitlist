@@ -112,6 +112,22 @@ function assertRatchet(rule: string, violations: ImportEdge[]): void {
 describe("module dependency boundaries", () => {
   const edges = importEdges();
 
+  it("keeps watch value contracts in one canonical domain owner", () => {
+    const declarationPattern = /\btype\s+(WatchObservationMode|WatchProvider|WatchSeatClass|WatchStatus)\s*=/g;
+    const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
+      [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
+        `${sourcePath(filePath)}:${match[1]}`
+      ))
+    ));
+
+    expect(declarations).toEqual([
+      "domain/watch.ts:WatchSeatClass",
+      "domain/watch.ts:WatchProvider",
+      "domain/watch.ts:WatchStatus",
+      "domain/watch.ts:WatchObservationMode",
+    ]);
+  });
+
   it("does not restore the deleted legacy API barrel", () => {
     expect(existsSync(path.join(SOURCE_DIRECTORY, "api.js"))).toBe(false);
   });

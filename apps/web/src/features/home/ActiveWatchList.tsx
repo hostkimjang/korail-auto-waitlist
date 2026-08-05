@@ -3,23 +3,11 @@ import type { ReactNode } from "react";
 
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
 import type { LatestReservationAttempt } from "../../domain/reservationAttempt";
+import type { WatchProvider, WatchSeatClass, WatchStatus } from "../../domain/watch";
 import type { OperationalCandidateMeta } from "../../domain/watchOperational";
 import { StatusPill } from "../../shared/ui/StatusPill";
 
-export type WatchStatus =
-  | "draft"
-  | "scheduled"
-  | "watching"
-  | "official_waitlist"
-  | "seat_found"
-  | "reserving"
-  | "payment_required"
-  | "completed"
-  | "paused"
-  | "cooldown"
-  | "auth_required"
-  | "expired"
-  | "failed";
+export type { WatchStatus } from "../../domain/watch";
 
 export type RailAccountAuthStatus =
   | "not_checked"
@@ -42,7 +30,7 @@ export type SeatFoundObservationContext =
 
 export interface ActiveWatch {
   id: string;
-  provider: "KORAIL" | "SRT" | "MOCK";
+  provider: WatchProvider;
   route: string;
   train: string;
   date: string;
@@ -51,7 +39,7 @@ export interface ActiveWatch {
   status: WatchStatus;
   statusLabel: string;
   accountAuthStatus?: RailAccountAuthStatus | null;
-  seatClass: "standard" | "first" | "any";
+  seatClass: WatchSeatClass;
   seatClassLabel: string;
   seatEvidenceLabel: string;
   registrationEvidenceLabel?: string | null;

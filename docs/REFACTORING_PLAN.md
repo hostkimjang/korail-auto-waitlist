@@ -1388,6 +1388,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
   최근 안전한 오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 C
+
+- watch core value owner: 52줄 `domain/watch.ts`가 KORAIL/SRT/MOCK provider, 13개 status,
+  standard/first/any seat class와 balanced/focused observation mode의 canonical 타입·guard를 소유합니다.
+  provider만 기존처럼 trim+uppercase하고 status/seat는 exact match합니다. module-boundary test가 네 타입의
+  중복 선언을 차단하며 `api/watches.ts`와 `ActiveWatchList.tsx`의 기존 type path는 re-export로 보존합니다.
+- explicit read DTO: 145줄 `api/watchReadDto.ts`가 외부 `unknown`의 watch identity·실제 달력 날짜와
+  candidate identity·timezone-aware 출도착·seat·정수 priority를 검증합니다. top-level arbitrary key는
+  버리고 잘못된 개별 후보만 drop하며 evidence·latest observation/attempt·operational 값은 명시적인
+  `unknown` 필드로 기존 projector에 전달합니다. 기존 한글 `ApiError`와 fail-closed 기본값은 유지합니다.
+- 호환 범위: `api/watches.ts`는 804→729줄로 줄었지만 `MappedWatch`, `mapWatch`, payload builder, CRUD
+  transport와 Vitest mock module path는 이동하지 않았습니다. `fixtures/demoData.ts`와 Home 표시 타입만
+  canonical domain owner를 직접 사용합니다. normalized domain snapshot·feature ViewModel 분리는 후속입니다.
+- 테스트: 신규 DTO 4개 선언과 canonical owner boundary 1개를 추가했습니다. 기존
+  `watchesApi.test.ts`의 30개 선언·33개 실행·76개 assertion은 그대로이며 focused 6개 파일·66건을
+  통과했습니다. 독립 리뷰에서 observation mode owner ratchet 누락 P3를 발견해 네 번째 타입도 고정했고
+  보정 뒤 P0~P3 잔여 지적은 없었습니다.
+- 확인된 검증: 전체 Vitest 80개 파일·576건, ESLint 오류 0개·고정 legacy warning 12개, strict
+  typecheck, production build와 `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고만
+  유지됐습니다. Sites·E2E는 배포 경계·화면·CSS·endpoint를 바꾸지 않은 parser/type 이동이라 반복하지
+  않았습니다.
+- 운영 검증: 같은 작업의 후속 API 코드 슬라이스와 함께 `experimental-rail` 전체 이미지를 build한 뒤
+  volume 삭제 없이 force-recreate했습니다. migration·log-init exit 0, 장기 서비스 11개 healthy,
+  API health·ready와 proxy health 200, 재생성 뒤 최근 안전한 오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

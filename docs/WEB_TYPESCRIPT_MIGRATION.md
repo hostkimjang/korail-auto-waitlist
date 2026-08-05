@@ -66,6 +66,9 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      같은 `mapTimetable` 경계를 통과
    - 완료: watch payload builder·DTO 검증·provenance·공식 URL fail-closed mapping과 CRUD를
      `api/watches.ts`로 이동하고 `api.js`에는 동일 함수 객체 compatibility re-export 유지
+   - 완료: `domain/watch.ts`가 provider·status·seat class·observation mode 값 타입과 guard를 단일
+     소유하고 `api/watchReadDto.ts`가 외부 watch/candidate identity를 `unknown`에서 explicit DTO로 검증.
+     `api/watches.ts`의 기존 타입 path는 compatibility re-export하고 `MappedWatch`·payload·transport는 유지
    - 완료: 좌석 재조회는 `api/timetables.ts`, demo runtime gate는 `shared/lib/runtimeConfig.ts`로
      이동하고 모든 production·test caller를 실제 owner import로 전환한 뒤 `api.js` barrel 제거
    - 완료: production graph에서 접근할 수 없던 Browser Companion 패널과 dead snapshot/provider
@@ -78,7 +81,7 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      owner로 이동하고 이름·순서·fixture·assertion을 보존
    - 완료: 마지막 auth 2개를 `authApi.test.ts`, events 1개를 `eventsApi.test.ts`로 이동하고
      `api.test.js` 삭제. bootstrap header 부재와 SSE replay cutoff·forward·close 계약 보존
-   - 남음: 잔여 API DTO·도메인·ViewModel 경계의 strict TypeScript 전환
+   - 남음: watch normalized domain snapshot·feature ViewModel과 잔여 API DTO·도메인 경계 분리
    - DTO validator와 mapper를 endpoint 호출과 분리해 단위 테스트
 4. leaf UI 전환
    - 완료: 공용 결제기한 표시 UI를 `shared/ui`, 공유 clock hook을 `hooks/`로 이동

@@ -11,6 +11,13 @@ import {
   mapOperationalCandidate,
   type OperationalCandidateMeta,
 } from "../domain/watchOperational";
+import {
+  isWatchSeatClass,
+  type WatchObservationMode,
+  type WatchProvider,
+  type WatchSeatClass,
+  type WatchStatus,
+} from "../domain/watch";
 import { ApiError, request } from "./client";
 import {
   awareTimestamp,
@@ -24,24 +31,15 @@ import {
   validateTravelDate,
   type TimetableSearchForm,
 } from "./timetables";
+import {
+  parseWatchCandidateReadDto,
+  parseWatchReadDto,
+  type WatchCandidateReadDto,
+} from "./watchReadDto";
+
+export type { WatchProvider, WatchSeatClass, WatchStatus } from "../domain/watch";
 
 type UnknownRecord = Record<string, unknown>;
-export type WatchSeatClass = "standard" | "first" | "any";
-export type WatchProvider = "KORAIL" | "SRT" | "MOCK";
-export type WatchStatus =
-  | "draft"
-  | "scheduled"
-  | "watching"
-  | "official_waitlist"
-  | "seat_found"
-  | "reserving"
-  | "payment_required"
-  | "completed"
-  | "paused"
-  | "cooldown"
-  | "auth_required"
-  | "expired"
-  | "failed";
 
 export interface WatchCreateForm extends TimetableSearchForm {
   seat?: string;
@@ -85,7 +83,7 @@ export interface MappedWatchCandidate {
 }
 
 interface ValidWatchCandidate {
-  raw: UnknownRecord;
+  raw: WatchCandidateReadDto;
   mapped: MappedWatchCandidate;
 }
 
@@ -136,7 +134,7 @@ export interface MappedWatch {
   seatFoundObservation: SeatFoundObservation | null;
   reservationCandidateContexts: Record<string, ReservationCandidateContext>;
   reservationPolicy: ReservationPolicy;
-  seatObservationMode: "balanced" | "focused";
+  seatObservationMode: WatchObservationMode;
   focusedObservationIntervalSeconds: number;
   nextCheckAt: string | null;
 }
@@ -161,12 +159,7 @@ const SEAT_CLASS_LABELS: Readonly<Record<WatchSeatClass, string>> = {
   first: "특실",
   any: "좌석 무관",
 };
-const WATCH_SEAT_CLASSES: ReadonlySet<string> = new Set(["standard", "first", "any"]);
-const WATCH_PROVIDERS: ReadonlySet<string> = new Set<WatchProvider>(["KORAIL", "SRT", "MOCK"]);
 const OFFICIAL_PROVIDERS: ReadonlySet<string> = new Set(["KORAIL", "SRT"]);
-const WATCH_STATUSES: ReadonlySet<string> = new Set<WatchStatus>(
-  Object.keys(STATUS_LABELS) as WatchStatus[],
-);
 const ACTIONABLE_OBSERVATION_STATUSES: ReadonlySet<string> = new Set([
   "available",
   "limited",
@@ -200,9 +193,7 @@ function requiredString(value: unknown, message: string): string {
 }
 
 function watchSeatClass(value: unknown): WatchSeatClass | null {
-  return typeof value === "string" && WATCH_SEAT_CLASSES.has(value)
-    ? value as WatchSeatClass
-    : null;
+  return isWatchSeatClass(value) ? value : null;
 }
 
 function timeLabel(value: unknown): string {
@@ -446,101 +437,35 @@ function latestObservationMeta(
 }
 
 function hasActionableLatestObservation(
-  candidate: UnknownRecord,
+  candidate: WatchCandidateReadDto,
   provider: WatchProvider,
 ): boolean {
   const latest = isRecord(candidate.latest_observation) ? candidate.latest_observation : null;
   return latestObservationMeta(latest, "좌석", provider)?.actionable === true;
 }
 
-function watchDto(value: unknown): UnknownRecord & {
-  id: string;
-  provider: WatchProvider;
-  status: WatchStatus;
-  origin: string;
-  destination: string;
-  travel_date: string;
-} {
-  if (!isRecord(value)) throw new ApiError("대기 작업 응답 형식을 확인할 수 없습니다.");
-  const id = requiredString(value.id, "대기 작업 응답 형식을 확인할 수 없습니다.");
-  const providerValue = requiredString(
-    value.provider,
-    "대기 작업 응답 형식을 확인할 수 없습니다.",
-  ).toUpperCase();
-  const statusValue = requiredString(
-    value.status,
-    "대기 작업 응답 형식을 확인할 수 없습니다.",
-  );
-  const origin = requiredString(value.origin, "대기 작업 응답 형식을 확인할 수 없습니다.");
-  const destination = requiredString(value.destination, "대기 작업 응답 형식을 확인할 수 없습니다.");
-  const travelDate = requiredString(
-    value.travel_date,
-    "대기 작업 응답 형식을 확인할 수 없습니다.",
-  );
-  const [year = Number.NaN, month = Number.NaN, day = Number.NaN] = travelDate
-    .split("-")
-    .map(Number);
-  const parsedTravelDate = new Date(Date.UTC(year, month - 1, day));
-  if (
-    !WATCH_PROVIDERS.has(providerValue)
-    || !WATCH_STATUSES.has(statusValue)
-    || !/^\d{4}-\d{2}-\d{2}$/.test(travelDate)
-    || parsedTravelDate.getUTCFullYear() !== year
-    || parsedTravelDate.getUTCMonth() !== month - 1
-    || parsedTravelDate.getUTCDate() !== day
-  ) {
-    throw new ApiError("대기 작업 응답 형식을 확인할 수 없습니다.");
-  }
-  return {
-    ...value,
-    id,
-    provider: providerValue as WatchProvider,
-    status: statusValue as WatchStatus,
-    origin,
-    destination,
-    travel_date: travelDate,
-  };
-}
-
 function optionalAwareTimestamp(value: unknown): string | null {
   return awareTimestamp(value) ? value : null;
 }
 
-function mappedWatchCandidate(value: unknown): MappedWatchCandidate | null {
-  if (!isRecord(value)) return null;
-  const id = typeof value.id === "string" ? value.id.trim() : "";
-  const trainNumber = typeof value.train_number === "string" ? value.train_number.trim() : "";
-  const departureAt = optionalAwareTimestamp(value.departure_at);
-  const arrivalAt = value.arrival_at === null || value.arrival_at === undefined
-    ? null
-    : optionalAwareTimestamp(value.arrival_at);
-  const seatClass = watchSeatClass(value.seat_class);
-  if (
-    !id
-    || !trainNumber
-    || departureAt === null
-    || (value.arrival_at !== null && value.arrival_at !== undefined && arrivalAt === null)
-    || seatClass === null
-    || !Number.isInteger(value.priority)
-    || Number(value.priority) < 1
-  ) return null;
-  return {
-    id,
-    train_number: trainNumber,
-    departure_at: departureAt,
-    arrival_at: arrivalAt,
-    seat_class: seatClass,
-    priority: Number(value.priority),
-  };
-}
-
 export function mapWatch(value: unknown): MappedWatch {
-  const watch = watchDto(value);
-  const candidates = Array.isArray(watch.candidates) ? watch.candidates : [];
-  const prioritizedCandidates = candidates
+  const watch = parseWatchReadDto(value);
+  const prioritizedCandidates = watch.candidates
     .flatMap((item): ValidWatchCandidate[] => {
-      const mapped = mappedWatchCandidate(item);
-      return mapped === null || !isRecord(item) ? [] : [{ raw: item, mapped }];
+      const candidate = parseWatchCandidateReadDto(item);
+      return candidate === null
+        ? []
+        : [{
+          raw: candidate,
+          mapped: {
+            id: candidate.id,
+            train_number: candidate.train_number,
+            departure_at: candidate.departure_at,
+            arrival_at: candidate.arrival_at,
+            seat_class: candidate.seat_class,
+            priority: candidate.priority,
+          },
+        }];
     })
     .sort((left, right) => left.mapped.priority - right.mapped.priority);
   const statePreferredCandidate = watch.status === "reserving"

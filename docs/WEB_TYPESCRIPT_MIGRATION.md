@@ -66,7 +66,10 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      이동하고 모든 production·test caller를 실제 owner import로 전환한 뒤 `api.js` barrel 제거
    - 완료: production graph에서 접근할 수 없던 Browser Companion 패널과 dead snapshot/provider
      frontend API를 제거하고 module-boundary 테스트로 중앙 API barrel 재도입 차단
-   - 남음: 잔여 API DTO·도메인·ViewModel 경계와 legacy JS 테스트의 strict TypeScript 전환
+   - 완료: `api.test.js`에 섞여 있던 역 카탈로그 6개 선언·10개 실행을 strict
+     `stationsApi.test.ts` owner로 이동하고 metadata tuple·부분 실패·빈 목록 계약을 그대로 보존
+   - 남음: `api.test.js`의 나머지 36개 선언과 잔여 API DTO·도메인·ViewModel 경계의 strict
+     TypeScript 전환
    - DTO validator와 mapper를 endpoint 호출과 분리해 단위 테스트
 4. leaf UI 전환
    - 완료: 공용 결제기한 표시 UI를 `shared/ui`, 공유 clock hook을 `hooks/`로 이동
@@ -122,7 +125,7 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      adapter를 strict `app/` 경계로 분리하고 controller hook 수명주기와 공개 export identity 보존
    - 완료: `App.jsx`를 forwarding shim 없이 strict `App.tsx`로 전환하고 selected timetable·watch
      snapshot·page caller 계약을 정적으로 검증
-   - 남음: 잔여 JS/JSX 테스트와 DTO·도메인·ViewModel 경계 전환
+   - 남음: `api.test.js` 36개 선언을 포함한 잔여 JS/JSX 테스트와 DTO·도메인·ViewModel 경계 전환
 6. shell과 테스트
    - 완료: top-level `app/useAppNavigation.ts`가 view·settings section state와 smooth scroll을,
      `app/AppShell.tsx`가 sidebar·mobile header·bottom nav·overlay exact DOM을 strict contract로 소유

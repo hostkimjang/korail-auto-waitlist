@@ -1049,6 +1049,23 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 범위: Mock의 넓은 상태·URL 타입, SRT executor 공통 gateway Protocol, TAGO JSON `Any` 경계,
   timetable support URL 타입을 owner별 오류 0 슬라이스로 고친 뒤 ratchet 목록을 확장합니다.
 
+### 2026-08-05 스물두 번째 구조 슬라이스 A
+
+- 역 카탈로그 strict 테스트 owner: legacy `api.test.js`의 연속된 역 카탈로그 6개 선언·10개 실행을
+  기존 `stationsApi.test.ts`로 이동했습니다. provider별 요청·node ID 병합, KORAIL+SRT 공용 목록,
+  provider 503·불완전 row, metadata tuple 5개, scope 누락·빈 목록, exact mock tuple 계약을 유지합니다.
+- 타입 경계: payload는 `unknown`, fetch 입력은 `RequestInfo | URL`, metadata table은 readonly tuple로
+  검사합니다. production `api/stations.ts`와 공개 export, station DTO·domain/ViewModel 타입에는 손대지
+  않았고 기존 strict owner 3건과 중복 제거도 하지 않았습니다.
+- 테스트 수 ratchet: 이동 전 legacy API 46실행 + station owner 3실행과 이동 후 legacy API 36실행 +
+  station owner 13실행이 모두 49건입니다. 두 파일의 테스트 선언 합계도 45개로 유지했습니다.
+- 확인된 검증: owner focused 49건, station 소비 hook/page 33건, ESLint 오류 0개·고정된 legacy warning
+  12개, strict typecheck, 전체 Vitest 80개 파일·571건, production build와 `git diff --check`를
+  통과했습니다. 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: production source와 runtime bundle 행동을 바꾸지 않은 테스트 owner·문서 이동이므로
+  기본 E2E와 Compose 재배포는 반복하지 않았습니다. 다음 후보는 timetable 12개, watch 21개이며
+  auth 2개·events 1개는 전용 strict owner와의 중복을 별도 판단합니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

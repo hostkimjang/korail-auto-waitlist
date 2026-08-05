@@ -346,6 +346,8 @@
 - [x] test extra의 mypy 1.20.2와 Python 3.12 strict 설정으로 `provider_contracts.py`, provider base·execution·experimental·KORAIL execution·timetable adapter, registry application의 오류 0인 7개 파일만 첫 정적 타입 ratchet으로 고정. suppression 없이 registry Protocol witness를 검사하고 전체 legacy 48개 파일·302오류는 미완료 범위로 명시
 - [x] Makefile·PowerShell `verify-api` 첫 단계에 `uv lock --check`를 두고 마지막에 frozen mypy를 연결해 stale lock의 선행 자동 갱신을 차단. provider focused pytest 30건, API 전체 1,073건, Ruff `E/F/I`, format ratchet 60개, mypy 오류 0, lock check·PowerShell parser·Make recipe 순서·`git diff --check` 통과
 - [x] 스물한 번째 구조 슬라이스 D의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] legacy `api.test.js`의 역 카탈로그 6개 선언·10개 실행을 strict `stationsApi.test.ts` owner로 이동하고 provider별 요청·node 병합·KORAIL+SRT 공용 목록·부분 실패·metadata tuple 5개·빈 목록·mock 계약을 보존. production API·공개 export와 기존 owner 3건은 변경·중복 제거하지 않음
+- [x] 스물두 번째 구조 슬라이스 A의 legacy API 36실행 + stations owner 13실행 = 49건 및 두 파일 선언 합계 45개 보존, 소비 hook/page 33건, 전체 Vitest 80파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build와 `git diff --check` 통과. test/docs only라 기본 E2E·Compose 재배포는 생략
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

@@ -239,6 +239,14 @@ commit 뒤 enqueue·멱등성·provider capability·outbox 정책은 이동 전�
 관리자 인증 dependency 자체의 streaming response 수명과 outbox cursor의 commit 순서 의미는 이번
 이동에서 바꾸지 않았으며 별도 수명주기·정책 슬라이스에서 검증할 부채로 남아 있습니다.
 
+watch 수정 명령의 canonical owner는 FastAPI 비의존 `watch_management/update_application.py`입니다.
+이 application은 대상 watch를 candidate와 함께 `FOR UPDATE`로 다시 읽고, 활성 작업의 수정 가능 필드·
+채널·focused 관측 정원·후보와 시간창 정합성을 검증합니다. 수정과 `watch.updated` outbox를 같은 명령
+transaction에서 commit·refresh하며, `services.update_watch`는 호출 시점 dependency를 조립하고
+`WatchCommandNotFound`·`WatchCommandConflict`·`WatchCommandValidationError`만 기존 404·409·422로
+변환하는 compatibility facade입니다. application의 FastAPI·services·worker·provider runtime
+역의존은 module-boundary gate로 차단합니다.
+
 watch 정책 변경·start 뒤 즉시 처리 자격은 FastAPI 비의존 `watch_management/application.py`가
 요청 정책·영속 상태·provider·인증 계정·reservation capability 순서로 fail-closed 판단합니다.
 실제 broker enqueue는 service의 commit이 끝난 뒤 HTTP 계층이 best-effort로 호출하므로 잠금·outbox·
@@ -431,7 +439,8 @@ adapter→registry/facade 역의존을 차단합니다.
 오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
 공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
-payment-hold·watch transition notification application·watch transition policy/application의 14개 오류 0
+payment-hold·watch transition notification application·watch transition policy/application·watch update
+application의 15개 오류 0
 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.

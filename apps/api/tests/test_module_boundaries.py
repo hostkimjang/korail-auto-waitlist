@@ -124,6 +124,10 @@ def _is_watch_transition_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/watch_management/transition_application.py"
 
 
+def _is_watch_update_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/watch_management/update_application.py"
+
+
 def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
@@ -309,6 +313,26 @@ BOUNDARY_RULES = (
     BoundaryRule(
         name="watch transition application receives transport and runtime dependencies",
         matches=_is_watch_transition_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "notification_management",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "services",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="watch update application owns persistence without runtime dependencies",
+        matches=_is_watch_update_application,
         forbidden_import_roots=frozenset(
             {
                 "celery",
@@ -556,6 +580,25 @@ def test_watch_transition_application_joins_the_callers_unit_of_work() -> None:
     assert called_attributes.isdisjoint(
         {"begin", "commit", "refresh", "rollback", "with_for_update"}
     )
+
+
+def test_watch_update_application_owns_only_its_command_transaction() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "watch_management" / "update_application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "HTTPException" not in called_names
+    assert called_attributes.isdisjoint({"begin", "rollback"})
+    assert {"commit", "refresh", "with_for_update"} <= called_attributes
 
 
 def test_provider_contract_imports_are_allowlisted() -> None:

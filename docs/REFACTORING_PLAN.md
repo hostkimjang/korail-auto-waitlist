@@ -1432,6 +1432,28 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 운영 검증 범위: CSS 이동 자체에는 별도 Compose 재배포가 필요하지 않지만, 같은 작업의 코드
   슬라이스와 함께 최신 통합 tree를 전체 build·force-recreate해 health를 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 E
+
+- watch update application: 273줄 `watch_management/update_application.py`가 dedupe key·outbox·clock·
+  채널 검증·focused 정원 검증의 다섯 typed dependency port와 `WatchCommandNotFound`·
+  `WatchCommandConflict`·`WatchCommandValidationError`를 소유합니다. 대상 행을 candidate와 함께 다시
+  잠그고 활성 작업 수정 필드·채널·focused 정원·후보/시간창 정합성, mutation → due 재무장 → dedupe →
+  `watch.updated` outbox → commit → refresh 순서를 보존합니다. outbox 실패 시 commit·refresh하지 않습니다.
+- facade·경계: `services.update_watch`와 두 validator는 호출 시점 dependency 조립과 404·409·422 HTTP
+  변환만 담당하며 기존 public module/function identity와 monkeypatch seam을 보존합니다. create watch도
+  같은 validator wrapper를 계속 사용합니다. application은 FastAPI·services·worker·provider runtime에
+  의존하지 않고 boundary test는 `FOR UPDATE`와 명령 transaction·commit·refresh 소유를 고정합니다.
+  `services.py`는 1,368→1,253줄로 줄었습니다.
+- 테스트·정적 경계: 신규 owner 15건이 stale 재조회·`selectinload`·`populate_existing`·행 잠금,
+  상태별 수정 제한, 후보/시간창·채널·focused 정원, 별도 clock 호출, outbox 원자성과 기존 monkeypatch
+  seam을 검증합니다. strict mypy ratchet은 14→15개 파일로 확장했습니다.
+- 확인된 검증: owner·module-boundary focused pytest 28건, API 전체 pytest 1,500건, Ruff `E/F/I`,
+  format ratchet 60개, strict mypy 15개 파일 오류 0, `uv lock --check`, 독립 리뷰 P0~P3 지적 없음과
+  `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
+  최근 안전한 오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

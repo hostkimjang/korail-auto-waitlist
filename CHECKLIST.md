@@ -394,6 +394,9 @@
 - [x] 스물다섯 번째 구조 슬라이스 C를 같은 작업의 후속 API 코드 슬라이스와 함께 `experimental-rail` 전체 build·force-recreate하고 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] production `OfficialHandoff`의 기본 187줄·760px 48줄을 237줄 `features/official-handoff/officialHandoff.css`로 재소유하고 전역 CSS import를 아홉 경계로 확장. `features.css` 3,837→3,650줄·`responsive.css` 1,318→1,270줄로 축소하며 legacy modal selector 잔존 0과 import 순서를 구조 테스트로 고정
 - [x] 실제 OfficialHandoff dialog를 1,440px·320px·720px에서 열어 viewport·가로 넘침·44px 행동 영역·app shell inert·Escape focus 복원을 기본 Playwright에 추가. 전체 Vitest 80파일·576건, Sites 4건, 기본 E2E 14건과 독립 리뷰 보정 뒤 P0~P3 잔여 없음 확인
+- [x] 273줄 `watch_management/update_application.py`로 watch 수정 명령의 잠금·상태별 수정 필드·채널·focused 정원·후보/시간창 검증과 mutation→due 재무장→dedupe→outbox→commit→refresh를 이동. `services.update_watch`와 validator는 기존 identity·monkeypatch seam·404/409/422 facade만 유지하고 `services.py`를 1,368→1,253줄로 축소
+- [x] watch update owner 15건·owner/boundary 28건, API 전체 pytest 1,500건, Ruff `E/F/I`, format ratchet 60개, strict mypy 15개 오류 0, lock check와 독립 리뷰 P0~P3 없음 확인
+- [x] 스물다섯 번째 구조 슬라이스 E의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

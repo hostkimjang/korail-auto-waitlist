@@ -12,6 +12,7 @@ from ..auth import require_admin
 from ..celery_app import celery_app
 from ..database import get_session
 from ..domain import Provider, ReservationOutcome, WatchStatus
+from ..idempotency.application import IdempotencyConflict
 from ..models import Watch, WatchCandidate
 from ..provider_registry.application import get_timetable_provider
 from ..schemas import ReservationResult, WatchCreate, WatchRead, WatchUpdate
@@ -47,7 +48,11 @@ def enqueue_immediate_watch_processing(watch_id: str) -> bool:
 async def watches_create(
     data: WatchCreate, session: Session, idempotency_key: IdempotencyKey = None
 ) -> WatchRead:
-    return await watch_read(session, await create_watch(session, data, idempotency_key))
+    try:
+        watch = await create_watch(session, data, idempotency_key)
+    except IdempotencyConflict as error:
+        raise HTTPException(409, str(error)) from None
+    return await watch_read(session, watch)
 
 
 @router.get("/watches", response_model=list[WatchRead])
@@ -93,12 +98,15 @@ async def watches_start(
 ) -> WatchRead:
     watch = await find_watch(session, watch_id)
     previous_status = watch.status
-    started = await transition_watch(
-        session,
-        watch,
-        WatchStatus.SCHEDULED,
-        idempotency_key,
-    )
+    try:
+        started = await transition_watch(
+            session,
+            watch,
+            WatchStatus.SCHEDULED,
+            idempotency_key,
+        )
+    except IdempotencyConflict as error:
+        raise HTTPException(409, str(error)) from None
     if await should_enqueue_after_start(session, previous_status, started):
         enqueue_immediate_watch_processing(started.id)
     return await watch_read(session, started)
@@ -108,11 +116,14 @@ async def watches_start(
 async def watches_pause(
     watch_id: str, session: Session, idempotency_key: IdempotencyKey = None
 ) -> WatchRead:
+    watch = await find_watch(session, watch_id)
+    try:
+        paused = await transition_watch(session, watch, WatchStatus.PAUSED, idempotency_key)
+    except IdempotencyConflict as error:
+        raise HTTPException(409, str(error)) from None
     return await watch_read(
         session,
-        await transition_watch(
-            session, await find_watch(session, watch_id), WatchStatus.PAUSED, idempotency_key
-        ),
+        paused,
     )
 
 
@@ -120,11 +131,14 @@ async def watches_pause(
 async def watches_cancel(
     watch_id: str, session: Session, idempotency_key: IdempotencyKey = None
 ) -> WatchRead:
+    watch = await find_watch(session, watch_id)
+    try:
+        cancelled = await transition_watch(session, watch, WatchStatus.EXPIRED, idempotency_key)
+    except IdempotencyConflict as error:
+        raise HTTPException(409, str(error)) from None
     return await watch_read(
         session,
-        await transition_watch(
-            session, await find_watch(session, watch_id), WatchStatus.EXPIRED, idempotency_key
-        ),
+        cancelled,
     )
 
 

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -23,8 +20,12 @@ from .domain import (
     SeatObservationStatus,
     WatchStatus,
 )
+from .idempotency.application import (
+    get_idempotent_resource as get_idempotent_resource,
+)
+from .idempotency.application import remember_idempotency as remember_idempotency
+from .idempotency.application import request_hash as request_hash
 from .models import (
-    IdempotencyRecord,
     NotificationChannel,
     ProviderCircuit,
     ReservationAttempt,
@@ -160,41 +161,6 @@ _RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
         SeatObservationStatus.OUT_OF_SERVICE,
     }
 )
-
-
-def request_hash(value: Any) -> str:
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
-    return hashlib.sha256(encoded).hexdigest()
-
-
-async def get_idempotent_resource(
-    session: AsyncSession, scope: str, key: str | None, payload_hash: str
-) -> str | None:
-    if not key:
-        return None
-    record = await session.scalar(
-        select(IdempotencyRecord).where(
-            IdempotencyRecord.scope == scope, IdempotencyRecord.key == key
-        )
-    )
-    if record is None:
-        return None
-    if record.request_hash != payload_hash:
-        raise HTTPException(409, "Idempotency-Key was already used with a different request")
-    return record.resource_id
-
-
-async def remember_idempotency(
-    session: AsyncSession, scope: str, key: str | None, resource_id: str, payload_hash: str
-) -> None:
-    if key:
-        session.add(
-            IdempotencyRecord(
-                scope=scope, key=key, resource_id=resource_id, request_hash=payload_hash
-            )
-        )
 
 
 async def create_watch(

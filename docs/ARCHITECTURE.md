@@ -286,6 +286,15 @@ Migration `0020_reservation_reconciliation`은 실제 사용 credential version�
 application을 호출합니다. lock·commit·rollback은 기존 transition 호출자에 남으므로 두 outbox와 상태
 이력은 같은 SQLAlchemy UoW에서 함께 commit되거나 rollback됩니다.
 
+watch 생성·상태 전이·공식 페이지 좌석 확인이 공유하는 요청 hash와 idempotency record 조회·추가의
+canonical owner는 `idempotency/application.py`입니다. Pydantic JSON과 기존 동적 `model_dump`
+duck typing을 포함한 payload를 정렬된 compact JSON + SHA-256으로 동일하게 hash합니다. 같은 scope/key의
+payload가 다르면 FastAPI 비의존 `IdempotencyConflict`를 발생시키고, watch와 official evidence HTTP
+경계만 기존 detail의 409로 변환합니다. application은 caller session에 record만 추가하며 lock·commit·
+rollback을 소유하지 않아 watch/outbox 또는 official confirmation batch와 같은 UoW에서 함께 확정됩니다.
+`services.py`는 기존 호출자를 위해 세 함수를 같은 객체로 다시 export하고 official confirmation
+영속 계층은 canonical owner를 직접 사용합니다.
+
 outbox의 사람이 읽을 수 있는 중복 방지 키가 DB의 128자 저장 계약을 넘으면 앞부분과 전체 키의
 SHA-256을 결합한 고정 길이 키로 정규화합니다. 조회와 저장에 같은 정규화를 적용하므로 긴 상태
 전이 token도 중복 방지 의미를 유지하며, 알림 생성 실패로 좌석 관측 트랜잭션이 롤백되지 않습니다.
@@ -398,8 +407,8 @@ adapter→registry/facade 역의존을 차단합니다.
 
 오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
-공식 timetable adapter·registry application, operational projection·observation cycle·payment-hold·
-watch transition notification application의 11개 오류 0 파일만 대상입니다. registry 반환 타입은
+공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
+payment-hold·watch transition notification application의 12개 오류 0 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로

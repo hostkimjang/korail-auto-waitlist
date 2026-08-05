@@ -374,6 +374,10 @@
 - [x] 스물세 번째 구조 슬라이스 C의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] Vitest `setup.js`, ESLint ratchet 3선언·8실행, service worker 계약 2선언·실행을 strict `.ts`로 전환하고 setup 경로를 원자적으로 갱신. 실제 `public/sw.js` VM 실행, 가상 lint 경계 6행, push payload·waitUntil Promise를 assertion/suppression 없이 보존
 - [x] 스물네 번째 구조 슬라이스 A의 focused 10건·남은 `App.test.jsx` 32건, 전체 Vitest 79파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build와 `git diff --check` 통과. test/config/docs only라 Sites·기본 E2E·Compose 재배포는 생략하고 `allowJs`는 App test 전환까지 유지
+- [x] 요청 hash·idempotency 조회/추가를 FastAPI 비의존 `idempotency/application.py`로 이동하고 `IdempotencyConflict`를 watch create/start/pause/cancel·official evidence HTTP에서만 기존 detail 409로 변환. services 세 함수 identity와 internal canonical binding, official confirmation 직접 import를 유지해 services를 1,417→1,383줄로 축소
+- [x] compact JSON+SHA-256 mapping/Pydantic/dynamic model_dump hash, replay·payload conflict, caller UoW commit/rollback, watch 4개 HTTP 409, official concurrent same-key record/batch 1건, transaction/row-lock/transport 역의존 부재를 고정. focused 24건·최종 신규/boundary 19건, API 전체 1,129건, Ruff `E/F/I`, format ratchet 60개, 독립 리뷰 P3 duck typing 보정 뒤 P0~P3 없음과 `git diff --check` 통과
+- [x] 오류 0인 idempotency owner를 strict mypy ratchet에 추가해 대상 11→12개 파일 확장하고 `uv lock --check`·scoped mypy 오류 0 확인
+- [x] 스물네 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

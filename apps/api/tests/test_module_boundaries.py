@@ -108,6 +108,14 @@ def _is_observation_cycle_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/observations/cycle_application.py"
 
 
+def _is_idempotency_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/idempotency/application.py"
+
+
+def _is_official_page_confirmations(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/official_page_confirmations.py"
+
+
 def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
@@ -247,6 +255,27 @@ BOUNDARY_RULES = (
                 "worker",
             }
         ),
+    ),
+    BoundaryRule(
+        name="idempotency application owns persistence without transport or runtime dependencies",
+        matches=_is_idempotency_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "outbox",
+                "schemas",
+                "services",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="official confirmation persistence uses the canonical idempotency owner",
+        matches=_is_official_page_confirmations,
+        forbidden_import_roots=frozenset({"services"}),
     ),
     BoundaryRule(
         name="reservation reconciliation application depends on provider roles",
@@ -422,6 +451,18 @@ def test_observation_cycle_application_does_not_own_transactions_locks_or_outbox
     }
 
     assert "add_outbox_event" not in called_names
+    assert called_attributes.isdisjoint({"begin", "commit", "rollback", "with_for_update"})
+
+
+def test_idempotency_application_joins_the_callers_unit_of_work() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "idempotency" / "application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
     assert called_attributes.isdisjoint({"begin", "commit", "rollback", "with_for_update"})
 
 

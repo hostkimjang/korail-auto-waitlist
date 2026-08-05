@@ -9,6 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .domain import Provider, SeatObservationStatus
+from .idempotency.application import (
+    get_idempotent_resource,
+    remember_idempotency,
+    request_hash,
+)
 from .models import OfficialPageSeatConfirmation
 from .schemas import (
     OFFICIAL_PAGE_CONFIRMATION_SOURCE,
@@ -19,7 +24,6 @@ from .schemas import (
     TimetableItem,
     normalize_official_train_number,
 )
-from .services import get_idempotent_resource, remember_idempotency, request_hash
 
 CONFIRMATION_FRESHNESS = timedelta(minutes=5)
 IDEMPOTENCY_SCOPE = "official-page-seat-confirmation.create"

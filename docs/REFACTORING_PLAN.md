@@ -1272,6 +1272,35 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   않았습니다. `allowJs=true`, `checkJs=false`, Vitest JSX include는 29개 선언·32개 실행을 가진
   `App.test.jsx`가 남아 있어 아직 제거하지 않습니다.
 
+### 2026-08-05 스물네 번째 구조 슬라이스 B
+
+- idempotency application: `services.py`의 `request_hash`, `get_idempotent_resource`,
+  `remember_idempotency`를 53줄 `idempotency/application.py`로 이동하고 FastAPI 비의존
+  `IdempotencyConflict`를 도입했습니다. services는 세 함수를 wrapper 없이 같은 객체로 다시 export하고
+  내부 watch 생성·전이도 canonical binding을 사용해 1,417줄에서 1,383줄로 줄었습니다.
+- canonical 소비와 HTTP 경계: official page confirmation persistence는 services facade 대신 새 owner를
+  직접 import합니다. watch create/start/pause/cancel과 official evidence HTTP만 payload mismatch를 기존
+  detail의 409로 변환하며, official confirmation의 별도 incomplete batch `ValueError → 409` 계약도
+  유지합니다. transition core 본문과 row lock·commit 순서는 변경하지 않았습니다.
+- hash 호환: mapping order와 Pydantic JSON뿐 아니라 동적 `__getattr__`로 `model_dump`를 제공하는 기존
+  duck-typed 객체도 legacy `hasattr` 판정과 같은 compact JSON + SHA-256 결과를 냅니다. strict typing은
+  `hasattr` 직후의 근거 있는 Protocol cast만 사용하며 suppression이나 broad input cast는 없습니다.
+- UoW·동시성: application은 record를 caller session에 추가할 뿐 lock·commit·rollback을 소유하지
+  않습니다. watch/outbox 또는 official confirmation batch와 같은 UoW의 commit/rollback, watch 4개 HTTP
+  409, official concurrent same-key replay의 record/batch 1건을 회귀 테스트로 고정했습니다.
+- 타입·경계 gate: 새 owner의 FastAPI·services·worker·schema·outbox/runtime 역의존과 transaction/row-lock
+  소유를 차단하고 official confirmation→services 역의존도 금지했습니다. strict mypy ratchet은 11개에서
+  12개 파일로 확장했습니다.
+- 확인된 검증: 최종 신규 owner·boundary focused pytest 19건, 선행 HTTP/concurrency focused 24건,
+  API 전체 pytest 1,129건, Ruff `E/F/I`, format ratchet 60개, strict mypy 12개 파일 오류 0,
+  `uv lock --check`와 `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은
+  유지됐습니다.
+- 독립 리뷰: runtime Protocol이 동적 `model_dump`를 legacy와 다르게 처리하는 P3를 발견해 `hasattr`과
+  grounded cast로 복원하고 동적 fixture를 추가했습니다. 보정 뒤 P0~P3 잔여 지적이 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

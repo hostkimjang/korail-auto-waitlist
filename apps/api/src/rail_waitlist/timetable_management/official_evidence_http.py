@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_admin
 from ..database import get_session
+from ..idempotency.application import IdempotencyConflict
 from ..models import KorailBrowserSnapshotBatch
 from ..official_page_confirmations import upsert_official_page_confirmations
 from ..schemas import (
@@ -63,6 +64,8 @@ async def official_page_confirmation_create(
             data,
             idempotency_key=idempotency_key,
         )
+    except IdempotencyConflict as error:
+        raise HTTPException(409, str(error)) from None
     except ValueError as error:
         raise HTTPException(409, str(error)) from None
     await session.commit()

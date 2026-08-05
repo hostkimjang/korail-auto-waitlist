@@ -9,7 +9,6 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterable, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from datetime import time as clock_time
@@ -17,7 +16,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, Protocol, Self
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
 
 from .korail_browser_automation import (
     FULLSTACK_E2E_PAGE_URL,
@@ -50,11 +48,11 @@ from .korail_http_replay import (
     KorailHttpReplayPlan,
     build_http_replay_plan,
 )
-from .korail_reservation_confirmation import (
-    KORAIL_CONFIRMATION_SOURCE,
-    KORAIL_RESERVATION_LIST_SOURCE,
-    KorailSameSessionDetailEvidence,
+from .korail_pydoll_confirmation_reader import (
+    _parse_korail_payment_deadline,
+    read_korail_same_session_confirmation,
 )
+from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
 from .korail_reservation_controls import booking_seat_control_key
 from .korail_search_bootstrap import (
     KorailStationIdentityResolver,
@@ -133,9 +131,7 @@ class KorailLoginMethod(StrEnum):
                 "input#id[name='id'][type='text'][title='회원번호'][maxlength='10']"
             ),
             self.EMAIL: "input#id[name='id'][type='email'][title='이메일 주소']",
-            self.PHONE: (
-                "input#id[name='id'][type='text'][title='휴대폰 번호'][maxlength='11']"
-            ),
+            self.PHONE: ("input#id[name='id'][type='text'][title='휴대폰 번호'][maxlength='11']"),
         }[self]
 
 
@@ -295,13 +291,38 @@ class PydollBrowserSession(Protocol):
 
     async def read_reservation_list(self) -> PydollPageSnapshot: ...
 
+    async def _snapshot(self) -> PydollPageSnapshot: ...
 
-PydollSessionFactory = Callable[[str, int, bool], AbstractAsyncContextManager[PydollBrowserSession]]
+    async def _probe_official_authenticated_session(self) -> bool: ...
+
+    async def _has_authenticated_header(self) -> bool: ...
+
+
+class PydollSessionContext(Protocol):
+    async def __aenter__(self) -> PydollBrowserSession: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> bool | None: ...
+
+
+PydollSessionFactory = Callable[[str, int, bool], PydollSessionContext]
+
+
+def _default_pydoll_session_factory(
+    page_url: str,
+    timeout_ms: int,
+    headless: bool,
+) -> PydollSessionContext:
+    return _PydollSessionContext(_PydollSession(page_url, timeout_ms, headless))
 
 
 @dataclass
 class _ActivePydollSession:
-    context: AbstractAsyncContextManager[PydollBrowserSession]
+    context: PydollSessionContext
     session: PydollBrowserSession
     created_at: float
     last_used_at: float
@@ -313,7 +334,7 @@ class _ActivePydollSession:
 
 @dataclass(frozen=True)
 class _PydollSessionLease:
-    context: AbstractAsyncContextManager[PydollBrowserSession]
+    context: PydollSessionContext
     session: PydollBrowserSession
     created_at: float
     searches_started: int
@@ -332,10 +353,10 @@ class _ActiveHttpReplayLease:
     searches_started: int = 0
 
 
-async def _finish_owned_cleanup(cleanup: Awaitable[None]) -> None:
+async def _finish_owned_cleanup(cleanup: Awaitable[object]) -> None:
     """Finish Chromium cleanup even when the owning task is cancelled repeatedly."""
     pending_cancellation: asyncio.CancelledError | None = None
-    cleanup_task = asyncio.create_task(cleanup)
+    cleanup_task: asyncio.Future[object] = asyncio.ensure_future(cleanup)
     while not cleanup_task.done():
         try:
             await asyncio.shield(cleanup_task)
@@ -356,7 +377,8 @@ async def probe_pydoll_chromium() -> None:
         raise BrowserSourceUnavailable("browser_import") from error
     browser: Any = None
     try:
-        options = ChromiumOptions()
+        chromium_options_factory: Any = ChromiumOptions
+        options = chromium_options_factory()
         options.headless = True
         _set_chromium_binary(options)
         browser = Chrome(options=options)
@@ -402,7 +424,9 @@ class PydollKorailBrowserClient:
         self.timeout_ms = int(timeout_seconds * 1000)
         self.headless = headless
         self._validate_page_url(allow_test_loopback, allow_fullstack_fixture)
-        self._session_factory = session_factory or _PydollSession
+        self._session_factory: PydollSessionFactory = (
+            session_factory or _default_pydoll_session_factory
+        )
         self._session_reuse_ttl_seconds = session_reuse_ttl_seconds
         self._session_reuse_max_searches = session_reuse_max_searches
         self._station_identity_resolver = station_identity_resolver
@@ -416,9 +440,9 @@ class PydollKorailBrowserClient:
         self._session_actor_created_at: float | None = None
         self._session_actor_last_verified_at: float | None = None
         self._session_actor_last_used_at: float | None = None
-        self._active_http_replays: OrderedDict[
-            tuple[str, str], _ActiveHttpReplayLease
-        ] = OrderedDict()
+        self._active_http_replays: OrderedDict[tuple[str, str], _ActiveHttpReplayLease] = (
+            OrderedDict()
+        )
 
     def _validate_page_url(
         self,
@@ -495,9 +519,7 @@ class PydollKorailBrowserClient:
                         # Capture first, and never retry through the UI after this point.
                         capture_started = await self._begin_http_replay_capture(session)
                         stage = "direct_navigation"
-                        self._assert_response_allowed(
-                            await session.navigate(direct_url), stage
-                        )
+                        self._assert_response_allowed(await session.navigate(direct_url), stage)
                     stage = "wait_result"
                     snapshot = await session.wait_for_result()
                     self._assert_response_allowed(snapshot, stage)
@@ -578,18 +600,14 @@ class PydollKorailBrowserClient:
             # an in-flight timetable search before acting on the authenticated session.
             active = self._active_session
             credential_fingerprint = _credential_fingerprint(request.credential)
-            if (
-                active is not None
-                and (
-                    (
-                        active.credential_version is not None
-                        and active.credential_version != request.credential.version
-                    )
-                    or (
-                        active.authenticated_credential_version is not None
-                        and active.authenticated_credential_fingerprint
-                        != credential_fingerprint
-                    )
+            if active is not None and (
+                (
+                    active.credential_version is not None
+                    and active.credential_version != request.credential.version
+                )
+                or (
+                    active.authenticated_credential_version is not None
+                    and active.authenticated_credential_fingerprint != credential_fingerprint
                 )
             ):
                 self._session_actor_state = KorailSessionActorState.STALE
@@ -616,15 +634,13 @@ class PydollKorailBrowserClient:
                         reason="authentication_required",
                     )
                 session_ready_at = datetime.now(UTC)
-                if warm_direct_navigation:
+                if direct_url is not None and lease.authenticated:
                     # Preserve a fresh document/history boundary for every attempt while
                     # avoiding the redundant public search-page navigation. The new tab
                     # stays in the authenticated Chromium context; no cookie, captured
                     # template, or reservation payload crosses into application code.
                     stage = "direct_navigation"
-                    self._assert_response_allowed(
-                        await session.navigate_fresh(direct_url), stage
-                    )
+                    self._assert_response_allowed(await session.navigate_fresh(direct_url), stage)
                 elif direct_url is None:
                     stage = "choose_origin"
                     await session.choose_station("departure", request.origin)
@@ -707,9 +723,7 @@ class PydollKorailBrowserClient:
         if resolver is None:
             return None
         try:
-            origin_identity, destination_identity = await resolver.resolve_pair(
-                origin, destination
-            )
+            origin_identity, destination_identity = await resolver.resolve_pair(origin, destination)
         except KorailStationIdentityUnavailable:
             return None
         return build_korail_general_search_url(
@@ -765,152 +779,27 @@ class PydollKorailBrowserClient:
         self,
         target: ReservationConfirmationTarget,
     ) -> KorailSameSessionDetailEvidence:
-        """Read exact hold evidence from detail, then the official reservation list."""
+        """Read exact hold evidence while preserving the active auth-session generation."""
 
         async with self._session_lock:
-            observed_at = datetime.now(UTC)
             active = self._active_session
             if active is None or active.authenticated_credential_version is None:
                 return KorailSameSessionDetailEvidence(
-                    observed_at=observed_at,
+                    observed_at=datetime.now(UTC),
                     credential_version=None,
                     exact_identity_matched=False,
                     payment_pending_markers_present=False,
                 )
-            try:
-                snapshot = await active.session._snapshot()
-            except Exception:  # noqa: BLE001 -- provider backend errors stay opaque.
-                return KorailSameSessionDetailEvidence(
-                    observed_at=observed_at,
-                    credential_version=(
-                        int(active.authenticated_credential_version)
-                        if active.authenticated_credential_version.isdigit()
-                        else None
-                    ),
-                    exact_identity_matched=False,
-                    payment_pending_markers_present=False,
-                )
-
             credential_version = (
                 int(active.authenticated_credential_version)
                 if active.authenticated_credential_version.isdigit()
                 else None
             )
-            if _confirmation_snapshot_is_blocked(snapshot):
-                return KorailSameSessionDetailEvidence(
-                    observed_at=observed_at,
-                    credential_version=None,
-                    exact_identity_matched=False,
-                    payment_pending_markers_present=False,
-                    provider_blocked=True,
-                )
-
-            path = urlsplit(snapshot.url).path.rstrip("/")
-            auth_required = False
-            if path == "/ticket/login":
-                # The SPA can retain the login route briefly after the server-side session
-                # succeeds. Treat it as an authentication failure only when both official
-                # same-session signals agree that the session is unauthenticated.
-                officially_authenticated = (
-                    await active.session._probe_official_authenticated_session()
-                )
-                header_authenticated = await active.session._has_authenticated_header()
-                auth_required = not officially_authenticated and not header_authenticated
-            if auth_required:
-                return KorailSameSessionDetailEvidence(
-                    observed_at=observed_at,
-                    credential_version=credential_version,
-                    exact_identity_matched=False,
-                    payment_pending_markers_present=False,
-                    auth_required=True,
-                )
-
-            detail = _confirmation_evidence_from_text(
+            return await read_korail_same_session_confirmation(
+                session=active.session,
                 target=target,
-                text=snapshot.body_text,
-                observed_at=observed_at,
                 credential_version=credential_version,
-                source=KORAIL_CONFIRMATION_SOURCE,
-                required_path_matched=path == "/ticket/reservation/detail",
-            )
-            if (
-                detail.exact_identity_matched
-                and detail.seat_class_matched
-                and detail.passenger_count_matched
-                and detail.payment_pending_markers_present
-            ):
-                return detail
-
-            read_list = getattr(active.session, "read_reservation_list", None)
-            if not callable(read_list):
-                return detail
-            try:
-                list_snapshot = await read_list()
-            except Exception:  # noqa: BLE001 -- provider backend errors stay opaque.
-                return detail
-            list_observed_at = datetime.now(UTC)
-            if _confirmation_snapshot_is_blocked(list_snapshot):
-                return KorailSameSessionDetailEvidence(
-                    observed_at=list_observed_at,
-                    credential_version=None,
-                    exact_identity_matched=False,
-                    payment_pending_markers_present=False,
-                    provider_blocked=True,
-                    source=KORAIL_RESERVATION_LIST_SOURCE,
-                )
-            list_path = urlsplit(list_snapshot.url).path.rstrip("/")
-            if list_path == "/ticket/login":
-                officially_authenticated = (
-                    await active.session._probe_official_authenticated_session()
-                )
-                header_authenticated = await active.session._has_authenticated_header()
-                if not officially_authenticated and not header_authenticated:
-                    return KorailSameSessionDetailEvidence(
-                        observed_at=list_observed_at,
-                        credential_version=credential_version,
-                        exact_identity_matched=False,
-                        payment_pending_markers_present=False,
-                        auth_required=True,
-                        source=KORAIL_RESERVATION_LIST_SOURCE,
-                    )
-
-            matches = tuple(
-                evidence
-                for row in list_snapshot.reservation_rows
-                if (
-                    evidence := _confirmation_evidence_from_text(
-                        target=target,
-                        text=row,
-                        observed_at=list_observed_at,
-                        credential_version=credential_version,
-                        source=KORAIL_RESERVATION_LIST_SOURCE,
-                        required_path_matched=(
-                            list_path == "/ticket/reservation/list"
-                        ),
-                    )
-                ).exact_identity_matched
-                and (
-                    not evidence.seat_class_match_required
-                    or evidence.seat_class_matched
-                )
-                and evidence.passenger_count_matched
-                and evidence.payment_pending_markers_present
-            )
-            if len(matches) == 1:
-                return matches[0]
-            return KorailSameSessionDetailEvidence(
-                observed_at=list_observed_at,
-                credential_version=credential_version,
-                exact_identity_matched=False,
-                payment_pending_markers_present=False,
-                seat_class_match_required=False,
-                official_list_read_completed=(
-                    list_path == "/ticket/reservation/list"
-                ),
-                official_list_target_absent=(
-                    list_path == "/ticket/reservation/list" and len(matches) == 0
-                ),
-                source=KORAIL_RESERVATION_LIST_SOURCE,
+                payment_deadline_parser=_parse_korail_payment_deadline,
             )
 
     async def prewarm_credentials(self, credential: KorailCredentialInput) -> bool:
@@ -1015,8 +904,7 @@ class PydollKorailBrowserClient:
             raise BrowserRateLimited() from None
         except HttpReplaySessionInvalid:
             logger.info(
-                "KORAIL HTTP replay event=cold_reinit source=http_replay "
-                "reason=session_invalid"
+                "KORAIL HTTP replay event=cold_reinit source=http_replay reason=session_invalid"
             )
             await self._discard_http_replay(route_key)
             return None
@@ -1136,9 +1024,7 @@ class PydollKorailBrowserClient:
                 raise
         while len(self._active_http_replays) > _HTTP_REPLAY_ROUTE_CACHE_SIZE:
             oldest_route = next(iter(self._active_http_replays))
-            logger.info(
-                "KORAIL HTTP replay event=lease_retired reason=route_cache_capacity"
-            )
+            logger.info("KORAIL HTTP replay event=lease_retired reason=route_cache_capacity")
             await self._discard_http_replay(oldest_route)
         logger.info(
             "KORAIL HTTP replay event=lease_created captured_requests=%d "
@@ -1158,14 +1044,14 @@ class PydollKorailBrowserClient:
                 await _finish_owned_cleanup(active.client.close())
             return
 
-        active = tuple(self._active_http_replays.values())
+        active_leases = tuple(self._active_http_replays.values())
         self._active_http_replays.clear()
-        if not active:
+        if not active_leases:
             return
 
         async def close_all() -> None:
             results = await asyncio.gather(
-                *(lease.client.close() for lease in active),
+                *(lease.client.close() for lease in active_leases),
                 return_exceptions=True,
             )
             for result in results:
@@ -1550,7 +1436,8 @@ class _PydollSession:
         except ImportError as error:
             raise BrowserSourceUnavailable("browser_import") from error
         try:
-            options = ChromiumOptions()
+            chromium_options_factory: Any = ChromiumOptions
+            options = chromium_options_factory()
             options.headless = self.headless
             _set_chromium_binary(options)
             self._browser = Chrome(options=options)
@@ -1865,13 +1752,12 @@ class _PydollSession:
                 # navigation. Focus the visible viewport and send one standard arrow
                 # key; do not mutate the picker DOM or accept the requested time
                 # unless the live window and final #startDate readback both confirm it.
-                if (
-                    await self._navigate_hour_carousel_by_keyboard(dialog, direction)
-                    and await self._wait_for_hour_window_change(
-                        dialog,
-                        current_hours,
-                        direction,
-                    )
+                if await self._navigate_hour_carousel_by_keyboard(
+                    dialog, direction
+                ) and await self._wait_for_hour_window_change(
+                    dialog,
+                    current_hours,
+                    direction,
                 ):
                     continue
                 await self._log_hour_window_navigation_failure(
@@ -1993,15 +1879,10 @@ class _PydollSession:
             # the search page. Reservation callers return here so the current tab's
             # booking history state is not replaced by explicit navigation.
             if authenticated_header:
-                logger.info(
-                    "KORAIL login session marker stage=login_page present=true"
-                )
+                logger.info("KORAIL login session marker stage=login_page present=true")
                 return True
             elapsed = time.monotonic() - submitted_at
-            if (
-                not attempt.post_submit_check_attempted
-                and elapsed >= session_probe_delay
-            ):
+            if not attempt.post_submit_check_attempted and elapsed >= session_probe_delay:
                 # Latch before awaiting. A failed/uncertain fetch must not trigger
                 # another official loginCheck request during this reservation.
                 attempt.post_submit_check_attempted = True
@@ -2050,9 +1931,7 @@ class _PydollSession:
                 )
             )
         if attempt.post_submit_authenticated:
-            logger.info(
-                "KORAIL login session marker stage=official_session present=true"
-            )
+            logger.info("KORAIL login session marker stage=official_session present=true")
             return True
         authenticated = bool(
             await self._login_step(
@@ -2198,7 +2077,7 @@ class _PydollSession:
         origin: str,
         destination: str,
         captured_date: date,
-    ) -> object:
+    ) -> KorailHttpReplayPlan:
         if self._http_capture_start is None:
             raise HttpReplayInvalidCapture()
         try:
@@ -2474,9 +2353,7 @@ class _PydollSession:
         actionable_by_label: dict[str, Any] = {}
         for control in await self._visible_elements("a", scope=row):
             raw_text = str(await control.text)
-            price_box_text, price_box_classes = await self._seat_price_box_metadata(
-                control
-            )
+            price_box_text, price_box_classes = await self._seat_price_box_metadata(control)
             key = booking_seat_control_key(
                 seat_class_label=seat_class_label,
                 control_text=raw_text,
@@ -2525,9 +2402,7 @@ class _PydollSession:
             return (
                 str(value.get("text", ""))[:200],
                 _sanitized_class_tokens(
-                    " ".join(str(item) for item in classes)
-                    if isinstance(classes, list)
-                    else ""
+                    " ".join(str(item) for item in classes) if isinstance(classes, list) else ""
                 ),
             )
         except Exception:  # noqa: BLE001 -- missing owner metadata falls back to anchor text.
@@ -2894,10 +2769,7 @@ class _PydollSession:
             return []
         current_window: list[_HourCandidate] = []
         for candidate in candidates[current_indexes[0] :]:
-            if (
-                "slick-current" not in candidate.state.slide_classes
-                and not candidate.state.enabled
-            ):
+            if "slick-current" not in candidate.state.slide_classes and not candidate.state.enabled:
                 break
             current_window.append(candidate)
         return current_window
@@ -3217,9 +3089,7 @@ class _PydollSession:
         if click_count is not None:
             params["clickCount"] = click_count
         # Pydoll's public mouse helper omits the CDP ``buttons`` bitmask on move.
-        await self._tab._execute_command(
-            {"method": "Input.dispatchMouseEvent", "params": params}
-        )
+        await self._tab._execute_command({"method": "Input.dispatchMouseEvent", "params": params})
 
     async def _wait_for_schedule(self, travel_date: date, departure_hour: int) -> None:
         deadline = time.monotonic() + self._timeout_seconds
@@ -3425,13 +3295,13 @@ class _PydollSession:
             classes = _sanitized_class_tokens(value.get("className", ""))
             container_classes = _sanitized_class_tokens(value.get("containerClassName", ""))
             slide_classes = _sanitized_class_tokens(value.get("slideClassName", ""))
-            class_disabled = _has_disabled_class(classes) or _has_disabled_class(
-                container_classes
-            ) or _has_disabled_class(slide_classes)
+            class_disabled = (
+                _has_disabled_class(classes)
+                or _has_disabled_class(container_classes)
+                or _has_disabled_class(slide_classes)
+            )
             return _ControlState(
-                enabled=not disabled_attribute
-                and aria_disabled != "true"
-                and not class_disabled,
+                enabled=not disabled_attribute and aria_disabled != "true" and not class_disabled,
                 aria_disabled=aria_disabled if aria_disabled in {"", "true", "false"} else "other",
                 disabled_attribute=disabled_attribute,
                 classes=classes,
@@ -3498,6 +3368,8 @@ class _PydollSession:
             return
         status_value = response.get("status")
         resource_type = str(params.get("type", "")).strip().lower()
+        if not isinstance(status_value, (bytes, float, int, str)):
+            return
         try:
             status = int(status_value)
         except (TypeError, ValueError):
@@ -3508,12 +3380,31 @@ class _PydollSession:
             self._network_responses.add((status, resource_type))
 
 
+class _PydollSessionContext:
+    """Adapt Pydoll's concrete async context to the stable semantic protocol."""
+
+    def __init__(self, session: _PydollSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> PydollBrowserSession:
+        return await self._session.__aenter__()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> bool | None:
+        await self._session.__aexit__(exc_type, exc_value, traceback)
+        return None
+
+
 def _normalize_station(value: str) -> str:
     return " ".join(value.split()).removesuffix("역")
 
 
 def _replay_protection_trigger(trigger: str) -> ProtectionTrigger:
-    return {
+    triggers: dict[str, ProtectionTrigger] = {
         "http_403": "http_403_subresource",
         "code_1405": "marker_code_1405",
         "code_8002": "marker_code_8002",
@@ -3523,7 +3414,8 @@ def _replay_protection_trigger(trigger: str) -> ProtectionTrigger:
         "netfunnel": "marker_netfunnel",
         "unauthorized": "marker_unauthorized_tool",
         "restricted": "marker_abnormal_access",
-    }.get(trigger, "marker_abnormal_access")
+    }
+    return triggers.get(trigger, "marker_abnormal_access")
 
 
 def _log_protection_snapshot(
@@ -3549,9 +3441,7 @@ def _log_protection_snapshot(
 def _sanitized_class_tokens(value: object) -> tuple[str, ...]:
     """Keep bounded CSS token metadata without persisting page text or request values."""
     return tuple(
-        token
-        for token in str(value).split()[:8]
-        if re.fullmatch(r"[A-Za-z0-9_-]{1,40}", token)
+        token for token in str(value).split()[:8] if re.fullmatch(r"[A-Za-z0-9_-]{1,40}", token)
     )
 
 
@@ -3703,126 +3593,6 @@ def _reservation_date_markers(value: date) -> tuple[str, ...]:
         f"{value.year}년 {value.month}월 {value.day}일",
         f"{value.month}월 {value.day}일",
     )
-
-
-def _confirmation_snapshot_is_blocked(snapshot: PydollPageSnapshot) -> bool:
-    if protection_trigger_from_text(snapshot.body_text) is not None or any(
-        protection_trigger_from_text(text) is not None
-        for text in snapshot.protection_texts
-    ):
-        return True
-    return any(
-        is_rate_limit_response(status, resource_type)
-        or protection_trigger_from_http_response(status, resource_type) is not None
-        for status, resource_type in snapshot.network_responses
-    )
-
-
-def _confirmation_evidence_from_text(
-    *,
-    target: ReservationConfirmationTarget,
-    text: str,
-    observed_at: datetime,
-    credential_version: int | None,
-    source: str,
-    required_path_matched: bool,
-) -> KorailSameSessionDetailEvidence:
-    """Reduce one official reservation surface to secret-free exact evidence."""
-
-    body = " ".join(text.split())
-    local_departure = target.departure_at.astimezone(ZoneInfo("Asia/Seoul"))
-    local_arrival = (
-        target.arrival_at.astimezone(ZoneInfo("Asia/Seoul"))
-        if target.arrival_at is not None
-        else None
-    )
-    seat_label = "일반실" if target.seat_class.value == "standard" else "특실"
-    seat_class_matched = _has_exact_text_marker(body, seat_label)
-    seat_class_match_required = source != KORAIL_RESERVATION_LIST_SOURCE
-    passenger_markers = (
-        (f"{target.passenger_count}매",)
-        if source == KORAIL_RESERVATION_LIST_SOURCE
-        else (
-            f"총 {target.passenger_count}명",
-            f"성인 {target.passenger_count}명",
-            f"어른 {target.passenger_count}명",
-        )
-    )
-    passenger_count_matched = any(
-        _has_exact_text_marker(body, marker)
-        for marker in passenger_markers
-    )
-    service_date_and_departure_matched = any(
-        re.search(
-            rf"{re.escape(marker)}.{{0,120}}"
-            rf"(?<!\d){re.escape(local_departure.strftime('%H:%M'))}(?!\d)",
-            body,
-        )
-        is not None
-        for marker in _reservation_date_markers(local_departure.date())
-    )
-    exact_identity_matched = (
-        required_path_matched
-        and local_arrival is not None
-        and _has_exact_train_number_marker(body, target.train_number)
-        and _has_exact_text_marker(body, local_departure.strftime("%H:%M"))
-        and _has_exact_text_marker(body, local_arrival.strftime("%H:%M"))
-        and service_date_and_departure_matched
-        and _has_exact_route_markers(body, target.origin, target.destination)
-        and (not seat_class_match_required or seat_class_matched)
-        and passenger_count_matched
-    )
-    payment_pending_markers = (
-        ("예약취소", "예약변경", "결제/발권")
-        if source == KORAIL_RESERVATION_LIST_SOURCE
-        else ("예약취소", "장바구니", "결제하기")
-    )
-    return KorailSameSessionDetailEvidence(
-        observed_at=observed_at,
-        credential_version=credential_version,
-        exact_identity_matched=exact_identity_matched,
-        seat_class_matched=seat_class_matched,
-        passenger_count_matched=passenger_count_matched,
-        seat_class_match_required=seat_class_match_required,
-        official_list_read_completed=(
-            source == KORAIL_RESERVATION_LIST_SOURCE and required_path_matched
-        ),
-        payment_pending_markers_present=all(
-            marker in body for marker in payment_pending_markers
-        ),
-        payment_deadline=_parse_korail_payment_deadline(body),
-        source=source,
-    )
-
-
-def _parse_korail_payment_deadline(body: str) -> datetime | None:
-    """Parse only an explicit provider date and time; never invent a deadline."""
-
-    patterns = (
-        re.compile(
-            r"결제\s*(?:기한|마감)\s*[:：]?\s*"
-            r"(20\d{2})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})일?"
-            r"(?:\s*[.]\s*|\s+)"
-            r"(\d{1,2}):(\d{2})"
-        ),
-        re.compile(
-            r"결제\s*(?:기한|마감)\s*[:：]?\s*"
-            r"(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일\s+"
-            r"(\d{1,2}):(\d{2})"
-        ),
-    )
-    for pattern in patterns:
-        match = pattern.search(body)
-        if match is None:
-            continue
-        try:
-            return datetime(
-                *(int(part) for part in match.groups()),
-                tzinfo=ZoneInfo("Asia/Seoul"),
-            )
-        except ValueError:
-            return None
-    return None
 
 
 def _set_chromium_binary(options: Any) -> None:

@@ -380,6 +380,9 @@
 - [x] 스물네 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] 마지막 `App.test.jsx`의 29개 선언·32개 실행·120개 assertion을 strict `App.test.tsx`로 전환하고 공개 props 기반 fixture와 DOM·clipboard·`window.open` guard로 nullable 경계를 assertion/suppression 없이 좁힘. ESLint ratchet `.mjs`의 실제 세 export에는 `.d.mts` 계약을 추가
 - [x] `allowJs`·`checkJs`를 제거하고 Vitest discovery를 TS/TSX로 한정하되 실제 service worker·Sites worker·worker·빌드/ESLint `.js`·`.mjs` 런타임 경계와 별도 lint/계약 테스트는 유지. App focused 32건·ratchet 8건·전체 Vitest 79파일 571건·ESLint 오류 0/legacy warning 12·strict typecheck·production build·Sites 4건·독립 리뷰와 `git diff --check` 통과
+- [x] 98줄 `watch_management/transition_policy.py`에 no-op/rejected/allowed 판별 union, 13×13 상태표 결정, next-check preserve/clear/SCHEDULED 재무장과 transition identity를 분리. replay 선행·provider 지연 조회·status/UTC/cooldown 순서·reason·history→idempotency→status outbox→알림·public facade/UoW를 회귀 테스트로 고정
+- [x] transition policy owner의 runtime/transport/DB·async/clock/transaction 역의존을 차단하고 strict mypy ratchet 12→13개 파일 확장. 인접 pytest 406건·API 전체 1,481건·Ruff `E/F/I`·format ratchet 60개·mypy 오류 0·lock check·독립 리뷰 P0~P3 없음·`git diff --check` 통과
+- [x] 스물네 번째 구조 슬라이스 D의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -397,7 +400,8 @@
 - [x] API의 operations summary, UI preferences, 철도 계정·runtime 라우트와 schema를 기능 패키지로 이동하고 중앙 schema compatibility export·전체 pytest 949건 검증
 - [ ] UI preference application 분리 완료 위에서 API의 나머지 router·schema·application 경계를 분리하고 application의 HTTP 오류 의존 제거
 - [x] 예약 결과의 재시도·수동 확인 투영을 `reservations/domain.py` 순수 정책과 전체 outcome 표 테스트로 분리
-- [ ] watch transition·reservation episode·reconciliation 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
+- [x] watch transition 정책을 프레임워크 비의존 결정 함수로 추출하고 13×13 상태표·provider 지연 조회·DB UoW 불변식 회귀 검증
+- [ ] reservation episode·reconciliation의 남은 정책을 프레임워크 비의존 결정 함수로 추출하고 기존 DB 불변식 회귀 검증
 - [x] worker의 reservation execution을 application으로 분리하고 얇은 runtime 조립, claim/result UoW·잠금 순서·outbox 원자성·credential CAS 회귀 테스트 완성
 - [x] worker의 watch-group observation을 application으로 분리하고 얇은 Celery/runtime 조립, lease fencing·동일 조회 병합·상태 요약·rollback·PostgreSQL lock SQL 회귀 테스트 완성
 - [ ] Mock 전용 node ID partial·same·unknown·name mismatch를 parameterized 회귀로 고정하고 capability note·전체 node/city fixture·정확한 5분 freshness·20분 결제 기한 간격을 직접 검증

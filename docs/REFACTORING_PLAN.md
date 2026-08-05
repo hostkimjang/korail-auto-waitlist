@@ -1319,6 +1319,29 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 운영 검증 범위: test/typecheck discovery/docs-only 슬라이스로 사용자 동작과 배포 runtime을 바꾸지
   않아 기본 E2E와 Compose 재배포는 반복하지 않았습니다.
 
+### 2026-08-05 스물네 번째 구조 슬라이스 D
+
+- watch transition policy: 98줄 `watch_management/transition_policy.py`가 no-op/rejected/allowed 판별
+  union, `NextCheckPolicy`, 13×13 허용표 판단과 reason·transition token·status event dedupe identity를
+  소유합니다. 순수 owner는 기존 `domain.py` 상태표만 읽고 FastAPI·SQLAlchemy·model·provider·clock·
+  transaction을 import하거나 호출하지 않습니다.
+- orchestration 보존: `apply_watch_transition`과 `transition_watch`의 public owner·identity는 계속
+  `services.py`입니다. idempotency replay → policy 순서, no-op/거절의 무변경·provider 0회, 허용 전이의
+  status → UTC now 1회 → updated/cooldown → SCHEDULED capability 1회와 next-check preserve/clear/재무장
+  의미를 그대로 유지했습니다. services는 이 application orchestration을 포함한 1,399줄입니다.
+- artifact·UoW 보존: reason의 None/빈 값 기본값·160자 절단·공백 보존, history → idempotency → status
+  outbox → transition notification 순서와 token/dedupe 문자열을 고정했습니다. caller의 watch row lock과
+  commit/refresh, 예외 rollback은 이동하지 않았습니다.
+- 회귀·경계: 357줄 owner 테스트가 13×13 전체 matrix·상태 집합 completeness·다음 확인 정책·identity와
+  replay/provider 지연 조회를 검증합니다. module-boundary gate는 새 owner의 runtime·transport·DB 역의존과
+  async/clock/transaction 소유를 차단하고 strict mypy ratchet은 12개에서 13개 파일로 확장했습니다.
+- 확인된 검증: 인접 focused pytest 406건, API 전체 pytest 1,481건, Ruff `E/F/I`, format ratchet 60개,
+  strict mypy 13개 파일 오류 0, `uv lock --check`, 독립 리뷰 P0~P3 지적 없음과 `git diff --check`를
+  통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
+  최근 안전한 오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

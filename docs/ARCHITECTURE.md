@@ -292,6 +292,14 @@ duck typing을 포함한 payload를 정렬된 compact JSON + SHA-256으로 동�
 payload가 다르면 FastAPI 비의존 `IdempotencyConflict`를 발생시키고, watch와 official evidence HTTP
 경계만 기존 detail의 409로 변환합니다. application은 caller session에 record만 추가하며 lock·commit·
 rollback을 소유하지 않아 watch/outbox 또는 official confirmation batch와 같은 UoW에서 함께 확정됩니다.
+
+watch 상태표의 허용·거절·동일 상태 판단, 다음 관측 시각의 preserve/clear/SCHEDULED 재무장과 cooldown
+초기화 결정, reason·transition token·status outbox dedupe identity의 canonical owner는 FastAPI·DB·provider
+비의존 `watch_management/transition_policy.py`입니다. 이 순수 정책은 `domain.py`의 13개 상태
+`ALLOWED_TRANSITIONS`를 소비하며 시간이나 capability를 직접 조회하지 않습니다. `services.py`의
+`apply_watch_transition`은 idempotency replay를 먼저 확인한 뒤 정책을 해석해 status·UTC timestamp를
+적용하고, SCHEDULED 허용 전이에만 provider capability를 한 번 조회합니다. history → idempotency →
+`watch.status_changed` outbox → 채널 알림 순서와 lock·commit·rollback 소유권은 기존 호출자에 남습니다.
 `services.py`는 기존 호출자를 위해 세 함수를 같은 객체로 다시 export하고 official confirmation
 영속 계층은 canonical owner를 직접 사용합니다.
 
@@ -408,7 +416,8 @@ adapter→registry/facade 역의존을 차단합니다.
 오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
 공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
-payment-hold·watch transition notification application의 12개 오류 0 파일만 대상입니다. registry 반환 타입은
+payment-hold·watch transition notification application·watch transition policy의 13개 오류 0 파일만
+대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로

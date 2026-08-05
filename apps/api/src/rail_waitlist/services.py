@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .domain import (
-    ALLOWED_TRANSITIONS,
     TERMINAL_STATUSES,
     Provider,
     ProviderCircuitState,
@@ -76,6 +75,13 @@ from .schemas import (
 )
 from .ui_preferences.application import (
     update_admin_ui_preferences as update_admin_ui_preferences,
+)
+from .watch_management.transition_policy import (
+    NextCheckPolicy,
+    NoOpWatchTransition,
+    RejectedWatchTransition,
+    build_watch_transition_identity,
+    decide_watch_transition,
 )
 
 RESERVATION_RECONCILIATION_MAX_ATTEMPTS = 3
@@ -331,27 +337,33 @@ async def apply_watch_transition(
         existing = await session.get(Watch, existing_id)
         if existing:
             return existing
-    if watch.status == target:
+    decision = decide_watch_transition(watch.status, target)
+    if isinstance(decision, NoOpWatchTransition):
         return watch
-    if target not in ALLOWED_TRANSITIONS[watch.status]:
-        raise HTTPException(409, f"cannot transition {watch.status.value} to {target.value}")
-    previous = watch.status
-    watch.status = target
+    if isinstance(decision, RejectedWatchTransition):
+        raise HTTPException(409, decision.detail)
+    watch.status = decision.target_status
     transition_at = datetime.now(UTC)
     watch.updated_at = transition_at
-    if target == WatchStatus.SCHEDULED:
+    if decision.clear_cooldown:
         watch.cooldown_until = None
+    if decision.next_check_policy is NextCheckPolicy.TRANSITION_AT_IF_SEAT_MONITORING:
         execution_capabilities = get_execution_provider(watch.provider).capabilities()
         watch.next_check_at = transition_at if execution_capabilities.seat_monitoring else None
-    elif target in TERMINAL_STATUSES or target == WatchStatus.PAUSED:
+    elif decision.next_check_policy is NextCheckPolicy.CLEAR:
         watch.next_check_at = None
-    transition_reason = (reason or f"transition_to_{target.value}")[:160]
+    identity = build_watch_transition_identity(
+        decision,
+        watch_id=watch.id,
+        transition_at=transition_at,
+        reason=reason,
+    )
     session.add(
         WatchTransitionHistory(
             watch=watch,
-            from_status=previous,
-            to_status=target,
-            reason=transition_reason,
+            from_status=decision.previous_status,
+            to_status=decision.target_status,
+            reason=identity.reason,
             observation=observation,
         )
     )
@@ -361,15 +373,19 @@ async def apply_watch_transition(
         aggregate_type="watch",
         aggregate_id=watch.id,
         event_type="watch.status_changed",
-        payload={"watch_id": watch.id, "from": previous.value, "to": target.value},
-        dedupe_key=f"watch:{watch.id}:transition:{previous.value}:{target.value}:{transition_at.isoformat()}",
+        payload={
+            "watch_id": watch.id,
+            "from": decision.previous_status.value,
+            "to": decision.target_status.value,
+        },
+        dedupe_key=identity.status_event_dedupe_key,
     )
     await add_watch_notifications(
         session,
         watch,
-        target,
-        f"{previous.value}:{target.value}:{transition_at.isoformat()}",
-        reason=transition_reason,
+        decision.target_status,
+        identity.transition_token,
+        reason=identity.reason,
     )
     return watch
 

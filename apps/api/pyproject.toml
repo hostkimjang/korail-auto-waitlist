@@ -62,6 +62,7 @@ files = [
   "src/rail_waitlist/notification_management/watch_transition_application.py",
   "src/rail_waitlist/observations/cycle_application.py",
   "src/rail_waitlist/idempotency/application.py",
+  "src/rail_waitlist/watch_management/transition_policy.py",
 ]
 
 [tool.ruff]

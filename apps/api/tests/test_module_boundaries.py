@@ -116,6 +116,10 @@ def _is_official_page_confirmations(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/official_page_confirmations.py"
 
 
+def _is_watch_transition_policy(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/watch_management/transition_policy.py"
+
+
 def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
@@ -276,6 +280,27 @@ BOUNDARY_RULES = (
         name="official confirmation persistence uses the canonical idempotency owner",
         matches=_is_official_page_confirmations,
         forbidden_import_roots=frozenset({"services"}),
+    ),
+    BoundaryRule(
+        name="watch transition policy stays pure and runtime independent",
+        matches=_is_watch_transition_policy,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "models",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "schemas",
+                "services",
+                "sqlalchemy",
+                "worker",
+            }
+        ),
     ),
     BoundaryRule(
         name="reservation reconciliation application depends on provider roles",
@@ -464,6 +489,35 @@ def test_idempotency_application_joins_the_callers_unit_of_work() -> None:
     }
 
     assert called_attributes.isdisjoint({"begin", "commit", "rollback", "with_for_update"})
+
+
+def test_watch_transition_policy_imports_only_pure_domain_dependencies() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "watch_management" / "transition_policy.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    import_roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            import_roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            import_roots.add(node.module.split(".")[0])
+
+    assert import_roots <= {
+        "__future__",
+        "dataclasses",
+        "datetime",
+        "domain",
+        "enum",
+        "typing",
+    }
+    assert not any(isinstance(node, (ast.AsyncFunctionDef, ast.Await)) for node in ast.walk(tree))
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert called_attributes.isdisjoint(
+        {"begin", "commit", "now", "rollback", "utcnow", "with_for_update"}
+    )
 
 
 def test_provider_contract_imports_are_allowlisted() -> None:

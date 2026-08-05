@@ -144,9 +144,9 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 | 3. 웹 수직 슬라이스 | 진행 | `NewWait` form·station·timetable·registration 흐름 | feature별 TS/TSX와 회귀 테스트 |
 | 4. 백엔드 정책 | 진행 | watch transition, reservation episode, reconciliation 결정 함수 | 프레임워크 비의존 domain 정책 |
 | 5. 실행 경계 | 진행 | 최소 UoW/repository seam, worker pipeline 분리 | 얇은 route/task와 트랜잭션 테스트 |
-| 6. provider 역할 | 계획 | timetable/observe/reserve/confirm/lifecycle 계약 분리 | capability와 adapter 역할별 검증 |
+| 6. provider 역할 | 진행 | timetable/observe/reserve/confirm/lifecycle 계약 분리 완료, 기본 stub 제거·승인 transport 남음 | capability와 adapter 역할별 검증 |
 | 7. 웹 전환 종료 | 진행 | `App.tsx`, `allowJs=false`, CSS 단계 분리 | strict TS와 모듈 경계 완성 |
-| 8. 고위험 sidecar | 계획 | `korail_pydoll_browser.py` 내부 lifecycle·DOM·flow 분리 | 기존 보호·결제 전 중단 계약 보존 |
+| 8. 고위험 sidecar | 완료 | Pydoll 응답 안전·인증 session·로그인 DOM·검색 actor/DOM·예약 actor/DOM·confirmation/replay 분리 | 기존 보호·exact identity·결제 전 중단 계약 보존 |
 
 단계 상태는 코드·검증 결과와 함께 `CHECKLIST.md`에서 갱신합니다. 문서 작성만으로 구현 단계를 완료 처리하지 않습니다.
 
@@ -1622,6 +1622,72 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 Phase 8 범위: sidecar DOM driver·parser와 read-only UI 검색 orchestration, 인증 actor와 단발
   예약 workflow의 더 작은 owner 분리는 계속 미완료입니다. 이 상태를 HTTP·confirmation reader·replay
   manager 분리만으로 완료라고 표현하지 않습니다.
+
+### 2026-08-05 스물일곱 번째 구조 슬라이스
+
+- Reservations ViewModel: `features/reservations/reservationViewModel.ts`가 production `MappedWatch`와
+  legacy snake_case 입력을 camelCase 표시 계약으로 변환합니다. 목록·요약·페이지는 raw deadline/URL을
+  읽지 않고, 공개 `Reservations` 함수·`ReservationListWatch` 타입 경로와 콜백·정렬·감사 행을
+  보존합니다. legacy 공식 URL도 공용 allowlist를 통과한 KORAIL·SRT HTTPS만 CTA로 만듭니다.
+- Pydoll read-only search actor: `korail_pydoll_contracts.py`가 snapshot 계약을,
+  `korail_pydoll_search_actor.py`가 search lock→replay→direct/UI→capture→submit/result→install→검색
+  session cleanup→finalize 순서를 소유합니다. browser facade는 인증·예약 session과 전체 close를 조립하고
+  기존 공개 export·호출 시점 monkeypatch seam을 유지합니다.
+- PostgreSQL observation fencing: 격리 opt-in script가 실제 observation application holder의 lease lock과
+  takeover wait/token +1, stale prepare·defer·persist·circuit·apply·전체 process의 기록 0건, 정·역순 두
+  process의 8회 무교착 실행을 검증합니다. 검증 대상 관찰 경로는 모두 lease를 먼저 잠그며,
+  downstream 순서는 prepare watch→circuit, defer watch `id` 정렬, persist
+  watch→candidate/observation, circuit check는 circuit, apply는 watch→circuit 순서입니다. CI PostgreSQL
+  16 job은 generic lease 검사 뒤 이 검사를 실행합니다.
+- 확인된 검증: 웹 Vitest 84개 파일·599건, ESLint 오류 0·기존 warning 12개, strict typecheck,
+  production build, Sites 4건, 기본 E2E 14건을 통과했습니다. API는 전체 pytest 1,568건, Ruff `E/F/I`,
+  format ratchet 59개, strict mypy 27개 파일, `uv lock --check`를 통과했고 기존 Starlette/httpx
+  deprecation warning 1건만 유지됐습니다. 두 PostgreSQL acceptance script는 CI 경로와 compile을
+  확인했고 observation 검사는 별도 임시 PostgreSQL 16 빈 DB에서 37.9초로 통과했습니다.
+- 통합 운영 검증: `experimental-rail` 전체 build·force-recreate 뒤 migration·log-init 2개 exit 0,
+  장기 서비스 11/11 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건을
+  확인했습니다.
+- 남은 핵심 범위: Pydoll 공용 page safety, 인증 session actor, 단발 예약 workflow, DOM driver 세분화와
+  웹 watch snapshot/live reservation notice의 DTO·ViewModel 분리, PostgreSQL 동일 episode·로그인·
+  credential 교차 수용 검증입니다.
+
+### 2026-08-05 스물여덟 번째 구조 슬라이스
+
+- 웹 watch read model: `api/watchProjection.ts`가 required camelCase `WatchReadModel`·
+  `WatchCandidateReadModel`, 기존 snake_case 공개 입력 `MappedWatch`·`MappedWatchCandidate`, mapper가
+  반환하는 교차 타입 `ProjectedWatch`·`ProjectedWatchCandidate`를 구분합니다. 후보 property와 배열은
+  readonly이며 production mapper와 demo producer가 priority 순서의 같은 객체·같은 배열에 양쪽 필드를
+  기록합니다. 기존 공개 object literal과 `mapWatch` identity는 유지합니다.
+- 웹 lifecycle·ViewModel: `features/app/watchLifecycleSnapshot.ts`가 REST/SSE 상태 전이에 필요한 typed
+  camelCase snapshot을 소유합니다. inline projector 변경은 polling/SSE lifecycle을 재시작하지 않으면서
+  이후 REST와 SSE에 최신 projector를 사용합니다. Home 활동·결제와 Reservations ViewModel, NewWait
+  registration hydration은 canonical model만 읽고 loose snake 입력은 명시한 compatibility adapter로
+  격리합니다.
+- Pydoll 구조 분리: 공용 보호 판정은 `korail_pydoll_page_safety.py`, 인증 값·session lifecycle은
+  `korail_pydoll_auth_contracts.py`·`korail_pydoll_auth_actor.py`, 로그인 DOM은
+  `korail_pydoll_login_driver.py`가 소유합니다. 읽기 전용 검색은 actor와 DOM driver, 단발 예약은
+  contracts·actor·DOM driver로 나눴습니다. 기존 facade의 public class identity와 생성 전·후 monkeypatch
+  seam을 유지하고 검색 actor/driver는 exact 역·날짜·시각 선택·성인 1명 readback·KTX projection,
+  예약 actor/driver는 성인 1명 identity와 좌석·예매 click 각 1회·결제/취소 비호출을 보존합니다.
+- PostgreSQL reservation/credential fencing: 결과 transaction이 실제 호출 credential generation과 현재
+  account generation을 row lock 아래 비교해 과거 결과의 watch·candidate·attempt·outbox·payment write를
+  모두 차단합니다. 격리 수용 script는 동일 episode spawn process의 provider 호출 1회, claim/result가
+  account를 기다리는 동안 독립 probe의 target row `FOR UPDATE NOWAIT`, credential 교체 직후와 늦은
+  payment 결과 처리 후의 watch·candidate·attempt·outbox·payment snapshot이 완전히 동일한지를 실제
+  PostgreSQL 16에서 검증합니다. CI는 generic lease→observation→reservation 순서로
+  세 검사를 실행합니다.
+- 확인된 검증: 웹 Vitest 85개 파일·615건, ESLint 오류 0·기존 warning 12개, strict typecheck,
+  production build, Sites 4건, 기본 E2E 14건을 통과했습니다. API는 전체 pytest 1,605건, Ruff `E/F/I`,
+  format ratchet 58개, strict mypy 35개 파일, `uv lock --check`를 통과했고 기존 Starlette/httpx
+  deprecation warning 1건만 유지됐습니다. 신규 reservation/credential acceptance는 별도 임시
+  PostgreSQL 16에서 migration 뒤 통과했습니다.
+- 통합 운영 검증: `experimental-rail` 전체 build·force-recreate 뒤 migration·log-init 2개 exit 0,
+  장기 서비스 11/11 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건을
+  확인했습니다. build가 exit 0으로 끝난 직후 Docker Desktop이
+  `http2: server: error reading preface ... file has already been closed` 경고를 한 줄 남겼지만, 이어진 전체
+  재생성과 health 검증이 통과했고 재생성 뒤 5분 로그의 `ERROR|CRITICAL|Traceback` 표식은 0건이었습니다.
+- 남은 항목은 실제 운영 계정·외부 알림 채널·공개 도메인·장시간 failover처럼 로컬 구조 리팩터링과
+  분리된 운영 확인, 그리고 설정·알림 등 다른 feature의 DTO/ViewModel·mutation epoch 개선입니다.
 
 ## 단계별 완료 기준과 rollback
 

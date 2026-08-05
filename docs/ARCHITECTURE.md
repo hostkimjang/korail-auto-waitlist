@@ -209,23 +209,29 @@ cooldown 상태만 노출합니다.
 웹 watch의 provider·13개 status·seat class·observation mode 값 계약은 `domain/watch.ts`가 단일
 소유합니다. 외부 read payload의 필수 identity·실제 달력 날짜와 후보 identity·timezone-aware 시각·
 priority는 `api/watchReadDto.ts`가 `unknown`에서 명시적 필드로 검증하며 임의 server key를 버립니다.
-432줄 `api/watchProjection.ts`가 DTO→공용 `MappedWatch` read model과 상태·좌석 표시 label, 최신 관측·
-evidence·operational·reservation attempt 투영을 소유합니다. 최신 좌석 관측은 source와
+`api/watchProjection.ts`가 DTO→read model과 상태·좌석 표시 label, 최신 관측·evidence·operational·
+reservation attempt 투영을 소유합니다. 앱 내부의 필수 camelCase 계약은 `WatchReadModel`과
+`WatchCandidateReadModel`, 기존 공개 snake_case object literal 계약은 `MappedWatch`와
+`MappedWatchCandidate`, API mapper가 실제로 반환하는 양쪽 교차 계약은 `ProjectedWatch`와
+`ProjectedWatchCandidate`로 구분합니다. 후보 배열과 프로퍼티는 readonly이고 production mapper와 demo
+producer는 priority 순서의 같은 객체·같은 배열에 camel/snake 호환 필드를 함께 기록합니다. 최신 좌석 관측은 source와
 `observed_at < fresh_until` 계약이 모두 확인될 때만 공식 또는 mock 관측으로 투영합니다. 후보의
 evidence·latest observation/attempt·operational nested 값은 `unknown`으로 받은 뒤 각 canonical
 projector가 fail-closed로 해석합니다. `api/watches.ts`는 watch 생성 payload·멱등 키와 CRUD transport만
-소유하고 324줄로 줄었으며, 기존 `MappedWatch` 타입과 `mapWatch` 함수 경로를 같은 identity로 다시
-export합니다. normalized domain snapshot과 feature별 ViewModel 분리는 후속 슬라이스입니다.
+소유하며 기존 `MappedWatch` 타입과 `mapWatch` 함수 경로를 같은 identity로 다시 export합니다.
+앱 상태 전이는 `features/app/watchLifecycleSnapshot.ts`의 camelCase `WatchLifecycleSnapshot`으로 투영하고,
+Home 활동·결제 목록과 Reservations는 각각의 feature ViewModel만 읽습니다. loose snake 입력은 명시한
+legacy adapter에만 남고 NewWait 등록 hydration은 canonical candidate를 우선합니다.
 `features/app/useWatchCollection.ts`는
 canonical REST snapshot, SSE burst
 병합, 예약정책 변경과 교차한 stale GET 차단, 인증·구독 lifecycle 세대 격리와 상태 전이 알림을
 소유합니다. pause·resume·cancel·delete와 예약정책 변경은 strict
-`features/app/useWatchMutations.ts`가 같은 canonical `MappedWatch`를 사용해 demo와 live 경로를
+`features/app/useWatchMutations.ts`가 canonical `WatchReadModel`을 사용해 demo와 live 경로를
 조립합니다. 실패 toast와 cancel 오류 재전파를 보존하고, 예약정책 변경은 mutation guard를 먼저 연
 뒤 성공·실패 모두 guard 종료와 목록 refresh를 수행합니다. strict `App.tsx`에는 이 훅과 화면을 연결하는
 조립만 남았으며 기능 페이지·설정 resource·app shell/navigation·auth/logout·compatibility 추출 뒤
-현재 246줄입니다. `fixtures/demoData.ts`의 typed
-factory는 초기 demo 작업과 마법사 완료 결과도 같은 `MappedWatch` 계약으로 생성합니다.
+app-level 조립만 담당합니다. `fixtures/demoData.ts`의 typed factory는 초기 demo 작업과 마법사 완료
+결과를 canonical·legacy 필드를 함께 보장하는 `ProjectedWatch`로 생성합니다.
 
 strict `features/new-wait/NewWaitPage.tsx`는 여정·조건·열차 단계 렌더링, 역 카탈로그·시간표 조회·
 좌석별 등록 hook 조립과 취소 흐름을 소유합니다. 공식 handoff는 다른 feature를 직접 import하지 않고
@@ -433,14 +439,28 @@ KORAIL read-only 시간표 검색은 인증 actor가 READY여도 별도 ephemera
 
 KORAIL sidecar의 HTTP route·internal Bearer 검증·DTO 정규화·lifespan은
 `korail_sidecar/http.py`가 소유하고, `korail_browser_adapter_service.py`는 호출 시점 compatibility
-dependency를 조립하는 얇은 facade로 남습니다. lifecycle·DOM·검색·인증·예약 전체 분리가 끝난 것은
-아닙니다. Pydoll의 동일 인증 세션 보류 확인은 `korail_pydoll_confirmation_reader.py`가 좁은 snapshot
+dependency를 조립하는 얇은 facade로 남습니다. Pydoll의 공용 응답 보호 판정은
+`korail_pydoll_page_safety.py`, credential/login 값 계약은 `korail_pydoll_auth_contracts.py`, 재사용 인증
+session의 generation·fingerprint·TTL·cleanup은 `korail_pydoll_auth_actor.py`가 소유합니다. 한 session의
+로그인 DOM은 `korail_pydoll_login_driver.py`, 단발 예약 orchestration과 계약은
+`korail_pydoll_reservation_actor.py`·`korail_pydoll_reservation_contracts.py`, exact 좌석·예매 1회와 결제
+전 중단 DOM은 `korail_pydoll_reservation_driver.py`가 소유합니다. 읽기 전용 검색 orchestration과 성인
+1명 identity 판정은 `korail_pydoll_search_actor.py`, 역·날짜·시각 선택과 성인 1명 exact readback·결과
+확장·snapshot DOM은 `korail_pydoll_search_driver.py`가 소유합니다. `korail_pydoll_browser.py`는 Chromium
+lifecycle·validated navigation·network listener·HTTP replay capture/export·읽기 전용 예약목록 이동,
+search 전용 hour carousel animation/drag/key와 저수준 DOM/CDP primitive, 기존 공개/private 호환 경로를
+조립합니다. high-level actor/driver 분리는 완료했지만 이 primitive 책임까지 facade 밖으로 이동했다고
+표현하지 않습니다.
+
+Pydoll의 동일 인증 세션 보류 확인은 `korail_pydoll_confirmation_reader.py`가 좁은 snapshot
 Protocol만 통해 현재 상세를 읽고 exact 근거가 없을 때만 공식 예약 목록을 읽습니다. 보호·인증·복수
 일치·불완전 정보는 성공으로 추정하지 않으며 이 reader는 예약·취소·결제 동작을 호출하지 않습니다.
 읽기 전용 HTTP replay의 route별 lease·TTL·횟수·LRU·capture/install·보호 응답 폐기와 취소 안전한
 정리는 `korail_pydoll_http_replay.py`의 manager가 소유합니다. Pydoll client는 검색/session actor와
 replay 설치 뒤 persistent 검색 session 폐기 순서만 조립하고, 인증 actor의 session·cookie를 replay에
 전달하지 않습니다.
+DOM snapshot 값 계약은 `korail_pydoll_contracts.py`가 소유합니다. browser facade는 인증·검색·예약
+session과 전체 close 순서를 조립하며 기존 공개 contract와 생성 전·후 monkeypatch 경로를 다시 export합니다.
 
 Migration `0020_reservation_reconciliation`은 `ReservationAttempt`에 실제 호출 credential generation과 정규화한 공식 확인 outcome·source·observed time·reconciled time을 추가합니다. `0021`은 일반 확인 횟수와 다음 확인 시각을, `0022`는 기한 경과 후 최종 확인 marker와 index를 추가합니다. worker는 provider/account 실행 임대와 fencing 아래 같은 credential generation의 인증 actor만 사용합니다. `PAYMENT_REQUIRED`는 빠른 확인 최대 3회와 marker 없는 결제기한 경과 보류의 최종 확인 1회를 유지하고, 이전 버전이 과거 기한 exact 행에 marker만 남긴 경우 호환성 정리 read를 한 번 허용합니다. `UNKNOWN + INCONCLUSIVE`는 빠른 3회 뒤 5분·15분·60분 지연 확인을 더해 총 6회까지 읽기 전용으로 확인합니다. KORAIL은 동일 인증 session의 현재 상세 화면, SRT는 예약 목록을 정확한 열차·구간·서비스일·출발시각·좌석 등급에 맞춥니다. 정확히 하나의 미결제 보류와 미래 결제기한이 확인된 경우에만 `payment_required` handoff를 복구합니다. `NOT_FOUND` 또는 exact 행의 공식 기한이 최종 확인 시각 이하인 결과는 정책별 종료·감시 복귀로 처리하지만 기존 episode를 직접 재무장하지 않습니다. `INCONCLUSIVE`·기한 없는 exact 행·인증·차단·확인 호출 실패는 상태를 추정하거나 episode를 재무장하지 않습니다. 최초 `UNKNOWN`의 exact `NOT_FOUND`만 같은 연속 가용 구간에서 `confirmed-absent-retry:<attempt.id>`로 한 번 재무장하며, 재무장된 `UNKNOWN`은 더 이상 예약 호출하지 않습니다. reconciliation task는 예매·취소·결제 동작을 호출하지 않습니다.
 
@@ -514,8 +534,9 @@ adapter→registry/facade 역의존을 차단합니다.
 공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
 payment-hold·reservation attempt policy/claim/result application·watch transition notification
 application·watch transition policy/application·watch update application·reservation reconciliation
-policy/state application·KORAIL sidecar runtime/HTTP·Pydoll browser/confirmation reader/HTTP replay
-manager의 오류 0인 25개 파일만 대상입니다. registry 반환 타입은
+policy/state application·KORAIL sidecar runtime/HTTP·Pydoll browser/page safety/auth contracts·actor·login
+driver/confirmation reader/HTTP replay manager/read-only search actor·driver/contracts/reservation
+contracts·actor·driver의 오류 0인 35개 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로
@@ -532,10 +553,20 @@ TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 s
 준비·source cooldown 연기·동일 요청 병합·provider 오류 정규화·작업별 관찰 저장과 상태 요약·
 가용성 episode winner 선택을 수행하고 target만 받는 port로 예약 실행을 위임합니다. worker는
 concrete provider adapter와 실행 임대의 수명주기만 조립합니다. 외부 provider의 prepare·연기·회로
-확인·관찰 저장·회로 반영 transaction은 실행 임대 행을 먼저 잠근 뒤 watch·candidate·circuit을
-잠급니다. 여러 watch를 연기할 때는 ID 순서로 `FOR UPDATE`하여 잠금 순서를 결정적으로 유지합니다.
-SQLite 회귀와 PostgreSQL SQL compile로 이 계약을 확인했지만, 실제 두 PostgreSQL session의
-takeover 대기와 다중 worker 교착 부재는 별도 운영·CI 검증 대상입니다.
+확인·관찰 저장·회로 반영 transaction은 모두 실행 임대 행을 먼저 잠급니다. 이후 prepare는
+watch→circuit, persist는 watch→candidate/observation, 회로 반영은 watch→circuit 순서를 유지하고,
+여러 watch 연기는 ID 순서로 `FOR UPDATE`합니다. 격리 PostgreSQL 수용 검사는 application이 임대를
+잠근 동안 takeover가 실제 lock wait에 들어가는지, takeover 뒤 stale grant의 prepare·defer·persist·
+circuit 확인·회로 반영과 전체 관찰 경로가 아무것도 기록하지 않는지, 정·역순 watch 입력의 두 spawn
+process를 8회 실행해 timeout·deadlock 없이 끝나는지를 검증합니다.
+
+예약 결과 transaction은 실제 provider 호출에 사용한 credential generation과 현재 provider account
+generation을 account row lock 아래 다시 비교합니다. 세대가 바뀐 뒤 도착한 결과는 watch·candidate·
+attempt·outbox·payment 상태를 전혀 쓰지 않으며, 현재 세대의 provider 예외는 claim generation을 유지해
+기존 실패 처리로 끝납니다. 격리 PostgreSQL 수용 검사는 동일 episode의 독립 process 두 개가 provider를
+정확히 한 번만 호출하는지, 로그인 저장과 예약 claim/result가 account를 기다리는 동안 별도 backend가
+target watch·candidate·attempt를 `FOR UPDATE NOWAIT`로 잠글 수 있는지, credential 교체 직후와 늦은
+payment 결과 처리 후의 watch·candidate·attempt·outbox·payment snapshot이 완전히 동일한지를 검증합니다.
 
 SRT background query key는 정규화한 출발역·도착역·KST 서비스일·인원으로 구성합니다. 같은
 키의 후보들은 `00:00–23:59` 하루 검색 하나를 singleflight와 TTL cache로 공유하므로 서로 다른

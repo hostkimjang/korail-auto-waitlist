@@ -331,9 +331,88 @@ docker compose --profile experimental-rail run --rm --no-deps `
 이 검사는 독립 session뿐 아니라 spawn한 holder·takeover 두 OS process와 별도 PostgreSQL backend PID를
 사용합니다. takeover가 guarded row lock에서 실제 대기한 것을 `pg_stat_activity`·`pg_locks`로 확인한 뒤
 commit 후 token이 정확히 1 증가하고 stale epoch가 거부되는지 검사합니다. GitHub Actions의
-`postgres-execution-lease-fencing` job은 격리 PostgreSQL 16 service에 migration을 적용한 뒤 같은 script를
-상시 실행합니다. 이는 CI 실행 임대 fencing 보증이며, 다중 watch·credential 교체·관찰 저장까지 포함한
-전체 경합 시나리오는 별도 운영 검증 항목입니다.
+`PostgreSQL fencing acceptance` job은 격리 PostgreSQL 16 service에 migration을 적용한 뒤 같은 script를
+상시 실행합니다. 이어 `check_observation_fencing_postgres.py`가 실제 observation application으로 임대를
+잠그고 takeover lock wait·token 증가, stale prepare/defer/persist/circuit/apply/process의 기록 0건과
+정·역순 watch 입력 두 process의 8회 무교착 실행을 검증합니다. 마지막으로
+`check_reservation_credential_fencing_postgres.py`가 동일 episode provider 호출 1회, 로그인 저장과 예약
+claim/result의 account→watch 잠금 순서, credential 교체 뒤 늦은 결과의 전체 write 차단을 검증합니다.
+
+관찰과 reservation/credential 수용 검사는 provider circuit·watch·candidate·attempt·account fixture를
+실제로 변경하므로 운영 DB나 현재 Compose DB에서 실행하지 않습니다. observation 스크립트는 opt-in과
+`rail_waitlist_acceptance_` DB prefix를 engine 생성 전에 검사하고, 생성 직후 연결 전에 PostgreSQL
+dialect가 아니면 거절합니다. reservation/credential 스크립트는 backend·opt-in·prefix 세 조건을 모두
+engine 생성 전에 검사합니다. 위의 generic execution lease 검사는 임시 scope만 만들고 현재 Compose
+DB에서도 실행할 수 있지만, 세 검사를 묶어 실행할 때는 아래처럼 별도 port의 빈 임시 PostgreSQL 16을
+기동하고 migration head를
+적용한 격리 환경에서만 실행합니다.
+
+```powershell
+$acceptanceContainer = "rail-waitlist-acceptance-pg-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+$environmentNames = @(
+  "DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_NAME",
+  "DATABASE_USER", "DATABASE_PASSWORD", "POSTGRES_ACCEPTANCE_ISOLATED"
+)
+$previousEnvironment = @{}
+foreach ($name in $environmentNames) {
+  $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+}
+try {
+  Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
+  $env:DATABASE_HOST = "127.0.0.1"
+  $env:DATABASE_PORT = "55432"
+  $env:DATABASE_NAME = "rail_waitlist_acceptance_local"
+  $env:DATABASE_USER = "rail_waitlist_acceptance"
+  $env:DATABASE_PASSWORD = [guid]::NewGuid().ToString("N")
+  $env:POSTGRES_ACCEPTANCE_ISOLATED = "true"
+  $containerId = docker run --detach --name $acceptanceContainer `
+    --publish "127.0.0.1:55432:5432" `
+    --env "POSTGRES_DB=$env:DATABASE_NAME" `
+    --env "POSTGRES_USER=$env:DATABASE_USER" `
+    --env "POSTGRES_PASSWORD=$env:DATABASE_PASSWORD" `
+    --health-cmd "pg_isready -U $env:DATABASE_USER -d $env:DATABASE_NAME" `
+    --health-interval 1s --health-timeout 3s --health-retries 30 postgres:16-alpine
+  if ($LASTEXITCODE -ne 0) { throw "임시 PostgreSQL 컨테이너를 시작하지 못했습니다." }
+  $healthy = $false
+  for ($probe = 0; $probe -lt 30; $probe += 1) {
+    $health = docker inspect --format "{{.State.Health.Status}}" $acceptanceContainer
+    if ($health -eq "healthy") { $healthy = $true; break }
+    if ($health -eq "unhealthy") { throw "임시 PostgreSQL healthcheck가 실패했습니다." }
+    Start-Sleep -Seconds 1
+  }
+  if (-not $healthy) { throw "임시 PostgreSQL 준비 시간이 초과됐습니다." }
+  Push-Location apps/api
+  try {
+    uv run --frozen alembic upgrade head
+    uv run --frozen python scripts/check_execution_lease_fencing_postgres.py
+    uv run --frozen python scripts/check_observation_fencing_postgres.py
+    uv run --frozen python scripts/check_reservation_credential_fencing_postgres.py
+  } finally {
+    Pop-Location
+  }
+} finally {
+  docker rm --force $acceptanceContainer 2>$null | Out-Null
+  foreach ($name in $environmentNames) {
+    $previousValue = $previousEnvironment[$name]
+    if ($null -eq $previousValue) {
+      Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    } else {
+      [Environment]::SetEnvironmentVariable($name, $previousValue, "Process")
+    }
+  }
+}
+```
+
+검증 대상인 관찰 application의 lease-guarded 경로는 실행 임대를 먼저 잠급니다. prepare는
+watch→circuit, defer는 `Watch.id` 정렬, persist는 watch→candidate/observation, circuit check는 circuit,
+회로 반영은 watch→circuit 순서를 유지합니다.
+예약 수용 검사는 claim 단계에서 credential 저장 backend가 account를 가진 채 별도 watch를 기다리고,
+reservation backend가 account를 기다리는 것을 `pg_stat_activity`·`pg_locks`로 확인합니다. 이때 독립 probe
+backend가 예약 target watch·candidate를 `FOR UPDATE NOWAIT`로 잠그고 attempt가 아직 없음을 확인하므로
+watch-first 역순 회귀는 통과할 수 없습니다. result 단계도 provider 반환을 멈춘 뒤 account holder를 세워
+결과 transaction의 account wait를 확인하고, 독립 probe가 watch·candidate·기존 attempt를 모두 잠글 수
+있어야 합니다. 모든 holder·waiter·probe는 서로 다른 OS process와 PostgreSQL backend이며 bounded cleanup을
+사용합니다. 외부 KORAIL·SRT 호출과 실제 credential은 사용하지 않습니다.
 
 sidecar는 host 포트를 열지 않고 API 내부망과 별도 egress network에만 연결합니다. read-only root filesystem에서도 이미지의 `pwuser` UID/GID 1001이 쓸 수 있는 전용 HOME tmpfs와 `/tmp`를 제공합니다. `/healthz`는 프로세스 liveness만 나타내고, Compose healthcheck가 사용하는 `/readyz`는 공식 페이지를 열지 않은 채 선택한 엔진의 Chromium launch/close probe를 통과한 뒤에만 `200`을 반환합니다. startup probe가 일시적으로 실패하면 `/readyz`는 준비 전까지 `503`으로 닫고, 5초 간격·동시 1개·30초 제한으로 재probe해 성공을 캐시하므로 컨테이너 수동 재시작 없이 회복할 수 있습니다. API가 sidecar 전체 응답을 기다리는 기본 제한은 90초, sidecar의 각 UI 대기는 25초로 분리합니다.
 

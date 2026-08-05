@@ -4,7 +4,7 @@
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.
 
-2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 현재 `api.js`와 `App.jsx`는 제거됐고 strict `App.tsx`는 246줄이며, `styles.css`는 기능 CSS owner를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 설정 resource orchestration, app navigation·shell·authentication·logout·compatibility, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 홈 활동 중 대기 행의 표시 판단은 `features/home/activeWatchViewModel.ts`로 분리하고, `ActiveWatchList.tsx`는 표시·행동 조립만 남겼습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `MappedWatch`로 만들고, demo 시간표·철도 계정·runtime도 production ViewModel 계약을 사용합니다. App에는 페이지/controller props와 등록 완료 조립만 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
+2026-08-04 구조 진단 착수 기준 주요 구조 부채는 `App.jsx` 약 2,100줄, `api.js` 1,185줄, `styles.css` 약 6,670줄이었습니다. 현재 `api.js`와 `App.jsx`는 제거됐고 strict `App.tsx`는 app-level 조립만 담당하며, `styles.css`는 기능 CSS owner를 순서대로 읽는 import-only 진입점입니다. watch REST/SSE 동기화, watch payload·DTO·ViewModel, pause·resume·cancel·delete와 예약정책 mutation, `NewWait` 페이지와 좌석별 등록·evidence 갱신, 설정 resource orchestration, app navigation·shell·authentication·logout·compatibility, 설정·예약·Home 페이지 조립은 strict TypeScript 경계로 이동했습니다. 홈 활동 중 대기 행의 표시 판단은 `features/home/activeWatchViewModel.ts`로 분리하고, `ActiveWatchList.tsx`는 표시·행동 조립만 남겼습니다. 초기 demo fixture와 마법사 완료 결과는 typed factory가 canonical `ProjectedWatch`로 만들고, demo 시간표·철도 계정·runtime도 production ViewModel 계약을 사용합니다. App에는 페이지/controller props와 등록 완료 조립만 남아 있습니다. 줄 수는 분리 목표가 아니라 서로 다른 변경 이유가 집중된 위치를 찾는 지표로만 사용합니다.
 
 현재 `main.tsx`, strict `App.tsx`와 typecheck gate가 적용되어 있고 Vitest가 탐색하는 모든 테스트도
 strict `.ts`·`.tsx`로 전환됐습니다. `allowJs`·`checkJs`와 Vitest의 JS/JSX include는 제거했습니다.
@@ -14,8 +14,15 @@ feature 간 역방향 import는 제거됐지만, 이는 모든 DTO/mapper 경계
 
 결제 필요 목록은 `features/home/paymentRequiredViewModel.ts`가 production watch와 legacy snake_case
 호환 입력을 camelCase 표시 계약으로 변환하며 Home과 `PaymentRequiredSection`은 raw API alias를 읽지
-않습니다. `reservationPolicyControl.css`는 새 대기 2단계의 예약 방식 option·설명·760px 반응형 규칙을
-독립 owner로 소유합니다. 2026-08-05 최종 웹 검증은 Vitest 83개 파일·593건, ESLint 오류 0개(기존 baseline
+않습니다. Reservations도 `features/reservations/reservationViewModel.ts`가 production/legacy 입력을
+camelCase 표시 계약으로 변환하며 목록·요약·페이지는 raw deadline/URL alias를 읽지 않습니다.
+legacy 공식 URL은 KORAIL·SRT allowlist를 통과한 HTTPS만 보존합니다. `reservationPolicyControl.css`는
+새 대기 2단계의 예약 방식 option·설명·760px 반응형 규칙을 독립 owner로 소유합니다.
+앱 내부 watch와 후보는 required camelCase `WatchReadModel`·`WatchCandidateReadModel`을 사용하고,
+`MappedWatch`·`MappedWatchCandidate`의 snake_case는 공개 호환 경계에 남깁니다. mapper와 demo producer는
+readonly 단일 후보 배열을 priority 순서로 만들며 양쪽 교차 타입을 같은 객체에 기록합니다.
+`WatchLifecycleSnapshot`과 Home·Reservations ViewModel은 canonical 값만 읽고 legacy 입력은 별도 adapter가
+담당합니다. 2026-08-05 최종 웹 검증은 Vitest 85개 파일·615건, ESLint 오류 0개(기존 baseline
 warning 12개), strict typecheck, production build, Sites 4건, 기본 E2E 14건을 통과했습니다.
 
 ## 목표 구조
@@ -75,9 +82,15 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: `domain/watch.ts`가 provider·status·seat class·observation mode 값 타입과 guard를 단일
      소유하고 `api/watchReadDto.ts`가 외부 watch/candidate identity를 `unknown`에서 explicit DTO로 검증.
      `api/watches.ts`의 기존 타입 path는 compatibility re-export하고 payload·transport는 유지
-   - 완료: 432줄 `api/watchProjection.ts`가 `MappedWatch` 계열 read model·상태/좌석 label·최신 관측·
-     evidence·operational·reservation attempt 투영과 `mapWatch`를 소유. `api/watches.ts`는 729→324줄의
-     create payload/CRUD 경계로 줄이고 기존 타입·함수 path와 exact 함수 identity를 compatibility export
+   - 완료: `api/watchProjection.ts`가 `MappedWatch` 계열 read model·상태/좌석 label·최신 관측·
+     evidence·operational·reservation attempt 투영과 `mapWatch`를 소유. `api/watches.ts`는 create
+     payload/CRUD 경계로 줄이고 기존 타입·함수 path와 exact 함수 identity를 compatibility export
+   - 완료: canonical `WatchReadModel`·`WatchCandidateReadModel`, legacy `MappedWatch`·
+     `MappedWatchCandidate`, mapper 반환 `ProjectedWatch`·`ProjectedWatchCandidate`를 구분하고 후보 배열과
+     property를 readonly로 고정. production/demo priority·동일 reference·camel/snake 동기화와 NewWait
+     canonical hydration을 회귀 테스트로 고정
+   - 완료: `features/app/watchLifecycleSnapshot.ts`가 watch 상태 전이·SSE 알림용 typed camelCase snapshot을
+     소유하고 기존 loose `WatchSnapshot` 공개 호출은 adapter overload로 보존
    - 완료: 좌석 재조회는 `api/timetables.ts`, demo runtime gate는 `shared/lib/runtimeConfig.ts`로
      이동하고 모든 production·test caller를 실제 owner import로 전환한 뒤 `api.js` barrel 제거
    - 완료: production graph에서 접근할 수 없던 Browser Companion 패널과 dead snapshot/provider
@@ -90,7 +103,7 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      owner로 이동하고 이름·순서·fixture·assertion을 보존
    - 완료: 마지막 auth 2개를 `authApi.test.ts`, events 1개를 `eventsApi.test.ts`로 이동하고
      `api.test.js` 삭제. bootstrap header 부재와 SSE replay cutoff·forward·close 계약 보존
-   - 남음: watch normalized domain snapshot·feature ViewModel과 잔여 API DTO·도메인 경계 분리
+   - 남음: watch 이외 endpoint의 잔여 DTO·도메인 경계와 설정 feature ViewModel 분리
    - DTO validator와 mapper를 endpoint 호출과 분리해 단위 테스트
 4. leaf UI 전환
    - 완료: 공용 결제기한 표시 UI를 `shared/ui`, 공유 clock hook을 `hooks/`로 이동
@@ -117,8 +130,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: App의 canonical watch snapshot·SSE burst·polling·상태 전이 알림·인증 만료와 stale GET
      차단을 `features/app/useWatchCollection.ts`로 이동하고 구독 lifecycle 세대를 격리
    - 완료: App의 pause·resume·cancel·delete와 예약정책 변경을 strict
-     `features/app/useWatchMutations.ts`로 이동. `api/watches.ts`의 canonical `MappedWatch`를 그대로
-     사용하고 demo/live snapshot 교체, 오류 toast와 cancel 재전파, 예약정책 mutation guard·정리 뒤
+     `features/app/useWatchMutations.ts`로 이동. 앱 내부 canonical `WatchReadModel`을 사용하고 API CRUD가
+     반환하는 `ProjectedWatch`를 source-compatible하게 받아 demo/live snapshot 교체, 오류 toast와 cancel 재전파, 예약정책 mutation guard·정리 뒤
      refresh 순서를 계약 테스트로 고정
    - 완료: `NewWait`의 좌석별 즉시 등록·DB hydration·정확한 watch ID 취소·만료 evidence 재조회와
      1회 재시도를 `useSeatWatchRegistration.ts`로 이동
@@ -150,7 +163,7 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: Vitest setup, ESLint ratchet, service worker 계약 테스트를 strict `.ts`로 전환하고
      setup 경로·3개 선언/8개 실행·2개 SW 실행을 보존
    - 완료: `App.test.jsx`의 29개 선언·32개 실행·120개 assertion을 strict `App.test.tsx`로 전환
-   - 남음: 잔여 DTO·도메인·ViewModel 경계 전환
+   - 남음: 설정·알림 등 잔여 DTO·도메인·ViewModel 경계 전환
 6. shell과 테스트
    - 완료: top-level `app/useAppNavigation.ts`가 view·settings section state와 smooth scroll을,
      `app/AppShell.tsx`가 sidebar·mobile header·bottom nav·overlay exact DOM을 strict contract로 소유

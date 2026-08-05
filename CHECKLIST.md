@@ -413,8 +413,16 @@
 - [x] 178줄 `korail_sidecar/runtime.py`로 engine/env/client factory·Pydoll lazy import·readiness cache/retry/timeout·automation 조립을 이동하고 `korail_browser_adapter_service.py`는 runtime 객체 identity·lifespan monkeypatch path·logger namespace를 보존하는 453줄 HTTP compatibility facade로 축소
 - [x] runtime FastAPI/facade 역의존·ImportFrom 누락 P3와 표준 mypy 누락 P2를 보정하고 strict ratchet 18→19개 확장. browser 64건·reserve/confirmation 108건·API 전체 1,530건·Ruff `E/F/I`·format ratchet 60개·lock check·재리뷰 나머지 P0~P3 없음 확인
 - [x] 스물다섯 번째 구조 슬라이스 K의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
-- [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
-- [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
+- [x] 격리 PostgreSQL 16에서 동일 episode의 spawn process 2개가 provider를 정확히 1회만 호출하고,
+  로그인 저장과 예약 claim/result가 account lock을 기다리는 동안 별도 backend가 target
+  watch·candidate·attempt를 `FOR UPDATE NOWAIT`로 잠가 account→watch 순서를 증명하며, credential 교체
+  직후와 늦은 payment 결과 처리 후의 watch·attempt·candidate·outbox·payment snapshot이 완전히
+  동일한지 검증
+- [x] 격리 PostgreSQL 16에서 실제 관찰 application이 실행 임대를 잠근 동안 takeover의 lock wait와
+  commit 뒤 fencing token +1을 확인하고, stale owner의 prepare·defer·persist·circuit·apply·전체 process
+  기록 0건과 정·역순 두 spawn process 8회 무교착을 검증. 검증 대상 관찰 경로는 lease를 먼저 잠그고
+  prepare는 watch→circuit, defer는 watch `id` 정렬, persist는 watch→candidate/observation, circuit check는
+  circuit, apply는 watch→circuit 순서 유지
 - [x] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행. 독립 session과 spawn한
   holder·takeover process가 guarded lock 대기, commit 뒤 fencing token +1, stale epoch 거부를 확인
 - [ ] 같은 알림 종류의 복수 채널을 허용할지, 종류별 하나만 허용할지 제품 계약을 확정하고 UI·API·DB 제약을 함께 정렬
@@ -423,7 +431,7 @@
 - [ ] 철도 계정 초기·인증 전이·runtime polling·저장/삭제 요청에 session/request epoch와 runtime latest-wins를 적용하고 mutation 401 인증 만료 전달, provider별 복수 pending 상태를 별도 안전성 슬라이스로 구현
 - [ ] UI preference initial GET·save·logout 교차와 복수 save에 request/session epoch·latest-wins를 적용하고 mutation 401 인증 만료 전달을 별도 안전성 슬라이스로 구현
 - [ ] Settings 화면에서 같은 Settings nav 재선택 시 mount-only 표시 section과 runtime polling active section을 동기화하고, `aria-current`·reduced-motion scroll·URL/history/deep-link·mobile 알림 행동은 각각 제품·접근성 계약을 정한 뒤 별도 슬라이스로 구현
-- [ ] 좌석 normalized domain 타입 owner 분리 완료 위에서 웹의 잔여 DTO·도메인·ViewModel 경계를 strict `.ts`로 분리하고 provenance/action/status 판별 union과 legacy JS/JSX 테스트 전환
+- [ ] watch 외 endpoint의 잔여 DTO·도메인 경계와 설정·알림 feature ViewModel을 strict `.ts`로 분리하고 provenance/action/status 판별 union을 확장
 - [x] OfficialHandoff·Auth 조립, App의 페이지 props·등록·logout 경계를 strict `.tsx`로 전환하고 `App.jsx` 제거
 - [x] 기존 JS/JSX 테스트를 owner별 strict TS/TSX로 전환하고 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
@@ -441,7 +449,10 @@
 - [x] provider 공통 base·fail-closed·timetable support·TAGO singleton·Official·Mock·운영사 execution·Experimental·registry를 canonical 모듈로 물리 분리하고 `providers.py`를 생산 코드가 의존하지 않는 identity 호환 facade로 축소
 - [ ] provider 물리 분리 완료 위에서 가짜 timetable/station 기본 stub 제거와 capability 교집합·부분 실패 fail-closed를 별도 행동 슬라이스로 검증
 - [x] API Python Protocol signature drift를 자동 검출하는 strict mypy gate를 오류 0인 provider 경계 7개 파일부터 도입하고 전체 legacy 오류는 파일별 0개 달성 뒤 allowlist를 확장하는 격리 기준 확정
-- [ ] 웹·API의 저위험 수직 슬라이스가 안정된 뒤 KORAIL browser sidecar의 lifecycle·DOM·검색·인증·예약 책임 분리
+- [x] KORAIL browser sidecar의 high-level HTTP/lifecycle, 공용 page safety, 인증 session actor, 로그인
+  DOM, read-only 검색 actor·DOM, 단발 예약 actor·DOM, confirmation reader, HTTP replay 책임을 분리하고
+  `korail_pydoll_browser.py`는 Chromium lifecycle·validated navigation·network/replay capture·예약목록·
+  hour carousel·저수준 DOM/CDP primitive와 compatibility 조립을 유지
 - [x] KORAIL Pydoll·SRT 로그인 세션 재사용형 에피소드당 1회 자동 예약 adapter, exact 열차·시각·좌석 등급 판정, 결제 직전 중단, credential version invalidation과 결과 정규화 구현
 - [x] startup prewarm이 활성 `auth_required` 계정도 현재 credential generation으로 재검증하고 성공만 영속 인증 복구·관련 작업 재무장에 반영하며, 실패·차단·동시 credential 교체는 기존 성공 상태를 오염시키지 않는 회귀 계약
 - [x] KORAIL SPA의 일시적인 `/ticket/login` URL만으로 인증 실패를 확정하지 않고 공식 login check와 인증 헤더가 모두 비인증일 때만 `auth_required`로 판정하는 회귀 계약
@@ -555,10 +566,35 @@
 - [x] KORAIL read-only HTTP replay의 route별 lease·TTL·횟수·LRU·capture/install·보호 폐기·close를
   strict `korail_pydoll_http_replay.py` manager로 이동하고 검색 session 정리 뒤 finalize 순서와 인증 actor
   격리를 검증
+- [x] KORAIL read-only UI/direct 검색의 lock·session lease·identity·capture·submit/result·replay handoff를
+  strict `korail_pydoll_search_actor.py`로, snapshot 계약을 `korail_pydoll_contracts.py`로 이동하고 facade
+  공개 export·호출 시점 monkeypatch·인증 lock→검색 close 순서 보존
+- [x] KORAIL document/fetch/xhr 403·429와 보호 marker를 strict
+  `korail_pydoll_page_safety.py`로 통합하고 stage·trigger·redacted count-only log와 constructor-time
+  monkeypatch seam 보존
+- [x] KORAIL credential/login 계약과 reusable session generation·fingerprint·TTL·prewarm·cleanup을
+  `korail_pydoll_auth_contracts.py`·`korail_pydoll_auth_actor.py`로, full/in-place 인증과 loginCheck 1회
+  DOM 흐름을 `korail_pydoll_login_driver.py`로 이동
+- [x] KORAIL 단발 예약의 auth lock·exact identity·결과/state/error orchestration을
+  `korail_pydoll_reservation_actor.py`로, 성인 1명 identity와 driver의 열차·구간·서비스일·시각·좌석 exact
+  DOM·좌석/예매 각 1회·결제 전 중단을 `korail_pydoll_reservation_driver.py`로 분리하고 결제·장바구니·
+  취소 비호출 확인
+- [x] KORAIL 역·날짜·시각 선택과 성인 1명 exact readback, submit latch, 결과 대기·더보기·snapshot DOM을
+  `korail_pydoll_search_driver.py`로 이동하고 search actor의 max19·KTX projection, browser의 저수준
+  carousel·CDP mouse release와 post-construction private seam 보존
 - [x] 홈 활동 중 대기 행의 정책·상태·공식 인계 presentation을 strict
   `features/home/activeWatchViewModel.ts`로 이동하고 `ActiveWatchList.tsx`는 typed rendering·행동 조립만 유지
 - [x] 홈 결제 필요 목록의 production watch와 legacy snake_case 입력을 strict
   `features/home/paymentRequiredViewModel.ts`의 camelCase 표시 계약으로 변환하고 Home/목록의 raw alias 의존 제거
+- [x] Reservations production/legacy 입력을 strict `features/reservations/reservationViewModel.ts`의
+  camelCase 표시 계약으로 변환하고 목록·요약·페이지의 raw alias 의존을 제거. legacy 공식 URL은 공용
+  KORAIL·SRT HTTPS allowlist를 통과한 경우만 CTA로 보존
+- [x] 앱 상태 전이와 live 예약 알림의 production watch를 strict
+  `features/app/watchLifecycleSnapshot.ts`의 camelCase 계약으로 투영하고 실제 watch identity·REST/SSE
+  epoch·예약정책 stale fence·legacy 공개 snapshot overload 보존
+- [x] watch/candidate read model을 required camelCase `WatchReadModel`·`WatchCandidateReadModel`, 기존 공개
+  snake_case `MappedWatch`·`MappedWatchCandidate`, mapper 반환 `ProjectedWatch` 계열로 분리하고 readonly
+  candidate property/배열·priority 정렬·production/demo 동일 reference·NewWait canonical hydration 검증
 - [x] 활동 중 대기 예약 정책 control의 기본·760px responsive CSS를
   `features/new-wait/reservationPolicyControl.css` owner로 이동하고 selector 순서·44px 행동 영역·320px/200%
   회귀를 검증
@@ -566,6 +602,17 @@
   typecheck·build·Sites 4건·기본 E2E 14건과 API pytest 1,566건·Ruff `E/F/I`·format ratchet 59개·strict
   mypy 25파일·lock check, 독립 리뷰 보정 뒤 P0~P3 잔여 없음과 `git diff --check` 통과
 - [x] 스물여섯 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init
+  exit 0, 장기 서비스 11/11 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] 스물일곱 번째 구조 슬라이스의 웹 Vitest 84파일·599건, lint 오류 0/기존 warning 12,
+  typecheck·build·Sites 4건·기본 E2E 14건과 API pytest 1,568건·Ruff `E/F/I`·format ratchet 59개·strict
+  mypy 27파일·lock check, PostgreSQL observation acceptance·독립 리뷰 보정·`git diff --check` 통과
+- [x] 스물일곱 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init
+  exit 0, 장기 서비스 11/11 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] 스물여덟 번째 구조 슬라이스의 웹 Vitest 85파일·615건, lint 오류 0/기존 warning 12,
+  typecheck·build·Sites 4건·기본 E2E 14건과 API pytest 1,605건·Ruff `E/F/I`·format ratchet 58개·strict
+  mypy 35파일·lock check, 실제 PostgreSQL reservation/credential acceptance·독립 리뷰 보정·
+  `git diff --check` 통과
+- [x] 스물여덟 번째 구조 슬라이스의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init
   exit 0, 장기 서비스 11/11 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] Pydoll의 pre-submit 역·날짜·시각·성인 1명 exact readback, 결과 화면에서 역 입력이 사라진 경우 날짜·시각·인원과 결과 행 구간 exact match, KTX 계열 전용 좌석 정규화 계약 구현
 - [x] Slick 시간 picker의 현재 `slick-current` 창과 인접 사전 렌더링 창이 함께 가시·active로 읽혀도 현재 창의 활성 control만 선택하고, 소유가 확인된 fixture 화살표가 있으면 한 번만 누르며 실제 공식 무화살표 `.slideWrap`은 가시 `.slick-list`를 CDP pointer drag한 뒤 창 signature 변경을 확인하고 무진전·반복은 fail-closed하는 외부 호출 없는 Chromium fixture 회귀 검증

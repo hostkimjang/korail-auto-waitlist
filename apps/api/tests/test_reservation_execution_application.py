@@ -33,7 +33,7 @@ from rail_waitlist.reservations.execution_application import (
     _locked_attempt_query,
     _locked_authenticated_credential_version_query,
     _locked_candidate_query,
-    _locked_provider_account_id_query,
+    _locked_provider_account_credential_version_query,
     _locked_watch_query,
     confirm_provider_reservation_result,
     execute_reservation,
@@ -146,7 +146,9 @@ def test_reservation_transactions_keep_explicit_postgresql_row_locks() -> None:
     account_claim_sql = _postgresql_sql(
         _locked_authenticated_credential_version_query(Provider.SRT)
     )
-    account_result_sql = _postgresql_sql(_locked_provider_account_id_query(Provider.SRT))
+    account_result_sql = _postgresql_sql(
+        _locked_provider_account_credential_version_query(Provider.SRT)
+    )
     watch_sql = _postgresql_sql(_locked_watch_query("watch-1"))
     candidate_sql = _postgresql_sql(_locked_candidate_query("candidate-1"))
     attempt_sql = _postgresql_sql(_locked_attempt_query("attempt-1"))
@@ -444,7 +446,7 @@ class StaleCredentialResultAdapter:
         raise AssertionError("AUTH_REQUIRED must not trigger a confirmation read")
 
 
-async def test_stale_credential_result_cannot_demote_new_generation(app) -> None:
+async def test_stale_credential_result_cannot_write_new_generation_state(app) -> None:
     departure_at = datetime.now(UTC) + timedelta(days=1)
     async with app.state.test_session_factory() as session:
         account = RailProviderAccount(
@@ -519,7 +521,106 @@ async def test_stale_credential_result_cannot_demote_new_generation(app) -> None
         assert account is not None
         assert account.credential_version == 5
         assert account.last_auth_status == "authenticated"
-        assert attempt is not None and attempt.outcome is ReservationOutcome.AUTH_REQUIRED
+        assert attempt is not None and attempt.outcome is ReservationOutcome.PENDING
         assert attempt.credential_version == 4
-        assert watch is not None and watch.status is WatchStatus.AUTH_REQUIRED
-        assert candidate is not None and candidate.state == "failed"
+        assert attempt.finished_at is None
+        assert watch is not None and watch.status is WatchStatus.RESERVING
+        assert watch.payment_deadline is None
+        assert watch.official_booking_url is None
+        assert candidate is not None and candidate.state == "reservation_attempted"
+        result_events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent).where(
+                        OutboxEvent.aggregate_id == target.watch_id,
+                        OutboxEvent.event_type == "watch.reservation_result",
+                    )
+                )
+            ).all()
+        )
+        assert result_events == []
+
+
+class FailingExternalReservationAdapter:
+    async def reserve_once(self, request) -> ReservationResult:
+        assert request.expected_credential_version == 4
+        raise RuntimeError("fixture provider failure")
+
+    async def confirm_reservation(self, target):
+        raise AssertionError("FAILED must not trigger a confirmation read")
+
+
+async def test_external_provider_error_retains_claim_generation_and_completes(app) -> None:
+    departure_at = datetime.now(UTC) + timedelta(days=1)
+    async with app.state.test_session_factory() as session:
+        account = RailProviderAccount(
+            provider=Provider.KORAIL,
+            credentials_ciphertext=secret_box.encrypt_dict(
+                {
+                    "login_method": "membership_number",
+                    "login_id": "failing-account",
+                    "password": "failing-password",
+                }
+            ),
+            enabled=True,
+            credential_version=4,
+            last_auth_status="authenticated",
+            last_authenticated_at=datetime.now(UTC),
+        )
+        watch = Watch(
+            provider=Provider.KORAIL,
+            origin="대전",
+            origin_node_id="NAT011668",
+            destination="서울",
+            destination_node_id="NAT010000",
+            travel_date=departure_at.date(),
+            time_from=time(8),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key="execution-provider-error-generation",
+        )
+        candidate = WatchCandidate(
+            train_number="00055",
+            departure_at=departure_at,
+            arrival_at=departure_at + timedelta(hours=1),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="seat_found",
+        )
+        watch.candidates.append(candidate)
+        session.add_all([account, watch])
+        await session.commit()
+        target = ReservationExecutionTarget(
+            watch_id=watch.id,
+            candidate_id=candidate.id,
+            provider=watch.provider,
+            origin=watch.origin,
+            destination=watch.destination,
+            origin_node_id=watch.origin_node_id or "",
+            destination_node_id=watch.destination_node_id or "",
+            train_number=candidate.train_number,
+            departure_at=candidate.departure_at,
+            arrival_at=candidate.arrival_at,
+            seat_class=candidate.seat_class,
+            passenger_count=watch.passenger_count,
+            reservation_episode_key="availability:provider-error",
+        )
+
+    await execute_reservation(
+        FailingExternalReservationAdapter(),
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    async with app.state.test_session_factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        watch = await session.get(Watch, target.watch_id)
+        candidate = await session.get(WatchCandidate, target.candidate_id)
+        assert attempt is not None and attempt.outcome is ReservationOutcome.FAILED
+        assert attempt.credential_version == 4
+        assert attempt.finished_at is not None
+        assert watch is not None and watch.status is WatchStatus.WATCHING
+        assert candidate is not None and candidate.state == "observed"

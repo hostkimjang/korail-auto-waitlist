@@ -242,9 +242,9 @@ def _locked_authenticated_credential_version_query(provider: Provider):
     )
 
 
-def _locked_provider_account_id_query(provider: Provider):
+def _locked_provider_account_credential_version_query(provider: Provider):
     return (
-        select(RailProviderAccount.id)
+        select(RailProviderAccount.credential_version)
         .where(RailProviderAccount.provider == provider)
         .with_for_update()
     )
@@ -457,6 +457,7 @@ async def execute_reservation(
             outcome=ReservationOutcome.FAILED,
             source=("mock" if target.provider is Provider.MOCK else "authorized-provider"),
             observed_at=dependencies.now(),
+            credential_version=provider_credential_version,
         )
     evaluation = await confirm_provider_reservation_result(
         adapter,
@@ -475,8 +476,19 @@ async def execute_reservation(
 
     async with dependencies.session_factory() as session:
         try:
-            if auth_status is not None and result.credential_version is not None:
-                await session.scalar(_locked_provider_account_id_query(target.provider))
+            current_credential_version: int | None = None
+            if target.provider in EXTERNAL_RESERVATION_PROVIDERS:
+                current_credential_version = await session.scalar(
+                    _locked_provider_account_credential_version_query(target.provider)
+                )
+                if (
+                    result.credential_version is None
+                    or current_credential_version != result.credential_version
+                ):
+                    # A provider result belongs to the credential generation that made
+                    # the external call. A newer verified login fences the entire late
+                    # result transaction, including watch/attempt/outbox/payment state.
+                    return
             watch = await session.scalar(_locked_watch_query(target.watch_id))
             candidate = await session.scalar(_locked_candidate_query(target.candidate_id))
             attempt = await session.scalar(_locked_attempt_query(attempt_id))

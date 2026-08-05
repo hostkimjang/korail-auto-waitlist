@@ -7,8 +7,7 @@ import logging
 import os
 import re
 import time
-from collections import OrderedDict
-from collections.abc import AsyncIterable, Awaitable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from datetime import time as clock_time
@@ -26,7 +25,6 @@ from .korail_browser_automation import (
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
     BrowserTrainSnapshot,
-    ProtectionTrigger,
     is_rate_limit_response,
     parse_expected_delay_minutes,
     parse_official_train_type,
@@ -38,12 +36,6 @@ from .korail_browser_automation import (
 )
 from .korail_http_replay import (
     HttpReplayInvalidCapture,
-    HttpReplayInvalidResponse,
-    HttpReplayLeaseInvalid,
-    HttpReplayProtectionDetected,
-    HttpReplayRateLimited,
-    HttpReplaySessionInvalid,
-    HttpReplaySourceUnavailable,
     KorailHttpReplayClient,
     KorailHttpReplayPlan,
     build_http_replay_plan,
@@ -51,6 +43,10 @@ from .korail_http_replay import (
 from .korail_pydoll_confirmation_reader import (
     _parse_korail_payment_deadline,
     read_korail_same_session_confirmation,
+)
+from .korail_pydoll_http_replay import (
+    DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE,
+    PydollHttpReplayManager,
 )
 from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
 from .korail_reservation_controls import booking_seat_control_key
@@ -68,7 +64,9 @@ _ROUTE_HEADING = re.compile(
 )
 _GENERIC_PROTECTION_TRIGGERS = frozenset({"marker_abnormal_access", "marker_unauthorized_tool"})
 _MAX_MORE_RESULT_ACTIONS = 19
-_HTTP_REPLAY_ROUTE_CACHE_SIZE = 4
+# Compatibility seam: focused tests patch this facade value before construction;
+# the canonical manager receives that value and owns the actual eviction behavior.
+_HTTP_REPLAY_ROUTE_CACHE_SIZE = DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE
 _PROTECTION_SURFACE_SELECTOR = (
     '[role="alert"], dialog[open], [aria-modal="true"], .alert, .error, .popup, .modal'
 )
@@ -343,16 +341,6 @@ class _PydollSessionLease:
     authenticated: bool
 
 
-@dataclass
-class _ActiveHttpReplayLease:
-    client: KorailHttpReplayClient
-    lease_id: object
-    origin: str
-    destination: str
-    created_at: float
-    searches_started: int = 0
-
-
 async def _finish_owned_cleanup(cleanup: Awaitable[object]) -> None:
     """Finish Chromium cleanup even when the owning task is cancelled repeatedly."""
     pending_cancellation: asyncio.CancelledError | None = None
@@ -440,8 +428,18 @@ class PydollKorailBrowserClient:
         self._session_actor_created_at: float | None = None
         self._session_actor_last_verified_at: float | None = None
         self._session_actor_last_used_at: float | None = None
-        self._active_http_replays: OrderedDict[tuple[str, str], _ActiveHttpReplayLease] = (
-            OrderedDict()
+        # Capture the module-level factory at construction time. Existing focused tests
+        # replace this name before creating the facade, and production never exposes the
+        # replay client's captured cookies or request material.
+        self._http_replay_manager = PydollHttpReplayManager(
+            timeout_seconds=max(1, self.timeout_ms / 1000),
+            reuse_ttl_seconds=self._session_reuse_ttl_seconds,
+            reuse_max_searches=self._session_reuse_max_searches,
+            route_cache_size=_HTTP_REPLAY_ROUTE_CACHE_SIZE,
+            monotonic=self._monotonic,
+            client_factory=KorailHttpReplayClient,
+            cleanup=_finish_owned_cleanup,
+            event_logger=logger,
         )
 
     def _validate_page_url(
@@ -477,7 +475,7 @@ class PydollKorailBrowserClient:
         if request.passenger_count != 1:
             raise BrowserSourceUnavailable("passenger_count_not_supported")
         async with self._search_lock:
-            replayed = await self._search_with_http_replay(request)
+            replayed = await self._http_replay_manager.try_search(request)
             if replayed is not None:
                 return replayed
             direct_url = await self._direct_search_url(
@@ -510,14 +508,14 @@ class PydollKorailBrowserClient:
                         capture_started = (
                             False
                             if lease.authenticated
-                            else await self._begin_http_replay_capture(session)
+                            else await self._http_replay_manager.begin_capture(session)
                         )
                         stage = "submit_search"
                         await session.submit_once()
                     else:
                         # Navigation itself starts the one official business lookup.
                         # Capture first, and never retry through the UI after this point.
-                        capture_started = await self._begin_http_replay_capture(session)
+                        capture_started = await self._http_replay_manager.begin_capture(session)
                         stage = "direct_navigation"
                         self._assert_response_allowed(await session.navigate(direct_url), stage)
                     stage = "wait_result"
@@ -533,7 +531,22 @@ class PydollKorailBrowserClient:
                         update={"official_search_url": direct_url}
                     )
                     if capture_started:
-                        await self._install_http_replay(session, request, lease)
+                        installed = await self._http_replay_manager.install_capture(
+                            session=session,
+                            request=request,
+                            created_at=lease.created_at,
+                            searches_started=lease.searches_started,
+                        )
+                        if installed and lease.persistent:
+                            try:
+                                await self._discard_active_search_session()
+                            except BaseException:
+                                await self._http_replay_manager.discard(
+                                    self._http_replay_manager.route_key(request)
+                                )
+                                raise
+                        if installed:
+                            await self._http_replay_manager.finalize_install(request)
                     return result
                 except asyncio.CancelledError:
                     if lease is not None and lease.persistent:
@@ -858,213 +871,16 @@ class PydollKorailBrowserClient:
         # session -> read-only search. No search or authentication path takes the
         # other actor's lock, so shutdown cannot form a lock-order cycle.
         async with self._session_lock, self._search_lock:
-            await self._discard_http_replay()
+            await self._http_replay_manager.discard()
             await self._discard_active_search_session()
             await self._discard_active_session()
             self._session_actor_state = KorailSessionActorState.COLD
 
-    async def _search_with_http_replay(
-        self,
-        request: BrowserSeatSearchRequest,
-    ) -> BrowserSeatSearchResult | None:
-        route_key = self._http_replay_route_key(request)
-        lease = self._active_http_replays.get(route_key)
-        if lease is None:
-            return None
-        now = self._monotonic()
-        retirement_reason: str | None = None
-        if now - lease.created_at >= self._session_reuse_ttl_seconds:
-            retirement_reason = "ttl_expired"
-        elif lease.searches_started >= self._session_reuse_max_searches:
-            retirement_reason = "search_limit"
-        if retirement_reason is not None:
-            logger.info(
-                "KORAIL HTTP replay event=lease_retired reason=%s recovery=cold_init",
-                retirement_reason,
-            )
-            await self._discard_http_replay(route_key)
-            return None
-        self._active_http_replays.move_to_end(route_key)
-        lease.searches_started += 1
-        try:
-            result = await lease.client.search(request)
-            logger.info(
-                "KORAIL HTTP replay event=search_succeeded lease_search_index=%d",
-                lease.searches_started,
-            )
-            return result
-        except HttpReplayProtectionDetected as error:
-            await self._discard_http_replay(route_key)
-            raise BrowserProtectionDetected(
-                _replay_protection_trigger(error.trigger),
-                "http_replay",
-            ) from None
-        except HttpReplayRateLimited:
-            await self._discard_http_replay(route_key)
-            raise BrowserRateLimited() from None
-        except HttpReplaySessionInvalid:
-            logger.info(
-                "KORAIL HTTP replay event=cold_reinit source=http_replay reason=session_invalid"
-            )
-            await self._discard_http_replay(route_key)
-            return None
-        except (
-            HttpReplayInvalidCapture,
-            HttpReplayInvalidResponse,
-            HttpReplayLeaseInvalid,
-        ):
-            await self._discard_http_replay(route_key)
-            raise BrowserSourceUnavailable("http_replay") from None
-        except HttpReplaySourceUnavailable:
-            await self._discard_http_replay(route_key)
-            raise BrowserSourceUnavailable("http_replay") from None
+    @property
+    def _active_http_replays(self) -> Mapping[tuple[str, str], object]:
+        """Read-only compatibility inspection for focused replay lifecycle tests."""
 
-    async def _begin_http_replay_capture(self, session: PydollBrowserSession) -> bool:
-        if not self._session_reuse_enabled:
-            return False
-        begin = getattr(session, "begin_http_replay_capture", None)
-        if begin is None:
-            return False
-        try:
-            await begin()
-        except asyncio.CancelledError:
-            raise
-        except HttpReplayInvalidCapture as error:
-            logger.warning(
-                "KORAIL HTTP replay event=capture_unavailable stage=capture_start "
-                "reason=%s capture_stage=%s",
-                error.reason,
-                error.stage,
-            )
-            return False
-        except HttpReplaySessionInvalid as error:
-            logger.warning(
-                "KORAIL HTTP replay event=capture_unavailable stage=capture_start reason=%s",
-                error.reason,
-            )
-            return False
-        except Exception:  # noqa: BLE001 -- optional Pydoll capture exceptions are unstable.
-            logger.warning("KORAIL HTTP replay capture unavailable stage=capture_start")
-            return False
-        return True
-
-    async def _install_http_replay(
-        self,
-        session: PydollBrowserSession,
-        request: BrowserSeatSearchRequest,
-        browser_lease: _PydollSessionLease,
-    ) -> None:
-        export = getattr(session, "export_http_replay_plan", None)
-        if export is None:
-            return
-        try:
-            plan = await export(
-                origin=request.origin,
-                destination=request.destination,
-                captured_date=request.travel_date,
-            )
-        except asyncio.CancelledError:
-            raise
-        except HttpReplayInvalidCapture as error:
-            logger.warning(
-                "KORAIL HTTP replay event=capture_unavailable stage=capture_export "
-                "reason=%s capture_stage=%s",
-                error.reason,
-                error.stage,
-            )
-            return
-        except HttpReplaySessionInvalid as error:
-            logger.warning(
-                "KORAIL HTTP replay event=capture_unavailable stage=capture_export reason=%s",
-                error.reason,
-            )
-            return
-        except Exception:  # noqa: BLE001 -- optional Pydoll capture exceptions are unstable.
-            logger.warning("KORAIL HTTP replay capture unavailable stage=capture_export")
-            return
-        route_key = self._http_replay_route_key(request)
-        lease_id = object()
-
-        def lease_is_current() -> bool:
-            active = self._active_http_replays.get(route_key)
-            return bool(
-                active is not None
-                and active.lease_id is lease_id
-                and self._monotonic() - active.created_at < self._session_reuse_ttl_seconds
-                and active.searches_started <= self._session_reuse_max_searches
-            )
-
-        try:
-            client = KorailHttpReplayClient(
-                plan,
-                timeout_seconds=max(1, self.timeout_ms / 1000),
-                lease_is_current=lease_is_current,
-            )
-        except Exception:  # noqa: BLE001 -- optional replay setup must not hide UI results.
-            logger.warning("KORAIL HTTP replay capture unavailable stage=client_init")
-            return
-        await self._discard_http_replay(route_key)
-        self._active_http_replays[route_key] = _ActiveHttpReplayLease(
-            client=client,
-            lease_id=lease_id,
-            origin=request.origin,
-            destination=request.destination,
-            created_at=browser_lease.created_at,
-            searches_started=browser_lease.searches_started,
-        )
-        self._active_http_replays.move_to_end(route_key)
-        # Only a reusable unauthenticated search session is retired after its detached
-        # replay plan is transferred. An ephemeral search beside an authenticated
-        # account session must never close or replace that account session.
-        if browser_lease.persistent:
-            try:
-                await self._discard_active_search_session()
-            except BaseException:
-                await self._discard_http_replay(route_key)
-                raise
-        while len(self._active_http_replays) > _HTTP_REPLAY_ROUTE_CACHE_SIZE:
-            oldest_route = next(iter(self._active_http_replays))
-            logger.info("KORAIL HTTP replay event=lease_retired reason=route_cache_capacity")
-            await self._discard_http_replay(oldest_route)
-        logger.info(
-            "KORAIL HTTP replay event=lease_created captured_requests=%d "
-            "ttl_seconds=%g max_searches=%d",
-            plan.captured_request_count,
-            self._session_reuse_ttl_seconds,
-            self._session_reuse_max_searches,
-        )
-
-    async def _discard_http_replay(
-        self,
-        route_key: tuple[str, str] | None = None,
-    ) -> None:
-        if route_key is not None:
-            active = self._active_http_replays.pop(route_key, None)
-            if active is not None:
-                await _finish_owned_cleanup(active.client.close())
-            return
-
-        active_leases = tuple(self._active_http_replays.values())
-        self._active_http_replays.clear()
-        if not active_leases:
-            return
-
-        async def close_all() -> None:
-            results = await asyncio.gather(
-                *(lease.client.close() for lease in active_leases),
-                return_exceptions=True,
-            )
-            for result in results:
-                if isinstance(result, BaseException):
-                    raise result
-
-        await _finish_owned_cleanup(close_all())
-
-    @staticmethod
-    def _http_replay_route_key(
-        request: BrowserSeatSearchRequest,
-    ) -> tuple[str, str]:
-        return request.origin, request.destination
+        return self._http_replay_manager.active_leases
 
     async def _acquire_session(
         self,
@@ -3401,21 +3217,6 @@ class _PydollSessionContext:
 
 def _normalize_station(value: str) -> str:
     return " ".join(value.split()).removesuffix("역")
-
-
-def _replay_protection_trigger(trigger: str) -> ProtectionTrigger:
-    triggers: dict[str, ProtectionTrigger] = {
-        "http_403": "http_403_subresource",
-        "code_1405": "marker_code_1405",
-        "code_8002": "marker_code_8002",
-        "code_8003": "marker_code_8003",
-        "macro_err": "marker_macro_err1",
-        "captcha": "marker_captcha",
-        "netfunnel": "marker_netfunnel",
-        "unauthorized": "marker_unauthorized_tool",
-        "restricted": "marker_abnormal_access",
-    }
-    return triggers.get(trigger, "marker_abnormal_access")
 
 
 def _log_protection_snapshot(

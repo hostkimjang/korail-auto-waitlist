@@ -329,6 +329,9 @@
 - [x] 외부 I/O 없는 mock 좌석 fixture helper와 `MockProviderAdapter`를 `provider_adapters/mock.py`로 함께 이동하고 `providers.py`가 동일 객체를 직접 re-export. 시간표·실행·legacy registry의 호출별 새 canonical 인스턴스와 기존 facade subclass·unbound base method identity 보존
 - [x] 스무 번째 구조 슬라이스 D의 owner/facade identity·전체 capability bit·세 registry fresh identity와 API·snapshot·worker subclass를 포함한 focused pytest 218건, API 전체 pytest 1,066건, Ruff `E/F/I`, format ratchet 61개, 독립 재감사 원본 AST 동일·P0~P2 회귀 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
 - [x] 스무 번째 구조 슬라이스 D의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] 공통 credential type·기본 DB loader를 `provider_adapters/execution.py`, KORAIL·SRT background 실행 구현을 각각 `provider_adapters/korail_execution.py`·`srt_execution.py`로 이동하고 `providers.py`가 동일 객체를 직접 re-export. 운영사별 source·reservation executor·credential generation·종료 정책을 별도 변경 이유로 분리
+- [x] 스무 번째 구조 슬라이스 E의 facade/canonical type·loader·class와 constructor default identity, KORAIL·SRT fresh·lazy registry, SRT singleton/explicit executor, borrowed/owned source drain·close를 고정. worker·due pipeline·예약 실행/정합화 focused pytest 232건, owner/lifecycle 77건, API 전체 pytest 1,070건, Ruff `E/F/I`, format ratchet 61개, 독립 재감사 AST 동일·P0~P2 회귀 없음과 `git diff --check` 통과. 기존 Starlette/httpx deprecation 경고 1건
+- [x] 스무 번째 구조 슬라이스 E의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -350,7 +353,7 @@
 - [x] worker의 reservation execution을 application으로 분리하고 얇은 runtime 조립, claim/result UoW·잠금 순서·outbox 원자성·credential CAS 회귀 테스트 완성
 - [x] worker의 watch-group observation을 application으로 분리하고 얇은 Celery/runtime 조립, lease fencing·동일 조회 병합·상태 요약·rollback·PostgreSQL lock SQL 회귀 테스트 완성
 - [ ] Mock 전용 node ID partial·same·unknown·name mismatch를 parameterized 회귀로 고정하고 capability note·전체 node/city fixture·정확한 5분 freshness·20분 결제 기한 간격을 직접 검증
-- [ ] 완료된 provider 공통 base·fail-closed·timetable support·TAGO singleton·Official·Mock 경계 위에서 Experimental·운영사 execution·registry를 단계별로 물리 분리하고, 가짜 timetable/station stub 제거와 capability 교집합·부분 실패 fail-closed를 별도 행동 슬라이스로 검증
+- [ ] 완료된 provider 공통 base·fail-closed·timetable support·TAGO singleton·Official·Mock·운영사 execution 경계 위에서 Experimental·registry를 단계별로 물리 분리하고, 가짜 timetable/station stub 제거와 capability 교집합·부분 실패 fail-closed를 별도 행동 슬라이스로 검증
 - [ ] API Python Protocol signature drift를 자동 검출할 mypy 또는 pyright 정적 타입 gate의 도입 범위와 legacy 격리 기준 확정
 - [ ] 웹·API의 저위험 수직 슬라이스가 안정된 뒤 KORAIL browser sidecar의 lifecycle·DOM·검색·인증·예약 책임 분리
 - [x] KORAIL Pydoll·SRT 로그인 세션 재사용형 에피소드당 1회 자동 예약 adapter, exact 열차·시각·좌석 등급 판정, 결제 직전 중단, credential version invalidation과 결과 정규화 구현

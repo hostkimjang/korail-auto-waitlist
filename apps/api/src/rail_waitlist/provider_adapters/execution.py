@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
+from ..database import SessionFactory
 from ..domain import Provider
+from ..provider_accounts import ProviderCredentials, get_enabled_provider_credentials
 from ..provider_contracts import ProviderUnavailable
 from ..schemas import ProviderCapabilities, StationCatalog, TimetableItem
 from .base import RailProviderAdapter
+
+ProviderCredentialLoader = Callable[[Provider], Awaitable[ProviderCredentials | None]]
+
+
+async def default_provider_credential_loader(provider: Provider) -> ProviderCredentials | None:
+    async with SessionFactory() as session:
+        return await get_enabled_provider_credentials(session, provider)
 
 
 class FailClosedExecutionAdapter(RailProviderAdapter):

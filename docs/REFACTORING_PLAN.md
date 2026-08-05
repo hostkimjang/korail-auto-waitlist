@@ -892,6 +892,36 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: Experimental, KORAIL/SRT execution adapter, provider registry application의 단계별
   물리 이동과 실행 전용 역할 base·Python 정적 타입 gate입니다.
 
+### 2026-08-05 스무 번째 구조 슬라이스 E
+
+- 공통 실행 소유권: `provider_adapters/execution.py`가 기존 fail-closed adapter에 더해
+  `ProviderCredentialLoader`와 DB session 기반 기본 credential loader를 소유합니다. 두 운영사
+  constructor의 기본 인자는 이 canonical 함수 객체에 정의 시점 binding된 상태를 유지합니다.
+- 운영사별 실행 소유권: KORAIL background 관측·예약·확인은
+  `provider_adapters/korail_execution.py`, SRT 관측·예약 executor·예약 확인은
+  `provider_adapters/srt_execution.py`가 소유합니다. 서로 다른 source factory, capability gate,
+  credential generation, reservation executor 선택과 종료 정책을 한 대형 모듈에 합치지 않았습니다.
+- 수명주기 보존: registry는 KORAIL·SRT 모두 호출마다 canonical fresh adapter를 만들고 capability
+  조회 전 `_source=None`을 유지합니다. SRT sidecar 비활성 경로는 process singleton 예약 executor를
+  공유하고 explicit executor는 기본 factory를 우회합니다. 주입 source는 drain만 하고 close·clear하지
+  않으며, 소유 source만 drain·close 뒤 `None`으로 reset하는 계약을 owner 테스트로 고정했습니다.
+- compatibility facade: `providers.py`는 credential type·loader와 두 운영사 class를 wrapper 없이 직접
+  re-export하고 registry 함수는 이번 단계에 남겼습니다. public import·constructor default identity,
+  task-scoped fresh adapter와 worker cleanup 순서는 유지되며 `providers.py`는 358줄에서 119줄로
+  줄었습니다.
+- 확인된 검증: worker·due pipeline·예약 실행/정합화를 포함한 focused pytest 232건과 owner/lifecycle
+  pytest 77건, API 전체 pytest 1,070건, Ruff `E/F/I`, format ratchet 61개와 `git diff --check`를
+  통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐고 독립 재감사에서 이동 전후
+  AST 동일, 역의존·순환 import 0건과 도입 P0~P2 회귀 없음을 확인했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: concrete class와 loader의 `__module__`은 새 canonical owner 경로로 바뀌었지만 저장소에
+  pickle·qualname 의존 사용처는 없습니다. credential loader를 runtime monkeypatch하는 기존 seam도
+  없으며 명시적 `credential_loader=`·source·executor 주입 계약을 유지했습니다.
+- 남은 핵심 부채: `ExperimentalRailAdapter`와 provider registry/capability application의 물리 이동,
+  실행 전용 역할 base와 Python 정적 타입 gate입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

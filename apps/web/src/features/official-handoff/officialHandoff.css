@@ -1,0 +1,237 @@
+.official-handoff-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.official-handoff-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: rgba(7, 24, 42, 0.52);
+  cursor: default;
+}
+
+.official-handoff-panel {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  position: relative;
+  z-index: 1;
+  overflow-y: auto;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(7, 24, 42, 0.28);
+}
+
+.official-handoff-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.official-handoff-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.official-handoff-header .provider-chip {
+  width: fit-content;
+  min-width: 86px;
+  justify-self: start;
+}
+
+.official-handoff-header h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 23px;
+  line-height: 1.3;
+  letter-spacing: -0.035em;
+}
+
+.official-handoff-header .icon-button {
+  flex: 0 0 44px;
+  margin: -8px -8px 0 0;
+}
+
+.official-handoff-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 0.8fr);
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.official-handoff-summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 13px;
+  background: var(--surface-soft);
+  border-radius: 11px;
+}
+
+.official-handoff-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.official-handoff-summary strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.official-handoff-fact,
+.official-handoff-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 12px;
+}
+
+.official-handoff-fact {
+  color: #17635e;
+  background: var(--teal-soft);
+  border: 1px solid #c7e6e2;
+}
+
+.official-handoff-warning {
+  color: #7b4b22;
+  background: var(--orange-soft);
+  border: 1px solid #f0d2bd;
+}
+
+.official-handoff-fact > svg,
+.official-handoff-warning > svg {
+  flex: 0 0 auto;
+}
+
+.official-handoff-fact > div,
+.official-handoff-warning > div {
+  display: grid;
+  gap: 4px;
+}
+
+.official-handoff-fact span,
+.official-handoff-warning span {
+  color: #596a7d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.official-handoff-description {
+  margin: 16px 2px 0;
+  color: #41536a;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.official-handoff-copy-status,
+.official-handoff-copy-error {
+  margin-top: 14px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.official-handoff-copy-status {
+  color: #17635e;
+  background: var(--teal-soft);
+  border: 1px solid #c7e6e2;
+}
+
+.official-handoff-copy-error {
+  display: grid;
+  gap: 4px;
+  color: #8b3e3e;
+  background: #fff1f1;
+  border: 1px solid #efc7c7;
+}
+
+.official-handoff-copy-error span {
+  overflow-wrap: anywhere;
+}
+
+.official-handoff-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.official-handoff-actions .button {
+  min-width: 0;
+  min-height: 48px;
+  padding-inline: 16px;
+}
+
+.official-handoff-actions .button small {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.78;
+}
+
+@media (max-width: 760px) {
+  .official-handoff-layer {
+    place-items: end stretch;
+    padding: 0;
+  }
+
+  .official-handoff-panel {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    padding: 12px 18px max(20px, env(safe-area-inset-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -12px 45px rgba(11, 35, 69, 0.24);
+  }
+
+  .official-handoff-header {
+    margin-top: 10px;
+  }
+
+  .official-handoff-summary {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    margin-top: 18px;
+  }
+
+  .official-handoff-summary > div {
+    grid-template-columns: 58px minmax(0, 1fr);
+    align-items: baseline;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .official-handoff-actions {
+    position: sticky;
+    bottom: -1px;
+    grid-template-columns: 1fr;
+    margin: 16px -18px 0;
+    padding: 12px 18px max(14px, env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -10px 24px rgba(11, 35, 69, 0.08);
+  }
+
+  .official-handoff-actions .button {
+    min-height: 48px;
+  }
+
+}

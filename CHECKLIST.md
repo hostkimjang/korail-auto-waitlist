@@ -392,6 +392,8 @@
 - [x] 52줄 `domain/watch.ts`에 provider·13 status·seat class·observation mode canonical 타입/guard를 두고 145줄 `api/watchReadDto.ts`가 외부 unknown watch/candidate identity·실제 날짜·aware 시각·priority를 explicit DTO로 검증. 임의 server key는 버리고 잘못된 후보만 drop하며 nested evidence/observation/attempt/operational unknown은 기존 projector로 보존
 - [x] `api/watches.ts`의 MappedWatch/mapWatch/payload/CRUD/module path와 compatibility type re-export를 유지하며 804→729줄로 축소. 기존 watch API 30선언·33실행·76 assertion 보존, 신규 DTO 4선언·owner boundary 1선언, focused 6파일 66건·전체 Vitest 80파일 576건·ESLint 오류 0/legacy warning 12·strict typecheck·build·독립 리뷰 P3 보정 뒤 잔여 없음·`git diff --check` 통과
 - [x] 스물다섯 번째 구조 슬라이스 C를 같은 작업의 후속 API 코드 슬라이스와 함께 `experimental-rail` 전체 build·force-recreate하고 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] production `OfficialHandoff`의 기본 187줄·760px 48줄을 237줄 `features/official-handoff/officialHandoff.css`로 재소유하고 전역 CSS import를 아홉 경계로 확장. `features.css` 3,837→3,650줄·`responsive.css` 1,318→1,270줄로 축소하며 legacy modal selector 잔존 0과 import 순서를 구조 테스트로 고정
+- [x] 실제 OfficialHandoff dialog를 1,440px·320px·720px에서 열어 viewport·가로 넘침·44px 행동 영역·app shell inert·Escape focus 복원을 기본 Playwright에 추가. 전체 Vitest 80파일·576건, Sites 4건, 기본 E2E 14건과 독립 리뷰 보정 뒤 P0~P3 잔여 없음 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

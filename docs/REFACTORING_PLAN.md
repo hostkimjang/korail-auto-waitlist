@@ -1413,6 +1413,25 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   volume 삭제 없이 force-recreate했습니다. migration·log-init exit 0, 장기 서비스 11개 healthy,
   API health·ready와 proxy health 200, 재생성 뒤 최근 안전한 오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 D
+
+- production OfficialHandoff CSS owner: `features.css`의 공식 인계 selector 187줄과
+  `responsive.css`의 760px override 48줄을 값·선언·cascade 순서 변경 없이 237줄
+  `features/official-handoff/officialHandoff.css`로 이동했습니다. `features.css`는 3,837→3,650줄,
+  `responsive.css`는 1,318→1,270줄로 줄었습니다. 아직 다른 화면이 소비하는
+  `.official-handoff-note`는 legacy owner에 남겼습니다.
+- cascade·접근성 회귀: 전역 import를 `tokens → base → shell → features → operations → app-surfaces →
+  officialHandoff → officialSeatConfirmation → responsive` 아홉 경계로 확장했습니다. 구조 테스트는 새
+  owner 시작·760px media·legacy modal selector 잔존 0과 exact import order를 고정합니다. 기본
+  Playwright는 1,440px·320px·720px에서 실제 dialog의 viewport 경계·가로 overflow 없음·44px 행동 영역·
+  app shell inert·Escape 뒤 trigger focus 복원을 확인합니다.
+- 확인된 검증: CSS 구조 focused Vitest 2개 파일·13건, 전체 Vitest 80개 파일·576건, ESLint 오류 0개·
+  고정 legacy warning 12개, strict typecheck, production build, Sites 4건, 기본 Playwright E2E 14건,
+  독립 리뷰의 닫기 접근성 이름 보정 뒤 P0~P3 잔여 없음과 `git diff --check`를 통과했습니다. 기존
+  500 kB 초과 chunk 경고만 유지됐습니다.
+- 운영 검증 범위: CSS 이동 자체에는 별도 Compose 재배포가 필요하지 않지만, 같은 작업의 코드
+  슬라이스와 함께 최신 통합 tree를 전체 build·force-recreate해 health를 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

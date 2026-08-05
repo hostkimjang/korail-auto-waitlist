@@ -158,6 +158,11 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
    - 완료: dormant `OfficialSeatConfirmation` 단일 소비 selector 14개의 기본 192줄과 760px/340px
      반응형 66줄을 `features/new-wait/officialSeatConfirmation.css`에 함께 이동. 공용 `.copy-status`·
      `.provider-chip`·button primitive는 기존 owner에 남기고 여덟 import 경계와 원본 263행 동등성을 고정
+   - 완료: production `OfficialHandoff` 단일 소비 selector의 기본·760px 규칙 237줄을
+     `features/official-handoff/officialHandoff.css`로 이동. `features.css`는 3,837→3,650줄,
+     `responsive.css`는 1,318→1,270줄로 축소하고 전역 import를 아홉 경계로 확장. 구조 테스트는 새
+     owner·legacy 잔존 없음·정확한 import 순서를, 기본 E2E는 실제 modal의 viewport·44px 행동 영역·
+     inert·Escape 뒤 focus 복원을 고정
    - 남음: `features.css`를 실제 기능 소유 경계로 더 나누고 중복 selector 정리는 별도 동작 변경
      슬라이스에서 수행
    - 완료: 모든 소스·Vitest 테스트 전환 후 `allowJs` 제거, Vitest JS/JSX include 제거. 배포 경계의

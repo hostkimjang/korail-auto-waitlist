@@ -252,6 +252,55 @@ async function expectCoreActionTargets(page: Page): Promise<void> {
   }
 }
 
+async function expectOfficialHandoffWithinBounds(
+  page: Page,
+  viewport: ViewportCase,
+): Promise<void> {
+  const trigger = page.locator(".watch-booking-button");
+  await trigger.click();
+
+  const dialog = page.getByRole("dialog", { name: /공식 예매 안내/ });
+  const panel = page.locator(".official-handoff-panel");
+  await expect(dialog).toBeVisible();
+  await expectWithinViewport(panel, viewport.width);
+
+  const panelBox = await panel.boundingBox();
+  expect(panelBox, "official handoff panel must have a bounding box").not.toBeNull();
+  if (panelBox !== null) {
+    expect(panelBox.y).toBeGreaterThanOrEqual(-0.5);
+    expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
+  }
+
+  await expectVisibleActionTarget(
+    dialog.getByRole("button", { name: /^공식 (?:예매 안내|좌석 확인 안내) 닫기$/ }),
+    "official handoff close action",
+  );
+  await expectVisibleActionTarget(
+    dialog.getByRole("button", { name: "여정 복사" }),
+    "official handoff copy action",
+  );
+  await expectVisibleActionTarget(
+    dialog.getByRole("button", { name: /공식 페이지 열기/ }),
+    "official handoff provider action",
+  );
+
+  const appShell = page.locator(".app-shell");
+  await expect(appShell).toHaveJSProperty("inert", true);
+  const rootWidths = await page.evaluate(() => ({
+    documentClient: document.documentElement.clientWidth,
+    documentScroll: document.documentElement.scrollWidth,
+    bodyClient: document.body.clientWidth,
+    bodyScroll: document.body.scrollWidth,
+  }));
+  expect(rootWidths.documentScroll).toBeLessThanOrEqual(rootWidths.documentClient);
+  expect(rootWidths.bodyScroll).toBeLessThanOrEqual(rootWidths.bodyClient);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await expect(appShell).toHaveJSProperty("inert", false);
+}
+
 async function expectWatchRegionsDoNotOverlap(page: Page): Promise<void> {
   const regionSelectors = [
     ".watch-provider",
@@ -399,6 +448,7 @@ for (const viewport of viewportCases) {
       }
       await expectMobileReadingOrder(page, viewport.height);
     }
+    await expectOfficialHandoffWithinBounds(page, viewport);
     await expectHomeApiAndBrowserClean(telemetry);
   });
 }

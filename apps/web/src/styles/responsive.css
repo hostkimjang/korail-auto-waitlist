@@ -563,54 +563,6 @@
     text-align: left;
   }
 
-  .official-handoff-layer {
-    place-items: end stretch;
-    padding: 0;
-  }
-
-  .official-handoff-panel {
-    width: 100%;
-    max-height: calc(100dvh - 24px);
-    padding: 12px 18px max(20px, env(safe-area-inset-bottom));
-    border-right: 0;
-    border-bottom: 0;
-    border-left: 0;
-    border-radius: 20px 20px 0 0;
-    box-shadow: 0 -12px 45px rgba(11, 35, 69, 0.24);
-  }
-
-  .official-handoff-header {
-    margin-top: 10px;
-  }
-
-  .official-handoff-summary {
-    grid-template-columns: 1fr;
-    gap: 6px;
-    margin-top: 18px;
-  }
-
-  .official-handoff-summary > div {
-    grid-template-columns: 58px minmax(0, 1fr);
-    align-items: baseline;
-    gap: 8px;
-    padding: 10px 12px;
-  }
-
-  .official-handoff-actions {
-    position: sticky;
-    bottom: -1px;
-    grid-template-columns: 1fr;
-    margin: 16px -18px 0;
-    padding: 12px 18px max(14px, env(safe-area-inset-bottom));
-    background: var(--surface);
-    border-top: 1px solid var(--line);
-    box-shadow: 0 -10px 24px rgba(11, 35, 69, 0.08);
-  }
-
-  .official-handoff-actions .button {
-    min-height: 48px;
-  }
-
   .selection-tray {
     position: static;
     margin-inline: -4px;

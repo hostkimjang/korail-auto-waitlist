@@ -9,6 +9,7 @@ const styleImports = [
   "./styles/features.css",
   "./styles/operations.css",
   "./styles/app-surfaces.css",
+  "./features/official-handoff/officialHandoff.css",
   "./features/new-wait/officialSeatConfirmation.css",
   "./styles/responsive.css",
 ] as const;
@@ -20,6 +21,9 @@ const shellStyles = readStyleFile("./styles/shell.css");
 const featureStyles = readStyleFile("./styles/features.css");
 const operationsStyles = readStyleFile("./styles/operations.css");
 const appSurfaceStyles = readStyleFile("./styles/app-surfaces.css");
+const officialHandoffStyles = readStyleFile(
+  "./features/official-handoff/officialHandoff.css",
+);
 const officialSeatConfirmationStyles = readStyleFile(
   "./features/new-wait/officialSeatConfirmation.css",
 );
@@ -31,6 +35,7 @@ const styles = [
   featureStyles,
   operationsStyles,
   appSurfaceStyles,
+  officialHandoffStyles,
   officialSeatConfirmationStyles,
   responsiveStyles,
 ].join("");
@@ -91,7 +96,7 @@ function extractCssBlock(source: string, header: string, fromIndex = 0): CssBloc
 }
 
 describe("global CSS structure", () => {
-  it("loads the eight style boundaries in their cascade order", () => {
+  it("loads the nine style boundaries in their cascade order", () => {
     const entryStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     const expectedImports = `${styleImports
       .map((styleImport) => `@import "${styleImport}";`)
@@ -114,6 +119,8 @@ describe("global CSS structure", () => {
     expect(featureStyles).toContain("container-name: train-results");
     expect(extractCssBlock(featureStyles, "@container train-results (min-width: 920px)").body)
       .toContain(".train-result-card");
+    expect(featureStyles).toContain(".official-handoff-note");
+    expect(featureStyles).not.toContain(".official-handoff-layer");
     expect(featureStyles).not.toContain(".official-confirmation-");
     expect(featureStyles.trimEnd()).toMatch(/\.system-grid strong\s*\{[\s\S]*color:\s*#17776f;[\s\S]*\}$/);
 
@@ -137,6 +144,15 @@ describe("global CSS structure", () => {
     expect(toastIn.body).toContain("from { opacity: 0; transform: translateY(10px); }");
     expect(appSurfaceStyles.slice(toastIn.end).trim()).toBe("");
 
+    expect(officialHandoffStyles.trimStart()).toMatch(/^\.official-handoff-layer\s*\{/);
+    expect(officialHandoffStyles).toContain(".official-handoff-copy-error");
+    const mobileHandoff = extractCssBlock(
+      officialHandoffStyles,
+      "@media (max-width: 760px)",
+    );
+    expect(mobileHandoff.body).toContain(".official-handoff-actions");
+    expect(officialHandoffStyles.slice(mobileHandoff.end).trim()).toBe("");
+
     expect(officialSeatConfirmationStyles.trimStart())
       .toMatch(/^\.official-confirmation-trigger\s*\{/);
     expect(officialSeatConfirmationStyles).toContain(".official-confirmation-layer");
@@ -153,6 +169,8 @@ describe("global CSS structure", () => {
     expect(officialSeatConfirmationStyles.slice(narrowConfirmation.end).trim()).toBe("");
 
     expect(responsiveStyles.trimStart()).toMatch(/^@media \(max-width: 980px\)/);
+    expect(responsiveStyles).toContain(".official-handoff-note");
+    expect(responsiveStyles).not.toContain(".official-handoff-layer");
     expect(responsiveStyles).not.toContain(".official-confirmation-");
     const reducedMotion = extractCssBlock(responsiveStyles, "@media (prefers-reduced-motion: reduce)");
     expect(reducedMotion.body).toContain("animation-duration: 0.01ms !important");

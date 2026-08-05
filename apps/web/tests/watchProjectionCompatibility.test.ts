@@ -3,7 +3,10 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { mapWatch as mapWatchFromCompatibilityApi } from "../src/api/watches";
 import type {
   MappedWatch,
+  MappedWatchCandidate,
   ProjectedWatch,
+  ProjectedWatchCandidate,
+  WatchCandidateReadModel,
   WatchReadModel,
 } from "../src/api/watches";
 import { mapWatch as mapWatchFromProjection } from "../src/api/watchProjection";
@@ -45,6 +48,26 @@ const legacySnakeOnlyFixture: MappedWatch = {
   nextCheckAt: null,
 };
 
+const legacyCandidateFixture: MappedWatchCandidate = {
+  id: "legacy-candidate",
+  train_number: "KTX 001",
+  departure_at: "2026-08-08T09:00:00+09:00",
+  arrival_at: "2026-08-08T11:30:00+09:00",
+  seat_class: "standard",
+  priority: 1,
+};
+
+type HasPush<T> = "push" extends keyof T ? true : false;
+type Equal<Left, Right> = (
+  <Value>() => Value extends Left ? 1 : 2
+) extends (
+  <Value>() => Value extends Right ? 1 : 2
+) ? true : false;
+type IsReadonlyProperty<Value, Key extends keyof Value> = Equal<
+  Pick<Value, Key>,
+  Readonly<Pick<Value, Key>>
+>;
+
 describe("watch projection compatibility exports", () => {
   it("keeps the legacy API mapper export as the exact projection function", () => {
     expect(mapWatchFromCompatibilityApi).toBe(mapWatchFromProjection);
@@ -59,5 +82,20 @@ describe("watch projection compatibility exports", () => {
   it("types mapper-produced watches as both canonical and legacy-compatible", () => {
     expectTypeOf<ProjectedWatch>().toExtend<WatchReadModel>();
     expectTypeOf<ProjectedWatch>().toExtend<MappedWatch>();
+  });
+
+  it("keeps legacy candidate object literals while typing projected candidates canonically", () => {
+    expect(legacyCandidateFixture).not.toHaveProperty("trainNumber");
+    expectTypeOf<ProjectedWatchCandidate>().toExtend<WatchCandidateReadModel>();
+    expectTypeOf<ProjectedWatchCandidate>().toExtend<MappedWatchCandidate>();
+  });
+
+  it("exposes every widened candidate collection as readonly", () => {
+    expectTypeOf<HasPush<WatchReadModel["candidates"]>>().toEqualTypeOf<false>();
+    expectTypeOf<HasPush<MappedWatch["candidates"]>>().toEqualTypeOf<false>();
+    expectTypeOf<HasPush<ProjectedWatch["candidates"]>>().toEqualTypeOf<false>();
+    expectTypeOf<IsReadonlyProperty<WatchReadModel, "candidates">>().toEqualTypeOf<true>();
+    expectTypeOf<IsReadonlyProperty<MappedWatch, "candidates">>().toEqualTypeOf<true>();
+    expectTypeOf<IsReadonlyProperty<ProjectedWatch, "candidates">>().toEqualTypeOf<true>();
   });
 });

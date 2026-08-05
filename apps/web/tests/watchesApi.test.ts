@@ -11,7 +11,9 @@ import {
   mapWatch,
   startWatch,
   updateWatch,
+  type MappedWatch,
   type WatchCreateForm,
+  type WatchReadModel,
 } from "../src/api/watches";
 
 const WATCH_DTO = {
@@ -257,6 +259,10 @@ describe("watch API boundary", () => {
 
     expect(mapped.candidates).toEqual([{
       id: "candidate-2",
+      trainNumber: "KTX 002",
+      departureAt: "2026-08-08T10:00:00+09:00",
+      arrivalAt: "2026-08-08T13:00:00+09:00",
+      seatClass: "standard",
       train_number: "KTX 002",
       departure_at: "2026-08-08T10:00:00+09:00",
       arrival_at: "2026-08-08T13:00:00+09:00",
@@ -311,6 +317,10 @@ describe("watch API boundary", () => {
       reservation_policy: "notify_only",
       candidates: [{
         id: "candidate-1",
+        trainNumber: "KTX 001",
+        departureAt: "2026-08-08T10:00:00+09:00",
+        arrivalAt: null,
+        seatClass: "standard",
         train_number: "KTX 001",
         departure_at: "2026-08-08T10:00:00+09:00",
         arrival_at: null,
@@ -323,6 +333,15 @@ describe("watch API boundary", () => {
     expect(mapped.updatedAt).toBe(mapped.updated_at);
     expect(mapped.officialBookingUrl).toBe(mapped.official_booking_url);
     expect(mapped.reservationPolicy).toBe(mapped.reservation_policy);
+    const candidate = mapped.candidates[0];
+    expect(candidate).toBeDefined();
+    expect(candidate?.trainNumber).toBe(candidate?.train_number);
+    expect(candidate?.departureAt).toBe(candidate?.departure_at);
+    expect(candidate?.arrivalAt).toBe(candidate?.arrival_at);
+    expect(candidate?.seatClass).toBe(candidate?.seat_class);
+    const canonicalView: WatchReadModel = mapped;
+    const compatibilityView: MappedWatch = mapped;
+    expect(canonicalView.candidates).toBe(compatibilityView.candidates);
     expect(Object.hasOwn(mapped.candidates[0] ?? {}, "arbitrary_candidate_field")).toBe(false);
   });
 

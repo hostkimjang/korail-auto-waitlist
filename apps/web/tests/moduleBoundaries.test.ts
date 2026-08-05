@@ -129,7 +129,7 @@ describe("module dependency boundaries", () => {
   });
 
   it("keeps watch projection contracts in one application read-model owner", () => {
-    const declarationPattern = /\bexport\s+(?:interface|type)\s+(MappedWatchCandidate|SeatFoundObservation|ReservationCandidateContext|WatchReadModel|MappedWatch|ProjectedWatch)\b/g;
+    const declarationPattern = /\bexport\s+(?:interface|type)\s+(WatchCandidateReadModel|MappedWatchCandidate|ProjectedWatchCandidate|SeatFoundObservation|ReservationCandidateContext|WatchReadModel|MappedWatch|ProjectedWatch)\b/g;
     const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
       [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
         `${sourcePath(filePath)}:${match[1]}`
@@ -137,7 +137,9 @@ describe("module dependency boundaries", () => {
     ));
 
     expect(declarations).toEqual([
+      "api/watchProjection.ts:WatchCandidateReadModel",
       "api/watchProjection.ts:MappedWatchCandidate",
+      "api/watchProjection.ts:ProjectedWatchCandidate",
       "api/watchProjection.ts:SeatFoundObservation",
       "api/watchProjection.ts:ReservationCandidateContext",
       "api/watchProjection.ts:WatchReadModel",
@@ -149,7 +151,7 @@ describe("module dependency boundaries", () => {
       path.join(SOURCE_DIRECTORY, "api/watchProjection.ts"),
       "utf8",
     );
-    expect(projection).toMatch(/type ProjectedWatch = WatchReadModel & MappedWatch/);
+    expect(projection).toMatch(/ProjectedWatchCandidate\[\]/);
   });
 
   it("keeps Home active-watch presentation contracts in the feature owner", () => {
@@ -273,6 +275,26 @@ describe("module dependency boundaries", () => {
     expect(liveReservationNotice).not.toMatch(/eventInstant\(attempt\?/);
     expect(edges.map(edgeName)).toContain(
       "features/app/watchLifecycleSnapshot.ts -> api/watchProjection",
+    );
+  });
+
+  it("keeps NewWait watch hydration on canonical candidate fields", () => {
+    const registrationHook = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/new-wait/useSeatWatchRegistration.ts"),
+      "utf8",
+    );
+    const hydration = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/new-wait/watchRegistrationHydration.ts"),
+      "utf8",
+    );
+
+    expect(registrationHook).toContain("resolvedWatchSeatRegistration");
+    expect(registrationHook).not.toContain("resolvedSeatRegistration(");
+    expect(hydration).toMatch(
+      /readModelCandidateMatches[\s\S]*candidate\.trainNumber[\s\S]*candidate\.departureAt[\s\S]*candidate\.seatClass/,
+    );
+    expect(edges.map(edgeName)).toContain(
+      "features/new-wait/watchRegistrationHydration.ts -> api/watchProjection",
     );
   });
 

@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import type { RailProvider } from "../../api/providerAccounts";
 import type { Timetable } from "../../api/timetables";
+import type { WatchReadModel } from "../../api/watchProjection";
 import { isExpiredWatchCreateConflict } from "../../domain/apiErrors";
 import type { NewWaitForm } from "./newWaitForm";
 import { recoverRefreshedRegistrationTrain } from "./registrationEvidenceRecovery";
@@ -14,7 +15,7 @@ import type {
   WatchRegistrationResult,
   WatchRegistrationState,
 } from "./useInstantWatchRegistration";
-import { resolvedSeatRegistration } from "./watchRegistrationHydration";
+import { resolvedWatchSeatRegistration } from "./watchRegistrationHydration";
 
 interface SeatWatchRegistrationSeat extends Record<string, unknown> {
   seat_class: SeatClass;
@@ -66,14 +67,14 @@ interface RegistrationInputs {
 }
 
 interface RegistrationSnapshot extends RegistrationInputs {
-  watches: readonly unknown[];
+  watches: readonly WatchReadModel[];
   getRegistrationState: (key: string) => WatchRegistrationState;
   register: ReturnType<typeof useInstantWatchRegistration>["register"];
   cancel: ReturnType<typeof useInstantWatchRegistration>["cancel"];
 }
 
 export interface UseSeatWatchRegistrationOptions extends RegistrationInputs {
-  watches: readonly unknown[];
+  watches: readonly WatchReadModel[];
 }
 
 export interface SeatWatchRegistrationController {
@@ -189,7 +190,7 @@ export function useSeatWatchRegistration({
     seatClass: SeatClass,
   ): WatchRegistrationState => {
     const local = getRegistrationState(seatRegistrationKey(train.id, seatClass));
-    return resolvedSeatRegistration(local, watches, train, seatClass);
+    return resolvedWatchSeatRegistration(local, watches, train, seatClass);
   }, [getRegistrationState, watches]);
 
   const chooseTrainSeat = useCallback(async (id: string, seatClass: SeatClass): Promise<void> => {
@@ -201,7 +202,7 @@ export function useSeatWatchRegistration({
 
     const key = seatRegistrationKey(train.id, seatClass);
     const local = snapshot.getRegistrationState(key);
-    const currentRegistration = resolvedSeatRegistration(
+    const currentRegistration = resolvedWatchSeatRegistration(
       local,
       snapshot.watches,
       train,

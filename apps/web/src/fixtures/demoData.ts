@@ -1,6 +1,7 @@
 import type {
   MappedWatchCandidate,
   ProjectedWatch,
+  ProjectedWatchCandidate,
 } from "../api/watches";
 import type { ProviderAccount } from "../api/providerAccounts";
 import type { ProviderRuntimeStatus } from "../api/providerRuntime";
@@ -106,18 +107,28 @@ export interface DemoWatchInput {
 
 export function createDemoWatch(input: DemoWatchInput): ProjectedWatch {
   const reservationPolicy = input.reservationPolicy ?? "notify_only";
-  const candidates = (input.candidates ?? []).map((candidate, index): MappedWatchCandidate => ({
-    ...candidate,
-    id: candidate.id ?? `${input.id}:candidate:${index + 1}`,
-  }));
+  const candidates = (input.candidates ?? [])
+    .map((candidate, index): ProjectedWatchCandidate => ({
+      id: candidate.id ?? `${input.id}:candidate:${index + 1}`,
+      trainNumber: candidate.train_number,
+      departureAt: candidate.departure_at,
+      arrivalAt: candidate.arrival_at,
+      seatClass: candidate.seat_class,
+      train_number: candidate.train_number,
+      departure_at: candidate.departure_at,
+      arrival_at: candidate.arrival_at,
+      seat_class: candidate.seat_class,
+      priority: candidate.priority,
+    }))
+    .sort((left, right) => left.priority - right.priority);
   const reservationCandidateContexts = Object.fromEntries(candidates.map((candidate) => [
     candidate.id,
     {
-      train: candidate.train_number,
+      train: candidate.trainNumber,
       seatClassLabel: input.seatClassLabel,
       date: input.date,
-      departure: candidate.departure_at.slice(11, 16),
-      arrival: candidate.arrival_at?.slice(11, 16) ?? input.arrival,
+      departure: candidate.departureAt.slice(11, 16),
+      arrival: candidate.arrivalAt?.slice(11, 16) ?? input.arrival,
     },
   ]));
 

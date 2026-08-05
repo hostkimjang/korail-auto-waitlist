@@ -1,4 +1,8 @@
 import type { SeatClass, WatchRegistrationState } from "./useInstantWatchRegistration";
+import type {
+  WatchCandidateReadModel,
+  WatchReadModel,
+} from "../../api/watchProjection";
 import { normalizeReservationPolicy } from "../../domain/reservationPolicy";
 
 type RecordValue = Record<string, unknown>;
@@ -61,6 +65,40 @@ function candidateMatches(candidate: unknown, identity: SeatRegistrationIdentity
     && seatClass === identity.seatClass;
 }
 
+function readModelCandidateMatches(
+  candidate: WatchCandidateReadModel,
+  provider: string,
+  identity: SeatRegistrationIdentity,
+): boolean {
+  return provider === identity.provider
+    && candidate.trainNumber === identity.trainNumber
+    && departureInstant(candidate.departureAt) === identity.departureInstant
+    && candidate.seatClass === identity.seatClass;
+}
+
+export function persistedWatchSeatRegistration(
+  watches: readonly WatchReadModel[],
+  train: unknown,
+  seatClass: SeatClass,
+): WatchRegistrationState | null {
+  const identity = trainIdentity(train, seatClass);
+  if (!identity) return null;
+
+  for (const watch of watches) {
+    if (!activeWatchStatuses.has(watch.status)) continue;
+    if (watch.candidates.some((candidate) => (
+      readModelCandidateMatches(candidate, watch.provider, identity)
+    ))) {
+      return {
+        status: "active",
+        watchId: watch.id,
+        reservationPolicy: normalizeReservationPolicy(watch.reservationPolicy),
+      };
+    }
+  }
+  return null;
+}
+
 /**
  * Reconnects a remounted Step 3 seat button to an active DB watch.  Candidate
  * times are compared as instants because the API may serialize an original KST
@@ -109,5 +147,16 @@ export function resolvedSeatRegistration(
 ): WatchRegistrationState {
   return local.status === "idle"
     ? persistedSeatRegistration(watches, train, seatClass) ?? local
+    : local;
+}
+
+export function resolvedWatchSeatRegistration(
+  local: WatchRegistrationState,
+  watches: readonly WatchReadModel[],
+  train: unknown,
+  seatClass: SeatClass,
+): WatchRegistrationState {
+  return local.status === "idle"
+    ? persistedWatchSeatRegistration(watches, train, seatClass) ?? local
     : local;
 }

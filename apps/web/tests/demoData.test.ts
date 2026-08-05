@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { MappedWatch } from "../src/api/watches";
+import {
+  mapWatch,
+  type MappedWatch,
+  type WatchReadModel,
+} from "../src/api/watches";
 import {
   createDemoWatch,
   demoTimetablesForForm,
@@ -69,6 +73,10 @@ describe("demo watch fixtures", () => {
     });
     expect(watch.candidates).toEqual([{
       id: "watch-demo:candidate:1",
+      trainNumber: "SRT 327",
+      departureAt: "2026-08-04T10:42:00+09:00",
+      arrivalAt: "2026-08-04T13:14:00+09:00",
+      seatClass: "standard",
       train_number: "SRT 327",
       departure_at: "2026-08-04T10:42:00+09:00",
       arrival_at: "2026-08-04T13:14:00+09:00",
@@ -82,6 +90,71 @@ describe("demo watch fixtures", () => {
       departure: "10:42",
       arrival: "13:14",
     });
+  });
+
+  it("sorts reverse candidate input like the production projection without duplicating arrays", () => {
+    const candidateInputs = [{
+      id: "candidate-later",
+      train_number: "KTX 002",
+      departure_at: "2026-08-08T11:00:00+09:00",
+      arrival_at: "2026-08-08T13:30:00+09:00",
+      seat_class: "first" as const,
+      priority: 2,
+    }, {
+      id: "candidate-first",
+      train_number: "KTX 001",
+      departure_at: "2026-08-08T10:00:00+09:00",
+      arrival_at: "2026-08-08T12:30:00+09:00",
+      seat_class: "standard" as const,
+      priority: 1,
+    }];
+    const demo = createDemoWatch({
+      id: "demo-sorted",
+      provider: "KORAIL",
+      train: "KTX 001",
+      route: "서울 → 부산",
+      origin: "서울",
+      destination: "부산",
+      departure: "10:00",
+      arrival: "12:30",
+      date: "8월 8일 (토)",
+      travelDate: "2026-08-08",
+      status: "watching",
+      statusLabel: "감시 중",
+      seatClass: "standard",
+      seatClassLabel: "일반실",
+      seatEvidenceLabel: "일반실 · 데모 좌석 상태",
+      candidates: candidateInputs,
+    });
+    const production = mapWatch({
+      id: "production-sorted",
+      provider: "korail",
+      origin: "서울",
+      destination: "부산",
+      travel_date: "2026-08-08",
+      time_from: "10:00:00",
+      time_to: "13:30:00",
+      train_numbers: ["KTX 001", "KTX 002"],
+      seat_class: "standard",
+      status: "watching",
+      candidates: candidateInputs,
+    });
+
+    expect(demo.candidates.map((candidate) => candidate.id)).toEqual([
+      "candidate-first",
+      "candidate-later",
+    ]);
+    expect(demo.candidates.map((candidate) => candidate.id)).toEqual(
+      production.candidates.map((candidate) => candidate.id),
+    );
+    expect(demo.candidates[0]?.trainNumber).toBe("KTX 001");
+    expect(Object.keys(demo.reservationCandidateContexts)).toEqual([
+      "candidate-first",
+      "candidate-later",
+    ]);
+    const canonicalView: WatchReadModel = demo;
+    const compatibilityView: MappedWatch = demo;
+    expect(canonicalView.candidates).toBe(compatibilityView.candidates);
   });
 
   it("maps generated demo timetables through the canonical API boundary", () => {

@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/api/client";
+import { createDemoWatch } from "../src/fixtures/demoData";
 import type { NewWaitForm } from "../src/features/new-wait/newWaitForm";
 import {
   useSeatWatchRegistration,
@@ -174,17 +175,31 @@ describe("useSeatWatchRegistration", () => {
     const cancellation = new Promise<void>((resolve) => { finishCancellation = resolve; });
     const onCancelWatch = vi.fn().mockReturnValue(cancellation);
     const persistedTrain = train();
-    const watches = [{
+    const watches = [createDemoWatch({
       id: "persisted-watch-standard",
       provider: "KORAIL",
+      train: "KTX 901",
+      route: "서울 → 부산",
+      origin: "서울",
+      destination: "부산",
+      departure: "14:30",
+      arrival: "17:00",
+      date: "8월 5일 (수)",
+      travelDate: "2026-08-05",
       status: "watching",
+      statusLabel: "감시 중",
+      seatClass: "standard",
+      seatClassLabel: "일반실",
+      seatEvidenceLabel: "일반실 · 확인 불가",
       reservationPolicy: "notify_only",
       candidates: [{
         train_number: "KTX 901",
         departure_at: "2026-08-05T05:30:00Z",
+        arrival_at: "2026-08-05T08:00:00Z",
         seat_class: "standard",
+        priority: 1,
       }],
-    }];
+    })];
     const { result } = renderHook(() => useSeatWatchRegistration(options({
       trains: [persistedTrain],
       watches,

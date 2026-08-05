@@ -36,18 +36,30 @@ type UnknownRecord = Record<string, unknown>;
 
 export { safeOfficialChannelUrl };
 
-export interface MappedWatchCandidate {
+interface WatchCandidateReadModelBase {
   id: string;
+  priority: number;
+}
+
+export interface WatchCandidateReadModel extends WatchCandidateReadModelBase {
+  trainNumber: string;
+  departureAt: string;
+  arrivalAt: string | null;
+  seatClass: WatchSeatClass;
+}
+
+export interface MappedWatchCandidate extends WatchCandidateReadModelBase {
   train_number: string;
   departure_at: string;
   arrival_at: string | null;
   seat_class: WatchSeatClass;
-  priority: number;
 }
+
+export type ProjectedWatchCandidate = WatchCandidateReadModel & MappedWatchCandidate;
 
 interface ValidWatchCandidate {
   raw: WatchCandidateReadDto;
-  mapped: MappedWatchCandidate;
+  mapped: ProjectedWatchCandidate;
 }
 
 export interface SeatFoundObservation {
@@ -69,7 +81,6 @@ interface WatchReadModelBase {
   id: string;
   provider: WatchProvider;
   status: WatchStatus;
-  candidates: MappedWatchCandidate[];
   train: string;
   route: string;
   departure: string;
@@ -98,12 +109,14 @@ interface WatchReadModelBase {
 }
 
 export interface WatchReadModel extends WatchReadModelBase {
+  readonly candidates: readonly WatchCandidateReadModel[];
   paymentDeadline: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
 
 export interface MappedWatch extends WatchReadModelBase {
+  readonly candidates: readonly MappedWatchCandidate[];
   payment_deadline: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -114,7 +127,9 @@ export interface MappedWatch extends WatchReadModelBase {
   updatedAt?: string | null;
 }
 
-export type ProjectedWatch = WatchReadModel & MappedWatch;
+export type ProjectedWatch = Omit<WatchReadModel, "candidates">
+  & Omit<MappedWatch, "candidates">
+  & { readonly candidates: readonly ProjectedWatchCandidate[] };
 
 const STATUS_LABELS: Readonly<Record<WatchStatus, string>> = {
   draft: "초안",
@@ -267,6 +282,10 @@ export function mapWatch(value: unknown): ProjectedWatch {
           raw: candidate,
           mapped: {
             id: candidate.id,
+            trainNumber: candidate.train_number,
+            departureAt: candidate.departure_at,
+            arrivalAt: candidate.arrival_at,
+            seatClass: candidate.seat_class,
             train_number: candidate.train_number,
             departure_at: candidate.departure_at,
             arrival_at: candidate.arrival_at,
@@ -293,7 +312,7 @@ export function mapWatch(value: unknown): ProjectedWatch {
     ?? null;
   const candidate = selectedCandidate?.raw ?? null;
   const mappedCandidate = selectedCandidate?.mapped ?? null;
-  const seatClass = mappedCandidate?.seat_class
+  const seatClass = mappedCandidate?.seatClass
     ?? watchSeatClass(watch.seat_class)
     ?? "any";
   const seatClassLabel = SEAT_CLASS_LABELS[seatClass];
@@ -387,12 +406,12 @@ export function mapWatch(value: unknown): ProjectedWatch {
     : null;
   const reservationCandidateContexts = Object.fromEntries(prioritizedCandidates.map(({ mapped }) => (
     [mapped.id, {
-      train: mapped.train_number,
-      seatClassLabel: SEAT_CLASS_LABELS[mapped.seat_class],
+      train: mapped.trainNumber,
+      seatClassLabel: SEAT_CLASS_LABELS[mapped.seatClass],
       date: dateLabel(watch.travel_date),
-      departure: timetableTimeLabel(mapped.departure_at),
-      arrival: mapped.arrival_at !== null
-        ? timetableTimeLabel(mapped.arrival_at)
+      departure: timetableTimeLabel(mapped.departureAt),
+      arrival: mapped.arrivalAt !== null
+        ? timetableTimeLabel(mapped.arrivalAt)
         : timeLabel(watch.time_to),
     }]
   )));
@@ -415,16 +434,16 @@ export function mapWatch(value: unknown): ProjectedWatch {
     createdAt,
     updatedAt,
     train: mappedCandidate !== null
-      ? mappedCandidate.train_number
+      ? mappedCandidate.trainNumber
       : Array.isArray(watch.train_numbers) && typeof watch.train_numbers[0] === "string"
         ? watch.train_numbers[0]
         : "열차 미정",
     route: `${watch.origin} → ${watch.destination}`,
     departure: mappedCandidate !== null
-      ? timetableTimeLabel(mappedCandidate.departure_at)
+      ? timetableTimeLabel(mappedCandidate.departureAt)
       : timeLabel(watch.time_from),
-    arrival: mappedCandidate?.arrival_at !== null && mappedCandidate?.arrival_at !== undefined
-      ? timetableTimeLabel(mappedCandidate.arrival_at)
+    arrival: mappedCandidate?.arrivalAt !== null && mappedCandidate?.arrivalAt !== undefined
+      ? timetableTimeLabel(mappedCandidate.arrivalAt)
       : timeLabel(watch.time_to),
     date: dateLabel(watch.travel_date),
     statusLabel: STATUS_LABELS[watch.status],

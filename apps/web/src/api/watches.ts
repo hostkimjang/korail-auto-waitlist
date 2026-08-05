@@ -20,9 +20,11 @@ export {
   type MappedWatch,
   type MappedWatchCandidate,
   type ProjectedWatch,
+  type ProjectedWatchCandidate,
   type ReservationCandidateContext,
   type SeatFoundObservation,
   type WatchReadModel,
+  type WatchCandidateReadModel,
 } from "./watchProjection";
 
 type UnknownRecord = Record<string, unknown>;

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_admin
 from ..database import get_session
 from ..domain import Provider
-from ..providers import ProviderUnavailable, RouteValidationError
+from ..provider_contracts import ProviderUnavailable, RouteValidationError
 from ..schemas import SeatStatusRefreshRequest, TimetableItem
 from ..timetable_snapshot_cache import TimetableSnapshotKey
 from .application import TimetableApplication, UnsupportedTimetableProvider, load_timetable_items

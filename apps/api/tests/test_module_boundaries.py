@@ -110,6 +110,14 @@ def _is_provider_adapter_module(relative_path: Path) -> bool:
     return relative_path.as_posix().startswith("rail_waitlist/provider_adapters/")
 
 
+def _is_provider_registry_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/provider_registry/application.py"
+
+
+def _is_production_module_outside_provider_facade(relative_path: Path) -> bool:
+    return relative_path.as_posix() != "rail_waitlist/providers.py"
+
+
 BOUNDARY_RULES = (
     BoundaryRule(
         name="domain modules are framework and provider independent",
@@ -209,6 +217,18 @@ BOUNDARY_RULES = (
     BoundaryRule(
         name="provider adapters do not reverse-depend on the compatibility facade",
         matches=_is_provider_adapter_module,
+        forbidden_import_roots=frozenset({"provider_registry", "providers"}),
+    ),
+    BoundaryRule(
+        name="provider registry application does not reverse-depend on runtime consumers",
+        matches=_is_provider_registry_application,
+        forbidden_import_roots=frozenset(
+            {"celery_app", "fastapi", "providers", "services", "worker"}
+        ),
+    ),
+    BoundaryRule(
+        name="production modules use canonical provider owners instead of the facade",
+        matches=_is_production_module_outside_provider_facade,
         forbidden_import_roots=frozenset({"providers"}),
     ),
 )

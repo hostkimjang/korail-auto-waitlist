@@ -333,8 +333,11 @@ binding은 노출하지 않습니다. 따라서 두 운영사의 raw-day cache·
 `provider_adapters/srt_execution.py`가 소유합니다. facade는 type alias·loader·두 class를 같은 객체로
 다시 export하고 registry는 호출마다 source가 아직 생성되지 않은 새 adapter를 반환합니다. SRT의
 process singleton 예약 executor와 sidecar source 선택, 두 운영사의 borrowed/owned source drain·close
-정책은 canonical owner에 유지됩니다. Experimental 표시와 registry·capability 병합만 compatibility
-facade에 남아 있으며 후속 수직 슬라이스에서 이동합니다.
+정책은 canonical owner에 유지됩니다. Experimental 표시는 `provider_adapters/experimental.py`,
+시간표·실행 선택과 capability 병합은 `provider_registry/application.py`가 소유합니다. 생산 코드는
+canonical registry와 provider 예외를 직접 import하며 `providers.py`는 기존 공개 객체를 같은 identity로
+다시 export하는 호환 facade 역할만 합니다. module-boundary gate가 production→facade와
+adapter→registry/facade 역의존을 차단합니다.
 
 외부 provider 관측 그룹은 `provider_execution_leases`의 `provider + account_scope` 복합 키로
 직렬화합니다. 획득할 때마다 fencing token을 증가시키고, worker는 공식 호출 직전과 관측 결과

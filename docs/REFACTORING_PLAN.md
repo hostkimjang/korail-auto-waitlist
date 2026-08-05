@@ -922,6 +922,42 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 남은 핵심 부채: `ExperimentalRailAdapter`와 provider registry/capability application의 물리 이동,
   실행 전용 역할 base와 Python 정적 타입 gate입니다.
 
+### 2026-08-05 스무 번째 구조 슬라이스 F
+
+- Experimental 소유권: 외부 구현이 없는 표시 adapter를 `provider_adapters/experimental.py`로 옮겨
+  설정 flag·안전 capability와 timetable/stations `NotImplementedError` 계약을 실행 adapter와
+  분리했습니다. facade는 canonical class를 wrapper 없이 같은 객체로 다시 export합니다.
+- registry application: `provider_registry/application.py`가 시간표·실행 adapter 선택, historical
+  timetable alias와 public capability 병합을 소유합니다. Settings는 호출 시작에서 한 번 결정해 모든
+  하위 factory에 같은 객체로 전달하고, 실행 capability에서는 `seat_monitoring`, `reservation_once`,
+  `note` 세 필드만 official timetable capability에 병합합니다.
+- 순서·수명주기: capability 반환 순서는 KORAIL official → SRT official → Mock → KORAIL experimental
+  → SRT experimental로 고정했습니다. execution adapter 호출별 fresh·lazy 수명주기, KORAIL·SRT
+  timetable의 같은 TAGO singleton, Mock 세 registry fresh 반환과 `get_provider()`의 timetable 역할을
+  유지했습니다.
+- canonical 소비와 facade: provider registry HTTP, services, timetable/watch application과 worker는
+  canonical registry를, station visibility와 timetable HTTP는 canonical provider 예외를 직접 import합니다.
+  production의 `providers.py` import는 0건이며 63줄의 facade에는 동일 객체 re-export만 남았습니다.
+  boundary gate가 production→facade, adapter→registry/facade, registry→HTTP/service/worker 역의존을
+  자동 차단합니다.
+- 회귀 계약: facade/canonical Experimental class·registry 함수 4개의 identity를 owner 테스트로
+  고정했습니다. 별도 registry golden test는 `get_settings()` 1회, 동일 Settings 전달, adapter 호출·결과
+  순서, official safe merge와 Mock 무변환을 검증합니다. 기존 소비 모듈 attribute monkeypatch seam도
+  그대로 통과했습니다.
+- 확인된 검증: API·worker·watch를 포함한 focused pytest 254건, API 전체 pytest 1,072건, Ruff
+  `E/F/I`, format ratchet 60개와 `git diff --check`를 통과했습니다. `station_visibility.py`와 새 worker
+  import를 formatter로 정리해 legacy allowlist를 61개에서 60개로 줄였습니다. 기존 Starlette/httpx
+  deprecation 경고 1건은 유지됐고 독립 재감사 152건·HTTP boundary 9건에서 이동 전후 AST·identity와
+  P0~P3 회귀 없음을 확인했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: facade 함수를 재할당해 canonical registry 내부 호출을 바꾼다는 기존 seam은 없으며,
+  앞으로 registry 조립을 대체하는 테스트는 canonical application을 patch합니다. class·function의
+  `__module__` 변경에 의존하는 pickle·qualname 사용처도 없습니다.
+- 남은 핵심 부채: 가짜 timetable/stations 기본 stub 제거와 capability 부분 실패 정책의 별도 행동
+  슬라이스, 실행 전용 역할 base, Python 정적 타입 gate와 Mock 세부 fixture 계약 강화입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

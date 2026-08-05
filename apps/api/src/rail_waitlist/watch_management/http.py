@@ -13,7 +13,7 @@ from ..celery_app import celery_app
 from ..database import get_session
 from ..domain import Provider, ReservationOutcome, WatchStatus
 from ..models import Watch, WatchCandidate
-from ..providers import get_timetable_provider
+from ..provider_registry.application import get_timetable_provider
 from ..schemas import ReservationResult, WatchCreate, WatchRead, WatchUpdate
 from ..services import (
     begin_reservation_attempt,

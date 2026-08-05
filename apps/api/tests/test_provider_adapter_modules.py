@@ -19,6 +19,9 @@ from rail_waitlist.provider_adapters.execution import (
 from rail_waitlist.provider_adapters.execution import (
     default_provider_credential_loader as owner_default_provider_credential_loader,
 )
+from rail_waitlist.provider_adapters.experimental import (
+    ExperimentalRailAdapter as OwnerExperimentalRailAdapter,
+)
 from rail_waitlist.provider_adapters.korail_execution import (
     KorailBrowserExecutionAdapter as OwnerKorailBrowserExecutionAdapter,
 )
@@ -45,8 +48,19 @@ from rail_waitlist.provider_adapters.timetable_support import (
 from rail_waitlist.provider_adapters.timetable_support import (
     official_unknown_seat_classes as owner_official_unknown_seat_classes,
 )
+from rail_waitlist.provider_registry.application import (
+    get_execution_provider as owner_get_execution_provider,
+)
+from rail_waitlist.provider_registry.application import get_provider as owner_get_provider
+from rail_waitlist.provider_registry.application import (
+    get_timetable_provider as owner_get_timetable_provider,
+)
+from rail_waitlist.provider_registry.application import (
+    list_capabilities as owner_list_capabilities,
+)
 from rail_waitlist.providers import (
     OFFICIAL_BOOKING_URLS,
+    ExperimentalRailAdapter,
     FailClosedExecutionAdapter,
     KorailBrowserExecutionAdapter,
     MockProviderAdapter,
@@ -61,6 +75,7 @@ from rail_waitlist.providers import (
     get_execution_provider,
     get_provider,
     get_timetable_provider,
+    list_capabilities,
     mock_seat_classes,
     normalize_departure_window,
     normalize_station_name,
@@ -93,6 +108,14 @@ def test_provider_facade_reexports_execution_objects_by_identity() -> None:
     assert default_provider_credential_loader is owner_default_provider_credential_loader
     assert KorailBrowserExecutionAdapter is OwnerKorailBrowserExecutionAdapter
     assert SrtLiveExecutionAdapter is OwnerSrtLiveExecutionAdapter
+
+
+def test_provider_facade_reexports_registry_objects_by_identity() -> None:
+    assert ExperimentalRailAdapter is OwnerExperimentalRailAdapter
+    assert get_timetable_provider is owner_get_timetable_provider
+    assert get_execution_provider is owner_get_execution_provider
+    assert get_provider is owner_get_provider
+    assert list_capabilities is owner_list_capabilities
 
 
 def test_execution_adapters_bind_the_canonical_default_credential_loader() -> None:

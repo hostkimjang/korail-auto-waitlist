@@ -40,7 +40,7 @@ from .provider_execution_lease import (
     ProviderExecutionLeaseService,
     lock_execution_lease_current,
 )
-from .providers import get_execution_provider
+from .provider_registry.application import get_execution_provider
 from .reservations.execution_application import (
     ReservationExecutionDependencies,
     ReservationExecutionTarget,

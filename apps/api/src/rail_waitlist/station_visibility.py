@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import httpx
 
 from .config import OFFICIAL_KORAIL_STATION_DATA_URL
-from .providers import ProviderUnavailable
+from .provider_contracts import ProviderUnavailable
 from .schemas import StationItem
 
 KORAIL_STATION_DATA_URL = OFFICIAL_KORAIL_STATION_DATA_URL
@@ -25,9 +25,7 @@ STATION_NAME_ALIASES: Mapping[str, str] = {
 
 # KORAIL's station-information asset also contains a small number of Seoul commuter stops.
 # They are deliberately not exposed as intercity journey discovery entries.
-NON_INTERCITY_STATION_NAMES = frozenset(
-    {"광운대", "노량진", "신도림", "서빙고", "왕십리", "옥수"}
-)
+NON_INTERCITY_STATION_NAMES = frozenset({"광운대", "노량진", "신도림", "서빙고", "왕십리", "옥수"})
 REQUIRED_STATION_NAMES = frozenset({"서울", "수서", "대전", "부산"})
 
 

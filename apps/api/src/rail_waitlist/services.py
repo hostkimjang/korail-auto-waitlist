@@ -41,7 +41,7 @@ from .models import (
 from .outbox import add_outbox_event
 from .policy import build_watch_dedupe_key, next_interval
 from .provider_execution_lease import ANONYMOUS_PUBLIC_ACCOUNT_SCOPE
-from .providers import get_execution_provider, get_timetable_provider
+from .provider_registry.application import get_execution_provider, get_timetable_provider
 from .reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,

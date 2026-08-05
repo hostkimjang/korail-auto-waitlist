@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..domain import Provider, ReservationPolicy, WatchStatus
 from ..models import Watch
 from ..provider_accounts import has_authenticated_provider_account
-from ..providers import get_execution_provider
+from ..provider_registry.application import get_execution_provider
 
 
 async def _reservation_dispatch_ready(session: AsyncSession, watch: Watch) -> bool:

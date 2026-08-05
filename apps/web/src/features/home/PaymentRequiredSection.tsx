@@ -8,60 +8,46 @@ import {
 import { usePaymentDeadlineClock } from "../../hooks/usePaymentDeadlineClock";
 import { PaymentDeadlineStatus } from "../../shared/ui/PaymentDeadlineStatus";
 import { StatusPill } from "../../shared/ui/StatusPill";
+import type { PaymentRequiredViewModel } from "./paymentRequiredViewModel";
 
-export interface PaymentRequiredWatch {
-  id?: string;
-  provider: "KORAIL" | "SRT" | "MOCK";
-  train: string;
-  origin?: string;
-  destination?: string;
-  route?: string;
-  departure: string;
-  arrival: string;
-  date: string;
-  seatClassLabel?: string;
-  payment_deadline?: string | null;
-  official_booking_url?: string | null;
-}
-
-function watchIdentity(watch: PaymentRequiredWatch): string {
-  return watch.id ?? `${watch.provider}-${watch.train}-${watch.date}-${watch.departure}`;
-}
+export type {
+  LegacyPaymentRequiredWatch as PaymentRequiredWatch,
+  PaymentRequiredViewModel,
+} from "./paymentRequiredViewModel";
 
 export interface PaymentRequiredSectionProps {
-  watches: ReadonlyArray<PaymentRequiredWatch>;
-  onOpenPayment: (watch: PaymentRequiredWatch) => void;
+  watches: ReadonlyArray<PaymentRequiredViewModel>;
+  onOpenPayment: (watch: PaymentRequiredViewModel) => void;
   emptyState?: ReactNode;
 }
 
 export function sortPaymentRequiredWatches(
-  watches: ReadonlyArray<PaymentRequiredWatch>,
-): PaymentRequiredWatch[] {
+  watches: ReadonlyArray<PaymentRequiredViewModel>,
+): PaymentRequiredViewModel[] {
   return [...watches].sort((left, right) => {
-    const leftDeadline = paymentDeadlineInstant(left.payment_deadline);
-    const rightDeadline = paymentDeadlineInstant(right.payment_deadline);
-    if (leftDeadline === null && rightDeadline === null) return watchIdentity(left).localeCompare(watchIdentity(right));
+    const leftDeadline = paymentDeadlineInstant(left.paymentDeadline);
+    const rightDeadline = paymentDeadlineInstant(right.paymentDeadline);
+    if (leftDeadline === null && rightDeadline === null) return left.id.localeCompare(right.id);
     if (leftDeadline === null) return 1;
     if (rightDeadline === null) return -1;
-    return leftDeadline - rightDeadline || watchIdentity(left).localeCompare(watchIdentity(right));
+    return leftDeadline - rightDeadline || left.id.localeCompare(right.id);
   });
 }
 
 function PaymentRequiredCard({ watch, onOpenPayment, now }: {
-  watch: PaymentRequiredWatch;
+  watch: PaymentRequiredViewModel;
   onOpenPayment: PaymentRequiredSectionProps["onOpenPayment"];
   now: number;
 }) {
-  const identity = watchIdentity(watch);
   const [routeOrigin = "출발역", routeDestination = "도착역"] = String(watch.route ?? "").split(" → ");
   const origin = watch.origin || routeOrigin;
   const destination = watch.destination || routeDestination;
   return (
-    <article className="payment-hero payment-required-card" aria-labelledby={`payment-title-${identity}`}>
+    <article className="payment-hero payment-required-card" aria-labelledby={`payment-title-${watch.id}`}>
       <div className="payment-trip">
         <StatusPill status="payment_required">결제 필요</StatusPill>
         <div className="trip-title-row">
-          <h2 id={`payment-title-${identity}`}>{origin} <ArrowRight aria-hidden="true" /> {destination}</h2>
+          <h2 id={`payment-title-${watch.id}`}>{origin} <ArrowRight aria-hidden="true" /> {destination}</h2>
           <span className={`provider-chip ${watch.provider === "SRT" ? "provider-srt" : "provider-korail"}`}>{watch.train}</span>
         </div>
         <div className="trip-times" aria-label={`${origin} ${watch.departure} 출발, ${destination} ${watch.arrival} 도착`}>
@@ -72,11 +58,11 @@ function PaymentRequiredCard({ watch, onOpenPayment, now }: {
         {watch.seatClassLabel ? <span className="payment-seat-class">{watch.seatClassLabel} 임시 예약</span> : null}
       </div>
       <div className="payment-action">
-        <PaymentDeadlineStatus value={watch.payment_deadline} now={now} />
+        <PaymentDeadlineStatus value={watch.paymentDeadline} now={now} />
         <button
           className="button button-primary button-payment"
           type="button"
-          disabled={!watch.official_booking_url}
+          disabled={!watch.officialBookingUrl}
           onClick={() => onOpenPayment(watch)}
         >
           공식 결제 열기 <ArrowRight size={22} aria-hidden="true" />
@@ -91,10 +77,10 @@ export function PaymentRequiredSection({
   onOpenPayment,
   emptyState = null,
 }: PaymentRequiredSectionProps) {
-  const now = usePaymentDeadlineClock(watches.map((watch) => watch.payment_deadline));
+  const now = usePaymentDeadlineClock(watches.map((watch) => watch.paymentDeadline));
   const sorted = useMemo(
     () => sortPaymentRequiredWatches(
-      watches.filter((watch) => paymentDeadlineState(watch.payment_deadline, now) !== "elapsed"),
+      watches.filter((watch) => paymentDeadlineState(watch.paymentDeadline, now) !== "elapsed"),
     ),
     [now, watches],
   );
@@ -108,7 +94,7 @@ export function PaymentRequiredSection({
       <div className="payment-required-list">
         {sorted.map((watch) => (
           <PaymentRequiredCard
-            key={watchIdentity(watch)}
+            key={watch.id}
             watch={watch}
             onOpenPayment={onOpenPayment}
             now={now}

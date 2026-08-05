@@ -27,7 +27,11 @@ import { useWatchCollection } from "./features/app/useWatchCollection";
 import { useWatchMutations } from "./features/app/useWatchMutations";
 import { HomePage } from "./features/home/HomePage";
 import { mapActiveWatch } from "./features/home/activeWatchViewModel";
-import type { PaymentRequiredWatch } from "./features/home/PaymentRequiredSection";
+import {
+  mapLegacyPaymentRequiredWatch,
+  mapPaymentRequiredWatch,
+  type PaymentRequiredViewModel,
+} from "./features/home/paymentRequiredViewModel";
 import { ReservationsPage } from "./features/reservations/ReservationsPage";
 import { NewWaitPage } from "./features/new-wait/NewWaitPage";
 import { seatClassNames } from "./features/new-wait/TrainResultCard";
@@ -210,10 +214,12 @@ export function App(): ReactElement {
     markUnauthenticated,
   });
 
-  const paymentWatches: PaymentRequiredWatch[] = watches.filter(
+  const paymentWatches: PaymentRequiredViewModel[] = watches.filter(
     (watch) => watch.status === "payment_required",
-  );
-  if (auth.demo && paymentWatches.length === 0) paymentWatches.push(demoPaymentWatch);
+  ).map(mapPaymentRequiredWatch);
+  if (auth.demo && paymentWatches.length === 0) {
+    paymentWatches.push(mapLegacyPaymentRequiredWatch(demoPaymentWatch));
+  }
   const activeWatches = watches.filter(isActiveWatch).map((watch) => (
     mapActiveWatch(watch, accountAuthStatusFor(watch.provider))
   ));

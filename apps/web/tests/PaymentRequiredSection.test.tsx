@@ -5,20 +5,23 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PaymentRequiredSection,
   sortPaymentRequiredWatches,
-  type PaymentRequiredWatch,
 } from "../src/features/home/PaymentRequiredSection";
+import type { PaymentRequiredViewModel } from "../src/features/home/paymentRequiredViewModel";
 
-function paymentWatch(id: string, deadline: string | null): PaymentRequiredWatch {
+function paymentWatch(id: string, deadline: string | null): PaymentRequiredViewModel {
   return {
     id,
     provider: "KORAIL",
     train: `KTX ${id}`,
+    origin: null,
+    destination: null,
     route: "서울 → 부산",
     departure: "10:00",
     arrival: "12:30",
     date: "8월 2일",
-    payment_deadline: deadline,
-    official_booking_url: "https://www.korail.com/ticket/search/general",
+    seatClassLabel: null,
+    paymentDeadline: deadline,
+    officialBookingUrl: "https://www.korail.com/ticket/search/general",
   };
 }
 

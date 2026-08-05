@@ -9,7 +9,7 @@ import {
   openHomeOfficialPayment,
   type HomePageProps,
 } from "../src/features/home/HomePage";
-import type { PaymentRequiredWatch } from "../src/features/home/PaymentRequiredSection";
+import type { PaymentRequiredViewModel } from "../src/features/home/paymentRequiredViewModel";
 
 function activeWatch(overrides: Partial<ActiveWatch> = {}): ActiveWatch {
   return {
@@ -95,14 +95,19 @@ describe("home page", () => {
   it("fails closed with a readable toast when the official payment URL is missing", () => {
     const onToast = vi.fn();
     const openWindow = vi.fn(() => null);
-    const payment: PaymentRequiredWatch = {
+    const payment: PaymentRequiredViewModel = {
+      id: "missing-url",
       provider: "KORAIL",
       train: "KTX 085",
+      origin: null,
+      destination: null,
       route: "서울 → 부산",
       departure: "12:00",
       arrival: "14:30",
       date: "8월 8일",
-      official_booking_url: null,
+      seatClassLabel: null,
+      paymentDeadline: null,
+      officialBookingUrl: null,
     };
 
     openHomeOfficialPayment(payment, onToast, openWindow);
@@ -116,15 +121,19 @@ describe("home page", () => {
     const user = userEvent.setup();
     const onToast = vi.fn();
     const openWindow = vi.spyOn(window, "open").mockImplementation(() => null);
-    const payment: PaymentRequiredWatch = {
+    const payment: PaymentRequiredViewModel = {
+      id: "valid-url",
       provider: "SRT",
       train: "SRT 370",
+      origin: null,
+      destination: null,
       route: "대전 → 수서",
       departure: "22:06",
       arrival: "23:12",
       date: "8월 8일",
-      payment_deadline: null,
-      official_booking_url: "https://etk.srail.kr",
+      seatClassLabel: null,
+      paymentDeadline: null,
+      officialBookingUrl: "https://etk.srail.kr",
     };
     render(
       <HomePage
@@ -152,14 +161,18 @@ describe("home page", () => {
       <HomePage
         {...homePageProps({
           paymentWatches: [{
+            id: "elapsed",
             provider: "SRT",
             train: "SRT 370",
+            origin: null,
+            destination: null,
             route: "대전 → 수서",
             departure: "22:06",
             arrival: "23:12",
             date: "8월 4일",
-            payment_deadline: "2026-08-01T23:59:59Z",
-            official_booking_url: "https://etk.srail.kr",
+            seatClassLabel: null,
+            paymentDeadline: "2026-08-01T23:59:59Z",
+            officialBookingUrl: "https://etk.srail.kr",
           }],
         })}
       />,

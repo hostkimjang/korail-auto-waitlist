@@ -171,6 +171,36 @@ describe("module dependency boundaries", () => {
     );
   });
 
+  it("keeps the Home payment-required ViewModel in one feature owner", () => {
+    const declarationPattern = /\bexport\s+interface\s+(PaymentRequiredViewModel)\b/g;
+    const declarations = sourceFiles(SOURCE_DIRECTORY).flatMap((filePath) => (
+      [...readFileSync(filePath, "utf8").matchAll(declarationPattern)].map((match) => (
+        `${sourcePath(filePath)}:${match[1]}`
+      ))
+    ));
+    const paymentRequiredSection = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/home/PaymentRequiredSection.tsx"),
+      "utf8",
+    );
+    const homePage = readFileSync(
+      path.join(SOURCE_DIRECTORY, "features/home/HomePage.tsx"),
+      "utf8",
+    );
+
+    expect(declarations).toEqual([
+      "features/home/paymentRequiredViewModel.ts:PaymentRequiredViewModel",
+    ]);
+    expect(paymentRequiredSection).not.toMatch(/payment_deadline|official_booking_url/);
+    expect(homePage).not.toMatch(/payment_deadline|official_booking_url/);
+    expect(paymentRequiredSection).toMatch(
+      /LegacyPaymentRequiredWatch\s+as\s+PaymentRequiredWatch/,
+    );
+    expect(homePage).toMatch(/\bexport interface HomeCompatibilityProps\b/);
+    expect(edges.map(edgeName)).toContain(
+      "features/home/paymentRequiredViewModel.ts -> api/watchProjection",
+    );
+  });
+
   it("keeps watch DTO parsing upstream of projection and CRUD", () => {
     const watchEdges = edges
       .filter(({ importer }) => [

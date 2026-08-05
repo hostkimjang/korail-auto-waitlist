@@ -10,8 +10,9 @@ import {
 } from "./ActiveWatchList";
 import {
   PaymentRequiredSection,
-  type PaymentRequiredWatch,
+  type PaymentRequiredViewModel,
 } from "./PaymentRequiredSection";
+import type { LegacyPaymentRequiredWatch } from "./paymentRequiredViewModel";
 
 export interface HomeWatchRefreshState {
   isRefreshing: boolean;
@@ -27,7 +28,7 @@ type OpenOfficialWindow = (
 
 export interface HomePageProps {
   watches: ActiveWatch[];
-  paymentWatches?: ReadonlyArray<PaymentRequiredWatch>;
+  paymentWatches?: ReadonlyArray<PaymentRequiredViewModel>;
   watchRefreshState?: HomeWatchRefreshState;
   onRefreshWatches?: () => void;
   onCreate: () => void;
@@ -54,8 +55,8 @@ export interface HomeCompatibilityProps extends Pick<
   | "reservationPolicyUpdatingIds"
   | "onToast"
 > {
-  paymentWatch?: PaymentRequiredWatch | null;
-  paymentWatches?: ReadonlyArray<PaymentRequiredWatch>;
+  paymentWatch?: LegacyPaymentRequiredWatch | null;
+  paymentWatches?: ReadonlyArray<LegacyPaymentRequiredWatch>;
   onNavigate: (
     page: "new" | "reservations" | "settings",
     section?: "rail-accounts",
@@ -83,18 +84,18 @@ function WatchManagementHero({ onCreate }: { onCreate: () => void }): ReactEleme
 }
 
 export function openHomeOfficialPayment(
-  watch: PaymentRequiredWatch,
+  watch: PaymentRequiredViewModel,
   onToast: HomeToast,
   openWindow: OpenOfficialWindow = (url, target, features) => (
     window.open(url, target, features)
   ),
 ): void {
-  if (!watch.official_booking_url) {
+  if (!watch.officialBookingUrl) {
     onToast("공식 예매 주소를 확인할 수 없습니다.");
     return;
   }
   onToast("공식 결제 화면을 새 창에서 엽니다.");
-  openWindow(watch.official_booking_url, "_blank", "noopener,noreferrer");
+  openWindow(watch.officialBookingUrl, "_blank", "noopener,noreferrer");
 }
 
 export function HomePage({

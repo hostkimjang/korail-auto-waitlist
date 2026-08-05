@@ -1,10 +1,11 @@
 import type { ReactElement } from "react";
 
 import { HomePage, type HomeCompatibilityProps } from "../features/home/HomePage";
+import { PaymentRequiredSection } from "../features/home/PaymentRequiredSection";
 import {
-  PaymentRequiredSection,
-  type PaymentRequiredWatch,
-} from "../features/home/PaymentRequiredSection";
+  mapLegacyPaymentRequiredWatch,
+  type LegacyPaymentRequiredWatch,
+} from "../features/home/paymentRequiredViewModel";
 import { NewWaitPage, type NewWaitPageProps } from "../features/new-wait/NewWaitPage";
 import { OfficialHandoff } from "../features/official-handoff/OfficialHandoff";
 import {
@@ -14,7 +15,7 @@ import {
 import { renderHomeSeatFoundAction } from "./HomeSeatFoundOfficialHandoff";
 
 export interface PaymentHeroProps {
-  watch: PaymentRequiredWatch;
+  watch: LegacyPaymentRequiredWatch;
   onOfficialPayment: () => void;
 }
 
@@ -24,7 +25,7 @@ export function PaymentHero({
 }: PaymentHeroProps): ReactElement {
   return (
     <PaymentRequiredSection
-      watches={[watch]}
+      watches={[mapLegacyPaymentRequiredWatch(watch)]}
       onOpenPayment={() => onOfficialPayment()}
     />
   );
@@ -47,7 +48,7 @@ export function Home({
   return (
     <HomePage
       watches={watches}
-      paymentWatches={paymentWatches}
+      paymentWatches={paymentWatches.map(mapLegacyPaymentRequiredWatch)}
       watchRefreshState={watchRefreshState}
       {...(onRefreshWatches ? { onRefreshWatches } : {})}
       onCreate={() => onNavigate("new")}

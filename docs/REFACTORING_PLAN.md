@@ -1095,6 +1095,25 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   중단 내구성을 새로 증명하지는 않습니다. `SeatObservationResult` DTO annotation의 domain 타입
   재설계와 `record_seat_observation` application 이동은 별도 슬라이스로 남겼습니다.
 
+### 2026-08-05 스물두 번째 구조 슬라이스 C
+
+- 시간표 strict 테스트 owner: legacy `api.test.js`의 연속된 시간표 12개 선언·12개 실행을
+  `timetablesApi.test.ts`로 이동했습니다. production mapper, provider·구간·날짜·시간 query와 승객 수,
+  provider별 1회 요청·병합·필터·정렬·중복 제거, 화면 결과 상한 없음, 요일·역 identity·시간 범위 검증,
+  provider scoped 503와 부분 성공 계약을 그대로 유지합니다.
+- strict 전환: fetch 입력은 `RequestInfo | URL`, provider key는 좁은 union/Record, filter form은
+  `TimetableSearchForm`, 배열·mock call은 명시적 guard로 검사합니다. `any`, `@ts-ignore`, 무근거
+  assertion은 추가하지 않았습니다. watch 테스트가 계속 쓰는 `mapTimetable` legacy import는 유지했습니다.
+- 테스트 수 ratchet: 이동 전 legacy API 36 + timetable owner 8과 이동 후 legacy API 24 + timetable
+  owner 20이 모두 44개 선언·44개 실행입니다. 기존 owner와 의미가 겹치는 테스트도 삭제·합치지 않았고
+  이름·순서·inline fixture·assertion의 기계적 비교가 일치합니다.
+- 확인된 검증: owner focused 44건, production consumer 5개 파일·44건, ESLint 오류 0개·고정된 legacy
+  warning 12개, strict typecheck, 전체 Vitest 80개 파일·571건, production build와
+  `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: production source와 runtime 행동을 바꾸지 않은 test/docs-only 슬라이스이므로 기본
+  E2E와 Compose 재배포는 반복하지 않았습니다. legacy API에는 watch 21개·auth 2개·events 1개 선언이
+  남아 있으며 시간표 DTO·domain·ViewModel 물리 분리는 별도 production 슬라이스입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

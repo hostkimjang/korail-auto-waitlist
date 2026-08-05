@@ -352,6 +352,8 @@
 - [x] booking open 5상태·waitlist·departed·out-of-service·sold-out no-op·delay projection, canonical/services identity, projection·observation·outbox commit/rollback 원자성과 새 owner 역의존 차단을 고정. focused pytest 59건, API 전체 1,083건, Ruff `E/F/I`, format ratchet 60개, 독립 재감사 P0~P3 없음과 `git diff --check` 통과
 - [x] 오류 0인 operational projection owner를 strict mypy ratchet에 즉시 추가해 대상 7→8개 파일 확장하고 `uv lock --check`·scoped mypy 오류 0 확인
 - [x] 스물두 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] legacy `api.test.js`의 시간표 mapper·query·승객 수·provider 병합/부분 성공·필터/정렬/중복 제거·입력 검증 12개 선언/실행을 strict `timetablesApi.test.ts` owner로 이동. watch가 쓰는 `mapTimetable` import와 기존 owner 8건·inline fixture·assertion은 보존하고 production source·public export는 변경하지 않음
+- [x] 스물두 번째 구조 슬라이스 C의 이동 전 API 36 + timetable 8과 이동 후 API 24 + timetable 20의 44개 선언/실행 보존, consumer 5파일·44건, 전체 Vitest 80파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build와 `git diff --check` 통과. test/docs only라 기본 E2E·Compose 재배포는 생략
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

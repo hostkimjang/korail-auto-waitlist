@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from datetime import time as clock_time
 from pathlib import Path
-from typing import Any, ClassVar, Protocol, Self, cast
+from typing import Any, Protocol, Self, cast
 from urllib.parse import urlsplit
 
 from .korail_browser_automation import (
@@ -56,7 +56,7 @@ from .korail_pydoll_confirmation_reader import (
 )
 from .korail_pydoll_contracts import (
     PydollPageSnapshot,
-    PydollSeatBox,
+    PydollSeatBox,  # noqa: F401 -- compatibility module export.
     PydollTrainRow,
     normalize_korail_train_number,
 )
@@ -102,6 +102,13 @@ from .korail_pydoll_reservation_driver import (
     ReservationAttemptState as _ReservationAttemptState,
 )
 from .korail_pydoll_search_actor import PydollReadOnlySearchActor
+from .korail_pydoll_search_driver import (
+    PydollSearchDomDriver,
+    SearchControlState,
+)
+from .korail_pydoll_search_driver import (
+    SearchHourCandidate as _HourCandidate,
+)
 from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
 from .korail_search_bootstrap import (
     KorailStationIdentityResolver,
@@ -134,7 +141,7 @@ _snapshot_has_unique_reservation_target = has_unique_reservation_target
 
 
 @dataclass(frozen=True)
-class _ControlState(ReservationControlState):
+class _ControlState(ReservationControlState, SearchControlState):
     enabled: bool
     aria_disabled: str
     disabled_attribute: bool
@@ -142,13 +149,6 @@ class _ControlState(ReservationControlState):
     container_classes: tuple[str, ...]
     slide_classes: tuple[str, ...]
     read_error: bool = False
-
-
-@dataclass(frozen=True)
-class _HourCandidate:
-    element: Any
-    hour: int
-    state: _ControlState
 
 
 class PydollBrowserSession(Protocol):
@@ -559,15 +559,6 @@ class PydollKorailBrowserClient:
 
 
 class _PydollSession:
-    _STATION_NAMES: ClassVar[dict[str, str]] = {
-        "departure": "txtGoStart",
-        "arrival": "txtGoEnd",
-    }
-    _STATION_TRIGGERS: ClassVar[dict[str, str]] = {
-        "departure": "출발역 선택",
-        "arrival": "도착역 선택",
-    }
-
     def __init__(self, page_url: str, timeout_ms: int, headless: bool) -> None:
         self.page_url = page_url
         self.timeout_ms = timeout_ms
@@ -620,6 +611,24 @@ class _PydollSession:
             utc_now=lambda: datetime.now(UTC),
             event_logger=logger,
         )
+        self._search_driver = PydollSearchDomDriver(
+            port=self,
+            timeout_seconds=self._timeout_seconds,
+            query=self._search_query,
+            execute_script=self._search_execute_script,
+            evaluate_value=lambda selector: self._evaluate_value(selector),
+            evaluate_text=lambda selector: self._evaluate_text(selector),
+            is_submitted=lambda: self._submitted,
+            mark_submitted=self._mark_search_submitted,
+            network_responses=lambda: self._network_responses,
+            deduplicate_snapshot=_deduplicate_snapshot,
+            merge_page_snapshots=_merge_page_snapshots,
+            snapshot_requires_expansion_stop=_snapshot_requires_expansion_stop,
+            train_row_identity=_train_row_identity,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            protection_surface_selector=_PROTECTION_SURFACE_SELECTOR,
+        )
 
     def _login_go_to(self, url: str, timeout: int) -> Awaitable[object]:
         return cast(Awaitable[object], self._tab.go_to(url, timeout=timeout))
@@ -641,6 +650,23 @@ class _PydollSession:
                 timeout=timeout,
             ),
         )
+
+    def _search_query(self, selector: str, **options: object) -> Awaitable[Any]:
+        return cast(Awaitable[Any], self._tab.query(selector, **options))
+
+    def _search_execute_script(
+        self,
+        script: str,
+        *,
+        return_by_value: bool,
+    ) -> Awaitable[object]:
+        return cast(
+            Awaitable[object],
+            self._tab.execute_script(script, return_by_value=return_by_value),
+        )
+
+    def _mark_search_submitted(self) -> None:
+        self._submitted = True
 
     def _reset_login_search_state(self) -> None:
         self._submitted = False
@@ -782,228 +808,19 @@ class _PydollSession:
                 logger.warning("KORAIL Pydoll network event cleanup failed")
 
     async def choose_station(self, kind: str, station: str) -> None:
-        trigger = await self._find_exact_visible("a", self._STATION_TRIGGERS[kind])
-        await trigger.click()
-        dialog = await self._wait_for_dialog("기차역 조회")
-        try:
-            target = await self._find_exact_visible("a", station, scope=dialog)
-        except LookupError:
-            inputs = await self._visible_elements(
-                "input[title='역명을 입력해주세요']", scope=dialog
-            )
-            if len(inputs) != 1:
-                raise BrowserSourceUnavailable("station_search_input") from None
-            await inputs[0].clear()
-            await inputs[0].type_text(station)
-            search = await self._find_exact_visible("button", "검색", scope=dialog)
-            await search.click()
-            target = await self._wait_for_exact_text("a", station, scope=dialog)
-        await target.click()
-        await self._wait_for_value(f"input[name='{self._STATION_NAMES[kind]}']", station)
+        await self._search_driver.choose_station(kind, station)
 
     async def choose_schedule(self, travel_date: date, departure_hour: int) -> None:
-        applied_date, applied_hour = await self.current_schedule()
-        target_date_was_selected = applied_date == travel_date
-        pre_picker_hour_matches = applied_hour == departure_hour
-        trigger = await self._tab.query("a[title='출발일']", timeout=self._timeout_seconds)
-        await trigger.click()
-        dialog = await self._wait_for_dialog("날짜 선택")
-        target_month = f"{travel_date.year}. {travel_date.month:02d}."
-        target_slide = None
-        await self._wait_for_visible_elements(
-            ".datepk_wrap .slick-slide.slick-active",
-            scope=dialog,
-            failure_stage="departure_date_controls",
-        )
-        for _ in range(25):
-            active_slides = await self._visible_elements(
-                ".datepk_wrap .slick-slide.slick-active", scope=dialog
-            )
-            for slide in active_slides:
-                label = await slide.query("p.date", raise_exc=False)
-                if label is not None and (await label.text).strip() == target_month:
-                    target_slide = slide
-                    break
-            if target_slide is not None:
-                break
-            current = await dialog.query(".datepk_wrap .slick-current p.date")
-            current_match = re.fullmatch(r"(\d{4})\.\s*(\d{2})\.", (await current.text).strip())
-            if current_match is None:
-                raise BrowserSourceUnavailable("departure_month_navigate")
-            current_month = (int(current_match.group(1)), int(current_match.group(2)))
-            direction = (
-                ".slick-next"
-                if current_month < (travel_date.year, travel_date.month)
-                else ".slick-prev"
-            )
-            arrow = await dialog.query(
-                f".datepk_wrap button{direction}:not(.slick-disabled)", raise_exc=False
-            )
-            if arrow is None:
-                raise BrowserSourceUnavailable("departure_month_navigate")
-            await arrow.click()
-            await asyncio.sleep(0.3)
-        if target_slide is None:
-            raise BrowserSourceUnavailable("departure_month_find")
-        if not target_date_was_selected:
-            day = await self._wait_for_enabled_exact_text(
-                ".datepicker a",
-                str(travel_date.day),
-                scope=target_slide,
-                failure_stage="departure_date_disabled",
-                accepted_labels=(f"{travel_date.day}출발일", f"{travel_date.day} 출발일"),
-            )
-            await day.click()
-            # The official picker can leave hour controls in the previous
-            # service-date state until the changed date is applied. Commit only
-            # the date first, verify the public input, then reopen the picker so
-            # hour enabled/disabled state belongs to the requested date.
-            apply_button = await self._find_exact_visible("button", "적용", scope=dialog)
-            await apply_button.click()
-            await self._wait_for_schedule_date(travel_date)
-            _, applied_hour = await self.current_schedule()
-            pre_picker_hour_matches = applied_hour == departure_hour
-            trigger = await self._tab.query(
-                "a[title='출발일']",
-                timeout=self._timeout_seconds,
-            )
-            await trigger.click()
-            dialog = await self._wait_for_dialog("날짜 선택")
-            target_date_was_selected = True
-
-        seen_signatures: set[tuple[object, ...]] = set()
-        await self._wait_for_visible_elements(
-            ".slideWrap .slick-slide.slick-active a",
-            scope=dialog,
-            failure_stage="departure_hour_controls",
-        )
-        for _ in range(24):
-            candidates = await self._read_hour_candidates(
-                ".slideWrap .slick-slide.slick-active a", scope=dialog
-            )
-            all_candidates = await self._read_hour_candidates(
-                ".slideWrap .slick-slide a",
-                scope=dialog,
-                visible_only=False,
-            )
-            current_window = self._current_hour_window(candidates)
-            signature = self._hour_window_signature(current_window)
-            if not current_window or signature in seen_signatures:
-                raise BrowserSourceUnavailable("departure_hour_navigate")
-            seen_signatures.add(signature)
-
-            active_targets = [
-                candidate for candidate in candidates if candidate.hour == departure_hour
-            ]
-            all_targets = [
-                candidate for candidate in all_candidates if candidate.hour == departure_hour
-            ]
-            current_targets = [
-                candidate for candidate in current_window if candidate.hour == departure_hour
-            ]
-            # React Slick keeps every exact hour in the official DOM even when
-            # only the first ten anchors are inside the clipped visual window.
-            # Validate the hidden catalog, but move the visible carousel below
-            # and click the target only after it becomes active.
-            if (
-                not active_targets
-                and self._is_exact_hour_catalog(all_candidates)
-                and (len(all_targets) != 1 or not self._is_soft_dom_hour(all_targets[0]))
-            ):
-                raise BrowserSourceUnavailable("departure_hour_disabled")
-            if (
-                len(active_targets) == 1
-                and self._is_soft_adjacent_hour(candidates, current_window, active_targets[0])
-                and await self._click_hour_and_confirm(active_targets[0])
-            ):
-                # KORAIL renders the next visible five-hour group inside the
-                # active Slick viewport but sets only aria-disabled/tabindex on
-                # those anchors. A normal pointer click still selects the hour.
-                # Live ``current`` confirmation and exact #startDate readback
-                # both reject an ignored click.
-                break
-            for candidate in current_targets:
-                if candidate.state.enabled:
-                    if not await self._click_hour_and_confirm(candidate):
-                        raise BrowserSourceUnavailable("departure_hour_navigate")
-                    break
-            else:
-                already_selected = self._is_exact_selected_hour(
-                    current_window,
-                    current_targets,
-                    target_date_is_selected=target_date_was_selected,
-                    pre_picker_hour_matches=pre_picker_hour_matches,
-                )
-                if already_selected:
-                    break
-                if current_targets:
-                    raise BrowserSourceUnavailable("departure_hour_disabled")
-                current_hours = tuple(candidate.hour for candidate in current_window)
-                if departure_hour < min(current_hours):
-                    direction = ".slick-prev"
-                elif departure_hour > max(current_hours):
-                    direction = ".slick-next"
-                else:
-                    raise BrowserSourceUnavailable("departure_hour_navigate")
-                arrow = await self._find_hour_navigation_control(direction, scope=dialog)
-                if arrow is not None:
-                    await arrow.click()
-                    if await self._wait_for_hour_window_change(
-                        dialog,
-                        current_hours,
-                        direction,
-                        timeout_seconds=1,
-                    ):
-                        continue
-
-                # The production time picker can have no time-owned arrow at all,
-                # or expose a disabled-looking ``a.slick-prev`` whose click is
-                # ignored while Slick is settling. Keep the date carousel out of
-                # this path and reproduce the user's horizontal drag inside the
-                # unique time viewport.
-                await self._swipe_hour_carousel(dialog, direction)
-                if await self._wait_for_hour_window_change(dialog, current_hours, direction):
-                    continue
-                # Some official picker renders expose neither a usable Slick arrow nor
-                # mouse-drag handling, but retain the carousel's normal keyboard
-                # navigation. Focus the visible viewport and send one standard arrow
-                # key; do not mutate the picker DOM or accept the requested time
-                # unless the live window and final #startDate readback both confirm it.
-                if await self._navigate_hour_carousel_by_keyboard(
-                    dialog, direction
-                ) and await self._wait_for_hour_window_change(
-                    dialog,
-                    current_hours,
-                    direction,
-                ):
-                    continue
-                await self._log_hour_window_navigation_failure(
-                    dialog,
-                    current_hours,
-                )
-                raise BrowserSourceUnavailable("departure_hour_navigate")
-            break
-        else:
-            raise BrowserSourceUnavailable("departure_hour_find")
-        apply_button = await self._find_exact_visible("button", "적용", scope=dialog)
-        await apply_button.click()
-        await self._wait_for_schedule(travel_date, departure_hour)
+        await self._search_driver.choose_schedule(travel_date, departure_hour)
 
     async def current_station(self, kind: str) -> str:
-        return str(await self._evaluate_value(f"input[name='{self._STATION_NAMES[kind]}']")).strip()
+        return await self._search_driver.current_station(kind)
 
     async def current_schedule(self) -> tuple[date, int]:
-        value = str(await self._evaluate_value("#startDate")).strip()
-        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\([^)]*\)\s+(\d{2}):00", value)
-        if match is None:
-            raise BrowserSourceUnavailable("departure_current_date")
-        return date.fromisoformat(match.group(1)), int(match.group(2))
+        return await self._search_driver.current_schedule()
 
     async def current_passenger(self) -> str:
-        value = await self._evaluate_text("a.data.btn_pop")
-        if not value:
-            value = str(await self._evaluate_value("#passenger, #labelple"))
-        return " ".join(value.split())
+        return await self._search_driver.current_passenger()
 
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         """Use one explicit official login method and verify an authenticated header."""
@@ -1100,47 +917,17 @@ class _PydollSession:
             self._http_capture_start = None
 
     async def submit_once(self) -> None:
-        if self._submitted:
-            raise BrowserSourceUnavailable("submit_button")
-        self._submitted = True
-        await self._click_exact_text("button", "열차 조회")
+        await self._search_driver.submit_once()
 
     async def wait_for_result(self) -> PydollPageSnapshot:
-        deadline = time.monotonic() + self._timeout_seconds
-        last = await self._snapshot()
-        while time.monotonic() < deadline:
-            trigger = protection_trigger_from_text(last.body_text)
-            if trigger is not None or last.rows or last.network_responses:
-                return last
-            if re.search(r"조회\s*결과(?:가)?\s*(?:없|0건)", last.body_text):
-                raise BrowserSourceUnavailable("wait_result")
-            await asyncio.sleep(0.25)
-            last = await self._snapshot()
-        raise BrowserSourceUnavailable("wait_result")
+        return await self._search_driver.wait_for_result()
 
     async def expand_results(
         self,
         snapshot: PydollPageSnapshot,
         max_actions: int,
     ) -> PydollPageSnapshot:
-        """Expand only the current result list without submitting or reloading the search."""
-        current = _deduplicate_snapshot(snapshot)
-        accumulated = current
-        for _ in range(max(0, max_actions)):
-            if _snapshot_requires_expansion_stop(current):
-                break
-            try:
-                more = await self._find_exact_visible("a", "더보기")
-            except LookupError:
-                break
-            previous_rows = {_train_row_identity(row) for row in current.rows}
-            await more.click()
-            candidate, progressed = await self._wait_for_result_growth(previous_rows)
-            accumulated = _merge_page_snapshots(accumulated, candidate)
-            current = candidate
-            if _snapshot_requires_expansion_stop(candidate) or not progressed:
-                break
-        return accumulated
+        return await self._search_driver.expand_results(snapshot, max_actions)
 
     async def reserve_once(
         self,
@@ -1185,105 +972,10 @@ class _PydollSession:
         self,
         previous_rows: set[tuple[str, str, str]],
     ) -> tuple[PydollPageSnapshot, bool]:
-        deadline = time.monotonic() + min(self._timeout_seconds, 10)
-        last = await self._snapshot()
-        while time.monotonic() < deadline:
-            if _snapshot_requires_expansion_stop(last):
-                return last, False
-            current_rows = {_train_row_identity(row) for row in last.rows}
-            if current_rows - previous_rows:
-                return last, True
-            await asyncio.sleep(0.25)
-            last = await self._snapshot()
-        return last, False
+        return await self._search_driver.wait_for_result_growth(previous_rows)
 
     async def _snapshot(self) -> PydollPageSnapshot:
-        script = """
-            (() => {
-              const visible = (element) => {
-                const style = getComputedStyle(element);
-                const rect = element.getBoundingClientRect();
-                return style.display !== 'none' && style.visibility !== 'hidden'
-                  && rect.width > 0 && rect.height > 0;
-              };
-              return {
-                body: document.body?.innerText || '',
-                url: window.location.href,
-                title: document.title || '',
-                reservationRows: (() => {
-                  const normalized = (value) => (value || '').replace(/\\s+/g, ' ').trim();
-                  const action = Array.from(document.querySelectorAll('button,a'))
-                    .filter(visible)
-                    .filter((item) => normalized(item.innerText) === '결제/발권');
-                  const rows = [];
-                  for (const control of action) {
-                    let current = control.parentElement;
-                    let best = null;
-                    for (let depth = 0; current && depth < 9; depth += 1) {
-                      const text = current.innerText || '';
-                      if (text.includes('예약취소') && text.includes('예약변경') &&
-                          text.includes('결제/발권') && text.includes('→') &&
-                          (text.match(/\\b\\d{2}:\\d{2}\\b/g) || []).length >= 2) {
-                        best = current;
-                        break;
-                      }
-                      current = current.parentElement;
-                    }
-                    if (best && !rows.includes(best)) rows.push(best);
-                  }
-                  return rows.map((row) => row.innerText || '');
-                })(),
-                protectionTexts: Array.from(document.querySelectorAll(
-                  __PROTECTION_SURFACE_SELECTOR__
-                )).filter(visible).map((item) => item.innerText),
-                rows: Array.from(document.querySelectorAll('li.tckList')).filter(visible)
-                  .map((row) => ({
-                    kind: row.querySelector('.tck_inner .tit_box')?.innerText || '',
-                    number: row.querySelector('.tck_inner .tit_box .num')?.innerText || '',
-                    route: row.querySelector('.tck_inner .data_box.right')?.innerText || '',
-                    fullText: row.innerText || '',
-                    seats: Array.from(row.querySelectorAll('.tck_inner .price_box'))
-                      .filter(visible).map((box) => ({
-                        text: box.innerText,
-                        classes: Array.from(new Set([
-                          ...box.classList,
-                          ...Array.from(box.querySelectorAll('.sold_out,.sold_out_soon'))
-                            .flatMap((item) => Array.from(item.classList)),
-                        ])),
-                      })),
-                  })),
-              };
-            })()
-            """.replace("__PROTECTION_SURFACE_SELECTOR__", repr(_PROTECTION_SURFACE_SELECTOR))
-        response = await self._tab.execute_script(
-            script,
-            return_by_value=True,
-        )
-        value = response["result"]["result"]["value"]
-        return PydollPageSnapshot(
-            body_text=str(value["body"]),
-            url=str(value["url"]),
-            title=str(value["title"]),
-            reservation_rows=tuple(str(item) for item in value["reservationRows"]),
-            protection_texts=tuple(str(item) for item in value["protectionTexts"]),
-            network_responses=tuple(sorted(self._network_responses)),
-            rows=tuple(
-                PydollTrainRow(
-                    kind_text=str(row["kind"]),
-                    train_number=str(row["number"]),
-                    route_text=str(row["route"]),
-                    seats=tuple(
-                        PydollSeatBox(
-                            text=str(box["text"]),
-                            classes=frozenset(str(item) for item in box["classes"]),
-                        )
-                        for box in row["seats"]
-                    ),
-                    full_text=str(row["fullText"]),
-                )
-                for row in value["rows"]
-            ),
-        )
+        return await self._search_driver.snapshot()
 
     async def _evaluate_value(self, selector: str) -> object:
         response = await self._tab.execute_script(
@@ -1948,7 +1640,7 @@ class _PydollSession:
             )
 
     @staticmethod
-    def _control_state_log_value(state: _ControlState) -> tuple[object, ...]:
+    def _control_state_log_value(state: SearchControlState) -> tuple[object, ...]:
         return (
             state.enabled,
             state.aria_disabled,

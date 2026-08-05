@@ -1208,6 +1208,27 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   재배포는 수행하지 않았습니다. `allowJs` 제거 전 남은 포함 범위는 `setup.js`,
   `eslintRatchet.test.js`, `App.test.jsx`, `sw.test.js` 네 파일입니다.
 
+### 2026-08-05 스물세 번째 구조 슬라이스 B
+
+- operations CSS owner: `features.css` 끝의 `.operations-dashboard`부터 마지막 reduced-motion block까지
+  447줄을 `styles/operations.css`로 이동했습니다. `operations-*` selector의 production consumer는
+  strict `features/settings/SystemStatusDashboard.tsx` 하나이며 공용 UI나 다른 feature 사용은 없습니다.
+- cascade 보존: 전역 import는 `tokens → base → shell → features → operations → app-surfaces → responsive`
+  일곱 경계입니다. HEAD의 4,476줄 `features.css`와 분리 후 `features.css` 4,029줄 +
+  `operations.css` 447줄이 줄·Git clean-filter blob 기준으로 정확히 같습니다. `operations-shimmer`와
+  reduced-motion override도 소비 owner와 함께 이동했습니다.
+- 리뷰 보정: 최초에는 앞 639줄을 Home owner로 분리했지만 status/provider/countdown/empty selector가
+  reservations·settings·new-wait에도 쓰이는 P2 암묵 의존을 독립 리뷰에서 확인해 전부 되돌렸습니다.
+  전용 tail만 다시 분리한 뒤 독립 재리뷰에서 P0~P3 잔여 지적이 없었습니다.
+- 구조 회귀: import exact order, feature owner 마지막 selector, operations 시작 selector·event list·
+  keyframe·reduced-motion EOF를 strict 구조 테스트로 고정했습니다. operations dashboard 인접 focused
+  2개 파일·14건도 통과했습니다.
+- 확인된 검증: ESLint 오류 0개·고정된 legacy warning 12개, strict typecheck, 전체 Vitest 79개 파일·
+  571건, production build, Sites 4건, 기본 Playwright E2E 14건과 `git diff --check`를 통과했습니다.
+  기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: CSS·구조 테스트·문서만 변경했으므로 Compose 재배포는 수행하지 않았습니다. 남은
+  `features.css`의 new-wait·reservation·settings/shared selector 재소유와 중복 정리는 별도입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

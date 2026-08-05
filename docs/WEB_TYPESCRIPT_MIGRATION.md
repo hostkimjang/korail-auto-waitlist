@@ -144,6 +144,8 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `styles/{tokens,base,shell,features,responsive}.css` 1차 경계로 분리. 원본 Git blob과 다섯 파일
      결합의 113,950바이트 동일성, 320px·720×500 reflow·overflow·44px Chromium 계약을 검증하고
      responsive spec을 기본 `test:e2e`/`verify`에 연결
+   - 완료: settings 운영 상태 대시보드 전용 `.operations-dashboard`부터 EOF 447줄을
+     `styles/operations.css`로 이동하고 `operations-shimmer`·reduced-motion·cascade 순서를 보존
    - 남음: `features.css`를 실제 기능 소유 경계로 더 나누고 중복 selector 정리는 별도 동작 변경
      슬라이스에서 수행
    - 모든 소스·테스트 전환 후 `allowJs` 제거, Vitest JS/JSX include 제거

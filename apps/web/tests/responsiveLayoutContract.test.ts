@@ -7,6 +7,7 @@ const styleFileNames = [
   "base.css",
   "shell.css",
   "features.css",
+  "operations.css",
   "app-surfaces.css",
   "responsive.css",
 ] as const;
@@ -17,6 +18,7 @@ const tokensStyles = readStyleFile("tokens.css");
 const baseStyles = readStyleFile("base.css");
 const shellStyles = readStyleFile("shell.css");
 const featureStyles = readStyleFile("features.css");
+const operationsStyles = readStyleFile("operations.css");
 const appSurfaceStyles = readStyleFile("app-surfaces.css");
 const responsiveStyles = readStyleFile("responsive.css");
 const styles = [
@@ -24,6 +26,7 @@ const styles = [
   baseStyles,
   shellStyles,
   featureStyles,
+  operationsStyles,
   appSurfaceStyles,
   responsiveStyles,
 ].join("");
@@ -84,7 +87,7 @@ function extractCssBlock(source: string, header: string, fromIndex = 0): CssBloc
 }
 
 describe("global CSS structure", () => {
-  it("loads the six style boundaries in their cascade order", () => {
+  it("loads the seven style boundaries in their cascade order", () => {
     const entryStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     const expectedImports = `${styleFileNames
       .map((fileName) => `@import "./styles/${fileName}";`)
@@ -93,7 +96,7 @@ describe("global CSS structure", () => {
     expect(entryStyles).toBe(expectedImports);
   });
 
-  it("keeps tokens, base, shell, feature, app surface, and responsive rules in their owners", () => {
+  it("keeps tokens, base, shell, feature, operations, app surface, and responsive rules in their owners", () => {
     expect(tokensStyles.trimStart()).toMatch(/^:root\s*\{/);
     expect(tokensStyles).toContain("--shadow:");
 
@@ -107,14 +110,18 @@ describe("global CSS structure", () => {
     expect(featureStyles).toContain("container-name: train-results");
     expect(extractCssBlock(featureStyles, "@container train-results (min-width: 920px)").body)
       .toContain(".train-result-card");
+    expect(featureStyles.trimEnd()).toMatch(/\.system-grid strong\s*\{[\s\S]*color:\s*#17776f;[\s\S]*\}$/);
+
+    expect(operationsStyles.trimStart()).toMatch(/^\.operations-dashboard\s*\{/);
+    expect(operationsStyles).toContain(".operations-event-list");
     const reducedMotionHeader = "@media (prefers-reduced-motion: reduce)";
     const operationsReducedMotion = extractCssBlock(
-      featureStyles,
+      operationsStyles,
       reducedMotionHeader,
-      featureStyles.lastIndexOf(reducedMotionHeader),
+      operationsStyles.lastIndexOf(reducedMotionHeader),
     );
     expect(operationsReducedMotion.body).toContain(".operations-skeleton");
-    expect(featureStyles.slice(operationsReducedMotion.end).trim()).toBe("");
+    expect(operationsStyles.slice(operationsReducedMotion.end).trim()).toBe("");
 
     expect(appSurfaceStyles.trimStart()).toMatch(/^\.toast\s*\{/);
     expect(appSurfaceStyles).toContain(".notification-center");

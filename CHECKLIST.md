@@ -366,6 +366,8 @@
 - [x] 스물두 번째 구조 슬라이스 F의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] legacy `api.test.js`의 마지막 관리자 등록·로그인 2개 선언을 strict `authApi.test.ts`, replay SSE 1개 선언을 `eventsApi.test.ts`로 이동하고 bootstrap header 부재·old/current/future/reservation 전달·close 계약을 보존한 뒤 빈 legacy 파일 삭제
 - [x] 스물세 번째 구조 슬라이스 A의 이동 전 API 3 + auth 5 + events 2와 이동 후 auth 7 + events 3의 10개 실행 및 선언 합계 9개 보존, consumer 7파일·26건, 전체 Vitest 79파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build·Sites 4건·기본 E2E 14건과 `git diff --check` 통과. test/docs only라 Compose 재배포는 생략
+- [x] `features.css` 끝의 settings 운영 상태 대시보드 전용 447줄과 `operations-shimmer`·reduced-motion을 `styles/operations.css`로 이동하고 전역 import를 `tokens → base → shell → features → operations → app-surfaces → responsive` 일곱 경계로 확장. 원본 4,476줄과 분리 후 4,029+447줄의 line/blob 동일성 보존
+- [x] 최초 Home prefix 분리에서 비-Home 공용 selector 암묵 의존 P2를 발견해 전부 되돌리고 operations 전용 tail만 재분리. focused 2파일·14건, 전체 Vitest 79파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build·Sites 4건·기본 E2E 14건, 독립 재리뷰 P0~P3 없음과 `git diff --check` 통과. CSS/구조/문서만 변경해 Compose 재배포는 생략
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

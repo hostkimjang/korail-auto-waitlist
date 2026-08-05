@@ -59,11 +59,13 @@ endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습
 계속 남아 있습니다.
 
 웹 전역 CSS 진입점 `styles.css`는 일반 규칙을 직접 소유하지 않고 `tokens -> base -> shell ->
-features -> app-surfaces -> responsive` 순서의 여섯 경계를 import합니다. 첫 다섯 경계 구조 분리는 기존
-6,648줄의 selector·규칙·media/container query·keyframes 순서를 바꾸지 않은 기계적 이동이었습니다.
+features -> operations -> app-surfaces -> responsive` 순서의 일곱 경계를 import합니다. 초기 다섯 경계
+구조 분리는 기존 6,648줄의 selector·규칙·media/container query·keyframes 순서를 바꾸지 않은
+기계적 이동이었습니다.
 후속 분리에서 `features.css` 끝의 toast·실시간 알림 surface·인증/loading 480행을 selector·선언·상대
 순서 그대로 `app-surfaces.css`로 이동했습니다. `toast-step-spin`과 `toast-in`도 사용하는 surface와 함께
-이동했고 operations skeleton의 reduced-motion 규칙은 feature owner에 남았습니다. responsive override는
+이동했습니다. 이어 settings의 운영 상태 대시보드 전용 tail 447줄과 `operations-shimmer`·reduced-motion
+규칙을 `operations.css`로 함께 이동했습니다. responsive override는
 항상 마지막에 적용됩니다. feature-local `providerRuntimeStatus.css`는 기존 위치와 import 순서를 유지하고
 전역 token을 사용합니다. 나머지 feature별 CSS 재소유, selector 중복 정리나 CSS Modules 전환은 이
 동작 보존 체크포인트와 섞지 않는 별도 슬라이스로 다룹니다.

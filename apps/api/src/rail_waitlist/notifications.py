@@ -104,7 +104,7 @@ def normalize_webpush_vapid_private_key(private_key: str) -> str:
         if private_key.lstrip().startswith("-----BEGIN"):
             key = serialization.load_pem_private_key(private_key.encode(), password=None)
             if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(
-                key.curve, ec.SECP256R1
+                key.curve, ec.SECP256R1  # gitleaks:allow -- 공개 P-256 곡선 상수
             ):
                 raise ValueError("Web Push VAPID requires a P-256 private key")
             der = key.private_bytes(
@@ -120,7 +120,7 @@ def normalize_webpush_vapid_private_key(private_key: str) -> str:
         else:
             key = serialization.load_der_private_key(decoded, password=None)
             if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(
-                key.curve, ec.SECP256R1
+                key.curve, ec.SECP256R1  # gitleaks:allow -- 공개 P-256 곡선 상수
             ):
                 raise ValueError("Web Push VAPID requires a P-256 private key")
     except NotificationDeliveryError:

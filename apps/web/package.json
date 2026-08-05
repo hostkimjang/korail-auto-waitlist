@@ -2,10 +2,13 @@
   "name": "web",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "demo:capture": "node scripts/capture-readme-demo.mjs",
+    "marketing:capture": "node scripts/capture-marketing-intro.mjs",
     "lint": "node scripts/check-eslint-ratchet.mjs",
     "preview": "vite preview",
     "test": "vitest run",

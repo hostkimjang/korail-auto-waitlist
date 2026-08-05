@@ -1,5 +1,8 @@
 # 웹 TypeScript·모듈 분리 계획
 
+> 보관 문서: 이 파일은 TypeScript 전환 과정의 작업 기록입니다. 현재 개발 규칙은
+> [코드 작성 규칙](CODE_CONVENTIONS.md)을 따릅니다.
+
 ## 목적
 
 프런트엔드를 strict TypeScript로 전환하면서 현재의 모바일·PC UX, 접근성, 공식 채널 인계, 시간표·좌석 provenance 계약을 그대로 보존합니다. 확장자만 일괄 변경하거나 하나의 거대 `App.tsx`에 타입 표기를 덧붙이는 방식은 사용하지 않습니다.

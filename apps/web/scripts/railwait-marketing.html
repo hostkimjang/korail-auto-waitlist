@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>레일웨잇 소개</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Pretendard, "Noto Sans KR", "Malgun Gothic", sans-serif;
+      --navy-950: #03142d;
+      --navy-900: #07234b;
+      --navy-800: #0b3565;
+      --teal: #10b8ac;
+      --teal-soft: #bff9f0;
+      --ice: #f6fbff;
+      --muted: #a9bfd7;
+      --orange: #ff7547;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      width: 1280px;
+      height: 720px;
+      margin: 0;
+      overflow: hidden;
+      background: var(--navy-950);
+    }
+
+    body {
+      position: relative;
+      color: var(--ice);
+      background:
+        radial-gradient(circle at 18% 20%, rgba(16, 184, 172, 0.2), transparent 30%),
+        radial-gradient(circle at 85% 80%, rgba(36, 104, 180, 0.25), transparent 32%),
+        linear-gradient(135deg, #03142d 0%, #082a54 55%, #061b39 100%);
+    }
+
+    .grain,
+    .track-grid {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .track-grid {
+      opacity: 0.18;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+      background-size: 64px 64px;
+      transform: perspective(700px) rotateX(64deg) scale(1.45) translateY(190px);
+      transform-origin: center bottom;
+      animation: grid-drift 21s linear both;
+    }
+
+    .grain {
+      opacity: 0.05;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.7'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+    }
+
+    .orb {
+      position: absolute;
+      width: 390px;
+      height: 390px;
+      border-radius: 50%;
+      filter: blur(10px);
+      opacity: 0.18;
+      background: var(--teal);
+      animation: orb-float 9s ease-in-out infinite alternate;
+    }
+
+    .orb-one { left: -180px; top: -170px; }
+    .orb-two { right: -220px; bottom: -210px; animation-delay: -3s; }
+
+    .brand-corner {
+      position: absolute;
+      top: 38px;
+      left: 48px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      opacity: 0.88;
+    }
+
+    .brand-corner img {
+      width: 44px;
+      height: 44px;
+      border-radius: 13px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+    }
+
+    .brand-corner strong {
+      font-size: 20px;
+      letter-spacing: -0.03em;
+    }
+
+    .demo-label {
+      position: absolute;
+      top: 42px;
+      right: 48px;
+      z-index: 20;
+      padding: 8px 13px;
+      border: 1px solid rgba(191, 249, 240, 0.28);
+      border-radius: 999px;
+      color: var(--teal-soft);
+      background: rgba(3, 20, 45, 0.45);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .scene {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 96px 70px 56px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+      color: var(--teal-soft);
+      font-size: 17px;
+      font-weight: 750;
+      letter-spacing: -0.02em;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 28px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--teal);
+    }
+
+    h1,
+    h2,
+    p { margin: 0; }
+
+    h1,
+    h2 {
+      letter-spacing: -0.055em;
+      line-height: 1.14;
+    }
+
+    h1 { font-size: 72px; }
+    h2 { font-size: 58px; }
+
+    .subcopy {
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 23px;
+      line-height: 1.5;
+      letter-spacing: -0.025em;
+    }
+
+    .scene-one { animation: scene-one 21s ease both; }
+    .scene-two { animation: scene-two 21s ease both; }
+    .scene-three { animation: scene-three 21s ease both; }
+    .scene-four { animation: scene-four 21s ease both; }
+    .scene-five { animation: scene-five 21s ease both; }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      align-items: center;
+      width: 1080px;
+      gap: 70px;
+    }
+
+    .hero-mark {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 330px;
+      height: 330px;
+    }
+
+    .hero-mark::before,
+    .hero-mark::after {
+      content: "";
+      position: absolute;
+      inset: 20px;
+      border: 1px solid rgba(191, 249, 240, 0.24);
+      border-radius: 50%;
+      animation: ring-pulse 2.8s ease-out infinite;
+    }
+
+    .hero-mark::after { animation-delay: 1.4s; }
+
+    .hero-mark img {
+      width: 190px;
+      height: 190px;
+      border-radius: 48px;
+      box-shadow: 0 32px 90px rgba(0,0,0,0.45);
+      animation: icon-float 3s ease-in-out infinite alternate;
+    }
+
+    .route-layout,
+    .alert-layout,
+    .handoff-layout {
+      width: 1090px;
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 74px;
+      align-items: center;
+    }
+
+    .glass-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 30px;
+      background: linear-gradient(145deg, rgba(255,255,255,0.13), rgba(255,255,255,0.055));
+      box-shadow: 0 30px 80px rgba(0,0,0,0.32);
+      backdrop-filter: blur(18px);
+    }
+
+    .route-card { padding: 38px 42px 34px; }
+
+    .provider-row,
+    .route-head,
+    .status-row,
+    .handoff-actions {
+      display: flex;
+      align-items: center;
+    }
+
+    .provider-row { justify-content: space-between; }
+
+    .provider-chip,
+    .mini-label {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      font-weight: 800;
+    }
+
+    .provider-chip {
+      min-width: 74px;
+      padding: 8px 14px;
+      background: #0864cb;
+      font-size: 14px;
+    }
+
+    .mini-label {
+      padding: 7px 11px;
+      color: var(--teal-soft);
+      background: rgba(16, 184, 172, 0.13);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    .route-head {
+      justify-content: space-between;
+      margin-top: 32px;
+    }
+
+    .station strong {
+      display: block;
+      font-size: 44px;
+      letter-spacing: -0.06em;
+    }
+
+    .station span {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .station:last-child { text-align: right; }
+
+    .route-line {
+      position: relative;
+      width: 190px;
+      height: 3px;
+      margin: 4px 24px 0;
+      overflow: visible;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.18);
+    }
+
+    .route-line::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      transform: scaleX(0);
+      transform-origin: left;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--teal), #77e6db);
+      animation: route-progress 4.6s ease-in-out 4.1s both;
+    }
+
+    .train-dot {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      width: 17px;
+      height: 17px;
+      transform: translate(-50%, -50%);
+      border: 4px solid var(--navy-900);
+      border-radius: 50%;
+      background: var(--teal-soft);
+      box-shadow: 0 0 0 7px rgba(16,184,172,0.14);
+      animation: train-progress 4.6s ease-in-out 4.1s both;
+    }
+
+    .seat-box {
+      margin-top: 30px;
+      padding: 18px 20px;
+      border-radius: 18px;
+      background: rgba(3, 20, 45, 0.48);
+    }
+
+    .status-row { justify-content: space-between; }
+    .status-row strong { font-size: 18px; }
+    .status-row span { color: var(--teal-soft); font-size: 15px; font-weight: 750; }
+
+    .watch-bar {
+      height: 6px;
+      margin-top: 15px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.1);
+    }
+
+    .watch-bar::after {
+      content: "";
+      display: block;
+      width: 42%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, transparent, var(--teal), transparent);
+      animation: watch-scan 1.4s linear infinite;
+    }
+
+    .phone {
+      position: relative;
+      width: 320px;
+      height: 475px;
+      margin-left: 48px;
+      padding: 18px;
+      border: 2px solid rgba(255,255,255,0.26);
+      border-radius: 48px;
+      background: #071b39;
+      box-shadow: 0 36px 90px rgba(0,0,0,0.42);
+      transform: rotate(-4deg);
+    }
+
+    .phone::before {
+      content: "";
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      width: 84px;
+      height: 22px;
+      transform: translateX(-50%);
+      border-radius: 99px;
+      background: #021026;
+    }
+
+    .phone-screen {
+      height: 100%;
+      padding: 62px 18px 20px;
+      overflow: hidden;
+      border-radius: 34px;
+      background: linear-gradient(165deg, #f8fbfd, #eaf2f7);
+      color: #0b2345;
+    }
+
+    .phone-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .phone-brand img { width: 34px; height: 34px; border-radius: 10px; }
+
+    .phone-copy {
+      margin-top: 52px;
+      font-size: 15px;
+      color: #65758a;
+    }
+
+    .notification {
+      position: absolute;
+      left: -54px;
+      top: 178px;
+      width: 405px;
+      padding: 23px 24px;
+      border: 1px solid rgba(255,255,255,0.54);
+      border-radius: 22px;
+      background: rgba(255,255,255,0.94);
+      box-shadow: 0 26px 64px rgba(5, 25, 54, 0.28);
+      color: #0b2345;
+      animation: notification-pop 21s cubic-bezier(.2,.9,.2,1) both;
+    }
+
+    .notification small { color: #087f7b; font-weight: 800; }
+    .notification strong { display: block; margin-top: 9px; font-size: 22px; letter-spacing: -0.04em; }
+    .notification p { margin-top: 7px; color: #65758a; font-size: 15px; }
+
+    .pulse-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 7px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 0 rgba(16,184,172,0.45);
+      animation: pulse 1.7s ease-out infinite;
+    }
+
+    .handoff-card { padding: 38px; }
+
+    .handoff-card h3 {
+      margin: 0;
+      font-size: 27px;
+      letter-spacing: -0.045em;
+    }
+
+    .handoff-card p {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.5;
+    }
+
+    .shield {
+      display: grid;
+      place-items: center;
+      width: 64px;
+      height: 64px;
+      margin-bottom: 25px;
+      border-radius: 20px;
+      color: var(--teal-soft);
+      background: rgba(16,184,172,0.14);
+      font-size: 31px;
+      font-weight: 900;
+    }
+
+    .handoff-actions { gap: 12px; margin-top: 28px; }
+
+    .button {
+      padding: 15px 20px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .button-primary { color: #042b37; background: var(--teal-soft); }
+    .button-ghost { color: var(--muted); border: 1px solid rgba(255,255,255,0.14); }
+
+    .final-lockup {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .final-lockup img {
+      width: 120px;
+      height: 120px;
+      border-radius: 34px;
+      box-shadow: 0 26px 70px rgba(0,0,0,0.42);
+    }
+
+    .final-lockup h2 { margin-top: 28px; font-size: 64px; }
+    .final-lockup p { margin-top: 14px; color: var(--teal-soft); font-size: 22px; }
+
+    @keyframes scene-one {
+      0%, 2% { opacity: 0; transform: translateY(18px); }
+      5%, 16% { opacity: 1; transform: translateY(0); }
+      20%, 100% { opacity: 0; transform: translateY(-16px); }
+    }
+
+    @keyframes scene-two {
+      0%, 18% { opacity: 0; transform: translateY(18px); }
+      22%, 40% { opacity: 1; transform: translateY(0); }
+      44%, 100% { opacity: 0; transform: translateY(-16px); }
+    }
+
+    @keyframes scene-three {
+      0%, 42% { opacity: 0; transform: translateY(18px); }
+      46%, 64% { opacity: 1; transform: translateY(0); }
+      68%, 100% { opacity: 0; transform: translateY(-16px); }
+    }
+
+    @keyframes scene-four {
+      0%, 66% { opacity: 0; transform: translateY(18px); }
+      70%, 84% { opacity: 1; transform: translateY(0); }
+      88%, 100% { opacity: 0; transform: translateY(-16px); }
+    }
+
+    @keyframes scene-five {
+      0%, 86% { opacity: 0; transform: scale(0.96); }
+      90%, 100% { opacity: 1; transform: scale(1); }
+    }
+
+    @keyframes grid-drift { to { background-position: 260px 140px, 260px 140px; } }
+    @keyframes orb-float { to { transform: translate(80px, 55px) scale(1.1); } }
+    @keyframes icon-float { to { transform: translateY(-13px) rotate(1deg); } }
+    @keyframes ring-pulse { 0% { transform: scale(.72); opacity: 0; } 25% { opacity: .7; } 100% { transform: scale(1.18); opacity: 0; } }
+    @keyframes route-progress { 0% { transform: scaleX(0); } 70%, 100% { transform: scaleX(1); } }
+    @keyframes train-progress { 0% { left: 0; } 70%, 100% { left: 100%; } }
+    @keyframes watch-scan { from { transform: translateX(-120%); } to { transform: translateX(340%); } }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16,184,172,.45); } 100% { box-shadow: 0 0 0 14px rgba(16,184,172,0); } }
+    @keyframes notification-pop {
+      0%, 47% { opacity: 0; transform: translateY(35px) scale(.94); }
+      52%, 64% { opacity: 1; transform: translateY(0) scale(1); }
+      68%, 100% { opacity: 0; transform: translateY(-18px) scale(.98); }
+    }
+  </style>
+</head>
+<body>
+  <div class="track-grid"></div>
+  <div class="grain"></div>
+  <div class="orb orb-one"></div>
+  <div class="orb orb-two"></div>
+
+  <div class="brand-corner">
+    <img src="{{APP_ICON_DATA_URL}}" alt="" />
+    <strong>레일웨잇</strong>
+  </div>
+  <div class="demo-label">연출 화면 · 비공식 프로젝트</div>
+
+  <section class="scene scene-one">
+    <div class="hero">
+      <div>
+        <span class="eyebrow">열차를 계속 확인하는 대신</span>
+        <h1>관심 열차를<br />한곳에 모아보세요</h1>
+        <p class="subcopy">KTX·SRT 여정을 편리하게 관리합니다.</p>
+      </div>
+      <div class="hero-mark">
+        <img src="{{APP_ICON_DATA_URL}}" alt="" />
+      </div>
+    </div>
+  </section>
+
+  <section class="scene scene-two">
+    <div class="route-layout">
+      <div>
+        <span class="eyebrow">좌석 감시를 켜면</span>
+        <h2>레일웨잇이<br />변화를 확인합니다</h2>
+        <p class="subcopy">열차와 좌석 등급별로 대기를 관리하세요.</p>
+      </div>
+      <div class="glass-card route-card">
+        <div class="provider-row">
+          <span class="provider-chip">KTX</span>
+          <span class="mini-label">DEMO</span>
+        </div>
+        <div class="route-head">
+          <div class="station"><strong>서울</strong><span>12:00</span></div>
+          <div class="route-line"><span class="train-dot"></span></div>
+          <div class="station"><strong>부산</strong><span>14:41</span></div>
+        </div>
+        <div class="seat-box">
+          <div class="status-row"><strong>일반실</strong><span>변화 확인 중</span></div>
+          <div class="watch-bar"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene scene-three">
+    <div class="alert-layout">
+      <div>
+        <span class="eyebrow">변화가 관측되면</span>
+        <h2>설정한 채널에서<br />알림을 확인하세요</h2>
+        <p class="subcopy">홈에서도 최근 상태와 확인 시각을 볼 수 있습니다.</p>
+      </div>
+      <div class="phone">
+        <div class="phone-screen">
+          <div class="phone-brand"><img src="{{APP_ICON_DATA_URL}}" alt="" /><span>레일웨잇</span></div>
+          <p class="phone-copy">활동 중인 대기 2건</p>
+        </div>
+        <div class="notification">
+          <small><span class="pulse-dot"></span>좌석 변화 알림 · DEMO</small>
+          <strong>KTX 033 일반실을 확인해 보세요</strong>
+          <p>서울 → 부산 · 12:00 출발</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene scene-four">
+    <div class="handoff-layout">
+      <div>
+        <span class="eyebrow">마지막 확인은 안전하게</span>
+        <h2>확인과 결제는<br />공식 플랫폼에서</h2>
+        <p class="subcopy">레일웨잇은 결제를 대신하지 않습니다.</p>
+      </div>
+      <div class="glass-card handoff-card">
+        <div class="shield">✓</div>
+        <h3>공식 예매 안내</h3>
+        <p>선택한 여정을 확인한 뒤<br />공식 앱이나 홈페이지로 이동합니다.</p>
+        <div class="handoff-actions">
+          <span class="button button-primary">공식 페이지 열기 ↗</span>
+          <span class="button button-ghost">여정 복사</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene scene-five">
+    <div class="final-lockup">
+      <img src="{{APP_ICON_DATA_URL}}" alt="" />
+      <h2>레일웨잇</h2>
+      <p>내 서버에서 운영하는 열차 대기 알림</p>
+    </div>
+  </section>
+</body>
+</html>

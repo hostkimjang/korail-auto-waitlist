@@ -2,6 +2,7 @@
   "name": "korail-browser-companion",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

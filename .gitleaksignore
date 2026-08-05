@@ -1,0 +1,3 @@
+# P-256 공개 곡선 검증 상수에 대한 generic-api-key 오탐입니다.
+5ebce99d5ffe88375deda64c2379e53eea1b2336:apps/api/src/rail_waitlist/notifications.py:generic-api-key:107
+5ebce99d5ffe88375deda64c2379e53eea1b2336:apps/api/src/rail_waitlist/notifications.py:generic-api-key:123

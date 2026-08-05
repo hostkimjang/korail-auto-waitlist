@@ -7,7 +7,7 @@ Docker secret 파일 방식은 더 이상 사용하지 않습니다. 새 설치�
 - `postgres_password.txt` → `POSTGRES_PASSWORD`
 - `rail_credential_key.txt` → `SECRET_ENCRYPTION_KEY`
 - `auth_session_key.txt` → `AUTH_SESSION_SECRET`
-- `auth_bootstrap_token.txt` → `AUTH_BOOTSTRAP_TOKEN`
+- `auth_bootstrap_token.txt` → 현재 런타임에서 사용하지 않음. 값을 `.env`로 옮기지 말고 기존 secret 폐기 절차를 따름
 - `tago_service_key.txt` → `TAGO_SERVICE_KEY`
 - `webpush_vapid_private_key.txt` → `WEBPUSH_VAPID_PRIVATE_KEY`
 - `webpush_vapid_public_key.txt` → `WEBPUSH_VAPID_PUBLIC_KEY`

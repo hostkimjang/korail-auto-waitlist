@@ -2,10 +2,9 @@
 
 ## 최초 설정
 
-1. `.env.example`을 `.env`로 복사합니다.
-2. `.env.example`을 `.env`로 복사하고 형식 안내에 따라 비밀값을 채웁니다. 실제 `.env`는 커밋하지 않습니다.
-3. `docker compose -f compose.yml config --quiet`으로 설정을 검증합니다.
-4. `docker compose -f compose.yml up -d --build`로 기본 서비스를 시작합니다.
+1. `.env.example`을 `.env`로 복사하고 형식 안내에 따라 비밀값을 채웁니다. 실제 `.env`는 커밋하지 않습니다.
+2. `docker compose -f compose.yml config --quiet`으로 설정을 검증합니다.
+3. `docker compose -f compose.yml up -d --build`로 기본 서비스를 시작합니다.
 
 기본 구성은 Caddy의 80/443만 호스트에 게시합니다. 앱·데이터·관제 서비스는 Compose 내부 네트워크에서만 통신합니다. 마이그레이션이 성공한 뒤 API, scheduler, worker가 시작되며 scheduler는 1개, worker는 concurrency 1로 고정합니다.
 
@@ -17,7 +16,7 @@
 
 ## 선택 프로필
 
-- `--profile experimental-rail`: KORAIL Chromium sidecar와 별도 experimental worker를 시작합니다. 실제 due 감시 작업은 `rail` queue의 기본 worker가 소비하므로 `scripts/ops.ps1 experimental`로 API·sidecar·기본 worker·experimental worker를 함께 재생성합니다. KORAIL 좌석 감시는 세 환경변수가 모두 켜졌을 때만 활성화되고 예약 시도는 항상 비활성입니다.
+- `--profile experimental-rail`: KORAIL Chromium sidecar, SRT provider sidecar와 별도 experimental worker를 시작합니다. 실제 due 감시 작업은 `rail` queue의 기본 worker가 소비하므로 `scripts/ops.ps1 experimental`로 API·sidecar·기본 worker·experimental worker를 함께 재생성합니다. 운영사별 좌석 감시는 세 환경변수가 모두 켜졌을 때만 활성화됩니다. 예매 시도는 별도 운영사 gate, 로그인 확인된 활성 계정과 작업별 `reserve_once_before_payment` 정책까지 모두 만족할 때만 가용성 에피소드당 최대 한 번 실행하고 결제 전에 멈춥니다. 기본값은 모두 비활성입니다.
 - `--profile monitoring`: Prometheus와 Grafana를 실행합니다. Grafana는 `/ops/grafana/`에서 접근하며 자체 관리자 로그인이 필요합니다.
 - `--profile ntfy`: 내부 알림용 ntfy를 실행합니다. 기본 접근 정책은 `deny-all`입니다.
 - `--profile backup`: 암호화 백업 daemon을 실행합니다.

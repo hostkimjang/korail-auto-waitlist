@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env*
+node_modules/
+dist/
+output/
+playwright-report/
+test-results/
+.playwright-cli/
+.playwright-mcp/
+playwright/.auth/
+*.storage-state.json
+*.har
+*.trace.zip
+npm-debug.log*

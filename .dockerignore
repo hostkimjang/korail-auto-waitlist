@@ -1,6 +1,7 @@
 .git
 .gitignore
-.env
+.env*
+!.env.example
 secrets
 backups
 apps
@@ -9,5 +10,9 @@ node_modules
 **/node_modules
 **/__pycache__
 **/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.test-tmp
+**/.tmp-pytest-*
 **/dist
 **/.next

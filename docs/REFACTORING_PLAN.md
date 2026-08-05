@@ -1161,6 +1161,33 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   E2E와 Compose 재배포는 반복하지 않았습니다. 커진 `watchesApi.test.ts`의 mapper·payload·transport
   물리 분리와 auth/events strict owner 이동은 테스트 손실 없이 별도 슬라이스로 진행합니다.
 
+### 2026-08-05 스물두 번째 구조 슬라이스 F
+
+- watch transition notification application: `services.py`의 `add_watch_notifications` 본문·메시지·
+  enabled 전역 채널 조회·dispatch outbox 생성을
+  `notification_management/watch_transition_application.py`로 이동했습니다. services는 함수를 wrapper
+  없이 같은 객체로 다시 export하며 기존 `apply_watch_transition`의 호출 위치를 유지합니다.
+- 경계와 순서: status·updated time → transition history → idempotency → `watch.status_changed` outbox →
+  `notification.dispatch_requested` outbox 순서를 보존합니다. lock·commit·rollback과 상태 전이 허용
+  정책은 services에 남겼으므로 status/history와 두 outbox가 같은 UoW에서 함께 commit되거나 rollback됩니다.
+  services는 1,606줄에서 1,493줄, 새 owner는 126줄입니다.
+- 전달 계약: 현재 `enabled=true`인 단일 관리자 전역 채널을 `created_at, id` 순으로 선택하고 disabled
+  채널과 watch의 legacy 채널 snapshot은 전달 권한에서 제외합니다. 상태·reason 9분기, 결제기한 유무와
+  KST 표시, 비알림 상태 조기 반환, transition-token dedupe, canonical/services identity를 고정했습니다.
+- 의존성·타입 gate: 새 owner는 SQLAlchemy session·domain·ORM model·outbox primitive만 사용하며
+  FastAPI·Celery·worker·provider·security·services를 역참조하지 않습니다. transaction·row lock 호출
+  부재를 AST로 검사하고 strict mypy ratchet을 9개에서 10개 파일로 확장했습니다.
+- 확인된 검증: 신규 owner·boundary focused pytest 23건, 상태·만료·예약·관찰 인접 focused 80건,
+  API 전체 pytest 1,107건, Ruff `E/F/I`, format ratchet 60개, strict mypy 10개 파일 오류 0,
+  `uv lock --check`와 `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은
+  유지됐습니다.
+- 독립 리뷰: 기존 순서는 정확하고 P0~P2 회귀는 없었습니다. 원자성 테스트가 outbox 종류를 set으로만
+  비교해 생성 순서를 고정하지 못한다는 P3를 발견해 두 canonical seam의 호출 순서 assertion을
+  추가했고, 보강 뒤 focused 23건을 다시 통과했습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

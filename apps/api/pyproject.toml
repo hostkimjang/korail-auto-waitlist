@@ -59,6 +59,7 @@ files = [
   "src/rail_waitlist/provider_registry/application.py",
   "src/rail_waitlist/observations/operational_projection_application.py",
   "src/rail_waitlist/reservations/payment_hold_application.py",
+  "src/rail_waitlist/notification_management/watch_transition_application.py",
 ]
 
 [tool.ruff]

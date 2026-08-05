@@ -112,6 +112,12 @@ def _is_payment_hold_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/payment_hold_application.py")
 
 
+def _is_watch_transition_notification_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == (
+        "rail_waitlist/notification_management/watch_transition_application.py"
+    )
+
+
 def _is_provider_contract(relative_path: Path) -> bool:
     return relative_path.as_posix() == "rail_waitlist/provider_contracts.py"
 
@@ -242,6 +248,26 @@ BOUNDARY_RULES = (
         ),
     ),
     BoundaryRule(
+        name="watch transition notification application stays runtime independent",
+        matches=_is_watch_transition_notification_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "notifications",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "security",
+                "services",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
         name="provider contracts are independent from runtime integrations",
         matches=_is_provider_contract,
         forbidden_import_roots=frozenset(
@@ -338,6 +364,23 @@ def test_module_dependency_boundaries() -> None:
                     )
 
     assert violations == [], "\n".join(violations)
+
+
+def test_watch_transition_notification_application_does_not_own_transactions_or_locks() -> None:
+    module_path = (
+        SOURCE_ROOT
+        / "rail_waitlist"
+        / "notification_management"
+        / "watch_transition_application.py"
+    )
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert called_attributes.isdisjoint({"begin", "commit", "rollback", "with_for_update"})
 
 
 def test_provider_contract_imports_are_allowlisted() -> None:

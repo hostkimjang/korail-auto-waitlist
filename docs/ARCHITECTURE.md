@@ -275,6 +275,15 @@ Migration `0020_reservation_reconciliation`은 실제 사용 credential version�
 `services.py`는 기존 begin·confirmation·reconciliation 호출자를 위해 private UTC helper와 두 public
 함수를 같은 객체로 다시 export하고, watch read model은 canonical owner를 직접 사용합니다.
 
+상태 전이에 따른 사용자 알림 message·대상 채널 조회·dispatch outbox 생성의 canonical owner는
+`notification_management/watch_transition_application.py`입니다. 단일 관리자 전역 설정에서 현재
+`enabled=true`인 채널만 `created_at, id` 순으로 선택하며, watch에 남은 채널 snapshot은 전달 권한으로
+사용하지 않습니다. 상태 전이 token을 채널별 dedupe key에 포함하고 KST 결제기한·좌석 소실·예약 결과
+불확정·결제 보류 종료의 기존 안내 문구를 그대로 유지합니다. `services.py`는 이 함수를 같은 객체로
+다시 export하고 status·history·idempotency와 `watch.status_changed` outbox를 먼저 추가한 뒤 알림
+application을 호출합니다. lock·commit·rollback은 기존 transition 호출자에 남으므로 두 outbox와 상태
+이력은 같은 SQLAlchemy UoW에서 함께 commit되거나 rollback됩니다.
+
 outbox의 사람이 읽을 수 있는 중복 방지 키가 DB의 128자 저장 계약을 넘으면 앞부분과 전체 키의
 SHA-256을 결합한 고정 길이 키로 정규화합니다. 조회와 저장에 같은 정규화를 적용하므로 긴 상태
 전이 token도 중복 방지 의미를 유지하며, 알림 생성 실패로 좌석 관측 트랜잭션이 롤백되지 않습니다.
@@ -378,7 +387,8 @@ adapter→registry/facade 역의존을 차단합니다.
 
 오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
-공식 timetable adapter·registry application, operational projection과 payment-hold application의 9개 오류 0 파일만 대상입니다. registry 반환 타입은
+공식 timetable adapter·registry application, operational projection·payment-hold·watch transition
+notification application의 10개 오류 0 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로

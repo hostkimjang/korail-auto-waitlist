@@ -314,6 +314,14 @@ Migration `0020_reservation_reconciliation`은 `ReservationAttempt`에 실제 �
 
 Migration `0019_candidate_operational_state`는 `scheduled_departure_at`, `estimated_departure_at`, `actual_departure_at`, `delay_minutes`, 운행·예매창 상태와 provenance를 분리합니다. KORAIL `BrowserTrainSnapshot`은 정확한 `N분 지연 예상` 문구를, HTTP replay는 `h_expn_dpt_dlay_tnum`을 `delay_minutes`로 정규화합니다. 이 투영은 scheduled identity를 보존하고 `estimated_departure_at`만 갱신합니다. `sold_out`은 좌석 재고 관측이므로 예매창 `closed`로 승격하지 않습니다. fresh terminal provenance가 있는 출발·취소·예매창 종료만 즉시 만료시킵니다. 이 판정 전에 `Watch.travel_date`로 후보를 제외하지 않으므로 KST 자정 직전 다음 서비스일 열차도 신선한 공식 `closed` 근거를 즉시 반영합니다. fresh 지연·탑승·열린 예매창은 예정시각 경과보다 우선합니다. 상태가 unknown이거나 terminal 근거가 stale이면 예정 출발 뒤 최대 15분 동안만 제한 재평가하고, 그때까지 신선한 계속 운행 근거가 없으면 절대 horizon에서 fail-closed 만료합니다. 이는 앞선 `departure_at` 기반 호환 identity·시간창 설명보다 우선하는 현재 만료 계약입니다.
 
+정규화된 좌석 관측에서 후보의 지연·운행·예매창 상태를 투영하는 순수 정책은
+`observations/operational_projection_application.py`가 소유합니다. 이 owner는 SQL·model·outbox·provider
+runtime을 import하지 않고 `SeatObservationResult`와 최소 candidate Protocol만 사용합니다. services는
+기존 호출자를 위해 같은 Protocol·함수 객체를 다시 export합니다. 호출 순서는 watch 잠금 뒤 projection,
+`SeatObservation` flush, `watch.seat_observed` outbox, watch 요약·주기 종료, commit이며 예외 때 같은
+transaction이 rollback됩니다. 예약 retry edge 판정과 observation 영속·outbox 책임은 계속
+`services.py`에 남아 있습니다.
+
 ## 상태 계약
 
 공식 KORAIL·SRT의 기본 흐름은 작업 생성 직후 start 요청을 거쳐 `draft → scheduled`가 됩니다. UI의 자동 시작 자체는 조회 capability를 바꾸지 않으며, 좌석 관측 근거가 없으면 `unknown`과 안전한 미관측 사유를 표시합니다. 사용자 시간표 요청에서 `SrtLiveSeatSource`는 계정 없는 검색 한 번을, KORAIL Chromium source는 공식 페이지의 렌더된 결과 판독 한 번을 수행합니다. 같은 source를 worker에 연결하는 것은 운영사별 3중 opt-in이 모두 켜진 경우로 제한합니다. 활성화 뒤 기존 `scheduled|seat_found|official_waitlist + next_check_at=null` 작업은 worker가 한 번 재무장하고, due 작업은 DB 실행 임대를 얻은 뒤 관측합니다. `sold_out`은 `watching`과 다음 관측 시각을 유지하고, `available`·`limited`·`standing_plus_seat`는 `seat_found`, `waitlist_available`은 `official_waitlist`로 전이합니다. `seat_found`와 `official_waitlist`는 종착 상태가 아니며 동일한 상태에서도 다음 관측을 예약합니다. 주기 결과에 따라 두 상태 사이를 이동하고, 모든 후보가 확정적인 비행동 상태로 바뀌면 `watching`으로 복귀합니다. 오류·미관측만으로 기존 발견 상태를 강등하지 않으며 같은 상태 반복은 전이·알림 outbox를 만들지 않습니다. 작업 감시 기한은 마지막 관측 후보의 출발시각과 사용자가 지정한 시간창 종료 중 이른 시점입니다. KORAIL worker는 공식 UI가 요구하는 후보 출발시의 시작 시간을 사용하고 같은 구간·서비스일·인원·시작 시각 후보를 singleflight로 합친 뒤 열차번호·KST 출발시각·좌석 등급을 다시 exact match합니다. Browser Companion snapshot은 기존 데이터 호환 범위에서만 읽습니다. 시간표 stale response를 거르는 웹 query key에는 provider·구간·날짜·시간창과 승객 수를 함께 넣습니다.
@@ -360,9 +368,9 @@ canonical registry와 provider 예외를 직접 import하며 `providers.py`는 �
 다시 export하는 호환 facade 역할만 합니다. module-boundary gate가 production→facade와
 adapter→registry/facade 역의존을 차단합니다.
 
-provider 역할 계약의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
+provider 역할과 observation projection의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
-공식 timetable adapter와 registry application의 7개 오류 0 파일만 대상입니다. registry 반환 타입은
+공식 timetable adapter·registry application과 operational projection application의 8개 오류 0 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.
 TAGO·Mock·SRT execution·timetable support를 포함한 나머지 package는 strict 오류를 숨기지 않고 owner별로

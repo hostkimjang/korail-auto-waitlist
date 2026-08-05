@@ -57,6 +57,7 @@ files = [
   "src/rail_waitlist/provider_adapters/korail_execution.py",
   "src/rail_waitlist/provider_adapters/timetable.py",
   "src/rail_waitlist/provider_registry/application.py",
+  "src/rail_waitlist/observations/operational_projection_application.py",
 ]
 
 [tool.ruff]

@@ -1066,6 +1066,35 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   기본 E2E와 Compose 재배포는 반복하지 않았습니다. 다음 후보는 timetable 12개, watch 21개이며
   auth 2개·events 1개는 전용 strict owner와의 중복을 별도 판단합니다.
 
+### 2026-08-05 스물두 번째 구조 슬라이스 B
+
+- operational projection owner: `services.py`의 `_BOOKING_OPEN_OBSERVATIONS`,
+  `OperationalProjectionCandidate`, `apply_operational_projection`을 본문·타입 변경 없이
+  `observations/operational_projection_application.py`로 이동했습니다. services는 Protocol과 함수를
+  wrapper 없이 직접 다시 export해 기존 import와 runtime identity를 보존합니다.
+- 범위 제한: 예약 DB query 정책인 `_RESERVATION_RETRY_EDGE_OBSERVATIONS`와
+  `record_seat_observation`의 observation flush·outbox·상태 전이·transaction은 services에 남겼습니다.
+  services는 1,692줄에서 1,632줄, 새 owner는 71줄입니다.
+- 원자성 계약: watch/candidate 잠금 뒤 projection → observation flush → `watch.seat_observed` outbox →
+  watch 요약·주기 종료 → commit 순서는 같습니다. 별도 session 회귀가 commit 때 projection·observation·
+  outbox가 모두 영속되고 rollback 때 셋 모두 사라지는 같은 SQLAlchemy UoW를 검증합니다.
+- 상태·의존성 회귀: booking open 5상태, waitlist, departed, out-of-service, sold-out no-op, delay 투영과
+  compatibility identity를 고정했습니다. boundary gate는 새 owner의 services·worker·Celery·FastAPI·
+  SQLAlchemy·model·outbox·provider registry/facade 역의존을 차단합니다.
+- mypy ratchet 확장: 새 owner가 단독 strict 오류 0이므로 기존 7개 파일 목록에 즉시 추가해 현재
+  scoped strict gate를 8개 파일로 확장했습니다. `WatchCandidate`의 candidate Protocol 구조 적합성도
+  정적으로 확인했습니다.
+- 확인된 검증: operational·boundary·service observation focused pytest 59건, API 전체 pytest
+  1,083건, Ruff `E/F/I`, format ratchet 60개, strict mypy 8개 파일 오류 0, `uv lock --check`와
+  `git diff --check`를 통과했습니다. 기존 Starlette/httpx deprecation 경고 1건은 유지됐고 독립
+  AST·identity·transaction 재감사에서 P0~P3 지적이 없었습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 재생성 뒤 최근 안전한
+  오류 표식 0건을 확인했습니다.
+- 검증 범위: transaction 테스트는 동일 UoW의 commit/rollback을 검증하지만 PostgreSQL process 경합이나
+  중단 내구성을 새로 증명하지는 않습니다. `SeatObservationResult` DTO annotation의 domain 타입
+  재설계와 `record_seat_observation` application 이동은 별도 슬라이스로 남겼습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

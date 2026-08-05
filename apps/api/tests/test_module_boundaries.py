@@ -98,6 +98,12 @@ def _is_observation_group_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/observations/group_application.py")
 
 
+def _is_operational_projection_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == (
+        "rail_waitlist/observations/operational_projection_application.py"
+    )
+
+
 def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
@@ -187,6 +193,23 @@ BOUNDARY_RULES = (
                 "srt_execution",
                 "srt_provider_adapter",
                 "srt_reservation",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="operational projection application stays a pure normalized-result policy",
+        matches=_is_operational_projection_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "fastapi",
+                "models",
+                "outbox",
+                "provider_registry",
+                "providers",
+                "services",
+                "sqlalchemy",
                 "worker",
             }
         ),

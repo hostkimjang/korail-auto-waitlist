@@ -348,6 +348,10 @@
 - [x] 스물한 번째 구조 슬라이스 D의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] legacy `api.test.js`의 역 카탈로그 6개 선언·10개 실행을 strict `stationsApi.test.ts` owner로 이동하고 provider별 요청·node 병합·KORAIL+SRT 공용 목록·부분 실패·metadata tuple 5개·빈 목록·mock 계약을 보존. production API·공개 export와 기존 owner 3건은 변경·중복 제거하지 않음
 - [x] 스물두 번째 구조 슬라이스 A의 legacy API 36실행 + stations owner 13실행 = 49건 및 두 파일 선언 합계 45개 보존, 소비 hook/page 33건, 전체 Vitest 80파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build와 `git diff --check` 통과. test/docs only라 기본 E2E·Compose 재배포는 생략
+- [x] `_BOOKING_OPEN_OBSERVATIONS`·`OperationalProjectionCandidate`·`apply_operational_projection`을 71줄 `observations/operational_projection_application.py`로 이동하고 services가 동일 객체를 직접 compatibility re-export. 예약 retry edge와 observation flush·outbox·transaction은 services에 유지해 1,692→1,632줄로 축소
+- [x] booking open 5상태·waitlist·departed·out-of-service·sold-out no-op·delay projection, canonical/services identity, projection·observation·outbox commit/rollback 원자성과 새 owner 역의존 차단을 고정. focused pytest 59건, API 전체 1,083건, Ruff `E/F/I`, format ratchet 60개, 독립 재감사 P0~P3 없음과 `git diff --check` 통과
+- [x] 오류 0인 operational projection owner를 strict mypy ratchet에 즉시 추가해 대상 7→8개 파일 확장하고 `uv lock --check`·scoped mypy 오류 0 확인
+- [x] 스물두 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

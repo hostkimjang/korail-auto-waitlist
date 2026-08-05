@@ -116,7 +116,7 @@ pytest
 ```
 
 기능을 바꾼 뒤에는 저장소 루트에서 `./scripts/ops.ps1 verify`를 실행합니다. 이 명령은 Compose
-구성, API lock 무결성·전체 pytest·Ruff·provider 경계 scoped strict mypy, 웹 strict
+구성, API lock 무결성·전체 pytest·Ruff·provider·observation 경계 scoped strict mypy, 웹 strict
 typecheck·컴포넌트 계약·Playwright 데스크톱·모바일
 실제 사용자 여정·production build를 한 번에 확인합니다. API 검증에는 Python 3.12와 `uv`가
 필요합니다. E2E는 로컬 고정 API로 `예매 가능`,

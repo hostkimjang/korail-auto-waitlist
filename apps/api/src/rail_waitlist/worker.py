@@ -50,12 +50,16 @@ from .reservations.execution_application import (
     ReservationExecutionTarget,
     execute_reservation,
 )
+from .reservations.payment_hold_application import _utc_instant
 from .reservations.reconciliation_application import (
     ReconciliationDependencies,
     _reservation_reconciliation_due_clause,
 )
 from .reservations.reconciliation_application import (
     reconcile_reservation_attempt as run_reservation_reconciliation,
+)
+from .reservations.reconciliation_state_application import (
+    ReservationReconciliationStateDependencies,
 )
 from .schemas import RailProviderAuthStatus
 from .services import (
@@ -442,6 +446,12 @@ def _reconciliation_dependencies() -> ReconciliationDependencies:
         drain_execution_adapter=_drain_execution_adapter,
         close_execution_adapter=_close_execution_adapter,
         provider_circuit_is_closed=_provider_circuit_is_closed,
+        state_dependencies=ReservationReconciliationStateDependencies(
+            apply_watch_transition=apply_watch_transition,
+            add_outbox_event=add_outbox_event,
+            record_reservation_confirmation=record_reservation_confirmation,
+            utc_instant=_utc_instant,
+        ),
     )
 
 

@@ -69,6 +69,8 @@ files = [
   "src/rail_waitlist/reservations/attempt_claim_application.py",
   "src/rail_waitlist/reservations/attempt_result_application.py",
   "src/rail_waitlist/korail_sidecar/runtime.py",
+  "src/rail_waitlist/reservations/reconciliation_policy.py",
+  "src/rail_waitlist/reservations/reconciliation_state_application.py",
 ]
 
 [tool.ruff]

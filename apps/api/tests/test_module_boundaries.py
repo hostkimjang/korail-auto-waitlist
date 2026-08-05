@@ -132,6 +132,16 @@ def _is_reservation_reconciliation_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_application.py")
 
 
+def _is_reservation_reconciliation_policy(relative_path: Path) -> bool:
+    return relative_path.as_posix() == ("rail_waitlist/reservations/reconciliation_policy.py")
+
+
+def _is_reservation_reconciliation_state_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == (
+        "rail_waitlist/reservations/reconciliation_state_application.py"
+    )
+
+
 def _is_payment_hold_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/payment_hold_application.py")
 
@@ -364,7 +374,49 @@ BOUNDARY_RULES = (
     BoundaryRule(
         name="reservation reconciliation application depends on provider roles",
         matches=_is_reservation_reconciliation_application,
-        forbidden_import_roots=PROVIDER_APPLICATION_FORBIDDEN_IMPORT_ROOTS,
+        forbidden_import_roots=PROVIDER_APPLICATION_FORBIDDEN_IMPORT_ROOTS
+        | frozenset({"services"}),
+    ),
+    BoundaryRule(
+        name="reservation reconciliation policy stays pure and runtime independent",
+        matches=_is_reservation_reconciliation_policy,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "models",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "schemas",
+                "services",
+                "sqlalchemy",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="reservation reconciliation state receives runtime side effects",
+        matches=_is_reservation_reconciliation_state_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "notification_management",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "services",
+                "worker",
+            }
+        ),
     ),
     BoundaryRule(
         name="payment hold application stays a persistence-read policy",
@@ -705,6 +757,45 @@ def test_reservation_attempt_result_application_joins_the_callers_unit_of_work()
     assert called_attributes.isdisjoint(
         {"begin", "begin_nested", "commit", "flush", "refresh", "rollback", "with_for_update"}
     )
+
+
+def test_reservation_reconciliation_state_joins_the_callers_unit_of_work() -> None:
+    module_path = (
+        SOURCE_ROOT / "rail_waitlist" / "reservations" / "reconciliation_state_application.py"
+    )
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "HTTPException" not in called_names
+    assert called_attributes.isdisjoint(
+        {"begin", "begin_nested", "commit", "flush", "refresh", "rollback", "with_for_update"}
+    )
+
+
+def test_reconciliation_orchestrator_uses_canonical_policy_and_state_owners() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "reservations" / "reconciliation_application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    reservation_imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and node.module.startswith("reconciliation_")
+    }
+
+    assert reservation_imports == {
+        "reconciliation_policy",
+        "reconciliation_state_application",
+    }
 
 
 def test_observation_group_imports_only_the_canonical_reservation_attempt_policy() -> None:

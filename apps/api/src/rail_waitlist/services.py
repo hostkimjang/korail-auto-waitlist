@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -11,7 +11,6 @@ from .domain import (
     Provider,
     ProviderCircuitState,
     ReservationOutcome,
-    ReservationPolicy,
     SeatObservationMode,
     SeatObservationStatus,
     WatchStatus,
@@ -49,7 +48,6 @@ from .outbox import add_outbox_event as add_outbox_event
 from .policy import build_watch_dedupe_key
 from .provider_registry.application import get_execution_provider, get_timetable_provider
 from .reservation_confirmation import (
-    ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
 from .reservations.attempt_claim_application import (
@@ -84,6 +82,25 @@ from .reservations.payment_hold_application import (
 )
 from .reservations.payment_hold_application import (
     payment_hold_end_reason as payment_hold_end_reason,
+)
+from .reservations.reconciliation_policy import (
+    RESERVATION_RECONCILIATION_INTERVAL as RESERVATION_RECONCILIATION_INTERVAL,
+)
+from .reservations.reconciliation_policy import (
+    RESERVATION_RECONCILIATION_MAX_ATTEMPTS as RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
+)
+from .reservations.reconciliation_policy import (
+    UNKNOWN_RECONCILIATION_MAX_ATTEMPTS as UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
+)
+from .reservations.reconciliation_policy import (
+    unknown_reconciliation_retry_interval as unknown_reconciliation_retry_interval,
+)
+from .reservations.reconciliation_state_application import (
+    ReservationReconciliationNotEligible,
+    ReservationReconciliationStateDependencies,
+)
+from .reservations.reconciliation_state_application import (
+    apply_reservation_reconciliation as apply_reservation_reconciliation_application,
 )
 from .schemas import (
     RegistrationEvidenceConflictDetail,
@@ -125,21 +142,6 @@ from .watch_management.update_application import (
 from .watch_management.update_application import (
     validate_channel_ids as validate_channel_ids_application,
 )
-
-RESERVATION_RECONCILIATION_MAX_ATTEMPTS = 3
-RESERVATION_RECONCILIATION_INTERVAL = timedelta(seconds=30)
-UNKNOWN_RECONCILIATION_MAX_ATTEMPTS = 6
-_UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS = {
-    1: RESERVATION_RECONCILIATION_INTERVAL,
-    2: RESERVATION_RECONCILIATION_INTERVAL,
-    3: timedelta(minutes=5),
-    4: timedelta(minutes=15),
-    5: timedelta(minutes=60),
-}
-
-
-def unknown_reconciliation_retry_interval(completed_attempt_count: int) -> timedelta | None:
-    return _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS.get(completed_attempt_count)
 
 
 async def _ensure_focused_observation_capacity(
@@ -659,271 +661,27 @@ async def apply_reservation_reconciliation(
     *,
     reconciled_at: datetime,
 ) -> None:
-    """Apply one bounded read-only confirmation while preserving the no-retry fence.
-
-    Ambiguous lookup results remain fenced. An exact official-list NOT_FOUND for an
-    UNKNOWN attempt may authorize one separately fenced retry after a later actionable
-    observation. A positive exact match may restore the payment handoff that the
-    original worker could not durably prove.
-    """
-
-    if attempt.outcome not in {
-        ReservationOutcome.PAYMENT_REQUIRED,
-        ReservationOutcome.UNKNOWN,
-    }:
-        raise HTTPException(409, "reservation attempt is not eligible for reconciliation")
-    if confirmation.provider != watch.provider:
-        raise ValueError("reservation confirmation provider does not match watch")
-    payment_deadline = watch.payment_deadline
-    if payment_deadline is not None and (
-        payment_deadline.tzinfo is None or payment_deadline.utcoffset() is None
-    ):
-        payment_deadline = payment_deadline.replace(tzinfo=UTC)
-    legacy_expired_hold_cleanup_read = (
-        attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and attempt.reconciliation_attempt_count == RESERVATION_RECONCILIATION_MAX_ATTEMPTS
-        and attempt.post_deadline_reconciled_at is not None
-        and attempt.confirmation_outcome
-        is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-        and attempt.payment_deadline is not None
-        and _utc_instant(attempt.payment_deadline)
-        <= _utc_instant(attempt.post_deadline_reconciled_at)
+    dependencies = ReservationReconciliationStateDependencies(
+        apply_watch_transition=apply_watch_transition,
+        add_outbox_event=add_outbox_event,
+        record_reservation_confirmation=record_reservation_confirmation,
+        utc_instant=_utc_instant,
     )
-    post_deadline_final_read = (
-        attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and watch.status is WatchStatus.PAYMENT_REQUIRED
-        and payment_deadline is not None
-        and payment_deadline <= reconciled_at
-        and attempt.reconciliation_attempt_count >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS
-        and (attempt.post_deadline_reconciled_at is None or legacy_expired_hold_cleanup_read)
-    )
-    record_reservation_confirmation(
-        attempt,
-        confirmation,
-        reconciled_at=reconciled_at,
-    )
-    confirmed_hold_has_usable_deadline = (
-        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-        and confirmation.payment_deadline is not None
-        and confirmation.payment_deadline > reconciled_at
-    )
-    reconciliation_attempt_limit = (
-        UNKNOWN_RECONCILIATION_MAX_ATTEMPTS
-        if attempt.outcome is ReservationOutcome.UNKNOWN
-        else RESERVATION_RECONCILIATION_MAX_ATTEMPTS
-    )
-    if post_deadline_final_read:
-        if confirmed_hold_has_usable_deadline:
-            attempt.post_deadline_reconciled_at = None
-        else:
-            attempt.post_deadline_reconciled_at = reconciled_at
-            if legacy_expired_hold_cleanup_read:
-                attempt.reconciliation_attempt_count += 1
-    else:
-        attempt.reconciliation_attempt_count += 1
-        if attempt.reconciliation_attempt_count > reconciliation_attempt_limit:
-            raise RuntimeError("reservation reconciliation attempt limit exceeded")
-    confirmed_absent_unknown = (
-        attempt.outcome is ReservationOutcome.UNKNOWN
-        and confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
-    )
-    terminal_confirmation = (
-        confirmed_hold_has_usable_deadline
-        or confirmed_absent_unknown
-        or confirmation.outcome
-        in {
-            ReservationConfirmationOutcome.AUTH_REQUIRED,
-            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
-        }
-    )
-    if (
-        attempt.outcome is ReservationOutcome.UNKNOWN
-        and confirmation.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
-    ):
-        retry_interval = unknown_reconciliation_retry_interval(attempt.reconciliation_attempt_count)
-        attempt.next_reconcile_at = (
-            attempt.last_reconciled_at + retry_interval if retry_interval is not None else None
-        )
-    elif (
-        not terminal_confirmation
-        and attempt.reconciliation_attempt_count < RESERVATION_RECONCILIATION_MAX_ATTEMPTS
-    ):
-        reconciliation_anchor = attempt.last_reconciled_at
-        if reconciliation_anchor is None:
-            raise RuntimeError("reconciliation must persist a reconciliation timestamp")
-        attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
-    elif (
-        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-        and confirmation.payment_deadline is not None
-        and confirmation.payment_deadline <= reconciled_at
-        and attempt.reconciliation_attempt_count >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS
-        and attempt.post_deadline_reconciled_at is None
-    ):
-        attempt.next_reconcile_at = reconciled_at + RESERVATION_RECONCILIATION_INTERVAL
-    else:
-        attempt.next_reconcile_at = None
-    expired_confirmed_hold = (
-        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-        and confirmation.payment_deadline is not None
-        and confirmation.payment_deadline <= reconciled_at
-    )
-    payment_hold_ended_confirmation = (
-        post_deadline_final_read
-        and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and watch.status is WatchStatus.PAYMENT_REQUIRED
-        and (
-            confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
-            or expired_confirmed_hold
-        )
-    )
-    if payment_hold_ended_confirmation:
-        if expired_confirmed_hold:
-            attempt.payment_deadline = confirmation.payment_deadline
-        # The official unpaid hold is either absent or retained only as a row whose
-        # own provider deadline has elapsed. Neither is an actionable payment handoff.
-        candidate.state = (
-            "expired" if watch.reservation_policy is ReservationPolicy.NOTIFY_ONLY else "observed"
-        )
-        candidate.suppressed_by_candidate_id = None
-        suppressed_candidates = list(
-            (
-                await session.scalars(
-                    select(WatchCandidate).where(
-                        WatchCandidate.watch_id == watch.id,
-                        WatchCandidate.state == "suppressed_by_priority",
-                        WatchCandidate.suppressed_by_candidate_id == candidate.id,
-                    )
-                )
-            ).all()
-        )
-        for suppressed in suppressed_candidates:
-            suppressed.state = (
-                "expired"
-                if watch.reservation_policy is ReservationPolicy.NOTIFY_ONLY
-                else "observed"
-            )
-            suppressed.suppressed_by_candidate_id = None
-        watch.payment_deadline = None
-        watch.official_booking_url = None
-        watch.next_check_at = reconciled_at
-        terminal_one_off = watch.reservation_policy is ReservationPolicy.NOTIFY_ONLY
-        await apply_watch_transition(
+    try:
+        await apply_reservation_reconciliation_application(
             session,
             watch,
-            WatchStatus.EXPIRED if terminal_one_off else WatchStatus.WATCHING,
-            reason=(
-                "confirmed_payment_hold_no_longer_actionable_one_off_expired"
-                if terminal_one_off
-                else "confirmed_payment_hold_no_longer_actionable_monitoring_resumed"
-            ),
+            candidate,
+            attempt,
+            confirmation,
+            reconciled_at=reconciled_at,
+            dependencies=dependencies,
         )
-        await add_outbox_event(
-            session,
-            aggregate_type="watch",
-            aggregate_id=watch.id,
-            event_type=(
-                "watch.payment_hold_ended_one_off_expired"
-                if terminal_one_off
-                else "watch.payment_hold_ended_monitoring_resumed"
-            ),
-            payload={
-                "watch_id": watch.id,
-                "candidate_id": candidate.id,
-                "terminal": True,
-                "status": (
-                    WatchStatus.EXPIRED.value if terminal_one_off else WatchStatus.WATCHING.value
-                ),
-                "from": WatchStatus.PAYMENT_REQUIRED.value,
-                "to": (
-                    WatchStatus.EXPIRED.value if terminal_one_off else WatchStatus.WATCHING.value
-                ),
-                "reason": (
-                    "confirmed_payment_deadline_elapsed"
-                    if expired_confirmed_hold
-                    else "confirmed_payment_hold_no_longer_present"
-                ),
-                "message": (
-                    "임시 예약이 결제기한 안에 결제되지 않아 취소되었습니다."
-                    if expired_confirmed_hold
-                    else "공식 예약 목록에서 미결제 보류가 종료된 것을 확인했습니다."
-                ),
-                "payment_deadline": (
-                    confirmation.payment_deadline.isoformat()
-                    if expired_confirmed_hold and confirmation.payment_deadline is not None
-                    else None
-                ),
-                "automatic_reservation_retry": not terminal_one_off,
-                "retry_condition": ("new_availability_episode" if not terminal_one_off else None),
-            },
-            dedupe_key=f"payment-hold-ended:{attempt.id}",
-        )
-        return
-    if confirmation.outcome is not ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED:
-        return
-    if confirmation.official_handoff_url is None:
-        raise RuntimeError("confirmed reservation requires an official handoff URL")
-    if confirmation.payment_deadline is not None and confirmation.payment_deadline <= reconciled_at:
-        # Preserve the latest official evidence but do not surface an unusable hold.
-        return
-
-    attempt.outcome = ReservationOutcome.PAYMENT_REQUIRED
-    attempt.payment_deadline = confirmation.payment_deadline
-    attempt.official_handoff_url = confirmation.official_handoff_url
-    if (
-        watch.status
-        in {
-            WatchStatus.WATCHING,
-            WatchStatus.OFFICIAL_WAITLIST,
-            WatchStatus.SEAT_FOUND,
-            WatchStatus.RESERVING,
-            WatchStatus.PAYMENT_REQUIRED,
-        }
-        and candidate.state != "expired"
-    ):
-        candidate.state = "payment_required"
-        watch.payment_deadline = confirmation.payment_deadline
-        watch.official_booking_url = confirmation.official_handoff_url
-        if watch.status != WatchStatus.PAYMENT_REQUIRED:
-            await apply_watch_transition(
-                session,
-                watch,
-                WatchStatus.PAYMENT_REQUIRED,
-                reason="reservation_reconciliation_confirmed_payment_required",
-            )
-        lower_candidates = list(
-            (
-                await session.scalars(
-                    select(WatchCandidate).where(
-                        WatchCandidate.watch_id == watch.id,
-                        WatchCandidate.priority > candidate.priority,
-                        WatchCandidate.state.in_(["active", "observed", "seat_found"]),
-                    )
-                )
-            ).all()
-        )
-        for lower in lower_candidates:
-            lower.state = "suppressed_by_priority"
-            lower.suppressed_by_candidate_id = candidate.id
-
-    await add_outbox_event(
-        session,
-        aggregate_type="watch",
-        aggregate_id=watch.id,
-        event_type="watch.reservation_reconciled",
-        payload={
-            "watch_id": watch.id,
-            "candidate_id": candidate.id,
-            "attempt_sequence": attempt.attempt_sequence,
-            "confirmation_outcome": confirmation.outcome.value,
-            "payment_deadline": (
-                confirmation.payment_deadline.isoformat()
-                if confirmation.payment_deadline is not None
-                else None
-            ),
-            "retryable": False,
-        },
-        dedupe_key=(f"reservation-reconciled:{attempt.id}:{confirmation.observed_at.isoformat()}"),
-    )
+    except ReservationReconciliationNotEligible as error:
+        raise HTTPException(
+            409,
+            "reservation attempt is not eligible for reconciliation",
+        ) from error
 
 
 async def update_watch(session: AsyncSession, watch: Watch, data: WatchUpdate) -> Watch:

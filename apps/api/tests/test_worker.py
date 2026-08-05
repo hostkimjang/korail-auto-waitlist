@@ -213,6 +213,15 @@ async def test_worker_reconciliation_delegate_wires_runtime_dependencies(monkeyp
     assert dependencies.close_execution_adapter is worker_module._close_execution_adapter
     assert dependencies.provider_circuit_is_closed is worker_module._provider_circuit_is_closed
     assert dependencies.lease_is_current_in_session is lock_execution_lease_current
+    state_dependencies = dependencies.state_dependencies
+    assert state_dependencies is not None
+    assert state_dependencies.apply_watch_transition is worker_module.apply_watch_transition
+    assert state_dependencies.add_outbox_event is worker_module.add_outbox_event
+    assert (
+        state_dependencies.record_reservation_confirmation
+        is worker_module.record_reservation_confirmation
+    )
+    assert state_dependencies.utc_instant is worker_module._utc_instant
 
 
 def test_reconciliation_celery_task_preserves_name_route_and_delegate(monkeypatch) -> None:

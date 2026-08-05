@@ -21,11 +21,16 @@ from ..reservation_confirmation import (
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
-from ..services import (
+from .reconciliation_policy import (
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
-    apply_reservation_reconciliation,
     unknown_reconciliation_retry_interval,
+)
+from .reconciliation_state_application import (
+    ReservationReconciliationStateDependencies,
+)
+from .reconciliation_state_application import (
+    apply_reservation_reconciliation as apply_reservation_reconciliation_application,
 )
 
 EXTERNAL_RECONCILIATION_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
@@ -48,7 +53,19 @@ AcquireExecutionLease = Callable[
 ProviderGetter = Callable[[Provider], ReconciliationExecutionProvider]
 AdapterLifecycle = Callable[[ProviderLifecycle, Provider], Awaitable[None]]
 ProviderCircuitCheck = Callable[[Provider], Awaitable[bool]]
-ApplyReconciliation = Callable[..., Awaitable[None]]
+
+
+class ApplyReconciliation(Protocol):
+    async def __call__(
+        self,
+        session: AsyncSession,
+        watch: Watch,
+        candidate: WatchCandidate,
+        attempt: ReservationAttempt,
+        confirmation: ReservationConfirmationResult,
+        *,
+        reconciled_at: datetime,
+    ) -> None: ...
 
 
 class LockedLeaseCheck(Protocol):
@@ -74,7 +91,8 @@ class ReconciliationDependencies:
     close_execution_adapter: AdapterLifecycle
     provider_circuit_is_closed: ProviderCircuitCheck
     lease_is_current_in_session: LockedLeaseCheck = lock_execution_lease_current
-    apply_reconciliation: ApplyReconciliation = apply_reservation_reconciliation
+    state_dependencies: ReservationReconciliationStateDependencies | None = None
+    apply_reconciliation: ApplyReconciliation | None = None
     now: Callable[[], datetime] = _now
 
 
@@ -359,14 +377,28 @@ async def reconcile_reservation_attempt(
                 now=dependencies.now(),
             ):
                 return 0
-            await dependencies.apply_reconciliation(
-                session,
-                watch,
-                candidate,
-                attempt,
-                confirmation,
-                reconciled_at=reconciled_at,
-            )
+            if dependencies.apply_reconciliation is not None:
+                await dependencies.apply_reconciliation(
+                    session,
+                    watch,
+                    candidate,
+                    attempt,
+                    confirmation,
+                    reconciled_at=reconciled_at,
+                )
+            else:
+                state_dependencies = dependencies.state_dependencies
+                if state_dependencies is None:
+                    raise RuntimeError("reservation reconciliation state dependencies are missing")
+                await apply_reservation_reconciliation_application(
+                    session,
+                    watch,
+                    candidate,
+                    attempt,
+                    confirmation,
+                    reconciled_at=reconciled_at,
+                    dependencies=state_dependencies,
+                )
             await session.commit()
         return 1
     finally:

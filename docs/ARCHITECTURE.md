@@ -306,6 +306,22 @@ Migration `0020_reservation_reconciliation`은 실제 사용 credential version�
 `services.py`는 기존 begin·confirmation·reconciliation 호출자를 위해 private UTC helper와 두 public
 함수를 같은 객체로 다시 export하고, watch read model은 canonical owner를 직접 사용합니다.
 
+예약 시도 재무장 판단의 canonical owner는 53줄 `reservations/attempt_policy.py`입니다.
+`ConfirmedAbsentRetrySource` Protocol의 confirmation·episode·outcome·deadline 필드만 읽어 최초
+`UNKNOWN` 또는 기한 없는 legacy `PAYMENT_REQUIRED`의 exact `NOT_FOUND`를 한 번의
+`confirmed-absent-retry:<attempt.id>` 근거로 허용합니다. 이미 retry episode이거나 confirmation·시각·
+deadline/post-deadline 조건이 불완전하면 fail-closed합니다. policy는 ORM·SQL·FastAPI·runtime을
+import하지 않으며 observation group도 중복 문자열 대신 이 canonical episode prefix를 사용합니다.
+
+예약 episode claim의 canonical owner는 183줄 `reservations/attempt_claim_application.py`입니다. 기존
+episode replay와 최신 attempt fence, `NOT_AVAILABLE`·새 인증 세대·provider-blocked·결제 보류 종료 뒤
+확정 비가용 edge·confirmed-absent 뒤 새 actionable 관측의 재시도 자격을 같은 순서로 판정합니다.
+새 claim은 savepoint의 add·flush와 `IntegrityError` 승자 재조회로 하나만 만들고 candidate/watch 상태,
+`SEAT_FOUND → RESERVING`, `watch.reservation_attempted` outbox를 caller UoW에 추가합니다. application은
+commit·rollback·refresh하지 않으며 `services.begin_reservation_attempt` wrapper가 호출 시점의 transition·
+outbox·payment-hold·policy dependency를 조립해 기존 signature·module identity·monkeypatch seam을
+보존합니다.
+
 상태 전이에 따른 사용자 알림 message·대상 채널 조회·dispatch outbox 생성의 canonical owner는
 `notification_management/watch_transition_application.py`입니다. 단일 관리자 전역 설정에서 현재
 `enabled=true`인 채널만 `created_at, id` 순으로 선택하며, watch에 남은 채널 snapshot은 전달 권한으로
@@ -448,8 +464,8 @@ adapter→registry/facade 역의존을 차단합니다.
 오류 0인 provider·observation·reservation policy의 정적 구조 적합성은 Python 3.12 strict mypy ratchet으로도 확인합니다. 현재
 `provider_contracts.py`, 공통 base·credential/fail-closed execution, Experimental·KORAIL execution·
 공식 timetable adapter·registry application, operational projection·observation cycle·idempotency·
-payment-hold·watch transition notification application·watch transition policy/application·watch update
-application의 15개 오류 0
+payment-hold·reservation attempt policy/claim application·watch transition notification application·
+watch transition policy/application·watch update application의 17개 오류 0
 파일만 대상입니다. registry 반환 타입은
 `TimetableProvider`와 `ExecutionProvider`이므로 이 분기들이 concrete adapter의 Protocol witness가
 됩니다. test extra에만 mypy를 설치하며 production Compose runtime dependency에는 포함하지 않습니다.

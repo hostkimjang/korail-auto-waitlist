@@ -136,6 +136,14 @@ def _is_payment_hold_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == ("rail_waitlist/reservations/payment_hold_application.py")
 
 
+def _is_reservation_attempt_policy(relative_path: Path) -> bool:
+    return relative_path.as_posix() == "rail_waitlist/reservations/attempt_policy.py"
+
+
+def _is_reservation_attempt_claim_application(relative_path: Path) -> bool:
+    return relative_path.as_posix() == ("rail_waitlist/reservations/attempt_claim_application.py")
+
+
 def _is_watch_transition_notification_application(relative_path: Path) -> bool:
     return relative_path.as_posix() == (
         "rail_waitlist/notification_management/watch_transition_application.py"
@@ -222,7 +230,6 @@ BOUNDARY_RULES = (
                 "provider_accounts",
                 "provider_execution_lease",
                 "providers",
-                "reservations",
                 "services",
                 "srt_execution",
                 "srt_provider_adapter",
@@ -369,6 +376,47 @@ BOUNDARY_RULES = (
                 "schemas",
                 "services",
                 "sqlalchemy",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="reservation attempt policy stays transport and runtime independent",
+        matches=_is_reservation_attempt_policy,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "schemas",
+                "services",
+                "sqlalchemy",
+                "worker",
+            }
+        ),
+    ),
+    BoundaryRule(
+        name="reservation attempt claim application receives runtime side effects",
+        matches=_is_reservation_attempt_claim_application,
+        forbidden_import_roots=frozenset(
+            {
+                "celery",
+                "config",
+                "database",
+                "fastapi",
+                "metrics",
+                "notification_management",
+                "outbox",
+                "provider_adapters",
+                "provider_registry",
+                "providers",
+                "services",
                 "worker",
             }
         ),
@@ -599,6 +647,39 @@ def test_watch_update_application_owns_only_its_command_transaction() -> None:
     assert "HTTPException" not in called_names
     assert called_attributes.isdisjoint({"begin", "rollback"})
     assert {"commit", "refresh", "with_for_update"} <= called_attributes
+
+
+def test_reservation_attempt_claim_application_joins_the_callers_unit_of_work() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "reservations" / "attempt_claim_application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "begin_nested" in called_attributes
+    assert "flush" in called_attributes
+    assert called_attributes.isdisjoint({"begin", "commit", "refresh", "rollback"})
+
+
+def test_observation_group_imports_only_the_canonical_reservation_attempt_policy() -> None:
+    module_path = SOURCE_ROOT / "rail_waitlist" / "observations" / "group_application.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    reservation_imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            reservation_imports.update(
+                alias.name for alias in node.names if "reservations" in alias.name.split(".")
+            )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.module is not None
+            and "reservations" in node.module.split(".")
+        ):
+            reservation_imports.add(node.module)
+
+    assert reservation_imports == {"reservations.attempt_policy"}
 
 
 def test_provider_contract_imports_are_allowlisted() -> None:

@@ -26,6 +26,7 @@ from ..models import (
 from ..operational import decide_operational_expiry
 from ..provider_contracts import ObservationProvider
 from ..reservation_confirmation import ReservationConfirmationOutcome
+from ..reservations.attempt_policy import CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX
 from ..schemas import SeatObservationRequest, SeatObservationResult
 
 OBSERVATION_WATCH_STATUSES = frozenset(
@@ -56,7 +57,6 @@ SEAT_FOUND_STATUSES = frozenset(
 )
 ACTIONABLE_SEAT_STATUSES = SEAT_FOUND_STATUSES | {SeatObservationStatus.WAITLIST_AVAILABLE}
 NOT_AVAILABLE_RETRY_EPISODE_PREFIX = "not-available-retry:"
-CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
 
 
 class AsyncSessionFactory(Protocol):

@@ -402,6 +402,9 @@
 - [x] 스물다섯 번째 구조 슬라이스 F를 같은 작업의 API 코드 슬라이스와 함께 `experimental-rail` 전체 build·force-recreate하고 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [x] 예약 요약·목록·결제기한 기본 90줄과 760px 27줄을 118줄 `features/reservations/reservations.css`로 재소유하고 전역 CSS import를 열 경계로 확장. `features.css` 3,650→3,560줄·`responsive.css` 1,270→1,243줄로 축소하며 원본 동등성·legacy 잔존 0·import 순서를 고정
 - [x] 기한 경과 payment fixture로 실제 예약 항목 2개·결제기한·공식 확인 44px 행동·page/root overflow를 1,440/320/720px×두 브라우저에서 직접 검증. 전체 Vitest 81파일·579건, Sites 4건·기본 E2E 14건과 독립 P2 보정 뒤 재리뷰 P0~P3 잔여 없음 확인
+- [x] 53줄 `reservations/attempt_policy.py`에 field Protocol 기반 confirmed-absent 재무장과 결제 보류 종료 retry-edge 상태를 단일화하고 observation group의 중복 episode prefix 제거. 183줄 `attempt_claim_application.py`에 replay·latest fence·재시도 자격·savepoint/IntegrityError 승자 재조회·상태/outbox를 caller UoW로 이동하며 `services.py`를 1,253→1,131줄로 축소
+- [x] services claim wrapper의 기존 signature/module identity·호출 시점 monkeypatch seam과 begin_nested/flush·commit/rollback/refresh 부재를 고정. owner/boundary 29건·관련 75+2건·API 전체 1,516건·Ruff `E/F/I`·format ratchet 60개·strict mypy 17개·lock check·독립 리뷰 P0~P3 없음 확인
+- [x] 스물다섯 번째 구조 슬라이스 H의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 최근 안전한 오류 표식 0건 확인
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

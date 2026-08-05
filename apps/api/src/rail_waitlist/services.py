@@ -52,6 +52,18 @@ from .reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
+from .reservations.attempt_claim_application import (
+    ReservationAttemptClaimDependencies,
+)
+from .reservations.attempt_claim_application import (
+    begin_reservation_attempt as begin_reservation_attempt_application,
+)
+from .reservations.attempt_policy import (
+    CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX as CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
+)
+from .reservations.attempt_policy import (
+    is_confirmed_absent_retry_source as is_confirmed_absent_retry_source,
+)
 from .reservations.domain import ReservationAttemptResultPolicy as ReservationAttemptResultPolicy
 from .reservations.domain import reservation_attempt_result_policy
 from .reservations.payment_hold_application import _utc_instant as _utc_instant
@@ -105,7 +117,6 @@ from .watch_management.update_application import (
 RESERVATION_RECONCILIATION_MAX_ATTEMPTS = 3
 RESERVATION_RECONCILIATION_INTERVAL = timedelta(seconds=30)
 UNKNOWN_RECONCILIATION_MAX_ATTEMPTS = 6
-CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
 _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS = {
     1: RESERVATION_RECONCILIATION_INTERVAL,
     2: RESERVATION_RECONCILIATION_INTERVAL,
@@ -133,42 +144,6 @@ async def _ensure_focused_observation_capacity(
         )
     except WatchCommandConflict as error:
         raise HTTPException(409, str(error)) from None
-
-
-def is_confirmed_absent_retry_source(attempt: ReservationAttempt) -> bool:
-    """Return whether exact negative evidence can safely re-arm one attempt.
-
-    Older PAYMENT_REQUIRED rows may predate persisted payment deadlines and the
-    post-deadline marker.  They would otherwise remain fenced forever even after an
-    official reservation-list read proved the hold absent.  Keep this compatibility
-    path deliberately narrower than the normal expired-hold flow: a missing deadline,
-    exact NOT_FOUND confirmation, and a non-retry episode are all required.
-    """
-    if (
-        attempt.confirmation_outcome is not ReservationConfirmationOutcome.NOT_FOUND
-        or attempt.confirmation_observed_at is None
-        or attempt.episode_key.startswith(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
-    ):
-        return False
-    if attempt.outcome is ReservationOutcome.UNKNOWN:
-        return True
-    return (
-        attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and attempt.payment_deadline is None
-        and attempt.post_deadline_reconciled_at is None
-    )
-
-
-_RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
-    {
-        SeatObservationStatus.UNAVAILABLE,
-        SeatObservationStatus.NOT_ENOUGH_SEATS,
-        SeatObservationStatus.SOLD_OUT,
-        SeatObservationStatus.NOT_OFFERED,
-        SeatObservationStatus.DEPARTED,
-        SeatObservationStatus.OUT_OF_SERVICE,
-    }
-)
 
 
 async def create_watch(
@@ -615,120 +590,23 @@ async def begin_reservation_attempt(
     retry_authorized: bool = False,
     credential_version: int | None = None,
 ) -> tuple[ReservationAttempt, bool]:
-    normalized_episode_key = episode_key or f"manual:{idempotency_key}"
-    existing = await session.scalar(
-        select(ReservationAttempt).where(
-            ReservationAttempt.candidate_id == candidate.id,
-            ReservationAttempt.episode_key == normalized_episode_key,
-        )
+    dependencies = ReservationAttemptClaimDependencies(
+        apply_watch_transition=apply_watch_transition,
+        add_outbox_event=add_outbox_event,
+        is_payment_hold_ended=is_payment_hold_ended,
+        is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        actionable_seat_statuses=ACTIONABLE_SEAT_STATUSES,
     )
-    if existing is not None:
-        return existing, False
-
-    latest_attempt = await session.scalar(
-        select(ReservationAttempt)
-        .where(ReservationAttempt.candidate_id == candidate.id)
-        .order_by(ReservationAttempt.attempt_sequence.desc())
-        .limit(1)
-    )
-    confirmed_absent_retry_authorized = False
-    if latest_attempt is not None and normalized_episode_key.startswith(
-        CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX
-    ):
-        expected_episode_key = f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
-        actionable_after_confirmation = None
-        if (
-            retry_authorized
-            and normalized_episode_key == expected_episode_key
-            and is_confirmed_absent_retry_source(latest_attempt)
-        ):
-            actionable_after_confirmation = await session.scalar(
-                select(SeatObservation.id)
-                .where(
-                    SeatObservation.candidate_id == candidate.id,
-                    SeatObservation.observed_at > latest_attempt.confirmation_observed_at,
-                    SeatObservation.status.in_(ACTIONABLE_SEAT_STATUSES),
-                )
-                .order_by(SeatObservation.observed_at, SeatObservation.id)
-                .limit(1)
-            )
-        confirmed_absent_retry_authorized = actionable_after_confirmation is not None
-    payment_hold_ended = latest_attempt is not None and is_payment_hold_ended(latest_attempt)
-    payment_hold_retry_edge_observed = False
-    if payment_hold_ended and latest_attempt is not None:
-        retry_edge = await session.scalar(
-            select(SeatObservation.id)
-            .where(
-                SeatObservation.candidate_id == candidate.id,
-                SeatObservation.observed_at > latest_attempt.post_deadline_reconciled_at,
-                SeatObservation.status.in_(_RESERVATION_RETRY_EDGE_OBSERVATIONS),
-            )
-            .order_by(SeatObservation.observed_at, SeatObservation.id)
-            .limit(1)
-        )
-        payment_hold_retry_edge_observed = retry_edge is not None
-    if latest_attempt is not None and (
-        not retry_authorized
-        or latest_attempt.outcome
-        not in {
-            ReservationOutcome.NOT_AVAILABLE,
-            ReservationOutcome.AUTH_REQUIRED,
-            ReservationOutcome.PROVIDER_BLOCKED,
-        }
-        and not payment_hold_retry_edge_observed
-        and not confirmed_absent_retry_authorized
-    ):
-        return latest_attempt, False
-
-    latest_sequence = latest_attempt.attempt_sequence if latest_attempt is not None else 0
-
-    attempt = ReservationAttempt(
-        candidate_id=candidate.id,
-        attempt_sequence=(latest_sequence or 0) + 1,
-        episode_key=normalized_episode_key,
-        idempotency_key=idempotency_key,
-        outcome=ReservationOutcome.PENDING,
-        credential_version=credential_version,
-    )
-    try:
-        async with session.begin_nested():
-            session.add(attempt)
-            await session.flush()
-    except IntegrityError:
-        existing = await session.scalar(
-            select(ReservationAttempt).where(
-                ReservationAttempt.candidate_id == candidate.id,
-                ReservationAttempt.episode_key == normalized_episode_key,
-            )
-        )
-        if existing is None:
-            raise
-        return existing, False
-
-    candidate.state = "reservation_attempted"
-    watch.reservation_attempted = True
-    if watch.status == WatchStatus.SEAT_FOUND:
-        await apply_watch_transition(
-            session,
-            watch,
-            WatchStatus.RESERVING,
-            reason="reservation_attempt_claimed",
-        )
-    await add_outbox_event(
+    return await begin_reservation_attempt_application(
         session,
-        aggregate_type="watch",
-        aggregate_id=watch.id,
-        event_type="watch.reservation_attempted",
-        payload={
-            "watch_id": watch.id,
-            "candidate_id": candidate.id,
-            "attempt_sequence": attempt.attempt_sequence,
-            "episode_key": attempt.episode_key,
-            "outcome": ReservationOutcome.PENDING.value,
-        },
-        dedupe_key=f"reservation-attempt:{attempt.id}",
+        watch,
+        candidate,
+        idempotency_key,
+        episode_key=episode_key,
+        retry_authorized=retry_authorized,
+        credential_version=credential_version,
+        dependencies=dependencies,
     )
-    return attempt, True
 
 
 async def complete_reservation_attempt(

@@ -1495,6 +1495,31 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 운영 검증 범위: CSS 이동 자체에는 별도 Compose 재배포가 필요하지 않지만, 같은 작업의 코드
   슬라이스와 함께 최신 통합 tree를 전체 build·force-recreate해 health를 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 H
+
+- reservation attempt policy: 53줄 `reservations/attempt_policy.py`가 confirmed-absent retry episode
+  prefix, 결제 보류 종료 뒤 새 episode를 허용하는 비가용 edge 상태와 exact negative confirmation 판정을
+  소유합니다. 모델 대신 `ConfirmedAbsentRetrySource` field Protocol을 사용해 ORM·SQL·FastAPI·runtime
+  역의존을 없앴고, observation group의 중복 prefix도 canonical policy import로 교체했습니다.
+- reservation attempt claim application: 183줄 `reservations/attempt_claim_application.py`가 existing
+  episode replay, 최신 attempt·retry 자격·새 관측 edge, savepoint add/flush와 `IntegrityError` 승자 재조회,
+  candidate/watch mutation·`RESERVING` 전이·attempt outbox를 소유합니다. savepoint만 열고 caller의
+  transaction에 참여하며 commit·rollback·refresh는 호출하지 않습니다.
+- compatibility seam: `services.begin_reservation_attempt`은 기존 signature와 module identity를 유지하고
+  호출 시점의 transition·outbox·payment-hold·confirmed-absent globals와 actionable status를 typed
+  dependency로 조립합니다. execution application의 provider I/O 전 claim commit과 mock HTTP UoW는
+  바뀌지 않았으며 `services.py`는 1,253→1,131줄로 줄었습니다.
+- 테스트·정적 경계: policy matrix, exact identity alias, canonical observation import, application claim·
+  replay·event, wrapper monkeypatch seam과 begin_nested/flush·commit/rollback/refresh 부재를 owner/boundary
+  테스트로 고정했습니다. strict mypy ratchet은 15→17개 파일로 확장했습니다.
+- 확인된 검증: 최신 owner·module-boundary pytest 29건, 관련 reservation/worker pytest 75+2건,
+  API 전체 pytest 1,516건, Ruff `E/F/I`, format ratchet 60개, strict mypy 17개 파일 오류 0,
+  `uv lock --check`, 독립 리뷰 P0~P3 지적 없음과 `git diff --check`를 통과했습니다. 기존
+  Starlette/httpx deprecation 경고 1건은 유지됐습니다.
+- 운영 검증: `experimental-rail` 전체 이미지를 build한 뒤 volume 삭제 없이 force-recreate했습니다.
+  migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
+  최근 안전한 오류 표식 0건을 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

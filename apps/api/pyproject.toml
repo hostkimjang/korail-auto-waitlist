@@ -65,6 +65,8 @@ files = [
   "src/rail_waitlist/watch_management/transition_policy.py",
   "src/rail_waitlist/watch_management/transition_application.py",
   "src/rail_waitlist/watch_management/update_application.py",
+  "src/rail_waitlist/reservations/attempt_policy.py",
+  "src/rail_waitlist/reservations/attempt_claim_application.py",
 ]
 
 [tool.ruff]

@@ -1,0 +1,181 @@
+.refresh-preference-card {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.refresh-preference-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.refresh-preference-heading > svg {
+  flex: 0 0 auto;
+  color: var(--teal);
+}
+
+.refresh-preference-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.refresh-preference-heading span,
+.refresh-preference-fields small {
+  color: var(--muted);
+}
+
+.refresh-preference-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.refresh-preference-fields > label {
+  display: grid;
+  grid-template-rows: auto minmax(36px, auto) auto auto;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.refresh-preference-fields > label > span:first-child {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.refresh-preference-fields small {
+  line-height: 1.45;
+}
+
+.refresh-preference-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 44px;
+  padding-right: 12px;
+  background: #fff;
+  border: 1px solid #cbd9e2;
+  border-radius: 10px;
+}
+
+.refresh-preference-input input {
+  min-width: 0;
+  height: 42px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.refresh-preference-input input:focus-visible {
+  outline: 3px solid rgba(7, 139, 133, 0.2);
+  outline-offset: 1px;
+}
+
+.refresh-preference-input:has(input:disabled) {
+  background: #f2f5f6;
+  opacity: 0.72;
+}
+
+.refresh-preference-input em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.refresh-preference-safety {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  color: #345d63;
+  background: #edf8f6;
+  border: 1px solid #c9e5e1;
+  border-radius: 11px;
+}
+
+.refresh-preference-safety > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--teal);
+}
+
+.refresh-preference-safety p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.refresh-preference-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.refresh-preference-actions > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.refresh-preference-actions > span svg {
+  flex: 0 0 auto;
+  color: var(--teal);
+}
+
+.refresh-preference-error,
+.refresh-preference-success {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.refresh-preference-error {
+  color: #9d3f3f;
+}
+
+.refresh-preference-success {
+  color: #176a61;
+}
+
+@media (max-width: 760px) {
+  .refresh-preference-card {
+    padding: 16px;
+  }
+
+  .refresh-preference-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .refresh-preference-fields > label {
+    grid-template-rows: auto auto auto auto;
+  }
+
+  .refresh-preference-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .refresh-preference-actions > .button {
+    width: 100%;
+  }
+}

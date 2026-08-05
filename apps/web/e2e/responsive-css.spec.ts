@@ -222,7 +222,11 @@ async function installMockApi(page: Page, telemetry: BrowserTelemetry): Promise<
   });
 }
 
-async function expectWithinViewport(locator: Locator, viewportWidth: number): Promise<void> {
+async function expectWithinViewport(
+  locator: Locator,
+  viewportWidth: number,
+  regionLabel = "layout region",
+): Promise<void> {
   await expect(locator).toBeVisible();
   const metrics = await locator.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -233,15 +237,16 @@ async function expectWithinViewport(locator: Locator, viewportWidth: number): Pr
       right: rect.right,
     };
   });
-  expect(metrics.clientWidth, "visible layout region must have a usable width").toBeGreaterThan(0);
+  expect(metrics.clientWidth, `${regionLabel} must have a usable width`).toBeGreaterThan(0);
   expect(
     metrics.scrollWidth,
-    "layout region must not contain clipped horizontal overflow",
+    `${regionLabel} must not contain clipped horizontal overflow`,
   ).toBeLessThanOrEqual(metrics.clientWidth + 1);
-  expect(metrics.left, "layout region must not extend past the left viewport edge").toBeGreaterThanOrEqual(-0.5);
+  expect(metrics.left, `${regionLabel} must not extend past the left viewport edge`)
+    .toBeGreaterThanOrEqual(-0.5);
   expect(
     metrics.right,
-    "layout region must not extend past the right viewport edge",
+    `${regionLabel} must not extend past the right viewport edge`,
   ).toBeLessThanOrEqual(viewportWidth + 0.5);
 }
 
@@ -347,7 +352,7 @@ async function expectReservationsWithinBounds(
     ".reservation-summary",
     ".reservation-list",
   ]) {
-    await expectWithinViewport(page.locator(selector), viewport.width);
+    await expectWithinViewport(page.locator(selector), viewport.width, selector);
   }
   const reservationItems = page.locator(".reservation-item");
   await expect(reservationItems).toHaveCount(2);
@@ -378,6 +383,45 @@ async function expectReservationsWithinBounds(
   }));
   expect(rootWidths.documentScroll).toBeLessThanOrEqual(rootWidths.documentClient);
   expect(rootWidths.bodyScroll).toBeLessThanOrEqual(rootWidths.bodyClient);
+}
+
+async function expectRefreshPreferencesWithinBounds(
+  page: Page,
+  viewport: ViewportCase,
+): Promise<void> {
+  const settingsNavigation = page.locator(
+    viewport.width <= 720 ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
+  ).filter({ hasText: "설정" });
+  await settingsNavigation.click();
+  await page.getByRole("navigation", { name: "설정 메뉴" })
+    .getByRole("button", { name: "화면 동작" })
+    .click();
+
+  await expect(page.getByRole("heading", { name: "화면 동작" })).toBeVisible();
+  for (const selector of [
+    ".settings-panel",
+    ".refresh-preference-card",
+    ".refresh-preference-fields",
+    ".refresh-preference-actions",
+  ]) {
+    await expectWithinViewport(page.locator(selector), viewport.width, selector);
+  }
+
+  const inputs = page.locator(".refresh-preference-input");
+  const inputControls = page.locator(".refresh-preference-input input");
+  await expect(inputs).toHaveCount(2);
+  await expect(inputControls).toHaveCount(2);
+  for (let index = 0; index < 2; index += 1) {
+    await expectWithinViewport(inputs.nth(index), viewport.width);
+    await expectWithinViewport(inputControls.nth(index), viewport.width);
+    await expectVisibleActionTarget(inputs.nth(index), `refresh preference input ${index + 1}`);
+  }
+  const saveAction = page.getByRole("button", { name: "간격 저장" });
+  await expectWithinViewport(saveAction, viewport.width);
+  await expectVisibleActionTarget(
+    saveAction,
+    "refresh preference save action",
+  );
 }
 
 async function expectWatchRegionsDoNotOverlap(page: Page): Promise<void> {
@@ -529,6 +573,7 @@ for (const viewport of viewportCases) {
     }
     await expectOfficialHandoffWithinBounds(page, viewport);
     await expectReservationsWithinBounds(page, viewport);
+    await expectRefreshPreferencesWithinBounds(page, viewport);
     await expectHomeApiAndBrowserClean(telemetry);
   });
 }

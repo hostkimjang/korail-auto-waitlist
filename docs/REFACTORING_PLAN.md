@@ -1520,6 +1520,26 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   migration·log-init exit 0, 장기 서비스 11개 healthy, API health·ready와 proxy health 200, 재생성 뒤
   최근 안전한 오류 표식 0건을 확인했습니다.
 
+### 2026-08-05 스물다섯 번째 구조 슬라이스 I
+
+- timetable refresh settings CSS owner: `.refresh-preference-*`의 기본 selector 구간과 760px override를
+  선언·값·상대 순서 변경 없이 181줄 `features/settings/timetableRefreshSettings.css`로 이동했습니다.
+  여러 설정 surface가 공유하는 `.setting-row*`와 바로 뒤 `NewWait`의 `.step-three-*`는 기존 owner에
+  남겼습니다. `features.css`는 3,560→3,401줄, `responsive.css`는 1,243→1,222줄로 줄었습니다.
+- cascade·구조 계약: 전역 import를 `tokens → base → shell → features → operations → app-surfaces →
+  reservations → timetableRefreshSettings → officialHandoff → officialSeatConfirmation → responsive`
+  열한 경계로 확장했습니다. owner 시작·desktop selector exact order·760px media 종료·legacy 잔존 0과
+  원본 행 단위 동등성을 구조 테스트로 고정했습니다.
+- 실화면 회귀: 기본 responsive E2E가 `설정 → 화면 동작`을 열어 card·fields·actions·두 input wrapper와
+  input control·저장 행동의 viewport/내부 overflow를 1,440px·320px·720px 두 브라우저 프로젝트에서
+  확인합니다. input wrapper와 저장 행동은 44px 이상을 직접 검증합니다.
+- 확인된 검증: focused Vitest 4개 파일·23건, 전체 Vitest 81개 파일·579건, ESLint 오류 0개·고정
+  legacy warning 12개, strict typecheck, production build, Sites 4건, responsive E2E 6건과 기본 E2E
+  14건, self-review P0~P3 없음과 `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고만
+  유지됐습니다.
+- 운영 검증 범위: CSS 이동 자체에는 별도 Compose 재배포가 필요하지 않지만, 같은 작업의 코드
+  슬라이스와 함께 최신 통합 tree를 전체 build·force-recreate해 health를 확인했습니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

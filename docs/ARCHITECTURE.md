@@ -60,8 +60,8 @@ endpoint·payload·관리자 인증·트랜잭션 계약은 이동 전과 같습
 
 웹 전역 CSS 진입점 `styles.css`는 일반 규칙을 직접 소유하지 않고 `tokens -> base -> shell ->
 features -> operations -> app-surfaces -> features/reservations/reservations ->
-features/official-handoff/officialHandoff -> features/new-wait/officialSeatConfirmation -> responsive`
-순서의 열 경계를 import합니다. 초기 다섯 경계
+features/settings/timetableRefreshSettings -> features/official-handoff/officialHandoff ->
+features/new-wait/officialSeatConfirmation -> responsive` 순서의 열한 경계를 import합니다. 초기 다섯 경계
 구조 분리는 기존 6,648줄의 selector·규칙·media/container query·keyframes 순서를 바꾸지 않은
 기계적 이동이었습니다. production graph의 `OfficialHandoff` modal/sheet 기본·760px 규칙 237줄은
 `features/official-handoff/officialHandoff.css`가 소유하고, dormant `OfficialSeatConfirmation`의
@@ -70,6 +70,9 @@ trigger·dialog·760px/340px 규칙은 `features/new-wait/officialSeatConfirmati
 예약 요약·목록·결제기한의 기본 90줄과 760px override 27줄은 118줄
 `features/reservations/reservations.css`가 소유하며 공용 `.countdown`, `.button`, `.status-pill`은 기존
 owner에 남깁니다.
+화면 시간표 갱신·좌석 관측 간격 form의 `.refresh-preference-*` 기본 selector와 760px override는 181줄
+`features/settings/timetableRefreshSettings.css`가 소유합니다. 여러 설정이 공유하는 `.setting-row*`와
+새 대기 단계의 `.step-three-*`는 이동하지 않습니다.
 후속 분리에서 `features.css` 끝의 toast·실시간 알림 surface·인증/loading 480행을 selector·선언·상대
 순서 그대로 `app-surfaces.css`로 이동했습니다. `toast-step-spin`과 `toast-in`도 사용하는 surface와 함께
 이동했습니다. 이어 settings의 운영 상태 대시보드 전용 tail 447줄과 `operations-shimmer`·reduced-motion
@@ -80,8 +83,9 @@ owner에 남깁니다.
 전환·Escape 닫기 뒤 trigger focus 복원을 확인합니다. 이는 production `OfficialHandoff`의 직접 검증이며
 dormant `OfficialSeatConfirmation`의 직접 dialog 검증과는 구분합니다. 같은 1,440px·320px·720px 검사는
 `내 예약` 화면의 요약·두 예약 항목·기한 경과 결제 영역·공식 확인 행동도 직접 열어 viewport 가로 넘침
-없음과 44px 행동 영역을 확인합니다. 나머지 feature별 CSS 재소유, selector 중복 정리나 CSS Modules
-전환은 이 동작 보존 체크포인트와 섞지 않는 별도 슬라이스로 다룹니다.
+없음과 44px 행동 영역을 확인합니다. 이어 `설정 → 화면 동작`의 refresh card·두 입력·저장 행동도 같은
+세 viewport에서 내부/문서 overflow와 44px 영역을 확인합니다. 나머지 feature별 CSS 재소유, selector
+중복 정리나 CSS Modules 전환은 이 동작 보존 체크포인트와 섞지 않는 별도 슬라이스로 다룹니다.
 
 웹의 알림 채널 transport·DTO 검증과 Web Push 브라우저 primitive는 `api/notifications.ts`, SSE 연결·
 history cutoff·정리 계약은 `api/events.ts`가 소유합니다. strict

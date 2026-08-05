@@ -170,6 +170,10 @@ FastAPI의 snake_case DTO와 웹 도메인 모델, 표시용 ViewModel을 동일
      `features/reservations/reservations.css`로 이동. `features.css` 3,650→3,560줄,
      `responsive.css` 1,270→1,243줄과 열 import 경계를 고정하고, 기본 E2E에서 실제 예약 항목·기한
      경과 결제 영역·공식 확인 행동의 1,440/320/720px overflow와 44px 영역을 검증
+   - 완료: `.refresh-preference-*` 기본·760px 규칙을 181줄
+     `features/settings/timetableRefreshSettings.css`로 이동. `features.css` 3,560→3,401줄,
+     `responsive.css` 1,243→1,222줄과 열한 import 경계를 고정하고, 설정 화면의 두 입력·저장 행동을
+     1,440/320/720px에서 직접 검증. 공용 `.setting-row*`와 `.step-three-*`는 기존 owner에 유지
    - 남음: `features.css`를 실제 기능 소유 경계로 더 나누고 중복 selector 정리는 별도 동작 변경
      슬라이스에서 수행
    - 완료: 모든 소스·Vitest 테스트 전환 후 `allowJs` 제거, Vitest JS/JSX include 제거. 배포 경계의

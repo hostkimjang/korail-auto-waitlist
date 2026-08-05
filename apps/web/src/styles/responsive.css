@@ -684,27 +684,6 @@
     padding: 14px;
   }
 
-  .refresh-preference-card {
-    padding: 16px;
-  }
-
-  .refresh-preference-fields {
-    grid-template-columns: 1fr;
-  }
-
-  .refresh-preference-fields > label {
-    grid-template-rows: auto auto auto auto;
-  }
-
-  .refresh-preference-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .refresh-preference-actions > .button {
-    width: 100%;
-  }
-
   .step-three-live-toolbar {
     align-items: center;
     flex-wrap: wrap;

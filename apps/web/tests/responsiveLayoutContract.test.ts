@@ -7,6 +7,7 @@ const styleFileNames = [
   "base.css",
   "shell.css",
   "features.css",
+  "app-surfaces.css",
   "responsive.css",
 ] as const;
 const styleDirectory = resolve(process.cwd(), "src/styles");
@@ -16,8 +17,16 @@ const tokensStyles = readStyleFile("tokens.css");
 const baseStyles = readStyleFile("base.css");
 const shellStyles = readStyleFile("shell.css");
 const featureStyles = readStyleFile("features.css");
+const appSurfaceStyles = readStyleFile("app-surfaces.css");
 const responsiveStyles = readStyleFile("responsive.css");
-const styles = [tokensStyles, baseStyles, shellStyles, featureStyles, responsiveStyles].join("");
+const styles = [
+  tokensStyles,
+  baseStyles,
+  shellStyles,
+  featureStyles,
+  appSurfaceStyles,
+  responsiveStyles,
+].join("");
 
 interface CssBlock {
   body: string;
@@ -75,7 +84,7 @@ function extractCssBlock(source: string, header: string, fromIndex = 0): CssBloc
 }
 
 describe("global CSS structure", () => {
-  it("loads the five style boundaries in their cascade order", () => {
+  it("loads the six style boundaries in their cascade order", () => {
     const entryStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     const expectedImports = `${styleFileNames
       .map((fileName) => `@import "./styles/${fileName}";`)
@@ -84,7 +93,7 @@ describe("global CSS structure", () => {
     expect(entryStyles).toBe(expectedImports);
   });
 
-  it("keeps tokens, base, shell, feature, and responsive rules in their owners", () => {
+  it("keeps tokens, base, shell, feature, app surface, and responsive rules in their owners", () => {
     expect(tokensStyles.trimStart()).toMatch(/^:root\s*\{/);
     expect(tokensStyles).toContain("--shadow:");
 
@@ -98,9 +107,23 @@ describe("global CSS structure", () => {
     expect(featureStyles).toContain("container-name: train-results");
     expect(extractCssBlock(featureStyles, "@container train-results (min-width: 920px)").body)
       .toContain(".train-result-card");
-    const toastIn = extractCssBlock(featureStyles, "@keyframes toast-in");
+    const reducedMotionHeader = "@media (prefers-reduced-motion: reduce)";
+    const operationsReducedMotion = extractCssBlock(
+      featureStyles,
+      reducedMotionHeader,
+      featureStyles.lastIndexOf(reducedMotionHeader),
+    );
+    expect(operationsReducedMotion.body).toContain(".operations-skeleton");
+    expect(featureStyles.slice(operationsReducedMotion.end).trim()).toBe("");
+
+    expect(appSurfaceStyles.trimStart()).toMatch(/^\.toast\s*\{/);
+    expect(appSurfaceStyles).toContain(".notification-center");
+    expect(appSurfaceStyles).toContain(".auth-page");
+    const toastStepSpin = extractCssBlock(appSurfaceStyles, "@keyframes toast-step-spin");
+    expect(toastStepSpin.body).toContain("transform: rotate(360deg)");
+    const toastIn = extractCssBlock(appSurfaceStyles, "@keyframes toast-in");
     expect(toastIn.body).toContain("from { opacity: 0; transform: translateY(10px); }");
-    expect(featureStyles.slice(toastIn.end).trim()).toBe("");
+    expect(appSurfaceStyles.slice(toastIn.end).trim()).toBe("");
 
     expect(responsiveStyles.trimStart()).toMatch(/^@media \(max-width: 980px\)/);
     const reducedMotion = extractCssBlock(responsiveStyles, "@media (prefers-reduced-motion: reduce)");

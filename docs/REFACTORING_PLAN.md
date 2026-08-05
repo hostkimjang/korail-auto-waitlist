@@ -1006,6 +1006,24 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   provenance kind, action kind, seat status의 더 좁은 판별 union과 `api.test.js`의 나머지 42개 선언은
   후속 strict TypeScript 슬라이스로 남겼습니다.
 
+### 2026-08-05 스물한 번째 구조 슬라이스 C
+
+- 앱 surface CSS owner: `features.css` 끝의 `.toast`부터 마지막 `@keyframes toast-in`까지 480행을
+  `styles/app-surfaces.css`로 이동했습니다. toast, 실시간 알림 center, 인증·복구·loading은 개별 제품
+  feature 내부가 아니라 앱 경계 surface라는 같은 변경 이유를 가집니다.
+- cascade 보존: `styles.css`는 `tokens → base → shell → features → app-surfaces → responsive`의 여섯
+  경계를 순서대로 import합니다. 이동 블록 안의 selector·선언·상대 순서는 같고 `toast-step-spin`과
+  `toast-in`도 소비 surface와 함께 이동했습니다. operations skeleton reduced-motion은 `features.css`,
+  공통 responsive override는 마지막 `responsive.css`에 그대로 남겼습니다.
+- 구조 회귀: CSS contract 테스트가 여섯 파일의 import·결합 순서, feature 파일의 operations 종료점,
+  app surface의 `.toast` 시작과 `toast-in` 종료, 두 animation owner를 고정합니다. selector 정리,
+  CSS Modules 전환, responsive 안의 누적 toast 규칙 병합은 수행하지 않았습니다.
+- 확인된 검증: app surface·알림·인증 focused Vitest 5개 파일·48건, ESLint 오류 0개·고정된 legacy
+  warning 12개, strict typecheck, 전체 Vitest 80개 파일·571건, production build, Sites 4건, 기본
+  Playwright E2E 14건과 `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: CSS·구조 테스트·문서만 바뀐 슬라이스이므로 저장소 규칙에 따라 Compose 이미지
+  재빌드·재생성은 수행하지 않았습니다. 나머지 4,476행 feature CSS의 실제 기능 owner 분리는 후속입니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

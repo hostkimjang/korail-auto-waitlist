@@ -341,6 +341,8 @@
 - [x] `domain/seatClasses.ts`가 좌석 등급·normalized provenance/action 모델의 canonical owner가 되고 `api/seatClasses.ts`는 외부 `unknown`·URL·TTL·evidence·action fail-closed mapper와 canonical 타입 compatibility re-export만 소유하도록 분리. 시간표 API·열차 결과 UI는 도메인 타입을 직접 import하고 feature→좌석 mapper 타입 의존 재도입을 boundary gate로 차단
 - [x] `api.test.js`의 좌석 정규화 12개 선언·14개 실행 케이스를 strict `seatClassesApi.test.ts`로 이동하고 두 파일의 테스트 선언 합계 54개 및 canonical/compatibility 타입 동일성 보존. 최종 focused Vitest 77건, 전체 80개 파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build, Sites 4건, 기본 E2E 14건과 `git diff --check` 통과
 - [x] 스물한 번째 구조 슬라이스 B의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] `features.css` 끝의 toast·실시간 알림 center·인증/복구/loading 480행과 `toast-step-spin`·`toast-in`을 selector·선언·상대 순서 그대로 `styles/app-surfaces.css`로 이동하고 전역 import를 `tokens → base → shell → features → app-surfaces → responsive` 여섯 경계로 확장. operations skeleton reduced-motion은 feature owner에 유지
+- [x] 스물한 번째 구조 슬라이스 C의 CSS owner 집중 Vitest 5개 파일·48건, 전체 80개 파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build, Sites 4건, 기본 E2E 14건과 `git diff --check` 통과. CSS·구조 테스트·문서만 변경해 Compose 재배포는 생략
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행
@@ -354,7 +356,7 @@
 - [x] OfficialHandoff·Auth 조립, App의 페이지 props·등록·logout 경계를 strict `.tsx`로 전환하고 `App.jsx` 제거
 - [ ] 기존 JS/JSX 테스트를 owner별 strict TSX로 전환한 뒤 `allowJs` 제거
 - [x] 전역 CSS를 tokens·base·shell·feature·responsive 경계로 분리하고 시각 회귀 검증
-- [ ] `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행
+- [ ] 앱 surface CSS 분리 완료 위에서 남은 `features.css`를 실제 기능 소유 경계로 추가 분리하고 중복 selector 정리와 시각 회귀를 별도 슬라이스로 수행
 - [x] API의 operations summary, UI preferences, 철도 계정·runtime 라우트와 schema를 기능 패키지로 이동하고 중앙 schema compatibility export·전체 pytest 949건 검증
 - [ ] UI preference application 분리 완료 위에서 API의 나머지 router·schema·application 경계를 분리하고 application의 HTTP 오류 의존 제거
 - [x] 예약 결과의 재시도·수동 확인 투영을 `reservations/domain.py` 순수 정책과 전체 outcome 표 테스트로 분리

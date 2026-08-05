@@ -358,6 +358,8 @@
 - [x] payment outcome/marker/NOT_FOUND/confirmed deadline exact·future/무관 confirmation, naive/aware UTC, boolean·identity와 기존 read/API/retry-edge·outbox 계약을 고정. focused pytest 89건, API 전체 1,091건, Ruff `E/F/I`, format ratchet 60개, 독립 재감사 P0~P3 없음과 `git diff --check` 통과
 - [x] 오류 0인 payment-hold owner를 strict mypy ratchet에 추가해 대상 8→9개 파일 확장하고 `uv lock --check`·scoped mypy 오류 0 확인
 - [x] 스물두 번째 구조 슬라이스 D의 `experimental-rail` 전체 build·force-recreate 후 migration·log-init exit 0, 장기 서비스 11개 healthy, API·proxy health 200, 최근 안전한 오류 표식 0건 확인
+- [x] legacy `api.test.js`의 watch mapper·생성 payload·REST mutation 21개 선언·실행을 strict `watchesApi.test.ts` owner로 이동하고 이름·순서·fixture·47개 assertion을 보존. legacy에는 auth 2개·events 1개와 필요한 helper만 유지
+- [x] 스물두 번째 구조 슬라이스 E의 이동 전 API 24 + watch owner 13과 이동 후 API 3 + watch owner 34의 37개 실행 및 두 파일 선언 합계 34개 보존, watch 인접 16건·consumer 7파일 57건, 전체 Vitest 80파일·571건, ESLint 오류 0개·legacy warning 12개, strict typecheck, production build와 `git diff --check` 통과. test/docs only라 기본 E2E·Compose 재배포는 생략
 - [ ] 동일 episode 여러 process 동시 실행, 로그인 저장과 예약 실행의 교착 부재, credential 교체와 늦은 결과 교차를 실제 PostgreSQL 환경에서 검증
 - [ ] 실제 PostgreSQL 두 session에서 관찰 application이 실행 임대를 잠근 동안 takeover가 commit까지 차단되고 stale owner의 prepare·defer·관찰 저장·circuit 반영이 0건인지, lease → watch/candidate/circuit 순서가 다중 worker에서 교착하지 않는지 검증
 - [ ] PostgreSQL 실행 임대 경합 검사를 격리된 CI PostgreSQL job에서 상시 실행

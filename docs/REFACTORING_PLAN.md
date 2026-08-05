@@ -1142,6 +1142,25 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   같습니다. legacy services symbol을 임의 monkeypatch해 canonical 내부 호출까지 바꾼다는 새 seam은
   지원하지 않으며 현재 그런 production/test 소비자는 없습니다.
 
+### 2026-08-05 스물두 번째 구조 슬라이스 E
+
+- watch strict 테스트 owner: legacy `api.test.js`의 watch mapper·생성 payload·REST mutation 21개 선언·
+  21개 실행을 기존 `watchesApi.test.ts`로 이동했습니다. 이름·순서·fixture·47개 assertion과 기존
+  strict owner의 10개 선언·13개 실행을 삭제하거나 합치지 않았습니다.
+- strict 전환: fetch 입력·옵션을 `RequestInfo | URL`과 `RequestInit`으로 고정하고 mock call·배열은
+  존재 여부를 확인한 뒤 사용합니다. payload override는 `Record<string, unknown>`에서 시작하며 `any`,
+  non-null assertion, `@ts-ignore`, 무근거 type assertion은 추가하지 않았습니다. 서로 다른 evidence·
+  provenance 계약을 가진 legacy fixture와 기존 `WATCH_DTO`도 임의 통합하지 않았습니다.
+- 테스트 수 ratchet: 이동 전 legacy API 24개 실행 + watch owner 13개 실행과 이동 후 legacy API 3개
+  실행 + watch owner 34개 실행이 모두 37건입니다. 두 파일 선언 합계도 34개로 유지했습니다. legacy
+  파일에는 auth 2개와 events 1개 및 필요한 helper만 남았습니다.
+- 확인된 검증: API+watch owner focused 37건, watch 인접 16건, production consumer 7개 파일·57건,
+  ESLint 오류 0개·고정된 legacy warning 12개, strict typecheck, 전체 Vitest 80개 파일·571건,
+  production build와 `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고는 유지됐습니다.
+- 운영 검증 범위: production source와 runtime 행동을 바꾸지 않은 test/docs-only 슬라이스이므로 기본
+  E2E와 Compose 재배포는 반복하지 않았습니다. 커진 `watchesApi.test.ts`의 mapper·payload·transport
+  물리 분리와 auth/events strict owner 이동은 테스트 손실 없이 별도 슬라이스로 진행합니다.
+
 ## 단계별 완료 기준과 rollback
 
 | 단계 | 완료 기준(DoD) | rollback 기준과 방법 |

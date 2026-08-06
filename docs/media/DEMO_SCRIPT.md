@@ -48,7 +48,7 @@ npm run demo:capture
 ```powershell
 ffmpeg -y -i output/readme-demo-video/railwait-demo.webm -an -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p -movflags +faststart docs/media/railwait-demo.mp4
 ffmpeg -y -ss 00:00:11.5 -i docs/media/railwait-demo.mp4 -frames:v 1 -vf "scale=1280:-2" docs/media/railwait-demo-poster.png
-ffmpeg -y -ss 00:00:08.5 -t 00:00:10 -i docs/media/railwait-demo.mp4 -vf "fps=8,scale=800:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" -loop 0 docs/media/railwait-demo.gif
+ffmpeg -y -i docs/media/railwait-demo.mp4 -vf "fps=8,scale=800:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" -loop 0 docs/media/railwait-demo.gif
 ```
 
 ## 공개 전 확인

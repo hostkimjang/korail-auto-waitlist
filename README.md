@@ -28,7 +28,7 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 
 ## 화면 미리 보기
 
-[![레일웨잇 화면 데모](docs/media/railwait-demo-poster.png)](docs/media/railwait-demo.mp4)
+[![레일웨잇 화면 데모](docs/media/railwait-demo.gif)](docs/media/railwait-demo.mp4)
 
 고정 예시 데이터만 사용하며 실제 좌석·외부 요청·예약 성공을 나타내지 않습니다.
 

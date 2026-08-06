@@ -22,13 +22,15 @@ ffmpeg -y -i docs/media/railwait-intro.mp4 -vf "fps=8,scale=800:-2:flags=lanczos
 
 ## 실제 UI 데모 장면
 
-1. 홈의 결제 필요·활동 중 대기 정보 구조
+1. 홈의 활동 중 대기 정보 구조
 2. `새 대기`에서 KORAIL·SRT, 서울→부산 여정 선택
-3. 좌석 발견 후 행동을 `알림만 받기`로 유지
+3. 좌석 발견 후 행동을 `좌석 재발견마다 자동 예매`로 선택
 4. 데모 시간표와 일반실·특실의 정보 출처 확인
-5. KTX 일반실 대기 등록 후 홈 반영
+5. KTX 일반실 대기 등록 후 홈에서 같은 열차 확인
+6. 같은 열차의 좌석 발견과 예매 진행 상태 확인
+7. 결제 직전 중단과 공식 플랫폼 직접 결제 안내 확인
 
-촬영은 실제 좌석, 예약 성공 또는 운영사 응답을 재현하지 않습니다.
+후반부 상태는 촬영 전용 고정 fixture가 같은 대기 ID와 여정을 유지하며 순서대로 전환합니다. 모든 좌석 근거는 `mock`으로 표시하고 결제기한은 만들지 않습니다. 촬영은 실제 좌석, 예약 성공 또는 운영사 응답을 재현하지 않습니다.
 
 ## 원본 녹화
 
@@ -38,9 +40,9 @@ npm ci
 npm run demo:capture
 ```
 
-원본 WebM은 Git에서 제외된 `output/readme-demo-video/railwait-demo.webm`에 생성됩니다. 스크립트가 자체 Vite 서버를 `127.0.0.1:4175`에 열고 종료하며, `VITE_DEMO_MODE=true`를 강제합니다. 브라우저 시계는 고정 예시 날짜인 `2026-07-30 14:32 KST`에 맞추고 localhost 밖의 요청은 차단합니다.
+원본 WebM은 Git에서 제외된 `output/readme-demo-video/railwait-demo.webm`에 생성됩니다. 스크립트가 자체 Vite 서버를 `127.0.0.1:4175`에 열고 종료하며, `VITE_DEMO_MODE=true`와 촬영 전용 예약 진행 시나리오를 강제합니다. 이 드라이버는 개발 모드의 명시적 촬영 시나리오에서만 열립니다. 브라우저 시계는 고정 예시 날짜인 `2026-07-30 14:32 KST`에 맞추고 localhost 밖의 요청은 차단합니다.
 
-`demo-capture-motion.mjs`는 접근성 선택자로 찾은 실제 위치를 기준으로 커서 이동과 클릭 링을 그립니다. 단계 화면은 짧게 교차 전환하고, 화면 밖의 다음 버튼과 열차 카드는 실제 페이지를 부드럽게 스크롤해 찾습니다. 화면 확대는 상태 변경이 끝난 결과 장면에만 적용하므로 앱 화면 구조와 스크롤 동작에는 영향을 주지 않습니다.
+`demo-capture-motion.mjs`는 접근성 선택자로 찾은 실제 위치를 기준으로 커서 이동과 클릭 링을 그립니다. 단계 화면과 예약 상태는 짧게 교차 전환하고, 화면 밖의 다음 버튼과 열차 카드는 실제 페이지를 부드럽게 스크롤해 찾습니다. 화면 확대는 상태 변경이 끝난 결과 장면에만 적용하므로 앱 화면 구조와 스크롤 동작에는 영향을 주지 않습니다. UI 장면에는 `연출 데모 · 실제 예약 아님` 표시를 고정합니다.
 
 ## 브랜드 인트로와 화면 데모 합성
 
@@ -49,11 +51,11 @@ npm run demo:capture
 ```powershell
 ffmpeg -y -i output/readme-demo-video/railwait-demo.webm -an -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p output/readme-demo-video/railwait-demo-ui.mp4
 ffmpeg -y -i docs/media/railwait-intro.mp4 -i output/readme-demo-video/railwait-demo-ui.mp4 -filter_complex "[0:v]trim=start=0:end=3.0,setpts=PTS-STARTPTS,scale=1280:720:flags=lanczos,pad=1280:800:0:40:color=0x082f52,fps=25[brand];[1:v]trim=start=2.36,setpts=PTS-STARTPTS,scale=1280:800:flags=lanczos,fps=25[ui];[brand][ui]xfade=transition=wipeleft:duration=0.40:offset=2.60,format=yuv420p[out]" -map "[out]" -an -c:v libx264 -preset slow -crf 22 -movflags +faststart docs/media/railwait-demo.mp4
-ffmpeg -y -ss 00:00:14.60 -i docs/media/railwait-demo.mp4 -frames:v 1 -vf "scale=1280:-2:flags=lanczos" docs/media/railwait-demo-poster.png
+ffmpeg -y -ss 00:00:30.80 -i docs/media/railwait-demo.mp4 -frames:v 1 -vf "scale=1280:-2:flags=lanczos" docs/media/railwait-demo-poster.png
 ffmpeg -y -i docs/media/railwait-demo.mp4 -vf "fps=8,scale=800:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" -loop 0 docs/media/railwait-demo.gif
 ```
 
-공개 영상은 3초짜리 브랜드 장면에서 실제 UI로 이어지는 23.48초 구성입니다. 원본 녹화 앞의 브라우저 준비 화면 2.36초는 합성할 때 제외합니다.
+공개 영상은 3초짜리 브랜드 장면에서 실제 UI로 이어지는 33.20초 구성입니다. 원본 녹화 앞의 브라우저 준비 화면 2.36초는 합성할 때 제외합니다.
 
 ## 공개 전 확인
 

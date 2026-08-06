@@ -26,6 +26,7 @@ import { AppNotificationCenter } from "./features/app/AppNotificationCenter";
 import { useWatchCollection } from "./features/app/useWatchCollection";
 import { mapWatchLifecycleSnapshot } from "./features/app/watchLifecycleSnapshot";
 import { useWatchMutations } from "./features/app/useWatchMutations";
+import { useDemoCaptureLifecycle } from "./features/app/useDemoCaptureLifecycle";
 import { HomePage } from "./features/home/HomePage";
 import { mapActiveWatch } from "./features/home/activeWatchViewModel";
 import {
@@ -49,7 +50,10 @@ import { formatNewWaitDateLabel } from "./features/new-wait/newWaitForm";
 import { useAppNotifications } from "./features/app/useAppNotifications";
 import { isActiveWatch } from "./features/app/watchSelectors";
 import { hasObservedSeatEvidence } from "./domain/seatEvidence";
-import { DEMO_MODE } from "./shared/lib/runtimeConfig";
+import {
+  DEMO_CAPTURE_RESERVATION_LIFECYCLE,
+  DEMO_MODE,
+} from "./shared/lib/runtimeConfig";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
 import type { WatchReadModel } from "./api/watches";
 import {
@@ -143,6 +147,13 @@ export function App(): ReactElement {
     onProviderAuthenticationTransition: handleProviderAuthenticationTransition,
     pushNotifications,
   });
+  useDemoCaptureLifecycle({
+    enabled: auth.demo && DEMO_CAPTURE_RESERVATION_LIFECYCLE,
+    watches,
+    commitWatches,
+    dismissTimedNotifications,
+    pushNotifications,
+  });
   const {
     pauseWatch,
     resumeWatch,
@@ -223,7 +234,11 @@ export function App(): ReactElement {
   const paymentWatches: PaymentRequiredViewModel[] = watches.filter(
     (watch) => watch.status === "payment_required",
   ).map(mapPaymentRequiredWatch);
-  if (auth.demo && paymentWatches.length === 0) {
+  if (
+    auth.demo
+    && !DEMO_CAPTURE_RESERVATION_LIFECYCLE
+    && paymentWatches.length === 0
+  ) {
     paymentWatches.push(mapLegacyPaymentRequiredWatch(demoPaymentWatch));
   }
   const activeWatches = watches.filter(isActiveWatch).map((watch) => (

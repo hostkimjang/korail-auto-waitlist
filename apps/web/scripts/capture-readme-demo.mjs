@@ -1,3 +1,5 @@
+/* global window */
+
 import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -12,6 +14,7 @@ import {
   installDemoCaptureMotion,
   smoothScrollLocatorIntoView,
   smoothScrollTo,
+  transitionWithDemoMotion,
 } from "./demo-capture-motion.mjs";
 
 const webRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -23,6 +26,14 @@ const baseUrl = "http://127.0.0.1:4175";
 const rawVideoPath = join(temporaryDirectory, "railwait-demo.webm");
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function advanceReservationLifecycle(page, stage) {
+  return page.evaluate((nextStage) => {
+    const bridge = window.__RAILWAIT_DEMO_CAPTURE__;
+    if (!bridge) throw new Error("README 예약 진행 데모 드라이버를 찾지 못했습니다.");
+    return bridge.advance(nextStage);
+  }, stage);
+}
 
 async function waitForServer() {
   const deadline = Date.now() + 60_000;
@@ -48,7 +59,11 @@ async function capture() {
     [viteEntrypoint, "--host", "127.0.0.1", "--port", "4175", "--strictPort"],
     {
       cwd: webRoot,
-      env: { ...process.env, VITE_DEMO_MODE: "true" },
+      env: {
+        ...process.env,
+        VITE_DEMO_CAPTURE_SCENARIO: "reservation-lifecycle",
+        VITE_DEMO_MODE: "true",
+      },
       stdio: "ignore",
       windowsHide: true,
     },
@@ -109,9 +124,19 @@ async function capture() {
       resultHoldMs: 420,
     });
 
-    await clickWithDemoMotion(page, page.getByRole("button", { name: /알림만 받기/ }), {
-      resultHoldMs: 220,
+    const automaticReservation = page.getByRole("button", {
+      name: /좌석 재발견마다 자동 예매/,
     });
+    await clickWithDemoMotion(page, automaticReservation, {
+      resultHoldMs: 420,
+    });
+    if (await automaticReservation.getAttribute("aria-pressed") !== "true") {
+      throw new Error("자동 예매 선택이 화면에 반영되지 않았습니다.");
+    }
+    await page.getByText(
+      "자동 결제는 하지 않습니다. 결제 필요 알림을 받은 뒤 공식 플랫폼에서 직접 결제하세요.",
+      { exact: true },
+    ).waitFor({ state: "visible" });
     await clickWithDemoMotion(page, page.getByRole("button", { name: "다음" }), {
       pageTransition: true,
       resultHoldMs: 300,
@@ -133,20 +158,82 @@ async function capture() {
       resultHoldMs: 420,
     });
     await page.getByRole("button", { name: /일반실 대기 취소/ }).waitFor({ state: "visible" });
+    await standardSeat.getByText(
+      "좌석 재발견마다 자동 예매 · 결제 전 중단",
+      { exact: true },
+    ).waitFor({ state: "visible" });
     await focusWithDemoMotion(page, standardSeat, {
       zoomScale: 1.12,
-      holdMs: 520,
+      holdMs: 620,
       scroll: false,
     });
 
     await smoothScrollTo(page, 0, { durationMs: 620, hideCursor: true, settleMs: 300 });
     await clickWithDemoMotion(page, page.getByRole("button", { name: "홈", exact: true }), {
       pageTransition: true,
-      resultHoldMs: 620,
+      resultHoldMs: 420,
     });
     await page.getByRole("heading", { name: "활동 중인 대기" }).waitFor({ state: "visible" });
+
+    const activeWatch = page.getByRole("article").filter({ hasText: "KTX 033" }).first();
+    await activeWatch.getByText("감시 중", { exact: true }).waitFor({ state: "visible" });
+    const policySwitch = activeWatch.getByRole("switch", {
+      name: /KTX 033 일반실 좌석 재발견마다 자동 예매 설정/,
+    });
+    if (await policySwitch.getAttribute("aria-checked") !== "true") {
+      throw new Error("등록한 대기의 자동 예매 정책이 홈 화면에 반영되지 않았습니다.");
+    }
+    await smoothScrollLocatorIntoView(page, activeWatch, {
+      align: 0.48,
+      force: true,
+      hideCursor: true,
+      settleMs: 420,
+    });
+
+    await transitionWithDemoMotion(page, async () => {
+      await advanceReservationLifecycle(page, "seat_found");
+      await activeWatch.getByText(
+        "좌석 발견 · 감시 계속",
+        { exact: true },
+      ).waitFor({ state: "visible" });
+      await activeWatch.getByText(
+        "일반실 · 예매 가능 · 데모 관측 14:33",
+        { exact: true },
+      ).waitFor({ state: "visible" });
+    }, { resultHoldMs: 720 });
+
+    const notificationCenter = page.getByRole("region", { name: "실시간 알림" });
+    await transitionWithDemoMotion(page, async () => {
+      await advanceReservationLifecycle(page, "reserving");
+      await activeWatch.getByText("예매 진행 중", { exact: true }).waitFor({ state: "visible" });
+      await activeWatch.getByText(/예매 시도 중/).waitFor({ state: "visible" });
+      await notificationCenter.getByText(
+        "예매를 진행하고 있습니다",
+        { exact: true },
+      ).waitFor({ state: "visible" });
+      await notificationCenter.getByText("예매 시작", { exact: true }).waitFor({ state: "visible" });
+    }, { resultHoldMs: 1_120 });
+
+    await smoothScrollTo(page, 0, { durationMs: 560, hideCursor: true, settleMs: 260 });
+    await transitionWithDemoMotion(page, async () => {
+      await advanceReservationLifecycle(page, "payment_required");
+      await page.getByRole("heading", { name: "결제 대기 1건" }).waitFor({ state: "visible" });
+      await page.getByRole("button", { name: /공식 결제 열기/ }).waitFor({ state: "visible" });
+      await page.getByText("결제기한 미제공", { exact: true }).waitFor({ state: "visible" });
+      await notificationCenter.getByText(
+        "결제 직전까지 예매되었습니다",
+        { exact: true },
+      ).waitFor({ state: "visible" });
+    }, { resultHoldMs: 900 });
+
+    const paymentCard = page.getByRole("article").filter({ hasText: "KTX 033" }).first();
+    await focusWithDemoMotion(page, paymentCard, {
+      zoomScale: 1.05,
+      holdMs: 1_100,
+      scroll: false,
+    });
     await hideDemoCursor(page);
-    await page.waitForTimeout(900);
+    await page.waitForTimeout(720);
 
     if (browserErrors.length > 0) {
       throw new Error(`브라우저 오류가 발생했습니다: ${browserErrors.join(" | ")}`);

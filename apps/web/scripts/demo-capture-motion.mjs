@@ -121,6 +121,21 @@ export async function installDemoCaptureMotion(page) {
         will-change: transform, opacity;
       }
 
+      #railwait-demo-disclaimer {
+        position: absolute;
+        top: 14px;
+        right: 18px;
+        padding: 7px 11px;
+        border: 1px solid rgb(255 255 255 / 0.5);
+        border-radius: 999px;
+        background: rgb(8 47 82 / 0.88);
+        box-shadow: 0 6px 18px rgb(8 47 82 / 0.18);
+        color: #ffffff;
+        font: 700 12px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: -0.01em;
+        backdrop-filter: blur(8px);
+      }
+
       #railwait-demo-cursor svg {
         display: block;
         width: 100%;
@@ -175,6 +190,7 @@ export async function installDemoCaptureMotion(page) {
     effects.id = "railwait-demo-effects";
     effects.setAttribute("aria-hidden", "true");
     effects.innerHTML = `
+      <div id="railwait-demo-disclaimer">연출 데모 · 실제 예약 아님</div>
       <div id="railwait-demo-cursor">
         <svg viewBox="0 0 34 42" aria-hidden="true">
           <path
@@ -302,6 +318,18 @@ async function revealPageTransition(page) {
       }),
     { durationMs: motion.pageTransitionMs, easing: motion.easing },
   );
+}
+
+export async function transitionWithDemoMotion(page, action, options = {}) {
+  await createPageTransitionSnapshot(page);
+  await page.evaluate(() => {
+    const cursor = document.querySelector("#railwait-demo-cursor");
+    if (cursor instanceof HTMLElement) cursor.style.opacity = "0";
+  });
+  await action();
+  await wait(options.beforeRevealMs ?? 120);
+  await revealPageTransition(page);
+  if (options.resultHoldMs) await wait(options.resultHoldMs);
 }
 
 async function focusLiveRegion(page, point, options) {

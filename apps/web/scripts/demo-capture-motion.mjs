@@ -4,6 +4,7 @@ const motion = Object.freeze({
   cursorDurationMs: 460,
   cursorSettleMs: 80,
   clickPulseMs: 360,
+  pageTransitionMs: 320,
   zoomInMs: 480,
   zoomOutMs: 540,
   easing: "cubic-bezier(0.22, 1, 0.36, 1)",
@@ -12,13 +13,88 @@ const motion = Object.freeze({
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function locatorCenter(locator) {
-  await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   if (!box) throw new Error("데모 동작 대상을 화면에서 찾지 못했습니다.");
   return {
     x: box.x + box.width / 2,
     y: box.y + box.height / 2,
   };
+}
+
+export async function smoothScrollTo(page, targetY, options = {}) {
+  if (options.hideCursor) {
+    await page.evaluate(() => {
+      const cursor = document.querySelector("#railwait-demo-cursor");
+      if (cursor instanceof HTMLElement) cursor.style.opacity = "0";
+    });
+  }
+
+  await page.evaluate(
+    async ({ durationMs, targetY }) => {
+      if (document.querySelector("#railwait-demo-transition")) {
+        throw new Error("화면 전환이 끝나기 전에 스크롤할 수 없습니다.");
+      }
+      const scroller = document.scrollingElement;
+      if (!scroller) throw new Error("문서 스크롤 영역을 찾지 못했습니다.");
+
+      const maximum = Math.max(0, scroller.scrollHeight - window.innerHeight);
+      const destination = Math.min(Math.max(targetY, 0), maximum);
+      const start = window.scrollY;
+      const distance = destination - start;
+      const duration =
+        durationMs ?? Math.min(Math.max(420 + Math.abs(distance) * 0.22, 480), 720);
+
+      if (Math.abs(distance) < 1) {
+        await new Promise((resolve) =>
+          window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)),
+        );
+        return;
+      }
+
+      await new Promise((resolve) => {
+        const startedAt = window.performance.now();
+        const step = (now) => {
+          const progress = Math.min((now - startedAt) / duration, 1);
+          const eased =
+            progress < 0.5
+              ? 4 * progress ** 3
+              : 1 - ((-2 * progress + 2) ** 3) / 2;
+          window.scrollTo(0, start + distance * eased);
+          if (progress < 1) window.requestAnimationFrame(step);
+          else {
+            window.scrollTo(0, destination);
+            window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+          }
+        };
+        window.requestAnimationFrame(step);
+      });
+    },
+    { durationMs: options.durationMs, targetY },
+  );
+
+  if (options.settleMs) await wait(options.settleMs);
+}
+
+export async function smoothScrollLocatorIntoView(page, locator, options = {}) {
+  const target = await locator.evaluate(
+    (element, { align, force }) => {
+      const rect = element.getBoundingClientRect();
+      const safeTop = window.innerHeight * 0.16;
+      const safeBottom = window.innerHeight * 0.84;
+      if (!force && rect.top >= safeTop && rect.bottom <= safeBottom) return window.scrollY;
+
+      const maximum = Math.max(
+        0,
+        (document.scrollingElement?.scrollHeight ?? document.documentElement.scrollHeight) -
+          window.innerHeight,
+      );
+      const centered =
+        window.scrollY + rect.top + rect.height / 2 - window.innerHeight * align;
+      return Math.min(Math.max(centered, 0), maximum);
+    },
+    { align: options.align ?? 0.46, force: options.force ?? false },
+  );
+  await smoothScrollTo(page, target, options);
 }
 
 export async function installDemoCaptureMotion(page) {
@@ -74,7 +150,7 @@ export async function installDemoCaptureMotion(page) {
         border-color: rgb(14 116 144 / 0.66);
       }
 
-      #railwait-demo-camera {
+      #railwait-demo-transition {
         position: fixed;
         inset: 0;
         width: 100vw;
@@ -171,7 +247,7 @@ async function endClickPulse(page) {
   });
 }
 
-async function createCameraSnapshot(page, point, zoomScale) {
+async function captureCleanScreenshot(page) {
   await page.evaluate(() => {
     const effects = document.querySelector("#railwait-demo-effects");
     if (effects instanceof HTMLElement) effects.style.visibility = "hidden";
@@ -185,98 +261,153 @@ async function createCameraSnapshot(page, point, zoomScale) {
       if (effects instanceof HTMLElement) effects.style.visibility = "visible";
     });
   }
+  return screenshot;
+}
 
-  return page.evaluate(
-    async ({ easing, image, point, zoomInMs, zoomScale }) => {
-      const clampValue = (value, minimum, maximum) =>
-        Math.min(Math.max(value, minimum), maximum);
-      document.querySelector("#railwait-demo-camera")?.remove();
-      const camera = document.createElement("img");
-      camera.id = "railwait-demo-camera";
-      camera.alt = "";
-      camera.src = `data:image/png;base64,${image}`;
-      document.body.append(camera);
-      await camera.decode();
+async function createPageTransitionSnapshot(page) {
+  const screenshot = await captureCleanScreenshot(page);
+  await page.evaluate(async (image) => {
+    document.querySelector("#railwait-demo-transition")?.remove();
+    const transition = document.createElement("img");
+    transition.id = "railwait-demo-transition";
+    transition.alt = "";
+    transition.src = `data:image/png;base64,${image}`;
+    document.body.append(transition);
+    await transition.decode();
+  }, screenshot.toString("base64"));
+}
 
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      const desiredX = clampValue(point.x, viewportWidth * 0.34, viewportWidth * 0.66);
-      const desiredY = clampValue(point.y, viewportHeight * 0.3, viewportHeight * 0.7);
-      const minimumX = viewportWidth - viewportWidth * zoomScale;
-      const minimumY = viewportHeight - viewportHeight * zoomScale;
-      const translateX = clampValue(desiredX - point.x * zoomScale, minimumX, 0);
-      const translateY = clampValue(desiredY - point.y * zoomScale, minimumY, 0);
-      const cursorX = point.x * zoomScale + translateX;
-      const cursorY = point.y * zoomScale + translateY;
-      const zoomTransform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${zoomScale})`;
-
-      camera.style.transform = "translate3d(0, 0, 0) scale(1)";
-      camera.style.opacity = "1";
-      camera.getBoundingClientRect();
-      camera.style.transition = `transform ${zoomInMs}ms ${easing}`;
-      camera.style.transform = zoomTransform;
-
-      const cursor = document.querySelector("#railwait-demo-cursor");
-      if (cursor instanceof HTMLElement) {
-        cursor.style.transition = `transform ${zoomInMs}ms ${easing}`;
-        cursor.style.transform = `translate3d(${cursorX}px, ${cursorY}px, 0)`;
-        cursor.dataset.x = String(cursorX);
-        cursor.dataset.y = String(cursorY);
-      }
-      return { x: cursorX, y: cursorY };
-    },
-    {
-      easing: motion.easing,
-      image: screenshot.toString("base64"),
-      point,
-      zoomInMs: motion.zoomInMs,
-      zoomScale,
-    },
+async function revealPageTransition(page) {
+  await page.evaluate(
+    ({ durationMs, easing }) =>
+      new Promise((resolve) => {
+        const transition = document.querySelector("#railwait-demo-transition");
+        if (!(transition instanceof HTMLElement)) {
+          resolve();
+          return;
+        }
+        let completed = false;
+        const finish = () => {
+          if (completed) return;
+          completed = true;
+          transition.remove();
+          resolve();
+        };
+        transition.addEventListener("transitionend", finish, { once: true });
+        window.setTimeout(finish, durationMs + 120);
+        transition.getBoundingClientRect();
+        transition.style.transition = `opacity ${durationMs}ms ease, transform ${durationMs}ms ${easing}`;
+        transition.style.opacity = "0";
+        transition.style.transform = "translate3d(0, -8px, 0) scale(1.004)";
+      }),
+    { durationMs: motion.pageTransitionMs, easing: motion.easing },
   );
 }
 
-async function revealCameraResult(page) {
-  await page.evaluate(({ easing, zoomOutMs }) => {
-    const camera = document.querySelector("#railwait-demo-camera");
-    if (!(camera instanceof HTMLElement)) return;
-    camera.style.transition = `transform ${zoomOutMs}ms ${easing}, opacity ${zoomOutMs}ms ease`;
-    camera.style.transform = "translate3d(0, 0, 0) scale(1)";
-    camera.style.opacity = "0";
-  }, { easing: motion.easing, zoomOutMs: motion.zoomOutMs });
-  await wait(motion.zoomOutMs);
-  await page.evaluate(() => document.querySelector("#railwait-demo-camera")?.remove());
+async function focusLiveRegion(page, point, options) {
+  await page.evaluate(
+    ({ easing, point, zoomInMs, zoomScale }) => {
+      const surface = document.querySelector(".main-content");
+      if (!(surface instanceof HTMLElement)) throw new Error("데모 화면을 찾지 못했습니다.");
+      const rect = surface.getBoundingClientRect();
+      surface.style.transformOrigin = `${point.x - rect.left}px ${point.y - rect.top}px`;
+      surface.style.transform = "scale(1)";
+      surface.style.transition = "none";
+      surface.style.willChange = "transform";
+      surface.getBoundingClientRect();
+      surface.style.transition = `transform ${zoomInMs}ms ${easing}`;
+      surface.style.transform = `scale(${zoomScale})`;
+    },
+    {
+      easing: motion.easing,
+      point,
+      zoomInMs: motion.zoomInMs,
+      zoomScale: options.zoomScale,
+    },
+  );
+  await wait(motion.zoomInMs + options.holdMs);
+  await page.evaluate(
+    ({ easing, zoomOutMs }) =>
+      new Promise((resolve) => {
+        const surface = document.querySelector(".main-content");
+        if (!(surface instanceof HTMLElement)) {
+          resolve();
+          return;
+        }
+        let completed = false;
+        const finish = () => {
+          if (completed) return;
+          completed = true;
+          surface.style.removeProperty("transform");
+          surface.style.removeProperty("transform-origin");
+          surface.style.removeProperty("transition");
+          surface.style.removeProperty("will-change");
+          resolve();
+        };
+        surface.addEventListener("transitionend", (event) => {
+          if (event.propertyName === "transform") finish();
+        });
+        window.setTimeout(finish, zoomOutMs + 120);
+        surface.style.transition = `transform ${zoomOutMs}ms ${easing}`;
+        surface.style.transform = "scale(1)";
+      }),
+    { easing: motion.easing, zoomOutMs: motion.zoomOutMs },
+  );
+}
+
+async function restoreCursorPosition(page, point, hidden = false) {
+  await page.evaluate(({ hidden, x, y }) => {
+    const cursor = document.querySelector("#railwait-demo-cursor");
+    if (!(cursor instanceof HTMLElement)) return;
+    cursor.getAnimations().forEach((animation) => animation.cancel());
+    cursor.style.transition = "none";
+    cursor.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    cursor.style.opacity = hidden ? "0" : "1";
+    cursor.dataset.x = String(x);
+    cursor.dataset.y = String(y);
+  }, { ...point, hidden });
 }
 
 export async function clickWithDemoMotion(page, locator, options = {}) {
+  if (options.scroll !== false) {
+    await smoothScrollLocatorIntoView(page, locator, {
+      align: options.scrollAlign,
+      settleMs: options.scrollSettleMs ?? 100,
+    });
+  }
   const point = await locatorCenter(locator);
   await moveCursor(page, point, options.cursorDurationMs);
 
-  let visiblePoint = point;
-  if (options.zoomScale) {
-    visiblePoint = await createCameraSnapshot(page, point, options.zoomScale);
-    await wait(motion.zoomInMs);
-  }
+  if (options.pageTransition) await createPageTransitionSnapshot(page);
 
-  await beginClickPulse(page, visiblePoint);
+  await beginClickPulse(page, point);
   await locator.click();
   await wait(motion.clickPulseMs);
   await endClickPulse(page);
   await wait(options.beforeRevealMs ?? 120);
 
-  if (options.zoomScale) await revealCameraResult(page);
+  if (options.pageTransition) await revealPageTransition(page);
   if (options.resultHoldMs) await wait(options.resultHoldMs);
 }
 
 export async function focusWithDemoMotion(page, locator, options = {}) {
+  if (options.scroll !== false) {
+    await smoothScrollLocatorIntoView(page, locator, {
+      align: options.scrollAlign,
+      settleMs: options.scrollSettleMs ?? 120,
+    });
+  }
   const point = await locatorCenter(locator);
   await moveCursor(page, point, options.cursorDurationMs);
   await page.evaluate(() => {
     const cursor = document.querySelector("#railwait-demo-cursor");
     if (cursor instanceof HTMLElement) cursor.style.opacity = "0";
   });
-  await createCameraSnapshot(page, point, options.zoomScale ?? 1.16);
-  await wait(motion.zoomInMs + (options.holdMs ?? 900));
-  await revealCameraResult(page);
+  await focusLiveRegion(page, point, {
+    holdMs: options.holdMs ?? 900,
+    zoomScale: options.zoomScale ?? 1.16,
+  });
+  await restoreCursorPosition(page, point, true);
 }
 
 export async function hideDemoCursor(page) {

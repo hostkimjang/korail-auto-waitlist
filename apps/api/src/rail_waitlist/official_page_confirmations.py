@@ -71,33 +71,10 @@ async def upsert_official_page_confirmations(
             raise ValueError("idempotent confirmation batch is incomplete")
         return replayed, 0, True
     batch_id = str(uuid.uuid4())
-    if idempotency_key:
-        try:
-            async with session.begin_nested():
-                await remember_idempotency(
-                    session,
-                    IDEMPOTENCY_SCOPE,
-                    idempotency_key,
-                    batch_id,
-                    payload_hash,
-                )
-                await session.flush()
-        except IntegrityError:
-            replay_resource = await get_idempotent_resource(
-                session, IDEMPOTENCY_SCOPE, idempotency_key, payload_hash
-            )
-            if replay_resource is None:
-                raise ValueError("idempotent confirmation batch is unavailable") from None
-            replayed = await _batch_rows(session, replay_resource, data)
-            if len(replayed) != len(data.seat_classes):
-                raise ValueError("idempotent confirmation batch is incomplete") from None
-            return replayed, 0, True
-
     observed_at = _as_utc(now or datetime.now(UTC))
     fresh_until = observed_at + CONFIRMATION_FRESHNESS
-    results: list[OfficialPageSeatConfirmation] = []
-    for item in data.seat_classes:
-        row = OfficialPageSeatConfirmation(
+    results = [
+        OfficialPageSeatConfirmation(
             batch_id=batch_id,
             provider=data.provider,
             origin_node_id=data.origin_node_id,
@@ -111,10 +88,33 @@ async def upsert_official_page_confirmations(
             observed_at=observed_at,
             fresh_until=fresh_until,
         )
-        session.add(row)
-        results.append(row)
-
-    await session.flush()
+        for item in data.seat_classes
+    ]
+    if idempotency_key:
+        try:
+            async with session.begin_nested():
+                await remember_idempotency(
+                    session,
+                    IDEMPOTENCY_SCOPE,
+                    idempotency_key,
+                    batch_id,
+                    payload_hash,
+                )
+                session.add_all(results)
+                await session.flush()
+        except IntegrityError:
+            replay_resource = await get_idempotent_resource(
+                session, IDEMPOTENCY_SCOPE, idempotency_key, payload_hash
+            )
+            if replay_resource is None:
+                raise ValueError("idempotent confirmation batch is unavailable") from None
+            replayed = await _batch_rows(session, replay_resource, data)
+            if len(replayed) != len(data.seat_classes):
+                raise ValueError("idempotent confirmation batch is incomplete") from None
+            return replayed, 0, True
+    else:
+        session.add_all(results)
+        await session.flush()
     return results, len(results), False
 
 

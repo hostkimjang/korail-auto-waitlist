@@ -352,7 +352,10 @@ export function NotificationChannelSettings({
               name="railwait-notification-name"
               autoComplete="off"
               value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+              onChange={(event) => setDraft((current) => ({
+                ...current,
+                name: event.target.value,
+              }))}
               placeholder="내 알림"
             />
           </NotificationField>
@@ -365,7 +368,7 @@ export function NotificationChannelSettings({
                   value={draft.token}
                   onChange={(event) => {
                     setEditorError(null);
-                    setDraft({ ...draft, token: event.target.value });
+                    setDraft((current) => ({ ...current, token: event.target.value }));
                   }}
                   autoComplete="new-password"
                   data-lpignore="true"
@@ -378,7 +381,7 @@ export function NotificationChannelSettings({
                   value={draft.chatId}
                   onChange={(event) => {
                     setEditorError(null);
-                    setDraft({ ...draft, chatId: event.target.value });
+                    setDraft((current) => ({ ...current, chatId: event.target.value }));
                   }}
                 />
               </NotificationField>
@@ -393,7 +396,7 @@ export function NotificationChannelSettings({
                   value={draft.url}
                   onChange={(event) => {
                     setEditorError(null);
-                    setDraft({ ...draft, url: event.target.value });
+                    setDraft((current) => ({ ...current, url: event.target.value }));
                   }}
                   placeholder="https://"
                 />
@@ -406,7 +409,10 @@ export function NotificationChannelSettings({
                     value={draft.authorization}
                     onChange={(event) => {
                       setEditorError(null);
-                      setDraft({ ...draft, authorization: event.target.value });
+                      setDraft((current) => ({
+                        ...current,
+                        authorization: event.target.value,
+                      }));
                     }}
                     autoComplete="new-password"
                     data-lpignore="true"

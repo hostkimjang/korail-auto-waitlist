@@ -192,6 +192,7 @@ function dateLabel(value: string): string {
     month: "long",
     day: "numeric",
     weekday: "short",
+    timeZone: "Asia/Seoul",
   }).format(parsed);
 }
 

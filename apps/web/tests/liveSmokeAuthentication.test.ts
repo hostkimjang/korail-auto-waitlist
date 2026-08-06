@@ -1,3 +1,5 @@
+import { resolve as resolvePath } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 const playwrightExpect = vi.hoisted(() => vi.fn(() => ({
@@ -15,8 +17,13 @@ import {
   type LiveSmokeAuthEnvironment,
 } from "../e2e/support/liveSmokeAuthentication";
 
-const repositoryRoot = "C:\\workspace\\rail-waitlist";
-const externalStorageState = "C:\\runtime-secrets\\playwright-state.json";
+const repositoryRoot = resolvePath(process.cwd(), "test-repository");
+const externalStorageState = resolvePath(
+  process.cwd(),
+  "..",
+  "runtime-secrets",
+  "playwright-state.json",
+);
 const validStorageState = JSON.stringify({
   cookies: [{ name: "session", value: "redacted" }],
   origins: [],
@@ -125,7 +132,7 @@ describe("live smoke authentication preflight", () => {
   });
 
   it("rejects storage state inside the repository or with an empty payload", () => {
-    const insidePath = `${repositoryRoot}\\private\\state.json`;
+    const insidePath = resolvePath(repositoryRoot, "private", "state.json");
     const inside = resolve(
       { E2E_STORAGE_STATE: insidePath },
       { [insidePath]: validStorageState },

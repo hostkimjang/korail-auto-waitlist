@@ -1,5 +1,8 @@
 name: repository-verify
 
+permissions:
+  contents: read
+
 on:
   push:
     paths:
@@ -34,6 +37,10 @@ jobs:
   verify-repository:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      POSTGRES_PASSWORD: ci-only-postgres-not-a-secret
+      SECRET_ENCRYPTION_KEY: ci-only-encryption-key-not-a-secret-000000
+      AUTH_SESSION_SECRET: ci-only-session-key-not-a-secret-000000000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

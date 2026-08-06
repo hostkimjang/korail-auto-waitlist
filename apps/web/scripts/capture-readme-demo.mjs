@@ -5,6 +5,13 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "@playwright/test";
 
+import {
+  clickWithDemoMotion,
+  focusWithDemoMotion,
+  hideDemoCursor,
+  installDemoCaptureMotion,
+} from "./demo-capture-motion.mjs";
+
 const webRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const mediaDirectory = fileURLToPath(new URL("../../../docs/media/", import.meta.url));
@@ -84,42 +91,53 @@ async function capture() {
 
     await page.clock.install({ time: new Date("2026-07-30T05:32:00.000Z") });
     await page.goto(baseUrl, { waitUntil: "networkidle" });
-    await page.waitForTimeout(2_200);
+    await installDemoCaptureMotion(page);
+    await page.waitForTimeout(800);
 
-    await page.getByRole("button", { name: "새 대기", exact: true }).click();
-    await page.waitForTimeout(1_600);
+    await clickWithDemoMotion(page, page.getByRole("button", { name: "새 대기", exact: true }), {
+      zoomScale: 1.16,
+      resultHoldMs: 550,
+    });
 
-    await page.getByRole("checkbox", { name: /SRT 시간표/ }).click();
-    await page.waitForTimeout(900);
-    await page.getByRole("button", { name: "다음" }).click();
-    await page.waitForTimeout(1_400);
+    await clickWithDemoMotion(page, page.getByRole("checkbox", { name: /SRT 시간표/ }), {
+      resultHoldMs: 280,
+    });
+    await clickWithDemoMotion(page, page.getByRole("button", { name: "다음" }), {
+      resultHoldMs: 420,
+    });
 
-    await page.getByRole("button", { name: /알림만 받기/ }).click();
-    await page.waitForTimeout(900);
-    await page.getByRole("button", { name: "다음" }).click();
+    await clickWithDemoMotion(page, page.getByRole("button", { name: /알림만 받기/ }), {
+      resultHoldMs: 220,
+    });
+    await clickWithDemoMotion(page, page.getByRole("button", { name: "다음" }), {
+      resultHoldMs: 300,
+    });
 
     const summary = page.getByLabel("시간표 조회 결과 요약");
     await summary.waitFor({ state: "visible" });
     await summary.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(1_800);
+    await page.waitForTimeout(600);
 
     const standardSeat = page.getByRole("region", { name: "KTX 033 일반실" });
     await standardSeat.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(1_500);
+    await page.waitForTimeout(650);
 
-    await standardSeat.getByRole("button", { name: /공식 예매 전 안내 열기/ }).click();
-    await page.getByRole("dialog").waitFor({ state: "visible" });
-    await page.waitForTimeout(2_000);
-    await page.getByRole("button", { name: "공식 좌석 확인 안내 닫기" }).click();
-    await page.waitForTimeout(900);
-
-    await standardSeat.getByRole("button", { name: "일반실로 대기" }).click();
+    await clickWithDemoMotion(page, standardSeat.getByRole("button", { name: "일반실로 대기" }), {
+      zoomScale: 1.2,
+      resultHoldMs: 720,
+    });
     await page.getByRole("button", { name: /일반실 대기 취소/ }).waitFor({ state: "visible" });
-    await page.waitForTimeout(1_600);
 
-    await page.getByRole("button", { name: "홈", exact: true }).click();
+    await clickWithDemoMotion(page, page.getByRole("button", { name: "홈", exact: true }), {
+      resultHoldMs: 420,
+    });
     await page.getByRole("heading", { name: "활동 중인 대기" }).waitFor({ state: "visible" });
-    await page.waitForTimeout(2_400);
+    await focusWithDemoMotion(page, page.getByRole("heading", { name: "활동 중인 대기" }), {
+      zoomScale: 1.12,
+      holdMs: 650,
+    });
+    await hideDemoCursor(page);
+    await page.waitForTimeout(650);
 
     if (browserErrors.length > 0) {
       throw new Error(`브라우저 오류가 발생했습니다: ${browserErrors.join(" | ")}`);

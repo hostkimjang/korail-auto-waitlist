@@ -17,7 +17,7 @@ npm run marketing:capture
 ```powershell
 ffmpeg -y -ss 00:00:00.20 -i output/marketing-video/railwait-intro.webm -an -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart docs/media/railwait-intro.mp4
 ffmpeg -y -ss 00:00:02.0 -i docs/media/railwait-intro.mp4 -frames:v 1 -update 1 docs/media/railwait-intro-poster.png
-ffmpeg -y -ss 00:00:00.70 -t 3 -i docs/media/railwait-intro.mp4 -vf "fps=8,scale=800:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" -loop 0 docs/media/railwait-intro.gif
+ffmpeg -y -i docs/media/railwait-intro.mp4 -vf "fps=8,scale=800:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" -loop 0 docs/media/railwait-intro.gif
 ```
 
 ## 실제 UI 데모 장면

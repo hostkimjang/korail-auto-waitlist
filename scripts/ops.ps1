@@ -50,7 +50,7 @@ function Invoke-ApiVerification {
         if ($LASTEXITCODE -ne 0) {
             throw "API Ruff check failed with exit code $LASTEXITCODE"
         }
-        & uv run --frozen --extra test mypy
+        & uv run --frozen --extra test --extra browser mypy
         if ($LASTEXITCODE -ne 0) {
             throw "API mypy check failed with exit code $LASTEXITCODE"
         }

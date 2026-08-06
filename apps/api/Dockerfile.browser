@@ -29,15 +29,20 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir --ignore-installed ".[browser]"
+COPY scripts/start-korail-browser-test.sh /usr/local/bin/start-korail-browser-test
+RUN chmod 0755 /usr/local/bin/start-korail-browser-test \
+    && pip install --no-cache-dir --ignore-installed ".[browser]"
 
 FROM browser-base AS test
+
+ENV KORAIL_BROWSER_TEST_DISABLE_SANDBOX=true \
+    KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/start-korail-browser-test
 
 USER root
 COPY tests ./tests
 RUN pip install --no-cache-dir --ignore-installed ".[browser,test]"
 USER pwuser
-CMD ["pytest", "tests/test_korail_browser_automation.py", "tests/test_korail_browser_mode_smoke.py", "tests/test_korail_direct_cdp.py", "tests/test_korail_pydoll_browser.py", "tests/test_korail_sidecar_runtime.py", "-q", "-p", "no:cacheprovider"]
+CMD ["pytest", "tests/test_korail_browser_automation.py", "tests/test_korail_browser_mode_smoke.py", "tests/test_korail_chromium_launch.py", "tests/test_korail_direct_cdp.py", "tests/test_korail_pydoll_browser.py", "tests/test_korail_sidecar_runtime.py", "-q", "-p", "no:cacheprovider"]
 
 FROM browser-base AS runtime
 

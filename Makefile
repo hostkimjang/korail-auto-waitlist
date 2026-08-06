@@ -1,15 +1,18 @@
 COMPOSE := docker compose -f compose.yml
 
-.PHONY: config build up down status logs migrate experimental monitoring ntfy backup restore verify verify-api verify-browser verify-web
+.PHONY: config build up down status logs migrate experimental monitoring ntfy backup restore verify verify-api verify-browser verify-web-core verify-web
 
 verify: config verify-browser verify-api verify-web
 
 verify-api:
-	cd apps/api && uv lock --check && uv run --extra test pytest && uvx --from ruff==0.12.12 ruff check --select E,F,I . && uv run --extra test python scripts/check_ruff_format_ratchet.py && uv run --frozen --extra test mypy
+	cd apps/api && uv lock --check && uv run --extra test pytest && uvx --from ruff==0.12.12 ruff check --select E,F,I . && uv run --extra test python scripts/check_ruff_format_ratchet.py && uv run --frozen --extra test --extra browser mypy
 
 verify-browser:
 	$(COMPOSE) --profile test build korail-browser-adapter-test
 	$(COMPOSE) --profile test run --rm --no-deps korail-browser-adapter-test
+
+verify-web-core:
+	cd apps/web && npm run verify:core
 
 verify-web:
 	cd apps/web && npm run verify

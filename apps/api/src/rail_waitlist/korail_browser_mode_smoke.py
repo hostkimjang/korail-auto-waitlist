@@ -134,9 +134,7 @@ async def run(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     secure_output_directory(output_dir)
     page_capture_path = output_dir / f"{args.mode}-page.png"
-    desktop_capture_path = (
-        output_dir / f"{args.mode}-desktop.png" if args.mode == "gui" else None
-    )
+    desktop_capture_path = output_dir / f"{args.mode}-desktop.png" if args.mode == "gui" else None
     capture_paths = [page_capture_path]
     if desktop_capture_path is not None:
         capture_paths.append(desktop_capture_path)
@@ -193,9 +191,7 @@ async def run(args: argparse.Namespace) -> int:
             client.search(request), timeout=args.overall_timeout_seconds
         )
         statuses = Counter(
-            status
-            for train in result.trains
-            for status in (train.standard, train.first)
+            status for train in result.trains for status in (train.standard, train.first)
         )
         summary.update(
             outcome="success",

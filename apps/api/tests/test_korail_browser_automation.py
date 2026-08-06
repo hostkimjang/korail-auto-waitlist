@@ -207,6 +207,7 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
 
     async def probe(*, headless: bool = True) -> None:
         probe_calls.append(headless)
+
     monkeypatch.setitem(
         sys.modules,
         "rail_waitlist.korail_pydoll_browser",
@@ -345,9 +346,7 @@ def test_direct_cdp_engine_keeps_existing_client_and_probe() -> None:
 
     assert isinstance(client, PlaywrightKorailBrowserClient)
     assert (
-        adapter_service._readiness_probe_for_engine(
-            KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP
-        )
+        adapter_service._readiness_probe_for_engine(KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP)
         is adapter_service.probe_chromium
     )
 
@@ -392,9 +391,7 @@ def test_browser_train_snapshot_requires_aware_exact_schedule_and_forbids_extra(
     with pytest.raises(ValidationError, match="schedule datetimes"):
         BrowserTrainSnapshot.model_validate({**valid, "arrival_at": "2026-08-04T02:30:00"})
     with pytest.raises(ValidationError, match="later than departure"):
-        BrowserTrainSnapshot.model_validate(
-            {**valid, "arrival_at": "2026-08-03T22:30:00+09:00"}
-        )
+        BrowserTrainSnapshot.model_validate({**valid, "arrival_at": "2026-08-03T22:30:00+09:00"})
 
 
 def test_official_visible_departure_format_matches_exact_date_and_hour() -> None:
@@ -570,9 +567,7 @@ async def test_visible_control_click_releases_mouse_after_repeated_cancellation(
     page = SimpleNamespace(context=RecordingContext(session))
     client = PlaywrightKorailBrowserClient()
 
-    task = asyncio.create_task(
-        client._click_visible_control(page, VisibleControl(), "test_click")
-    )
+    task = asyncio.create_task(client._click_visible_control(page, VisibleControl(), "test_click"))
     await session.release_started.wait()
     task.cancel()
     await asyncio.sleep(0)
@@ -953,8 +948,7 @@ async def test_station_search_waits_for_delayed_unique_result(
     with serve_korail_fixture(monkeypatch, analytics_status=403) as (base_url, handler):
         client = PlaywrightKorailBrowserClient(
             page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?scenario=delayed_station_result&track_click=1"
+                f"{base_url}/korail_browser_page.html?scenario=delayed_station_result&track_click=1"
             ),
             timeout_seconds=10,
             allow_test_loopback=True,
@@ -1013,10 +1007,7 @@ async def test_fixture_merges_rolling_date_into_existing_month_picker(
     pytest.importorskip("playwright.async_api")
     with serve_korail_fixture(monkeypatch, analytics_status=403) as (base_url, handler):
         client = PlaywrightKorailBrowserClient(
-            page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?today=2026-07-31&track_click=1"
-            ),
+            page_url=(f"{base_url}/korail_browser_page.html?today=2026-07-31&track_click=1"),
             timeout_seconds=10,
             allow_test_loopback=True,
         )
@@ -1049,10 +1040,7 @@ async def test_explicit_protection_surface_wins_over_result_state(
     pytest.importorskip("playwright.async_api")
     with serve_korail_fixture(monkeypatch, analytics_status=403) as (base_url, handler):
         client = PlaywrightKorailBrowserClient(
-            page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?scenario=protection&track_click=1"
-            ),
+            page_url=(f"{base_url}/korail_browser_page.html?scenario=protection&track_click=1"),
             timeout_seconds=10,
             allow_test_loopback=True,
         )
@@ -1075,8 +1063,7 @@ async def test_pre_submit_identity_mismatch_fails_before_search_click(
     ):
         client = PlaywrightKorailBrowserClient(
             page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?scenario=pre_submit_mismatch&track_click=1"
+                f"{base_url}/korail_browser_page.html?scenario=pre_submit_mismatch&track_click=1"
             ),
             timeout_seconds=10,
             allow_test_loopback=True,
@@ -1095,10 +1082,7 @@ async def test_duplicate_visible_station_trigger_fails_closed(
     pytest.importorskip("playwright.async_api")
     with serve_korail_fixture(monkeypatch, analytics_status=403) as (base_url, _):
         client = PlaywrightKorailBrowserClient(
-            page_url=(
-                f"{base_url}/korail_browser_page.html"
-                "?scenario=duplicate_station_trigger"
-            ),
+            page_url=(f"{base_url}/korail_browser_page.html?scenario=duplicate_station_trigger"),
             timeout_seconds=10,
             allow_test_loopback=True,
         )

@@ -72,7 +72,9 @@ async function configureTelegramChannel(page: Page): Promise<void> {
   await page.getByLabel("Bot token").fill("000000000:e2e-synthetic-token");
   await page.getByLabel("Chat ID").fill("100000001");
   await page.getByRole("button", { name: "저장" }).click();
-  await expect(telegram).toContainText("격리 E2E 알림 · 연결됨");
+  await expect(
+    telegram.getByText("격리 E2E 알림 · 사용 중", { exact: true }),
+  ).toBeVisible();
 }
 
 async function selectStation(
@@ -158,8 +160,8 @@ test.describe("격리 Compose 전체 스택", () => {
 
     await selectStation(page, "출발역", "서울");
     await selectStation(page, "도착역", "부산");
-    await page.getByRole("button", { name: /다음/ }).click();
-    await page.getByRole("button", { name: /다음/ }).click();
+    await page.getByRole("button", { name: "다음", exact: true }).click();
+    await page.getByRole("button", { name: "다음", exact: true }).click();
     await expect(page.getByRole("heading", { name: "공식 시간표에서 관심 열차를 고르세요" }))
       .toBeVisible();
 
@@ -213,7 +215,7 @@ test.describe("격리 Compose 전체 스택", () => {
       "available",
       "sold_out",
     ]);
-    expect(korailEvidenceIds.size).toBe(1);
+    expect(korailEvidenceIds.size).toBe(2);
     await korailFirstWatch.click();
     await expect(train9001.getByRole("button", { name: "특실 대기 취소" })).toBeVisible();
 
@@ -224,9 +226,9 @@ test.describe("격리 Compose 전체 스택", () => {
     await page.getByRole("checkbox", { name: /^KTX/ }).click();
     await selectStation(page, "출발역", "수서");
     await selectStation(page, "도착역", "부산");
-    await page.getByRole("button", { name: /다음/ }).click();
+    await page.getByRole("button", { name: "다음", exact: true }).click();
     await expect(page.getByRole("heading", { name: "어떤 좌석을 찾을까요?" })).toBeVisible();
-    await page.getByRole("button", { name: /다음/ }).click();
+    await page.getByRole("button", { name: "다음", exact: true }).click();
     await expect(page.getByRole("heading", { name: "공식 시간표에서 관심 열차를 고르세요" }))
       .toBeVisible();
 

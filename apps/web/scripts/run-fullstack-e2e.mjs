@@ -62,6 +62,7 @@ const environment = {
   POSTGRES_PASSWORD: randomSecret(),
   SECRET_ENCRYPTION_KEY: randomSecret(),
   AUTH_SESSION_SECRET: randomSecret(),
+  SRT_PROVIDER_ADAPTER_TOKEN: randomSecret(),
   E2E_BROWSER_TOKEN: randomSecret(),
   E2E_BASE_URL: baseUrl,
   CADDY_HTTP_BIND: `127.0.0.1:${httpPort}`,

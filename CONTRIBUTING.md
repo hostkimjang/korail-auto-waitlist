@@ -45,6 +45,8 @@ API 개발과 전체 실행 방법은 [apps/api/README.md](apps/api/README.md)�
 ./scripts/ops.ps1 verify
 ```
 
+Pull Request의 핵심 GitHub Actions 검증은 Compose 설정, API, 웹과 PostgreSQL 경합 계약을 실행합니다. KORAIL Chromium 컨테이너는 GitHub runner의 브라우저 실행 정책에 영향을 받으므로 별도 `experimental-browser-verify` 워크플로에서 검증합니다. 이 분리는 실패를 무시하지 않으며, 로컬 전체 검증은 계속 두 범위를 모두 포함합니다.
+
 웹 변경:
 
 ```powershell

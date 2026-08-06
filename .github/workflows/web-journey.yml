@@ -3,13 +3,16 @@ name: repository-verify
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     paths:
       - "apps/web/**"
       - "apps/api/**"
       - "compose.yml"
-      - "compose.fullstack-e2e.yml"
       - ".env.example"
       - "README.md"
       - "CHECKLIST.md"
@@ -23,7 +26,6 @@ on:
       - "apps/web/**"
       - "apps/api/**"
       - "compose.yml"
-      - "compose.fullstack-e2e.yml"
       - ".env.example"
       - "README.md"
       - "CHECKLIST.md"
@@ -59,7 +61,7 @@ jobs:
         working-directory: apps/web
       - run: npx playwright install --with-deps chromium
         working-directory: apps/web
-      - run: make verify
+      - run: make config verify-api verify-web-core
   postgres-execution-lease-fencing:
     name: PostgreSQL fencing acceptance
     runs-on: ubuntu-latest

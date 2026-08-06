@@ -4,7 +4,8 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 
 좌석 감시를 활성화하면 관심 열차의 상태 변화를 확인해 알림을 받을 수 있습니다. 모바일과 PC에서 사용할 수 있으며, 개인 서버에 직접 설치해 운영합니다.
 
-[![저장소 검증 상태](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/web-journey.yml/badge.svg)](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/web-journey.yml)
+[![핵심 저장소 검증 상태](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/web-journey.yml/badge.svg)](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/web-journey.yml)
+[![실험 Chromium 검증 상태](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/experimental-browser.yml/badge.svg)](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/experimental-browser.yml)
 
 [![여정 등록부터 알림과 공식 채널 안내까지 보여주는 레일웨잇 소개 영상](docs/media/railwait-intro.gif)](docs/media/railwait-intro.mp4)
 
@@ -93,6 +94,8 @@ docker compose -f compose.yml up -d --build
 ```powershell
 ./scripts/ops.ps1 verify
 ```
+
+GitHub Actions의 핵심 검증은 Compose 설정, API, 웹, PostgreSQL 경합 계약을 확인합니다. GitHub runner 환경에 민감한 KORAIL Chromium 컨테이너 검증은 별도 실험 워크플로에서 실행하며, 로컬의 `verify` 명령은 두 범위를 모두 확인합니다.
 
 변경 방법과 테스트 기준은 [기여 가이드](CONTRIBUTING.md)를 참고하세요. 보안 문제는 공개 이슈 대신 [보안 정책](SECURITY.md)의 비공개 신고 절차를 이용해 주세요.
 

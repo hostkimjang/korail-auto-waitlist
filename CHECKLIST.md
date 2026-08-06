@@ -27,6 +27,7 @@
 - [x] 공개 제외 자료를 로컬·원격 브랜치와 태그의 전체 Git 이력에서 제거
 - [ ] GitHub 비공개 취약점 신고 기능 활성화
 - [ ] clean clone에서 설치 절차 재검증
+- [ ] GitHub Actions의 핵심 검증과 실험 Chromium 검증 분리 후 원격 실행 확인
 
 상세한 공개 전 점검은 [공개 릴리스 체크리스트](docs/PUBLIC_RELEASE_CHECKLIST.md)에서 관리합니다.
 

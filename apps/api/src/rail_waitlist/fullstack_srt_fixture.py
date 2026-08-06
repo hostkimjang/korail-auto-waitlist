@@ -9,8 +9,13 @@ from urllib.request import Request, urlopen
 @dataclass(frozen=True, slots=True)
 class FixtureSrtTrain:
     train_number: str
+    train_name: str
+    dep_station_name: str
+    arr_station_name: str
     dep_date: str
     dep_time: str
+    arr_date: str
+    arr_time: str
     general_seat_state: str
     special_seat_state: str
     reserve_wait_possible_code: str
@@ -61,13 +66,16 @@ class FullstackSrtFixtureClient:
                 trains.append(
                     FixtureSrtTrain(
                         train_number=str(raw_train["train_number"]),
+                        train_name="SRT",
+                        dep_station_name=dep,
+                        arr_station_name=arr,
                         dep_date=str(raw_train["dep_date"]),
                         dep_time=str(raw_train["dep_time"]),
+                        arr_date=str(raw_train["arr_date"]),
+                        arr_time=str(raw_train["arr_time"]),
                         general_seat_state=str(raw_train["general_seat_state"]),
                         special_seat_state=str(raw_train["special_seat_state"]),
-                        reserve_wait_possible_code=str(
-                            raw_train["reserve_wait_possible_code"]
-                        ),
+                        reserve_wait_possible_code=str(raw_train["reserve_wait_possible_code"]),
                     )
                 )
             except KeyError:

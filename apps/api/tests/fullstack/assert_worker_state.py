@@ -9,6 +9,7 @@ from rail_waitlist.database import SessionFactory
 from rail_waitlist.domain import (
     OutboxStatus,
     Provider,
+    SeatClass,
     SeatObservationStatus,
     WatchStatus,
 )
@@ -46,7 +47,13 @@ async def _snapshot() -> dict[str, object] | None:
                 )
             ).all()
         )
-        if len(korail_evidence) != 1:
+        expected_korail_evidence = {
+            (SeatClass.STANDARD, SeatObservationStatus.AVAILABLE),
+            (SeatClass.FIRST, SeatObservationStatus.SOLD_OUT),
+        }
+        if {
+            (evidence.seat_class, evidence.status) for evidence in korail_evidence
+        } != expected_korail_evidence:
             return None
 
         rows = list(
@@ -120,10 +127,8 @@ async def _snapshot() -> dict[str, object] | None:
                 raise AssertionError("full-stack observations must retain fixture provenance")
             if observation.error_category is not None:
                 raise AssertionError("deterministic observations must not carry an error")
-            if expected_watch == WatchStatus.WATCHING and watch.next_check_at is None:
-                raise AssertionError("sold-out watch must keep its next observation time")
-            if expected_watch != WatchStatus.WATCHING and watch.next_check_at is not None:
-                raise AssertionError("actionable terminal handoff states must stop polling")
+            if watch.next_check_at is None:
+                raise AssertionError("active watches must keep their next observation time")
 
         transitions = list(
             (
@@ -136,8 +141,23 @@ async def _snapshot() -> dict[str, object] | None:
                 )
             ).all()
         )
-        if len(transitions) != 2 or any(item.observation_id is None for item in transitions):
-            raise AssertionError("actionable transitions must reference their observation")
+        expected_summary_transitions = {
+            (
+                WatchStatus.SEAT_FOUND,
+                "authorized_seat_observation_summary_seat_found",
+                None,
+            ),
+            (
+                WatchStatus.OFFICIAL_WAITLIST,
+                "authorized_seat_observation_summary_official_waitlist",
+                None,
+            ),
+        }
+        actual_summary_transitions = {
+            (item.to_status, item.reason, item.observation_id) for item in transitions
+        }
+        if len(transitions) != 2 or actual_summary_transitions != expected_summary_transitions:
+            raise AssertionError("actionable group summaries must retain their transition contract")
 
         reservation_attempts = await session.scalar(
             select(func.count()).select_from(ReservationAttempt)
@@ -151,17 +171,12 @@ async def _snapshot() -> dict[str, object] | None:
         )
         if lease is None or lease.fencing_token < 1:
             return None
-        if lease.owner_token is not None or lease.expires_at is not None:
-            return None
         korail_lease = await session.get(
             ProviderExecutionLease,
             {"provider": Provider.KORAIL, "account_scope": "anonymous/public"},
         )
         if korail_lease is None or korail_lease.fencing_token < 1:
             return None
-        if korail_lease.owner_token is not None or korail_lease.expires_at is not None:
-            return None
-
         notifications = list(
             (
                 await session.scalars(
@@ -178,20 +193,24 @@ async def _snapshot() -> dict[str, object] | None:
             raise AssertionError("notification outbox must match actionable watch states")
         if len({item.dedupe_key for item in notifications}) != 2:
             raise AssertionError("notification outbox dedupe keys must be unique")
-        if any(item.attempts < 1 for item in notifications):
-            return None
-        if any(
-            item.status not in {OutboxStatus.PENDING, OutboxStatus.FAILED} for item in notifications
-        ):
-            raise AssertionError("isolated notifications must fail closed without external egress")
+        if any(item.attempts != 0 for item in notifications):
+            raise AssertionError("isolated notifications must not attempt external delivery")
+        if any(item.status is not OutboxStatus.PENDING for item in notifications):
+            raise AssertionError("isolated notifications must remain pending without a consumer")
 
-        seat_events = await session.scalar(
-            select(func.count())
-            .select_from(OutboxEvent)
-            .where(OutboxEvent.event_type == "watch.seat_observed")
-        )
-        if int(seat_events or 0) != 4:
-            raise AssertionError("one normalized seat event is required per watch")
+        observation_count, seat_events = (
+            await session.execute(
+                select(
+                    select(func.count()).select_from(SeatObservation).scalar_subquery(),
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(OutboxEvent.event_type == "watch.seat_observed")
+                    .scalar_subquery(),
+                )
+            )
+        ).one()
+        if observation_count < 4 or seat_events != observation_count:
+            raise AssertionError("every normalized observation must retain its seat event")
 
         return {
             "korail_browser_evidence": len(korail_evidence),

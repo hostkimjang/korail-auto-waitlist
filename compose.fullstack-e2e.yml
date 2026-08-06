@@ -11,6 +11,7 @@ services:
       KORAIL_STATION_DATA_URL: http://e2e-fake-upstream:8001/station_data.json
       SRT_SEAT_STATUS_ENABLED: "true"
       SRT_SEAT_MONITORING_ENABLED: "true"
+      SRT_PROVIDER_ADAPTER_ENABLED: "false"
       SRT_FULLSTACK_FIXTURE_URL: http://e2e-fake-upstream:8001/srt/search
       EXPERIMENTAL_RAIL_ENABLED: "true"
       KORAIL_BROWSER_ADAPTER_ENABLED: "true"
@@ -32,6 +33,7 @@ services:
       EXPERIMENTAL_RAIL_ENABLED: "true"
       SRT_SEAT_STATUS_ENABLED: "true"
       SRT_SEAT_MONITORING_ENABLED: "true"
+      SRT_PROVIDER_ADAPTER_ENABLED: "false"
       SRT_FULLSTACK_FIXTURE_URL: http://e2e-fake-upstream:8001/srt/search
       KORAIL_BROWSER_ADAPTER_ENABLED: "true"
       KORAIL_SEAT_MONITORING_ENABLED: "true"
@@ -54,6 +56,8 @@ services:
   korail-browser-adapter:
     environment:
       ENVIRONMENT: test
+      KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"
+      KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH: /usr/local/bin/start-korail-browser-test
       KORAIL_BROWSER_PAGE_URL: http://e2e-korail-page:8080/korail_browser_page.html
       KORAIL_BROWSER_ADAPTER_TOKEN: ${E2E_BROWSER_TOKEN:?E2E_BROWSER_TOKEN is required}
       KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS: "10"

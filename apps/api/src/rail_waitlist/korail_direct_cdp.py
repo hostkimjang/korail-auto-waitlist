@@ -10,6 +10,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Protocol
 
+from .korail_chromium_launch import isolated_test_chromium_arguments
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +40,7 @@ async def open_direct_cdp_browser(
         try:
             process = await asyncio.create_subprocess_exec(
                 chromium.executable_path,
+                *isolated_test_chromium_arguments(),
                 "--headless=new",
                 "--window-size=1440,1000",
                 "--remote-debugging-address=127.0.0.1",

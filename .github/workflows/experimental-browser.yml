@@ -1,0 +1,51 @@
+name: experimental-browser-verify
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/web/**"
+      - "apps/api/**"
+      - "compose.yml"
+      - "compose.fullstack-e2e.yml"
+      - "Makefile"
+      - ".github/workflows/experimental-browser.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "apps/api/**"
+      - "compose.yml"
+      - "compose.fullstack-e2e.yml"
+      - "Makefile"
+      - ".github/workflows/experimental-browser.yml"
+
+jobs:
+  verify-experimental-browser:
+    name: Experimental KORAIL browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      POSTGRES_PASSWORD: ci-only-postgres-not-a-secret
+      SECRET_ENCRYPTION_KEY: ci-only-encryption-key-not-a-secret-000000
+      AUTH_SESSION_SECRET: ci-only-session-key-not-a-secret-000000000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+        working-directory: apps/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: make verify-browser
+      - run: npm run test:e2e:fullstack
+        working-directory: apps/web

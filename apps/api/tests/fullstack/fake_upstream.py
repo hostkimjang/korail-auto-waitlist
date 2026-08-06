@@ -77,9 +77,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             if len(service_date) != 8 or not service_date.isdigit():
                 self._json({"detail": "invalid service date"}, HTTPStatus.BAD_REQUEST)
                 return
-            origin = (
-                "수서" if query.get("depPlaceId", [""])[0] == "N-SUSEO" else "서울"
-            )
+            origin = "수서" if query.get("depPlaceId", [""])[0] == "N-SUSEO" else "서울"
             self._json(
                 _tago_response(
                     [
@@ -137,9 +135,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
                             "train_number": "9002",
                             "dep_date": service_date,
                             "dep_time": "131000",
-                            "general_seat_state": (
-                                "예약가능" if worker_observation else "매진"
-                            ),
+                            "arr_date": service_date,
+                            "arr_time": "154000",
+                            "general_seat_state": ("예약가능" if worker_observation else "매진"),
                             "special_seat_state": "매진",
                             "reserve_wait_possible_code": "",
                         },
@@ -147,6 +145,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
                             "train_number": "9003",
                             "dep_date": service_date,
                             "dep_time": "133000",
+                            "arr_date": service_date,
+                            "arr_time": "160000",
                             "general_seat_state": "매진",
                             "special_seat_state": "매진",
                             "reserve_wait_possible_code": "9",
@@ -156,6 +156,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             )
             return
         self._json({"detail": "not found"}, HTTPStatus.NOT_FOUND)
+
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("0.0.0.0", 8001), FixtureHandler).serve_forever()

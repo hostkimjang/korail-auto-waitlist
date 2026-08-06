@@ -274,4 +274,6 @@ docker compose -f compose.yml logs -f --tail=200 api worker notification-worker
 ./scripts/ops.ps1 verify
 ```
 
+GitHub Actions에서는 핵심 저장소 검증과 KORAIL Chromium 컨테이너 검증을 분리합니다. 핵심 검증은 Compose 설정, API, 웹, PostgreSQL 경합 계약을 담당하고, `experimental-browser-verify`는 외부 요청 없이 고정 fixture로 실제 Chromium 실행 경계를 확인합니다. 실험 브라우저 테스트 이미지와 격리 full-stack E2E는 GitHub runner의 사용자 네임스페이스 제한 때문에 Chromium 내부 sandbox만 끄지만, 비루트 사용자, 읽기 전용 루트, capability 제거와 권한 상승 금지 경계를 유지하고 전용 fixture 네트워크만 사용합니다. 운영 Chromium 서비스에는 이 실행 래퍼와 opt-in 환경값을 적용하지 않습니다.
+
 실제 외부 알림 채널, 공개 도메인, 철도사 계정, 실기기 동작은 자동 테스트와 별도로 확인합니다.

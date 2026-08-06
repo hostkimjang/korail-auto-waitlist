@@ -19,6 +19,7 @@ output/
 tests/*
 !tests/test_korail_browser_automation.py
 !tests/test_korail_browser_mode_smoke.py
+!tests/test_korail_chromium_launch.py
 !tests/test_korail_direct_cdp.py
 !tests/test_korail_pydoll_browser.py
 !tests/test_korail_sidecar_runtime.py

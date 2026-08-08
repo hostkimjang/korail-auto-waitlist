@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import rail_waitlist.korail_browser_adapter_service as adapter_service
+import rail_waitlist.korail_sidecar.pydoll.chromium_lifecycle as pydoll_lifecycle
 from rail_waitlist.korail_browser_adapter_service import (
     KorailBrowserEngine,
     create_adapter_app,
@@ -42,6 +43,7 @@ from rail_waitlist.korail_browser_automation import (
     visible_departure_matches,
 )
 from rail_waitlist.korail_search_bootstrap import KorailStationIdentityResolver
+from rail_waitlist.korail_sidecar.playwright import search_form
 
 
 @pytest.mark.parametrize(
@@ -216,6 +218,7 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
             probe_pydoll_chromium=probe,
         ),
     )
+    monkeypatch.setattr(pydoll_lifecycle, "probe_pydoll_chromium", probe)
 
     client = adapter_service._build_browser_client(
         KorailBrowserEngine.PYDOLL,
@@ -264,6 +267,7 @@ def test_pydoll_gui_mode_uses_headed_client_and_readiness_probe(
             probe_pydoll_chromium=probe,
         ),
     )
+    monkeypatch.setattr(pydoll_lifecycle, "probe_pydoll_chromium", probe)
 
     adapter_service._build_browser_client(
         KorailBrowserEngine.PYDOLL,
@@ -326,6 +330,7 @@ def test_pydoll_engine_readiness_uses_selected_probe_without_network(
             probe_pydoll_chromium=probe,
         ),
     )
+    monkeypatch.setattr(pydoll_lifecycle, "probe_pydoll_chromium", probe)
     app = create_adapter_app(token="t" * 32)
 
     with TestClient(app) as http:
@@ -516,11 +521,66 @@ class VisibleControl:
 
 
 @pytest.mark.asyncio
+async def test_canonical_submit_search_orchestrates_the_client_form_seams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = PlaywrightKorailBrowserClient()
+    search_request = request()
+    events: list[tuple[object, ...]] = []
+    button = SimpleNamespace(
+        is_visible=AsyncMock(return_value=True),
+        is_enabled=AsyncMock(return_value=True),
+    )
+    buttons = SimpleNamespace(count=AsyncMock(return_value=1), first=button)
+    role_queries: list[tuple[str, str]] = []
+
+    def get_by_role(role: str, *, name) -> SimpleNamespace:
+        role_queries.append((role, name.pattern))
+        return buttons
+
+    page = SimpleNamespace(get_by_role=get_by_role)
+
+    async def choose_station(actual_page, label: str, value: str) -> None:
+        events.append(("station", actual_page, label, value))
+
+    async def choose_departure(actual_page, travel_date: date, hour: int) -> None:
+        events.append(("departure", actual_page, travel_date, hour))
+
+    async def assert_identity(actual_page, actual_request) -> None:
+        events.append(("identity", actual_page, actual_request))
+
+    async def click_control(actual_page, control, stage: str) -> None:
+        events.append(("click", actual_page, control, stage))
+
+    monkeypatch.setattr(client, "_choose_station", choose_station)
+    monkeypatch.setattr(client, "_choose_departure", choose_departure)
+    monkeypatch.setattr(client, "_assert_pre_submit_identity", assert_identity)
+    monkeypatch.setattr(client, "_click_visible_control", click_control)
+
+    await search_form.submit_search(client, page, search_request)
+
+    assert events == [
+        ("station", page, "출발역", "서울"),
+        ("station", page, "도착역", "부산"),
+        ("departure", page, date(2026, 8, 3), 14),
+        ("identity", page, search_request),
+        ("click", page, button, "submit_button_click"),
+    ]
+    assert role_queries == [("button", r"(?:열차\s*)?조회|조회하기")]
+    buttons.count.assert_awaited_once_with()
+    button.is_visible.assert_awaited_once_with()
+    button.is_enabled.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_visible_control_click_uses_cdp_press_hold_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sleep = AsyncMock()
-    monkeypatch.setattr("rail_waitlist.korail_browser_automation.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "rail_waitlist.korail_sidecar.playwright.search_form.asyncio.sleep",
+        sleep,
+    )
     session = RecordingCdpSession()
     page = SimpleNamespace(context=RecordingContext(session))
     client = PlaywrightKorailBrowserClient()
@@ -544,7 +604,10 @@ async def test_visible_control_click_releases_mouse_when_hold_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sleep = AsyncMock(side_effect=RuntimeError("hold failed"))
-    monkeypatch.setattr("rail_waitlist.korail_browser_automation.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "rail_waitlist.korail_sidecar.playwright.search_form.asyncio.sleep",
+        sleep,
+    )
     session = RecordingCdpSession()
     page = SimpleNamespace(context=RecordingContext(session))
     client = PlaywrightKorailBrowserClient()

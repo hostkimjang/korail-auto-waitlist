@@ -76,6 +76,7 @@ const defaultBrowserPushState: BrowserPushState = {
   support: "checking",
   permission: "default",
   subscribed: false,
+  deviceKey: null,
 };
 
 const saveNoProviderAccount = async (

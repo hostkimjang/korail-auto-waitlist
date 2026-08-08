@@ -5,16 +5,90 @@
 ## 구현됨
 
 - [x] 모바일·데스크톱 반응형 웹과 PWA
+- [x] 가상 키보드 가용 높이를 반영하는 모바일·터치 태블릿 전용 역 선택 화면
+- [x] 실제 modal의 중첩 안전한 문서 스크롤 잠금과 원래 위치 복원
+- [x] 접속 중 알림센터가 페이지 스크롤과 현재 작업을 막지 않는 비차단 동작
 - [x] 단일 관리자 등록·로그인·세션 관리
 - [x] KTX·SRT 여정 검색과 좌석 등급 표시
+- [x] SRT 역 query-code roster의 정규화 충돌 거절과 시간표 fallback·예약 미호출 fail-closed 처리
+- [x] TAGO 응답 envelope·pagination·row 타입 검증과 malformed page 미캐시·fail-closed 처리
+- [x] TAGO 검증 raw 시간표 행의 provider·KST 시각·범위·운임·unknown 좌석 순수 projection 기능 owner 분리
+- [x] 새벽 `00:00–09:00`·저녁 `18:00–00:00` 시간 프리셋과 서비스 날짜 종료 경계 구분
 - [x] 일반실·특실별 대기 등록과 취소
 - [x] 홈의 감시·좌석 발견·결제 필요·인증 필요 상태
+- [x] 같은 가용성 구간의 자동 예매 1회 DB fence와 판매 불가→재가용 관측 뒤에만 여는 다음 에피소드
+- [x] 불확실·좌석 미확보 결과의 자동 반복 차단과 공식 확인·감시 복귀 외부 알림
+- [x] 화면 갱신·전역 좌석 관측 간격의 일관된 API 응답·저장 계약
 - [x] 브라우저 푸시·Telegram·Discord·Webhook 설정 화면
+- [x] 브라우저·설치 PWA별 Web Push 구독 저장과 모든 활성 기기 동시 발송, 현재 기기 연결·해제 계약
+- [x] 설정 화면 밖 전역 OS 알림 연결 CTA와 직접 사용자 행동 권한 요청, 명시적 기기 해제 뒤 재안내 억제
+- [x] 만료된 Web Push 구독만 비활성화하고 다른 활성 기기의 발송을 유지하는 실패 격리
+- [x] Web Push의 접속 중 상태 갱신 힌트와 알림 클릭 시 PWA 포커스·navigate 복구·열기 계약
+- [x] PWA 온라인 navigation의 현재 문서 우선·오프라인 shell fallback, 이전 해시 asset 404와 navigation preload 계약
+- [x] 중요 상태·시험 Web Push의 높은 전달 우선순위와 진동 힌트, `reserving` 긴급 갱신 계약
+- [x] Android·Apple 공통 foreground 8초 상단 간략 알림과 비차단 접힘·펼침 동작
+- [x] 재접속 시 canonical 예매 진행·결제·인증 상태 복원과 진행 카드의 결과 revision 전 유지
+- [x] SSE 진행 시각과 미래 REST 관측·다른 attempt 혼합 방지, 역순 단계 fail-closed 처리
+- [x] iOS·iPadOS 홈 화면 PWA의 사용자 행동 안에서 시작하는 Web Push 권한 요청 계약
+- [x] 일반·마스커블·Apple Touch·브라우저 탭 16·32px favicon·알림 배지 아이콘 자산 분리
+- [x] 예매 단계와 결제·예약 확인 단계를 구분한 KORAIL·SRT 고정 HTTPS 새 창 인계
+- [x] 앱 버전 기록이 없으면 닫히는 코레일+ `booking`·`ticket`, SRT `main`·`ticket` 경로별 기능 플래그와 미검증 스킴 금지
+- [x] Android intent 미연결 시 PWA를 교체하지 않고 외부 Custom Tab에서 고정 HTTPS fallback을 여는 사용자 클릭 계약
+- [x] 별도 APK 없이 PWA Web Push와 접속 중 `실시간 알림`만 사용하는 모바일 알림 범위
 - [x] PostgreSQL·Redis·Celery·FastAPI 기반 백엔드
 - [x] Docker Compose 실행과 health check
+- [x] 효과 없는 KORAIL accountless 설정·앱 조립 제거와 browser sidecar HTTP client 기능 owner 분리
+- [x] KORAIL browser adapter service의 route/runtime 정책 분리 완료와 top-level ASGI composition root·Docker entrypoint 유지 계약 고정
+- [x] KORAIL browser companion HTTP/UoW와 read-only snapshot overlay owner 분리, canonical consumer·legacy import/pickle 호환 보존
+- [ ] KORAIL browser companion snapshot 422 응답에서 거절된 입력값을 제외하는 validation detail redaction 보강
+- [x] KORAIL browser 요청·결과·오류 계약과 Playwright·Pydoll·HTTP replay 공통 보호 판정 leaf owner 분리
+- [x] KORAIL browser 검색 coordinator·공유 page 계약·Playwright direct-CDP/DOM owner 분리와 top-level exact facade 보존
+- [x] KORAIL Playwright 결과 row·좌석 snapshot reader 분리와 client private wrapper·legacy exact alias 보존
+- [x] KORAIL Playwright 검색 form·날짜/시간 navigation·CDP mouse cleanup owner 분리와 17개 client wrapper 보존
+- [x] KORAIL 검색 결과의 열차 종류·요금·지연·자정 교차 시각·좌석 상태 순수 policy owner 분리와 legacy exact alias 보존
+- [x] KORAIL core HTTP replay capture 검증·bounded pagination·lease·보호/세션 실패 owner 분리와 legacy import·pickle 호환 보존
+- [x] KORAIL Pydoll 검색 snapshot 행 집계·중복 제거·더보기 중단 순수 정책 owner 분리
+- [x] KORAIL Pydoll 시간 picker window·disabled·선택 완료 순수 상태 policy owner 분리와 browser private alias·pickle 보존
+- [x] KORAIL Pydoll visible element 수집·live DOM control 상태 owner 분리와 browser alias·pickle·late wrapper 보존
+- [x] KORAIL Pydoll current-tab value/text·exact/visible/dialog polling DOM interaction owner 분리와 secret-free 실패 로그·wrapper·pickle 보존
+- [ ] KORAIL Pydoll 알 수 없는 `aria-disabled` 값을 enabled로 해석하지 않도록 fail-closed 정책 보강
+- [x] KORAIL Pydoll 시간 carousel mouse/CDP·keyboard input owner 분리와 browser wrapper·pickle·현재 tab 조회 보존
+- [x] KORAIL Pydoll 시간 carousel candidate·window 안정화·animation·bounded diagnostic observation owner 분리와 wrapper·pickle 보존
+- [x] KORAIL Pydoll 날짜·시간 선택 commit readback owner 분리와 exact marker·timeout·wrapper·pickle 보존
+- [ ] KORAIL Pydoll carousel mouse release가 반복 취소 중에도 완료되도록 cancellation-resilient cleanup 보강
+- [x] KORAIL Pydoll 검색 form·결과 DOM driver canonical owner 이동과 browser direct consumer·legacy exact facade 보존
+- [x] KORAIL Pydoll read-only 검색 actor canonical owner 이동과 replay-first·direct/UI·취소 안전 cleanup·legacy exact facade 보존
+- [x] KORAIL Pydoll credential-bound 인증 session actor canonical owner 이동과 secret-free fingerprint·TTL/횟수·취소 안전 cleanup·legacy exact facade 보존
+- [x] KORAIL Pydoll 단일 예약 actor canonical owner 이동과 exact identity·bounded expansion·1회 예약·취소/보호 cleanup·legacy exact facade 보존
+- [x] KORAIL Pydoll 로그인 DOM driver canonical owner 이동과 유일 method tab·active panel·공식 session 확인·secret-free stage·legacy exact facade 보존
+- [x] KORAIL Pydoll 예약 DOM driver canonical owner 이동과 동일 열차·좌석·1회 예매·결제 전 중단 안전 계약 보존
+- [x] KORAIL Pydoll 더보기의 누적 반복 window 중단·최신 snapshot envelope 보존·page-safety 차단 판정 단일화
+- [x] KORAIL Pydoll Chromium launch·tab/listener·cleanup lifecycle owner 분리와 optional import·취소 중 cleanup 보존
+- [x] KORAIL Pydoll 동일 세션 예약 확인 read-only 정책 owner 분리와 기존 import·pickle 호환 facade 보존
+- [x] KORAIL Pydoll HTTP replay route lease·TTL·횟수·LRU·cleanup manager owner 분리와 로그·pickle 호환 보존
+- [x] KORAIL Pydoll browser를 concrete client/session composition shell로 동결하고 HTTP의 canonical contract 직행·정책 재유입 금지 고정
+- [x] KORAIL browser 검색 결과의 primary timetable·batch exact overlay·좌석 순수 projection 기능 owner 분리
+- [x] KORAIL browser query cache·singleflight·provider/query cooldown·drain runtime 기능 owner 분리
+- [x] KORAIL browser login verify/prewarm credential·결과 순수 auth policy owner 분리와 SecretStr·late failure seam 보존
+- [x] KORAIL browser KST 조회 시작 시간창 순수 policy owner 분리와 기존 picker method·clock late-dispatch 보존
+- [x] KORAIL browser 관측 request·정확 열차/시각 결과 순수 policy owner 분리와 source late-dispatch 보존
+- [x] KORAIL browser 예약 request/result 순수 policy owner 분리와 source late-dispatch 호환 wrapper 보존
+- [x] KORAIL browser source를 stateful provider composition shell로 동결하고 strict typing·canonical owner 단방향 의존 고정
+- [x] 중앙 `services.py`를 production consumer·직접 SQL/UoW 없는 14-wrapper compatibility composition facade로 동결하고 strict typing 고정
+- [x] 철도 provider account 암복호화·CRUD·generation CAS·watch 재개 UoW를 feature application owner로 이동하고 legacy import·pickle 호환 보존
+- [x] 철도 provider login verify/prewarm·session telemetry를 feature owner로 이동하고 sanitized 결과·legacy pickle 호환 보존
+- [x] 철도 provider session prewarm·generation fence·재사용 session 복구 UoW를 feature runtime owner로 이동하고 legacy pickle 호환 보존
+- [x] `worker.py`를 직접 SQL·provider I/O·비밀값 정책 없는 Celery composition root로 동결하고 strict typing 고정
+- [x] 중앙 `schemas.py` 76개 alias·`models.py` 24개 alias metadata registry를 exact compatibility hub로 동결
+- [x] test-only SRT fullstack transport fixture를 provider adapter owner로 이동하고 legacy import·pickle 호환 보존
+- [x] KORAIL sidecar 예약 확인 요청 생성·실패·wire 결과 정규화 read-only runtime 기능 owner 분리
+- [x] 재배포 시 ingress·scheduler를 먼저 차단하고 Celery worker/API를 sidecar보다 먼저 drain하는 단계적 종료와 5분 유예
+- [ ] `scripts/ops.ps1 experimental`에 GUI Compose override 선택 경로를 추가해 수동 adapter 재생성을 제거
 - [x] 외부 요청 없는 데모 모드와 자동 테스트
 - [x] 결제정보 미저장과 자동 결제 금지
 - [x] 보호 응답과 호출 제한을 우선하는 중단 정책
+- [x] 검증되지 않은 `Tailscale 보호됨` 상시 배지 제거와 운영 경계 문서화
+- [x] 익일 도착 열차의 aware 후보 시각 보존과 서비스 날짜 종료 watch window payload 회귀 검증
 
 ## 공개 저장소 준비
 
@@ -34,11 +108,35 @@
 ## 운영 환경에서 확인할 항목
 
 - [ ] 공개 또는 Tailscale HTTPS 환경에서 로그인·로그아웃 확인
-- [ ] 실제 브라우저의 Web Push 권한 승인과 수신 확인
+- [x] Android PWA 설치와 Web Push 알림창 수신 확인
+- [x] Android 16/API 36 에뮬레이터에서 다른 앱 사용 중 서비스 워커 알림 클릭으로 기존 설치형 PWA 전면 복귀 확인
+- [ ] 같은 계정의 Windows Chrome·Edge·Android PWA를 각각 연결한 뒤 한 상태 알림의 동시 수신과 활성 기기 수 확인
+- [ ] Android PWA 재설치 후 런처 마스커블 아이콘의 여백과 이전 아이콘 캐시 확인
+- [ ] Android 화면 위 팝업 알림의 기기별 중요도·방해 금지·쿨다운 확인
+- [ ] 알림 클릭의 실행 중 PWA 포커스, 종료된 PWA 열기와 캐시된 첫 화면 표시 시간 실기기 확인
+- [ ] 홈 화면·다른 앱 사용 중(백그라운드 PWA) 알림 클릭의 navigate 복구와 `navigate-existing` 전면 전환 실기기 확인(갤럭시 폴드7 등 Android 15)
+- [ ] Android·iPhone·iPad 앱 사용 중 Push 뒤 8초 상단 간략 알림과 비차단 스크롤 실기기 확인
+- [x] Android Studio·API 36 Google Play 에뮬레이터와 코레일+·SRT 경로별 ADB 검증 스크립트 준비
+- [x] 코레일+ 7.0.0 `booking`·`ticket`·`bookedTicket` BROWSABLE resolver와 예매 화면 확인
+- [x] 코레일+ `view=ticket`의 `나의 티켓` 오인계를 분리하고 `view=bookedTicket`이 `예약 승차권 조회 · 취소` 화면을 여는지 API 36에서 확인
+- [ ] 실제 결제 직전 예약이 있는 상태에서 코레일+ `bookedTicket` 첫 화면에 해당 예약이 표시되는지 확인
+- [x] SRT 2.0.41 매니페스트의 `srapp://main` BROWSABLE resolver와 실제 승차권 예매 홈 확인
+- [x] SRT 2.0.41 설치 APK의 고정 문자열 extra `btnNo=2` 처리와 실제 `승차권 확인`·비로그인 안내 화면 확인
+- [x] SRT ticket 웜 실행의 목록 미갱신 재현과 결제 카드의 하단 `승차권 확인` 재선택 안내
+- [x] Chrome 설치형 PWA 사용자 클릭에서 코레일+ booking과 SRT ticket 앱 전환, 시험용 미설치 package의 외부 Custom Tab fallback과 PWA 보존 확인
+- [x] Android 16/API 36 일반 Chrome의 실제 SRT `공식 결제 열기`와 기존 코레일 사용자 클릭이 설치 앱으로 전환되는지 확인
+- [x] Android 16/API 36 일반 Chrome·설치형 WebAPK에서 `bookedTicket` 동일 anchor가 코레일+ `예약 승차권 조회 · 취소` 화면을 여는지 확인
+- [ ] Android 16/API 36 일반 Chrome·설치형 PWA의 실제 코레일 `공식 결제 열기`가 `bookedTicket`의 `예약 승차권 조회 · 취소` 화면을 여는지 확인
+- [x] 로컬 QA 딥링크 enabled·검증 버전을 `.env`에 지속하고 effective Compose build args·배포 번들을 함께 확인
+- [ ] SRT main 웜 실행이 기존 앱 화면을 유지하는 제한을 해소하거나 예매 홈 목적 화면을 보장할 수 없음을 제품 UI에 반영
+- [ ] 코레일+·SRT 설치·미설치 각각에서 Chrome·삼성 인터넷의 브라우저 탭·설치형 PWA 사용자 클릭, fallback 외부 창과 뒤로가기 확인
+- [ ] SRT ticket intent의 삼성 인터넷 `btnNo=2`, 실제 앱 제거 상태의 발권·취소 조회 외부 창과 갤럭시 폴드7 동작 확인
+- [ ] SRT 앱 업데이트마다 ticket intent 첫 표시와 하단 `승차권 확인` 재선택 뒤 방금 예약 목록 갱신 차이 확인
 - [ ] Telegram·Discord·Webhook 실제 전송 확인
 - [ ] 별도 인스턴스에서 암호화 백업 복원 확인
-- [ ] iOS·Android PWA 설치와 알림 확인
+- [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
+- [ ] 실제 KORAIL·SRT 예매 진행 중 단계적 재배포에서 작업 완료 또는 안전한 재조정과 상태 연속성 확인
 - [ ] 보호 응답과 호출 제한 뒤 정상 복구 확인
 
 ## 유지 원칙

@@ -15,19 +15,20 @@ from ..domain import (
     SeatObservationStatus,
     WatchStatus,
 )
-from ..models import (
-    ProviderCircuit,
-    RailProviderAccount,
+from ..operational import decide_operational_expiry
+from ..provider_account_management.models import RailProviderAccount
+from ..provider_circuit.models import ProviderCircuit
+from ..provider_contracts import ObservationProvider
+from ..reservations.attempt_policy import CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX
+from ..reservations.provider_confirmation.contracts import ReservationConfirmationOutcome
+from ..watch_management.models import (
     ReservationAttempt,
     SeatObservation,
     Watch,
     WatchCandidate,
 )
-from ..operational import decide_operational_expiry
-from ..provider_contracts import ObservationProvider
-from ..reservation_confirmation import ReservationConfirmationOutcome
-from ..reservations.attempt_policy import CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX
-from ..schemas import SeatObservationRequest, SeatObservationResult
+from .contracts import SeatObservationRequest, SeatObservationResult
+from .status_policy import ACTIONABLE_SEAT_STATUSES, SEAT_FOUND_STATUSES
 
 OBSERVATION_WATCH_STATUSES = frozenset(
     {
@@ -48,15 +49,6 @@ CONCLUSIVE_UNAVAILABLE_SEAT_STATUSES = frozenset(
         SeatObservationStatus.OUT_OF_SERVICE,
     }
 )
-SEAT_FOUND_STATUSES = frozenset(
-    {
-        SeatObservationStatus.AVAILABLE,
-        SeatObservationStatus.LIMITED,
-        SeatObservationStatus.STANDING_PLUS_SEAT,
-    }
-)
-ACTIONABLE_SEAT_STATUSES = SEAT_FOUND_STATUSES | {SeatObservationStatus.WAITLIST_AVAILABLE}
-NOT_AVAILABLE_RETRY_EPISODE_PREFIX = "not-available-retry:"
 
 
 class AsyncSessionFactory(Protocol):
@@ -253,15 +245,9 @@ async def retryable_reservation_episode_key(
             .order_by(SeatObservation.observed_at, SeatObservation.id)
             .limit(1)
         )
-        if unavailable_observation is not None:
-            return f"availability-after:{unavailable_observation.id}"
-        if _as_utc(
-            current_observation.observed_at
-        ) <= finished_at or latest_attempt.episode_key.startswith(
-            NOT_AVAILABLE_RETRY_EPISODE_PREFIX
-        ):
+        if unavailable_observation is None:
             return None
-        return f"{NOT_AVAILABLE_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
+        return f"availability-after:{unavailable_observation.id}"
     if latest_attempt.outcome in {
         ReservationOutcome.AUTH_REQUIRED,
         ReservationOutcome.PROVIDER_BLOCKED,

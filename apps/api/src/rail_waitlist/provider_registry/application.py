@@ -9,7 +9,7 @@ from ..provider_adapters.mock import MockProviderAdapter
 from ..provider_adapters.srt_execution import SrtLiveExecutionAdapter
 from ..provider_adapters.timetable import OfficialTimetableAdapter
 from ..provider_contracts import ExecutionProvider, TimetableProvider
-from ..schemas import ProviderCapabilities
+from .contracts import ProviderCapabilities
 
 
 def get_timetable_provider(

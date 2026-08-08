@@ -137,9 +137,29 @@ export function NotificationChannelSettings({
   const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set());
   const editorHeadingRef = useRef<HTMLHeadingElement>(null);
   const configuredByKind = useMemo(
-    () => new Map(channels.map((channel) => [channel.kind, channel] as const)),
+    () => new Map(
+      channels
+        .filter((channel) => channel.kind !== "web_push")
+        .map((channel) => [channel.kind, channel] as const),
+    ),
     [channels],
   );
+  const webPushChannels = useMemo(
+    () => channels.filter((channel) => channel.kind === "web_push" && channel.configured),
+    [channels],
+  );
+  const currentWebPushChannel = useMemo(
+    () => browserPushState.deviceKey === null
+      ? undefined
+      : webPushChannels.find((channel) => channel.deviceKey === browserPushState.deviceKey),
+    [browserPushState.deviceKey, webPushChannels],
+  );
+  const activeWebPushDeviceCount = useMemo(() => {
+    const reportedCount = webPushChannels.find(
+      (channel) => channel.activeDeviceCount !== null,
+    )?.activeDeviceCount;
+    return reportedCount ?? webPushChannels.filter((channel) => channel.enabled).length;
+  }, [webPushChannels]);
 
   const startAction = (key: string): void => {
     setPendingActions((current) => new Set(current).add(key));
@@ -242,13 +262,16 @@ export function NotificationChannelSettings({
       </div>
       <div className="settings-list">
         {notificationOptions.map(({ id, label, helper, icon: Icon }) => {
-          const storedChannel = configuredByKind.get(id);
+          const storedChannel = id === "web_push"
+            ? currentWebPushChannel
+            : configuredByKind.get(id);
           const channel = storedChannel?.configured ? storedChannel : undefined;
           const isPending = [...pendingActions].some((key) => key.endsWith(`:${id}`));
           const isWebPush = id === "web_push";
           const webPushReady = browserPushState.support === "supported"
             && browserPushState.permission === "granted"
-            && browserPushState.subscribed;
+            && browserPushState.subscribed
+            && channel?.deviceKey === browserPushState.deviceKey;
           const checked = isWebPush
             ? Boolean(
               channel?.enabled
@@ -256,20 +279,20 @@ export function NotificationChannelSettings({
             )
             : Boolean(channel?.enabled);
           const webPushDetail = browserPushState.support === "checking"
-            ? "이 기기 구독 확인 중…"
+            ? `이 기기 구독 확인 중… · 전체 활성 기기 ${activeWebPushDeviceCount}대`
             : browserPushState.support === "unsupported"
-            ? "이 브라우저는 OS 알림을 지원하지 않음"
+            ? `이 브라우저는 OS 알림을 지원하지 않음 · 전체 활성 기기 ${activeWebPushDeviceCount}대`
             : browserPushState.support === "insecure"
-              ? "HTTPS 또는 localhost 접속 필요"
+              ? `HTTPS 또는 localhost 접속 필요 · 전체 활성 기기 ${activeWebPushDeviceCount}대`
               : browserPushState.permission === "denied"
-                ? "브라우저 사이트 설정에서 알림 권한이 차단됨"
-                : channel?.enabled && browserPushState.subscribed
-                  ? "이 기기의 OS 알림 사용 중"
-                  : channel?.enabled
-                    ? "이 기기 구독이 없어 다시 연결 필요"
-                    : channel
-                      ? "이 기기의 OS 알림 꺼짐"
-                      : helper;
+                ? `브라우저 사이트 설정에서 알림 권한이 차단됨 · 전체 활성 기기 ${activeWebPushDeviceCount}대`
+                : channel?.enabled && webPushReady
+                  ? `이 기기 사용 중 · 전체 활성 기기 ${activeWebPushDeviceCount}대`
+                  : channel
+                    ? `이 기기 꺼짐 · 전체 활성 기기 ${activeWebPushDeviceCount}대`
+                    : browserPushState.subscribed
+                      ? `이 기기는 서버에 연결되지 않음 · 전체 활성 기기 ${activeWebPushDeviceCount}대`
+                      : `이 기기 연결 안 됨 · 전체 활성 기기 ${activeWebPushDeviceCount}대`;
           const detail = isPending
             ? "처리 중…"
             : isWebPush
@@ -285,8 +308,9 @@ export function NotificationChannelSettings({
                 <span>{detail}</span>
                 {isWebPush && (
                   <small className="setting-row-note">
-                    허용하면 브라우저를 닫아도 운영체제 알림 영역으로 전달됩니다. iOS는 홈
-                    화면에 설치한 PWA에서 지원됩니다.
+                    기기·브라우저마다 한 번씩 연결하면 Chrome·Edge·설치한 PWA에 함께
+                    전달됩니다. 이 스위치는 다른 기기를 건드리지 않고 현재 기기만 켜거나
+                    끕니다. iOS·iPadOS 16.4 이상은 홈 화면에 설치한 PWA에서 지원됩니다.
                   </small>
                 )}
               </div>

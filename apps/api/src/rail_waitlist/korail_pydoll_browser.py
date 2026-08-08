@@ -3,119 +3,162 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
-import os
 import re
 import time
-from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncIterable as AsyncIterable
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass as dataclass
 from datetime import UTC, date, datetime
 from datetime import time as clock_time
-from pathlib import Path
 from typing import Any, Protocol, Self, cast
 from urllib.parse import urlsplit
 
-from .korail_browser_automation import (
-    FULLSTACK_E2E_PAGE_URL,
-    OFFICIAL_KORAIL_SEARCH_URL,
+from .korail_sidecar.browser_contracts import (
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
+)
+from .korail_sidecar.browser_page_contracts import (
+    FULLSTACK_E2E_PAGE_URL,
+    OFFICIAL_KORAIL_SEARCH_URL,
+)
+from .korail_sidecar.browser_protection import (
     is_rate_limit_response,
     protection_trigger_from_http_response,
     protection_trigger_from_text,
 )
-from .korail_http_replay import (
+from .korail_sidecar.http_replay import (
     HttpReplayInvalidCapture,
     KorailHttpReplayClient,
     KorailHttpReplayPlan,
     build_http_replay_plan,
 )
-from .korail_pydoll_auth_actor import (
+from .korail_sidecar.pydoll import dom_interaction as _dom_interaction_owner
+from .korail_sidecar.pydoll import live_dom as _live_dom_owner
+from .korail_sidecar.pydoll import search_hour_carousel_input as _search_hour_carousel_input_owner
+from .korail_sidecar.pydoll import (
+    search_hour_carousel_observation as _search_hour_carousel_observation_owner,
+)
+from .korail_sidecar.pydoll import search_hour_policy as _search_hour_policy_owner
+from .korail_sidecar.pydoll import search_schedule_commit as _search_schedule_commit_owner
+from .korail_sidecar.pydoll.auth_actor import (
     ActivePydollAuthenticationSession as _ActivePydollSession,
 )
-from .korail_pydoll_auth_actor import (
-    KorailCredentialInput as AuthKorailCredentialInput,
-)
-from .korail_pydoll_auth_actor import (
-    KorailLoginMethod as AuthKorailLoginMethod,
-)
-from .korail_pydoll_auth_actor import (
+from .korail_sidecar.pydoll.auth_actor import (
     KorailSessionActorSnapshot as AuthKorailSessionActorSnapshot,
 )
-from .korail_pydoll_auth_actor import (
+from .korail_sidecar.pydoll.auth_actor import (
     KorailSessionActorState as AuthKorailSessionActorState,
 )
-from .korail_pydoll_auth_actor import (
+from .korail_sidecar.pydoll.auth_actor import (
     PydollAuthenticationSessionActor,
     PydollAuthenticationSessionLease,
     credential_fingerprint,
 )
-from .korail_pydoll_confirmation_reader import (
+from .korail_sidecar.pydoll.auth_contracts import (
+    KorailCredentialInput as AuthKorailCredentialInput,
+)
+from .korail_sidecar.pydoll.auth_contracts import (
+    KorailLoginMethod as AuthKorailLoginMethod,
+)
+from .korail_sidecar.pydoll.chromium_lifecycle import (
+    PydollChromiumLifecycle,
+    cleanup_pydoll_tab_listener,
+)
+from .korail_sidecar.pydoll.chromium_lifecycle import (
+    configure_chromium_options as _configure_chromium_options,
+)
+from .korail_sidecar.pydoll.chromium_lifecycle import (
+    finish_owned_cleanup as _finish_owned_cleanup,
+)
+from .korail_sidecar.pydoll.chromium_lifecycle import (
+    probe_pydoll_chromium as probe_pydoll_chromium,
+)
+from .korail_sidecar.pydoll.chromium_lifecycle import (
+    set_chromium_binary as _set_chromium_binary,  # noqa: F401 -- compatibility export.
+)
+from .korail_sidecar.pydoll.confirmation_reader import (
     _parse_korail_payment_deadline,
     read_korail_same_session_confirmation,
 )
-from .korail_pydoll_contracts import (
-    PydollPageSnapshot,
-    PydollSeatBox,  # noqa: F401 -- compatibility module export.
-    PydollTrainRow,
-    normalize_korail_train_number,
-)
-from .korail_pydoll_contracts import (
-    normalize_korail_station as _normalize_station,
-)
-from .korail_pydoll_http_replay import DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE
-from .korail_pydoll_login_driver import (
+from .korail_sidecar.pydoll.http_replay import DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE
+from .korail_sidecar.pydoll.login_driver import (
     LoginAttemptState,
     PydollLoginDomDriver,
     login_step,
 )
-from .korail_pydoll_page_safety import (
-    GENERIC_PROTECTION_TRIGGERS as _GENERIC_PROTECTION_TRIGGERS,
+from .korail_sidecar.pydoll.page_contracts import (
+    PydollPageSnapshot,
+    PydollSeatBox,  # noqa: F401 -- compatibility module export.
+    PydollTrainRow,  # noqa: F401 -- compatibility module export.
+    normalize_korail_train_number,
 )
-from .korail_pydoll_page_safety import (
+from .korail_sidecar.pydoll.page_contracts import (
+    normalize_korail_station as _normalize_station,
+)
+from .korail_sidecar.pydoll.page_safety import (
+    GENERIC_PROTECTION_TRIGGERS as _GENERIC_PROTECTION_TRIGGERS,  # noqa: F401
+)
+from .korail_sidecar.pydoll.page_safety import (
     assert_pydoll_response_allowed,
 )
-from .korail_pydoll_reservation_actor import (
-    KorailReservationOutcome as ActorKorailReservationOutcome,
-)
-from .korail_pydoll_reservation_actor import (
-    KorailReservationRequest as ActorKorailReservationRequest,
-)
-from .korail_pydoll_reservation_actor import (
-    KorailReservationResult as ActorKorailReservationResult,
-)
-from .korail_pydoll_reservation_actor import (
-    KorailReservationSeatClass as ActorKorailReservationSeatClass,
-)
-from .korail_pydoll_reservation_actor import (
+from .korail_sidecar.pydoll.reservation_actor import (
     PydollReservationActor,
     has_unique_reservation_target,
 )
-from .korail_pydoll_reservation_actor import (
+from .korail_sidecar.pydoll.reservation_actor import (
     assert_reservation_identity as assert_actor_reservation_identity,
 )
-from .korail_pydoll_reservation_driver import (
-    PydollReservationDomDriver,
-    ReservationControlState,
+from .korail_sidecar.pydoll.reservation_contracts import (
+    KorailReservationOutcome as ActorKorailReservationOutcome,
 )
-from .korail_pydoll_reservation_driver import (
+from .korail_sidecar.pydoll.reservation_contracts import (
+    KorailReservationRequest as ActorKorailReservationRequest,
+)
+from .korail_sidecar.pydoll.reservation_contracts import (
+    KorailReservationResult as ActorKorailReservationResult,
+)
+from .korail_sidecar.pydoll.reservation_contracts import (
+    KorailReservationSeatClass as ActorKorailReservationSeatClass,
+)
+from .korail_sidecar.pydoll.reservation_driver import (
+    PydollReservationDomDriver,
+)
+from .korail_sidecar.pydoll.reservation_driver import (
     ReservationAttemptState as _ReservationAttemptState,
 )
-from .korail_pydoll_search_actor import PydollReadOnlySearchActor
-from .korail_pydoll_search_driver import (
-    PydollSearchDomDriver,
-    SearchControlState,
+from .korail_sidecar.pydoll.reservation_driver import (
+    ReservationControlState as ReservationControlState,
 )
-from .korail_pydoll_search_driver import (
+from .korail_sidecar.pydoll.search_actor import PydollReadOnlySearchActor
+from .korail_sidecar.pydoll.search_driver import (
+    PydollSearchDomDriver,
+)
+from .korail_sidecar.pydoll.search_driver import (
+    SearchControlState as SearchControlState,
+)
+from .korail_sidecar.pydoll.search_driver import (
     SearchHourCandidate as _HourCandidate,
 )
-from .korail_reservation_confirmation import KorailSameSessionDetailEvidence
-from .korail_search_bootstrap import (
-    KorailStationIdentityResolver,
-    build_korail_general_search_url,  # noqa: F401 -- compatibility module export.
-    validate_korail_general_search_url,
+from .korail_sidecar.pydoll.search_snapshot_policy import (
+    deduplicate_search_snapshot as _deduplicate_snapshot,
 )
-from .reservation_confirmation import ReservationConfirmationTarget
+from .korail_sidecar.pydoll.search_snapshot_policy import (
+    merge_search_snapshots as _merge_page_snapshots,
+)
+from .korail_sidecar.pydoll.search_snapshot_policy import (
+    snapshot_requires_expansion_stop as _snapshot_requires_expansion_stop,
+)
+from .korail_sidecar.pydoll.search_snapshot_policy import (
+    train_row_identity as _train_row_identity,
+)
+from .provider_adapters.korail_search_bootstrap import KorailStationIdentityResolver
+from .provider_registry.korail_search_url_policy import (
+    build_korail_general_search_url as build_korail_general_search_url,
+)
+from .provider_registry.korail_search_url_policy import validate_korail_general_search_url
+from .reservations.provider_confirmation.contracts import ReservationConfirmationTarget
+from .reservations.provider_confirmation.korail import KorailSameSessionDetailEvidence
 
 _MAX_MORE_RESULT_ACTIONS = 19
 # Compatibility seam: focused tests patch this facade value before construction;
@@ -138,17 +181,9 @@ KorailReservationRequest = ActorKorailReservationRequest
 KorailReservationResult = ActorKorailReservationResult
 KorailReservationSeatClass = ActorKorailReservationSeatClass
 _snapshot_has_unique_reservation_target = has_unique_reservation_target
-
-
-@dataclass(frozen=True)
-class _ControlState(ReservationControlState, SearchControlState):
-    enabled: bool
-    aria_disabled: str
-    disabled_attribute: bool
-    classes: tuple[str, ...]
-    container_classes: tuple[str, ...]
-    slide_classes: tuple[str, ...]
-    read_error: bool = False
+_has_disabled_class = _search_hour_policy_owner.has_disabled_class
+_ControlState = _live_dom_owner.PydollControlState
+_sanitized_class_tokens = _live_dom_owner.sanitized_class_tokens
 
 
 class PydollBrowserSession(Protocol):
@@ -224,51 +259,6 @@ def _default_pydoll_session_factory(
     headless: bool,
 ) -> PydollSessionContext:
     return _PydollSessionContext(_PydollSession(page_url, timeout_ms, headless))
-
-
-async def _finish_owned_cleanup(cleanup: Awaitable[object]) -> None:
-    """Finish Chromium cleanup even when the owning task is cancelled repeatedly."""
-    pending_cancellation: asyncio.CancelledError | None = None
-    cleanup_task: asyncio.Future[object] = asyncio.ensure_future(cleanup)
-    while not cleanup_task.done():
-        try:
-            await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError as error:
-            if pending_cancellation is None:
-                pending_cancellation = error
-    cleanup_task.result()
-    if pending_cancellation is not None:
-        raise pending_cancellation
-
-
-async def probe_pydoll_chromium(*, headless: bool = True) -> None:
-    """Start and close Pydoll Chromium without making an external request."""
-    try:
-        from pydoll.browser import Chrome
-        from pydoll.browser.options import ChromiumOptions
-    except ImportError as error:
-        raise BrowserSourceUnavailable("browser_import") from error
-    browser: Any = None
-    try:
-        chromium_options_factory: Any = ChromiumOptions
-        options = chromium_options_factory()
-        _configure_chromium_options(options, headless=headless)
-        browser = Chrome(options=options)
-        await browser.__aenter__()
-        await browser.start()
-    except BrowserSourceUnavailable:
-        raise
-    except Exception as error:
-        raise BrowserSourceUnavailable("browser_launch") from error
-    finally:
-        if browser is not None:
-            try:
-                await browser.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-                try:
-                    await browser.stop()
-                except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-                    await browser.close()
 
 
 class PydollKorailBrowserClient:
@@ -501,8 +491,18 @@ class PydollKorailBrowserClient:
         # session -> read-only search. No search or authentication path takes the
         # other actor's lock, so shutdown cannot form a lock-order cycle.
         async with self._session_lock:
-            await self._search_actor.close()
-            await self._auth_actor.close_locked()
+            first_error: BaseException | None = None
+            for cleanup in (
+                self._search_actor.close(),
+                self._auth_actor.close_locked(),
+            ):
+                try:
+                    await _finish_owned_cleanup(cleanup)
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+            if first_error is not None:
+                raise first_error
 
     @property
     def _active_http_replays(self) -> Mapping[tuple[str, str], object]:
@@ -558,16 +558,75 @@ class PydollKorailBrowserClient:
 
 
 class _PydollSession:
+    _evaluate_value_interaction = staticmethod(_dom_interaction_owner.evaluate_value)
+    _evaluate_text_interaction = staticmethod(_dom_interaction_owner.evaluate_text)
+    _wait_for_value_interaction = staticmethod(_dom_interaction_owner.wait_for_value)
+    _click_exact_text_interaction = staticmethod(_dom_interaction_owner.click_exact_text)
+    _wait_for_exact_text_interaction = staticmethod(_dom_interaction_owner.wait_for_exact_text)
+    _wait_for_enabled_exact_text_interaction = staticmethod(
+        _dom_interaction_owner.wait_for_enabled_exact_text
+    )
+    _wait_for_visible_elements_interaction = staticmethod(
+        _dom_interaction_owner.wait_for_visible_elements
+    )
+    _wait_for_dialog_interaction = staticmethod(_dom_interaction_owner.wait_for_dialog)
+    _find_exact_visible_interaction = staticmethod(_dom_interaction_owner.find_exact_visible)
+    _has_exact_visible_interaction = staticmethod(_dom_interaction_owner.has_exact_visible)
+    _collect_visible_elements = staticmethod(_live_dom_owner.visible_elements)
+    _read_control_state = staticmethod(_live_dom_owner.read_control_state)
+    _swipe_hour_carousel_input = staticmethod(_search_hour_carousel_input_owner.swipe_hour_carousel)
+    _navigate_hour_carousel_by_keyboard_input = staticmethod(
+        _search_hour_carousel_input_owner.navigate_hour_carousel_by_keyboard
+    )
+    _dispatch_mouse_event_input = staticmethod(
+        _search_hour_carousel_input_owner.dispatch_mouse_event
+    )
+    _read_hour_candidates_observation = staticmethod(
+        _search_hour_carousel_observation_owner.read_hour_candidates
+    )
+    _wait_for_hour_window_change_observation = staticmethod(
+        _search_hour_carousel_observation_owner.wait_for_hour_window_change
+    )
+    _log_hour_window_navigation_failure_observation = staticmethod(
+        _search_hour_carousel_observation_owner.log_hour_window_navigation_failure
+    )
+    _wait_for_hour_animation_observation = staticmethod(
+        _search_hour_carousel_observation_owner.wait_for_hour_animation
+    )
+    _hour_carousel_control_metadata_observation = staticmethod(
+        _search_hour_carousel_observation_owner.hour_carousel_control_metadata
+    )
+    _find_hour_navigation_control_observation = staticmethod(
+        _search_hour_carousel_observation_owner.find_hour_navigation_control
+    )
+    _wait_for_schedule_commit = staticmethod(_search_schedule_commit_owner.wait_for_schedule)
+    _wait_for_schedule_date_commit = staticmethod(
+        _search_schedule_commit_owner.wait_for_schedule_date
+    )
+    _click_hour_and_confirm_commit = staticmethod(
+        _search_schedule_commit_owner.click_hour_and_confirm
+    )
+    _current_hour_window = staticmethod(_search_hour_policy_owner.current_hour_window)
+    _hour_window_signature = staticmethod(_search_hour_policy_owner.hour_window_signature)
+    _is_soft_aria_hour = staticmethod(_search_hour_policy_owner.is_soft_aria_hour)
+    _is_soft_dom_hour = staticmethod(_search_hour_policy_owner.is_soft_dom_hour)
+    _is_exact_hour_catalog = staticmethod(_search_hour_policy_owner.is_exact_hour_catalog)
+    _is_soft_adjacent_hour = staticmethod(_search_hour_policy_owner.is_soft_adjacent_hour)
+    _is_exact_selected_hour = staticmethod(_search_hour_policy_owner.is_exact_selected_hour)
+    _control_state_log_value = staticmethod(_search_hour_policy_owner.control_state_log_value)
+
     def __init__(self, page_url: str, timeout_ms: int, headless: bool) -> None:
         self.page_url = page_url
         self.timeout_ms = timeout_ms
         self.headless = headless
-        self._browser: Any = None
-        self._tab: Any = None
+        self._chromium_lifecycle = PydollChromiumLifecycle(
+            headless=headless,
+            on_response=self._on_response_received,
+            options_configurer=_configure_chromium_options,
+            event_logger=logger,
+        )
         self._submitted = False
-        self._network_callback_id: int | None = None
-        self._network_events_enabled_by_session = False
-        self._network_responses: set[tuple[int, str]] = set()
+        self._network_responses: dict[tuple[int, str], None] = {}
         self._opened_once = False
         self._http_capture_start: int | None = None
         self._login_driver = PydollLoginDomDriver(
@@ -629,6 +688,38 @@ class _PydollSession:
             protection_surface_selector=_PROTECTION_SURFACE_SELECTOR,
         )
 
+    @property
+    def _browser(self) -> Any:
+        return self._chromium_lifecycle.browser
+
+    @_browser.setter
+    def _browser(self, value: Any) -> None:
+        self._chromium_lifecycle.browser = value
+
+    @property
+    def _tab(self) -> Any:
+        return self._chromium_lifecycle.tab
+
+    @_tab.setter
+    def _tab(self, value: Any) -> None:
+        self._chromium_lifecycle.tab = value
+
+    @property
+    def _network_callback_id(self) -> int | None:
+        return self._chromium_lifecycle.callback_id
+
+    @_network_callback_id.setter
+    def _network_callback_id(self, value: int | None) -> None:
+        self._chromium_lifecycle.callback_id = value
+
+    @property
+    def _network_events_enabled_by_session(self) -> bool:
+        return self._chromium_lifecycle.network_events_enabled_by_owner
+
+    @_network_events_enabled_by_session.setter
+    def _network_events_enabled_by_session(self, value: bool) -> None:
+        self._chromium_lifecycle.network_events_enabled_by_owner = value
+
     def _login_go_to(self, url: str, timeout: int) -> Awaitable[object]:
         return cast(Awaitable[object], self._tab.go_to(url, timeout=timeout))
 
@@ -672,32 +763,11 @@ class _PydollSession:
         self._network_responses.clear()
 
     async def __aenter__(self) -> Self:
-        try:
-            from pydoll.browser import Chrome
-            from pydoll.browser.options import ChromiumOptions
-        except ImportError as error:
-            raise BrowserSourceUnavailable("browser_import") from error
-        try:
-            chromium_options_factory: Any = ChromiumOptions
-            options = chromium_options_factory()
-            _configure_chromium_options(options, headless=self.headless)
-            self._browser = Chrome(options=options)
-            await self._browser.__aenter__()
-            self._tab = await self._browser.start()
-            (
-                self._network_callback_id,
-                self._network_events_enabled_by_session,
-            ) = await self._attach_network_listener(self._tab)
-            return self
-        except BrowserSourceUnavailable:
-            await self._close()
-            raise
-        except Exception as error:
-            await self._close()
-            raise BrowserSourceUnavailable("browser_launch") from error
+        await self._chromium_lifecycle.start()
+        return self
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        await self._close()
+        await self._chromium_lifecycle.close(raise_on_failure=exc_type is None)
 
     async def open(self) -> PydollPageSnapshot:
         # A warm browser keeps only the ordinary in-memory Chromium session.  Every
@@ -730,8 +800,11 @@ class _PydollSession:
             validate_korail_general_search_url(url)
         except ValueError as error:
             raise BrowserSourceUnavailable("direct_navigation") from error
+        capture_started = getattr(self, "_http_capture_start", None) is not None
         if self._opened_once:
             await self._replace_tab()
+            if capture_started:
+                self._http_capture_start = len(await self._tab.get_network_logs())
         self._opened_once = True
         return await self.navigate(url)
 
@@ -760,33 +833,10 @@ class _PydollSession:
         return last
 
     async def _replace_tab(self) -> None:
-        old_tab = self._tab
-        old_callback_id = self._network_callback_id
-        old_enabled_by_session = self._network_events_enabled_by_session
-        new_tab = await self._browser.new_tab()
-        callback_id, enabled_by_session = await self._attach_network_listener(new_tab)
-        self._tab = new_tab
-        self._network_callback_id = callback_id
-        self._network_events_enabled_by_session = enabled_by_session
-        await self._cleanup_tab_listener(
-            old_tab,
-            old_callback_id,
-            old_enabled_by_session,
-        )
-        await old_tab.close()
+        await self._chromium_lifecycle.replace_tab()
 
     async def _attach_network_listener(self, tab: Any) -> tuple[int, bool]:
-        enabled_by_session = False
-        if not tab.network_events_enabled:
-            await tab.enable_network_events()
-            enabled_by_session = True
-        from pydoll.protocol.network.events import NetworkEvent
-
-        callback_id = await tab.on(
-            NetworkEvent.RESPONSE_RECEIVED,
-            self._on_response_received,
-        )
-        return callback_id, enabled_by_session
+        return await self._chromium_lifecycle.attach_network_listener(tab)
 
     @staticmethod
     async def _cleanup_tab_listener(
@@ -794,16 +844,12 @@ class _PydollSession:
         callback_id: int | None,
         network_events_enabled_by_session: bool,
     ) -> None:
-        if tab is not None and callback_id is not None:
-            try:
-                await tab.remove_callback(callback_id)
-            except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-                logger.warning("KORAIL Pydoll network callback cleanup failed")
-        if tab is not None and network_events_enabled_by_session:
-            try:
-                await tab.disable_network_events()
-            except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-                logger.warning("KORAIL Pydoll network event cleanup failed")
+        await cleanup_pydoll_tab_listener(
+            tab,
+            callback_id,
+            network_events_enabled_by_session,
+            event_logger=logger,
+        )
 
     async def choose_station(self, kind: str, station: str) -> None:
         await self._search_driver.choose_station(kind, station)
@@ -976,39 +1022,39 @@ class _PydollSession:
         return await self._search_driver.snapshot()
 
     async def _evaluate_value(self, selector: str) -> object:
-        response = await self._tab.execute_script(
-            f"document.querySelector({selector!r})?.value ?? ''", return_by_value=True
-        )
-        return response["result"]["result"].get("value", "")
+        return await self._evaluate_value_interaction(self._tab, selector)
 
     async def _evaluate_text(self, selector: str) -> str:
-        response = await self._tab.execute_script(
-            f"document.querySelector({selector!r})?.innerText ?? ''", return_by_value=True
-        )
-        return str(response["result"]["result"].get("value", ""))
+        return await self._evaluate_text_interaction(self._tab, selector)
 
     async def _wait_for_value(
         self, selector: str, expected: str, *, contains: bool = False
     ) -> None:
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            actual = str(await self._evaluate_value(selector)).strip()
-            if (contains and expected in actual) or (not contains and actual == expected):
-                return
-            await asyncio.sleep(0.1)
-        raise BrowserSourceUnavailable("input_readback")
+        await self._wait_for_value_interaction(
+            self,
+            selector,
+            expected,
+            contains=contains,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            source_unavailable_type=BrowserSourceUnavailable,
+        )
 
     async def _click_exact_text(self, selector: str, text: str) -> None:
-        await (await self._find_exact_visible(selector, text)).click()
+        await self._click_exact_text_interaction(self, selector, text)
 
     async def _wait_for_exact_text(self, selector: str, text: str, *, scope: Any = None) -> Any:
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            try:
-                return await self._find_exact_visible(selector, text, scope=scope)
-            except LookupError:
-                await asyncio.sleep(0.1)
-        raise BrowserSourceUnavailable("visible_control")
+        return await self._wait_for_exact_text_interaction(
+            self,
+            selector,
+            text,
+            scope=scope,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            source_unavailable_type=BrowserSourceUnavailable,
+        )
 
     async def _wait_for_enabled_exact_text(
         self,
@@ -1019,35 +1065,19 @@ class _PydollSession:
         failure_stage: str = "disabled_control",
         accepted_labels: tuple[str, ...] = (),
     ) -> Any:
-        deadline = time.monotonic() + self._timeout_seconds
-        last_visible_count = 0
-        last_states: list[_ControlState] = []
-        normalized_labels = {" ".join(label.split()) for label in (text, *accepted_labels)}
-        while time.monotonic() < deadline:
-            # Slick keeps cloned slides in the rendered tree while moving between
-            # ranges.  A disabled clone can therefore precede the enabled control
-            # with the same visible label.  Select from every exact visible match
-            # instead of repeatedly waiting on the first clone.
-            visible = await self._visible_elements(selector, scope=scope)
-            last_visible_count = len(visible)
-            last_states = []
-            for element in visible:
-                label = " ".join(str(await element.text).split())
-                if label not in normalized_labels:
-                    continue
-                state = await self._read_control_state(element)
-                last_states.append(state)
-                if state.enabled:
-                    return element
-            await asyncio.sleep(0.1)
-        logger.warning(
-            "KORAIL Pydoll control unavailable stage=%s visible=%d exact=%d states=%s",
-            failure_stage,
-            last_visible_count,
-            len(last_states),
-            tuple(self._control_state_log_value(state) for state in last_states),
+        return await self._wait_for_enabled_exact_text_interaction(
+            self,
+            selector,
+            text,
+            scope=scope,
+            failure_stage=failure_stage,
+            accepted_labels=accepted_labels,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            event_logger=logger,
+            source_unavailable_type=BrowserSourceUnavailable,
         )
-        raise BrowserSourceUnavailable(failure_stage)
 
     async def _read_hour_candidates(
         self,
@@ -1056,50 +1086,11 @@ class _PydollSession:
         scope: Any,
         visible_only: bool = True,
     ) -> list[_HourCandidate]:
-        candidates: list[_HourCandidate] = []
-        if visible_only:
-            elements = await self._visible_elements(selector, scope=scope)
-        else:
-            elements = await scope.query(selector, find_all=True, raise_exc=False) or []
-        for element in elements:
-            label = (await element.text).strip()
-            if re.fullmatch(r"\d{2}시", label) is None:
-                continue
-            candidates.append(
-                _HourCandidate(
-                    element=element,
-                    hour=int(label.removesuffix("시")),
-                    state=await self._read_control_state(element),
-                )
-            )
-        return candidates
-
-    @staticmethod
-    def _current_hour_window(candidates: list[_HourCandidate]) -> list[_HourCandidate]:
-        current_indexes = [
-            index
-            for index, candidate in enumerate(candidates)
-            if "slick-current" in candidate.state.slide_classes
-        ]
-        if not current_indexes or current_indexes != list(
-            range(current_indexes[0], current_indexes[-1] + 1)
-        ):
-            return []
-        current_window: list[_HourCandidate] = []
-        for candidate in candidates[current_indexes[0] :]:
-            if "slick-current" not in candidate.state.slide_classes and not candidate.state.enabled:
-                break
-            current_window.append(candidate)
-        return current_window
-
-    @classmethod
-    def _hour_window_signature(cls, candidates: list[_HourCandidate]) -> tuple[object, ...]:
-        return tuple(
-            (
-                candidate.hour,
-                cls._control_state_log_value(candidate.state),
-            )
-            for candidate in candidates
+        return await self._read_hour_candidates_observation(
+            self,
+            selector,
+            scope=scope,
+            visible_only=visible_only,
         )
 
     async def _wait_for_hour_window_change(
@@ -1110,49 +1101,27 @@ class _PydollSession:
         *,
         timeout_seconds: float | None = None,
     ) -> bool:
-        timeout = min(self._timeout_seconds, 3) if timeout_seconds is None else timeout_seconds
-        deadline = time.monotonic() + max(0.05, timeout)
-        stable_progress: tuple[int, ...] = ()
-        stable_reads = 0
-        while time.monotonic() < deadline:
-            candidates = await self._read_hour_candidates(
-                ".slideWrap .slick-slide.slick-active a", scope=dialog
-            )
-            after = tuple(candidate.hour for candidate in self._current_hour_window(candidates))
-            progressed = bool(after) and (
-                (direction == ".slick-next" and after[0] > before[0])
-                or (direction == ".slick-prev" and after[0] < before[0])
-            )
-            if progressed:
-                if after == stable_progress:
-                    stable_reads += 1
-                else:
-                    stable_progress = after
-                    stable_reads = 1
-                if stable_reads >= 2:
-                    await self._wait_for_hour_animation(dialog, after)
-                    return True
-            else:
-                stable_progress = ()
-                stable_reads = 0
-            await asyncio.sleep(0.05)
-        return False
+        return await self._wait_for_hour_window_change_observation(
+            self,
+            dialog,
+            before,
+            direction,
+            timeout_seconds=timeout_seconds,
+            default_timeout_seconds=self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+        )
 
     async def _log_hour_window_navigation_failure(
         self,
         dialog: Any,
         before: tuple[int, ...],
     ) -> None:
-        candidates = await self._read_hour_candidates(
-            ".slideWrap .slick-slide.slick-active a", scope=dialog
-        )
-        after = tuple(candidate.hour for candidate in self._current_hour_window(candidates))
-        logger.warning(
-            "KORAIL Pydoll hour window did not change stage=departure_hour_navigate "
-            "before=%s after=%s controls=%s",
+        await self._log_hour_window_navigation_failure_observation(
+            self,
+            dialog,
             before,
-            after,
-            await self._hour_carousel_control_metadata(dialog),
+            event_logger=logger,
         )
 
     async def _wait_for_hour_animation(
@@ -1160,97 +1129,19 @@ class _PydollSession:
         dialog: Any,
         expected_hours: tuple[int, ...],
     ) -> None:
-        try:
-            response = await dialog.execute_script(
-                """
-                function() {
-                  const track = this.querySelector('.slideWrap .slick-track');
-                  if (!track) return null;
-                  const style = getComputedStyle(track);
-                  const milliseconds = (value) => value.split(',').map((part) => {
-                    const token = part.trim();
-                    if (token.endsWith('ms')) return Number.parseFloat(token);
-                    if (token.endsWith('s')) return Number.parseFloat(token) * 1000;
-                    return 0;
-                  });
-                  const duration = Math.max(0, ...milliseconds(style.transitionDuration));
-                  const delay = Math.max(0, ...milliseconds(style.transitionDelay));
-                  return Math.min(1500, duration + delay);
-                }
-                """,
-                return_by_value=True,
-            )
-            value = response.get("result", {}).get("result", {}).get("value")
-            if not isinstance(value, (int, float)) or not 0 <= value <= 1500:
-                raise ValueError("invalid hour transition duration")
-            await asyncio.sleep((value / 1000) + 0.05)
-            candidates = await self._read_hour_candidates(
-                ".slideWrap .slick-slide.slick-active a",
-                scope=dialog,
-            )
-            settled_hours = tuple(
-                candidate.hour for candidate in self._current_hour_window(candidates)
-            )
-            if settled_hours != expected_hours:
-                raise ValueError("hour transition did not settle")
-        except BrowserSourceUnavailable:
-            raise
-        except Exception as error:
-            raise BrowserSourceUnavailable("departure_hour_navigate") from error
+        await self._wait_for_hour_animation_observation(
+            self,
+            dialog,
+            expected_hours,
+            sleep=asyncio.sleep,
+        )
 
     @staticmethod
     async def _hour_carousel_control_metadata(dialog: Any) -> tuple[object, ...]:
-        """Return bounded structural metadata only; never page text, URLs, or request values."""
-        try:
-            response = await dialog.execute_script(
-                """
-                function() {
-                  const visible = (element) => {
-                    const style = getComputedStyle(element);
-                    const rect = element.getBoundingClientRect();
-                    return style.display !== 'none' && style.visibility !== 'hidden'
-                      && rect.width > 0 && rect.height > 0;
-                  };
-                  const wrap = this.querySelector('.slideWrap');
-                  if (!wrap) return [];
-                  const root = wrap.parentElement?.parentElement || wrap.parentElement || wrap;
-                  return Array.from(root.querySelectorAll('button, a'))
-                    .filter(visible)
-                    .slice(0, 24)
-                    .map((element) => {
-                      const relation = wrap.contains(element)
-                        ? 'inside'
-                        : (wrap.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
-                          ? 'after'
-                          : 'before';
-                      return {
-                        tag: element.tagName.toLowerCase(),
-                        classes: Array.from(element.classList).slice(0, 8),
-                        relation,
-                        parentClasses: Array.from(
-                          element.parentElement?.classList || []
-                        ).slice(0, 8),
-                      };
-                    });
-                }
-                """,
-                return_by_value=True,
-            )
-            value = response.get("result", {}).get("result", {}).get("value", [])
-            if not isinstance(value, list):
-                return ()
-            return tuple(
-                (
-                    str(item.get("tag", ""))[:16],
-                    _sanitized_class_tokens(" ".join(item.get("classes", []))),
-                    str(item.get("relation", ""))[:8],
-                    _sanitized_class_tokens(" ".join(item.get("parentClasses", []))),
-                )
-                for item in value
-                if isinstance(item, dict)
-            )
-        except Exception:  # noqa: BLE001 -- diagnostic metadata must not mask the failure.
-            return ()
+        return await _PydollSession._hour_carousel_control_metadata_observation(
+            dialog,
+            sanitize_class_tokens=_sanitized_class_tokens,
+        )
 
     async def _find_hour_navigation_control(
         self,
@@ -1258,133 +1149,21 @@ class _PydollSession:
         *,
         scope: Any,
     ) -> Any | None:
-        """Resolve one enabled time-carousel arrow owned by ``.slideWrap`` only."""
-        visible = await self._visible_elements(
-            f".slideWrap :is(button, a){direction}:not(.slick-disabled)", scope=scope
+        return await self._find_hour_navigation_control_observation(
+            self,
+            direction,
+            scope=scope,
         )
-        states = [(element, await self._read_control_state(element)) for element in visible]
-        enabled = [element for element, state in states if state.enabled]
-        if len(enabled) == 1:
-            return enabled[0]
-        return None
 
     async def _swipe_hour_carousel(self, dialog: Any, direction: str) -> None:
-        viewports = await self._visible_elements(".slideWrap .slick-list", scope=dialog)
-        if len(viewports) != 1:
-            raise BrowserSourceUnavailable("departure_hour_navigate")
-        try:
-            await viewports[0].scroll_into_view()
-            bounds = await viewports[0].get_bounds_using_js()
-            x = float(bounds["x"])
-            y = float(bounds["y"])
-            width = float(bounds["width"])
-            height = float(bounds["height"])
-            if width < 40 or height <= 0:
-                raise ValueError("invalid hour carousel bounds")
-            leading_x = x + width * 0.75
-            trailing_x = x + width * 0.25
-            if direction == ".slick-prev":
-                leading_x, trailing_x = trailing_x, leading_x
-            pointer_y = y + height * 0.5
-            await self._dispatch_mouse_event(
-                "mouseMoved",
-                leading_x,
-                pointer_y,
-                buttons=0,
-            )
-            pressed = False
-            try:
-                await self._dispatch_mouse_event(
-                    "mousePressed",
-                    leading_x,
-                    pointer_y,
-                    button="left",
-                    buttons=1,
-                    click_count=1,
-                )
-                pressed = True
-                for step in range(1, 11):
-                    progress = step / 10
-                    await self._dispatch_mouse_event(
-                        "mouseMoved",
-                        leading_x + (trailing_x - leading_x) * progress,
-                        pointer_y,
-                        button="left",
-                        buttons=1,
-                    )
-                    await asyncio.sleep(0.025)
-            finally:
-                if pressed:
-                    await asyncio.shield(
-                        self._dispatch_mouse_event(
-                            "mouseReleased",
-                            trailing_x,
-                            pointer_y,
-                            button="left",
-                            buttons=0,
-                            click_count=1,
-                        )
-                    )
-        except BrowserSourceUnavailable:
-            raise
-        except Exception as error:
-            raise BrowserSourceUnavailable("departure_hour_navigate") from error
+        await self._swipe_hour_carousel_input(self, dialog, direction)
 
     async def _navigate_hour_carousel_by_keyboard(
         self,
         dialog: Any,
         direction: str,
     ) -> bool:
-        """Use the picker viewport's documented keyboard-style navigation when focusable."""
-        try:
-            response = await dialog.execute_script(
-                """
-                function() {
-                  const viewports = this.querySelectorAll('.slideWrap .slick-list');
-                  if (viewports.length !== 1) return false;
-                  const viewport = viewports[0];
-                  viewport.focus({preventScroll: true});
-                  return document.activeElement === viewport
-                    || viewport.contains(document.activeElement);
-                }
-                """,
-                return_by_value=True,
-            )
-            focused = response.get("result", {}).get("result", {}).get("value")
-            if focused is not True:
-                return False
-            key, code, virtual_key_code = (
-                ("ArrowLeft", "ArrowLeft", 37)
-                if direction == ".slick-prev"
-                else ("ArrowRight", "ArrowRight", 39)
-            )
-            await self._tab._execute_command(
-                {
-                    "method": "Input.dispatchKeyEvent",
-                    "params": {
-                        "type": "rawKeyDown",
-                        "key": key,
-                        "code": code,
-                        "windowsVirtualKeyCode": virtual_key_code,
-                        "nativeVirtualKeyCode": virtual_key_code,
-                    },
-                }
-            )
-            await self._tab._execute_command(
-                {
-                    "method": "Input.dispatchKeyEvent",
-                    "params": {
-                        "type": "keyUp",
-                        "key": key,
-                        "code": code,
-                        "windowsVirtualKeyCode": virtual_key_code,
-                        "nativeVirtualKeyCode": virtual_key_code,
-                    },
-                }
-            )
-            return True
-        except Exception:  # noqa: BLE001 -- unsupported browser input remains fail-closed.
-            return False
+        return await self._navigate_hour_carousel_by_keyboard_input(self, dialog, direction)
 
     async def _dispatch_mouse_event(
         self,
@@ -1396,127 +1175,44 @@ class _PydollSession:
         button: str | None = None,
         click_count: int | None = None,
     ) -> None:
-        params: dict[str, object] = {
-            "type": event_type,
-            "x": round(x),
-            "y": round(y),
-            "buttons": buttons,
-        }
-        if button is not None:
-            params["button"] = button
-        if click_count is not None:
-            params["clickCount"] = click_count
-        # Pydoll's public mouse helper omits the CDP ``buttons`` bitmask on move.
-        await self._tab._execute_command({"method": "Input.dispatchMouseEvent", "params": params})
+        await self._dispatch_mouse_event_input(
+            self,
+            event_type,
+            x,
+            y,
+            buttons=buttons,
+            button=button,
+            click_count=click_count,
+        )
 
     async def _wait_for_schedule(self, travel_date: date, departure_hour: int) -> None:
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            try:
-                if await self.current_schedule() == (travel_date, departure_hour):
-                    return
-            except BrowserSourceUnavailable:
-                pass
-            await asyncio.sleep(0.1)
-        raise BrowserSourceUnavailable("departure_schedule_readback")
+        await self._wait_for_schedule_commit(
+            self,
+            travel_date,
+            departure_hour,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            source_unavailable_type=BrowserSourceUnavailable,
+        )
 
     async def _wait_for_schedule_date(self, travel_date: date) -> None:
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            try:
-                selected_date, _ = await self.current_schedule()
-                if selected_date == travel_date:
-                    return
-            except BrowserSourceUnavailable:
-                pass
-            await asyncio.sleep(0.1)
-        raise BrowserSourceUnavailable("departure_schedule_readback")
-
-    @staticmethod
-    def _is_soft_aria_hour(candidate: _HourCandidate) -> bool:
-        state = candidate.state
-        return (
-            state.aria_disabled == "true"
-            and not state.disabled_attribute
-            and not _has_disabled_class(state.classes)
-            and not _has_disabled_class(state.container_classes)
-            and not _has_disabled_class(state.slide_classes)
-            and "slick-active" in state.slide_classes
-            and not state.read_error
-        )
-
-    @staticmethod
-    def _is_soft_dom_hour(candidate: _HourCandidate) -> bool:
-        state = candidate.state
-        return (
-            state.aria_disabled == "true"
-            and not state.disabled_attribute
-            and not _has_disabled_class(state.classes)
-            and not _has_disabled_class(state.container_classes)
-            and not _has_disabled_class(state.slide_classes)
-            and "slick-slide" in state.slide_classes
-            and "slick-cloned" not in state.slide_classes
-            and not state.read_error
-        )
-
-    @staticmethod
-    def _is_exact_hour_catalog(candidates: list[_HourCandidate]) -> bool:
-        return len(candidates) == 24 and sorted(candidate.hour for candidate in candidates) == list(
-            range(24)
-        )
-
-    @classmethod
-    def _is_soft_adjacent_hour(
-        cls,
-        candidates: list[_HourCandidate],
-        current_window: list[_HourCandidate],
-        target: _HourCandidate,
-    ) -> bool:
-        if len(candidates) != 10 or len(current_window) != 5 or target in current_window:
-            return False
-        adjacent = candidates[len(current_window) :]
-        return (
-            len(adjacent) == 5
-            and all(candidate.state.enabled for candidate in current_window)
-            and all(cls._is_soft_aria_hour(candidate) for candidate in adjacent)
-            and target in adjacent
+        await self._wait_for_schedule_date_commit(
+            self,
+            travel_date,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            source_unavailable_type=BrowserSourceUnavailable,
         )
 
     async def _click_hour_and_confirm(self, candidate: _HourCandidate) -> bool:
-        await candidate.element.click()
-        deadline = time.monotonic() + min(self._timeout_seconds, 1)
-        while time.monotonic() < deadline:
-            state = await self._read_control_state(candidate.element)
-            if "current" in state.container_classes:
-                return True
-            await asyncio.sleep(0.05)
-        return False
-
-    @staticmethod
-    def _is_exact_selected_hour(
-        candidates: list[_HourCandidate],
-        target_elements: list[_HourCandidate],
-        *,
-        target_date_is_selected: bool,
-        pre_picker_hour_matches: bool,
-    ) -> bool:
-        if not target_date_is_selected or not pre_picker_hour_matches:
-            return False
-        if len(target_elements) != 1 or len(candidates) < 2:
-            return False
-        target_state = target_elements[0].state
-        if (
-            target_state.aria_disabled != "true"
-            or target_state.disabled_attribute
-            or target_state.classes
-            or _has_disabled_class(target_state.container_classes)
-            or _has_disabled_class(target_state.slide_classes)
-            or target_state.read_error
-        ):
-            return False
-        target_hour = target_elements[0].hour
-        return all(
-            candidate.state.enabled for candidate in candidates if candidate.hour != target_hour
+        return await self._click_hour_and_confirm_commit(
+            self,
+            candidate,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
         )
 
     async def _wait_for_visible_elements(
@@ -1526,155 +1222,54 @@ class _PydollSession:
         scope: Any = None,
         failure_stage: str,
     ) -> list[Any]:
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            elements = await self._visible_elements(selector, scope=scope)
-            if elements:
-                return elements
-            await asyncio.sleep(0.1)
-        logger.warning(
-            "KORAIL Pydoll controls unavailable stage=%s visible=0",
-            failure_stage,
+        return await self._wait_for_visible_elements_interaction(
+            self,
+            selector,
+            scope=scope,
+            failure_stage=failure_stage,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            event_logger=logger,
+            source_unavailable_type=BrowserSourceUnavailable,
         )
-        raise BrowserSourceUnavailable(failure_stage)
 
     async def _wait_for_dialog(self, marker: str) -> Any:
-        deadline = time.monotonic() + self._timeout_seconds
-        while time.monotonic() < deadline:
-            for dialog in await self._visible_elements("[role='dialog']"):
-                if marker in (await dialog.text):
-                    return dialog
-            await asyncio.sleep(0.1)
-        raise BrowserSourceUnavailable("dialog")
+        return await self._wait_for_dialog_interaction(
+            self,
+            marker,
+            timeout_seconds=lambda: self._timeout_seconds,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            source_unavailable_type=BrowserSourceUnavailable,
+        )
 
     async def _find_exact_visible(self, selector: str, text: str, *, scope: Any = None) -> Any:
-        for element in await self._visible_elements(selector, scope=scope):
-            if (await element.text).strip() == text:
-                return element
-        raise LookupError(text)
+        return await self._find_exact_visible_interaction(
+            self,
+            selector,
+            text,
+            scope=scope,
+        )
 
     async def _has_exact_visible(self, selector: str, text: str, *, scope: Any = None) -> bool:
-        # ``await`` inside a generator expression creates an async generator,
-        # which built-in ``any`` cannot consume.  Use an explicit loop so live
-        # Pydoll elements are awaited one at a time.
-        for element in await self._visible_elements(selector, scope=scope):
-            try:
-                if " ".join(str(await element.text).split()) == text:
-                    return True
-            except Exception:  # noqa: BLE001, S112 -- skip detached React nodes.
-                continue
-        return False
+        return await self._has_exact_visible_interaction(
+            self,
+            selector,
+            text,
+            scope=scope,
+        )
 
     async def _visible_elements(self, selector: str, *, scope: Any = None) -> list[Any]:
         root = scope or self._tab
-        elements = await root.query(selector, find_all=True, raise_exc=False)
-        if elements is None:
-            return []
-        if isinstance(elements, AsyncIterable):
-            candidates = [element async for element in elements]
-        else:
-            candidates = list(elements)
-        visible: list[Any] = []
-        for element in candidates:
-            try:
-                if await element.is_visible():
-                    visible.append(element)
-            except Exception:  # noqa: BLE001, S112 -- detached React nodes are skipped.
-                continue
-        return visible
-
-    @staticmethod
-    async def _read_control_state(element: Any) -> _ControlState:
-        """Read dynamic control attributes from the live DOM instead of Pydoll's cache."""
-        try:
-            response = await element.execute_script(
-                """
-                function() {
-                  const container = this.closest('td, li');
-                  const slide = this.closest('.slick-slide');
-                  return {
-                    ariaDisabled: (this.getAttribute('aria-disabled') || '').toLowerCase(),
-                    disabledAttribute: this.hasAttribute('disabled') || Boolean(this.disabled),
-                    className: typeof this.className === 'string' ? this.className : '',
-                    containerClassName: container && typeof container.className === 'string'
-                      ? container.className : '',
-                    slideClassName: slide && typeof slide.className === 'string'
-                      ? slide.className : '',
-                  };
-                }
-                """,
-                return_by_value=True,
-            )
-            value = response.get("result", {}).get("result", {}).get("value", {})
-            if not isinstance(value, dict):
-                raise TypeError("control state is not an object")
-            aria_disabled = str(value.get("ariaDisabled", "")).lower()
-            disabled_attribute = bool(value.get("disabledAttribute", False))
-            classes = _sanitized_class_tokens(value.get("className", ""))
-            container_classes = _sanitized_class_tokens(value.get("containerClassName", ""))
-            slide_classes = _sanitized_class_tokens(value.get("slideClassName", ""))
-            class_disabled = (
-                _has_disabled_class(classes)
-                or _has_disabled_class(container_classes)
-                or _has_disabled_class(slide_classes)
-            )
-            return _ControlState(
-                enabled=not disabled_attribute and aria_disabled != "true" and not class_disabled,
-                aria_disabled=aria_disabled if aria_disabled in {"", "true", "false"} else "other",
-                disabled_attribute=disabled_attribute,
-                classes=classes,
-                container_classes=container_classes,
-                slide_classes=slide_classes,
-            )
-        except Exception:  # noqa: BLE001 -- optional backend response shapes are not stable.
-            return _ControlState(
-                enabled=False,
-                aria_disabled="read_error",
-                disabled_attribute=False,
-                classes=(),
-                container_classes=(),
-                slide_classes=(),
-                read_error=True,
-            )
-
-    @staticmethod
-    def _control_state_log_value(state: SearchControlState) -> tuple[object, ...]:
-        return (
-            state.enabled,
-            state.aria_disabled,
-            state.disabled_attribute,
-            state.classes,
-            state.container_classes,
-            state.slide_classes,
-            state.read_error,
-        )
+        return await self._collect_visible_elements(root, selector)
 
     @property
     def _timeout_seconds(self) -> float:
         return max(1, self.timeout_ms / 1000)
 
     async def _close(self) -> None:
-        browser = self._browser
-        tab = self._tab
-        self._browser = None
-        self._tab = None
-        callback_id = self._network_callback_id
-        self._network_callback_id = None
-        await self._cleanup_tab_listener(
-            tab,
-            callback_id,
-            self._network_events_enabled_by_session,
-        )
-        self._network_events_enabled_by_session = False
-        if browser is None:
-            return
-        try:
-            await browser.__aexit__(None, None, None)
-        except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-            try:
-                await browser.stop()
-            except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-                await browser.close()
+        await self._chromium_lifecycle.close()
 
     def _on_response_received(self, event: dict[str, Any]) -> None:
         """Retain only sanitized status/resource evidence from the current browser search."""
@@ -1695,7 +1290,7 @@ class _PydollSession:
         if is_rate_limit_response(status, resource_type) or (
             protection_trigger_from_http_response(status, resource_type) == "http_403_main"
         ):
-            self._network_responses.add((status, resource_type))
+            self._network_responses.setdefault((status, resource_type), None)
 
 
 class _PydollSessionContext:
@@ -1715,72 +1310,6 @@ class _PydollSessionContext:
     ) -> bool | None:
         await self._session.__aexit__(exc_type, exc_value, traceback)
         return None
-
-
-def _sanitized_class_tokens(value: object) -> tuple[str, ...]:
-    """Keep bounded CSS token metadata without persisting page text or request values."""
-    return tuple(
-        token for token in str(value).split()[:8] if re.fullmatch(r"[A-Za-z0-9_-]{1,40}", token)
-    )
-
-
-def _has_disabled_class(tokens: tuple[str, ...]) -> bool:
-    return bool({"disabled", "off", "slick-disabled"} & set(tokens))
-
-
-def _train_row_identity(row: PydollTrainRow) -> tuple[str, str, str]:
-    return (
-        " ".join(row.kind_text.split()),
-        " ".join(row.train_number.split()),
-        " ".join(row.route_text.split()),
-    )
-
-
-def _deduplicate_snapshot(snapshot: PydollPageSnapshot) -> PydollPageSnapshot:
-    return _merge_page_snapshots(
-        PydollPageSnapshot(body_text=snapshot.body_text, rows=()),
-        snapshot,
-    )
-
-
-def _merge_page_snapshots(
-    accumulated: PydollPageSnapshot,
-    candidate: PydollPageSnapshot,
-) -> PydollPageSnapshot:
-    rows = list(accumulated.rows)
-    positions = {_train_row_identity(row): index for index, row in enumerate(rows)}
-    for row in candidate.rows:
-        identity = _train_row_identity(row)
-        existing = positions.get(identity)
-        if existing is None:
-            positions[identity] = len(rows)
-            rows.append(row)
-        else:
-            rows[existing] = row
-    return PydollPageSnapshot(
-        body_text=candidate.body_text,
-        rows=tuple(rows),
-        protection_texts=tuple(
-            dict.fromkeys((*accumulated.protection_texts, *candidate.protection_texts))
-        ),
-        network_responses=tuple(
-            sorted(set(accumulated.network_responses) | set(candidate.network_responses))
-        ),
-    )
-
-
-def _snapshot_requires_expansion_stop(snapshot: PydollPageSnapshot) -> bool:
-    if snapshot.network_responses:
-        return True
-    trigger = protection_trigger_from_text(snapshot.body_text)
-    if trigger is None:
-        return False
-    if trigger not in _GENERIC_PROTECTION_TRIGGERS:
-        return True
-    return not snapshot.rows or any(
-        protection_trigger_from_text(text) in _GENERIC_PROTECTION_TRIGGERS
-        for text in snapshot.protection_texts
-    )
 
 
 def _normalize_train_number(value: str) -> str:
@@ -1813,26 +1342,9 @@ def _has_exact_route_markers(body: str, origin: str, destination: str) -> bool:
     )
 
 
-def _set_chromium_binary(options: Any) -> None:
-    configured = os.environ.get("KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH", "").strip()
-    if configured:
-        path = Path(configured)
-        if not path.is_file():
-            raise BrowserSourceUnavailable("browser_binary")
-        options.binary_location = str(path)
-        return
-    playwright_root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright"))
-    candidates = sorted(playwright_root.glob("chromium-*/chrome-linux/chrome"), reverse=True)
-    if candidates:
-        options.binary_location = str(candidates[0])
-
-
-def _configure_chromium_options(options: Any, *, headless: bool) -> None:
-    options.headless = headless
-    options.browser_preferences = {
-        "credentials_enable_service": False,
-        "profile.password_manager_enabled": False,
-        "profile.password_manager_leak_detection": False,
-    }
-    options.add_argument("--disable-save-password-bubble")
-    _set_chromium_binary(options)
+del _dom_interaction_owner
+del _live_dom_owner
+del _search_hour_carousel_input_owner
+del _search_hour_carousel_observation_owner
+del _search_hour_policy_owner
+del _search_schedule_commit_owner

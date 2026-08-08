@@ -7,7 +7,7 @@ from typing import Literal, Protocol, cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import IdempotencyRecord
+from .models import IdempotencyRecord
 
 
 class IdempotencyConflict(RuntimeError):

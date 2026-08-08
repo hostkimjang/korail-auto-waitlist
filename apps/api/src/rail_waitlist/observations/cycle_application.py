@@ -8,9 +8,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..admin_auth.models import AdminAccount
 from ..domain import WatchStatus
-from ..models import AdminAccount, SeatObservation, Watch, WatchCandidate
 from ..policy import next_interval
+from ..watch_management.models import SeatObservation, Watch, WatchCandidate
 
 
 def _observation_fingerprint(value: object) -> str:

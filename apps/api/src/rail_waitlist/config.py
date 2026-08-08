@@ -11,9 +11,7 @@ from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 OFFICIAL_TAGO_BASE_URL = "https://apis.data.go.kr/1613000/TrainInfo"
-OFFICIAL_KORAIL_STATION_DATA_URL = (
-    "https://www.korail.com/public/st_info/station_data.json"
-)
+OFFICIAL_KORAIL_STATION_DATA_URL = "https://www.korail.com/public/st_info/station_data.json"
 FULLSTACK_E2E_UPSTREAM_ORIGIN = "http://e2e-fake-upstream:8001"
 FULLSTACK_E2E_SRT_FIXTURE_URL = f"{FULLSTACK_E2E_UPSTREAM_ORIGIN}/srt/search"
 
@@ -62,9 +60,6 @@ class Settings(BaseSettings):
     srt_provider_adapter_url: str = "http://srt-provider-adapter:8002"
     srt_provider_adapter_token: str | None = None
     srt_provider_adapter_timeout_seconds: float = Field(default=30, ge=3, le=120)
-    korail_seat_status_enabled: bool = False
-    korail_seat_status_cache_ttl_seconds: int = Field(default=1, ge=1, le=300)
-    korail_seat_status_timeout_seconds: float = Field(default=8, ge=3, le=30)
     seat_status_rate_limit_cooldown_seconds: int = Field(default=1800, ge=60, le=86400)
     seat_status_protection_cooldown_seconds: int = Field(default=300, ge=300, le=86400)
     korail_browser_bridge_enabled: bool = False
@@ -164,9 +159,7 @@ class Settings(BaseSettings):
             and not parsed.query
             and not parsed.fragment
         ):
-            raise ValueError(
-                "SRT_PROVIDER_ADAPTER_URL must be the exact internal sidecar origin"
-            )
+            raise ValueError("SRT_PROVIDER_ADAPTER_URL must be the exact internal sidecar origin")
         self.srt_provider_adapter_url = "http://srt-provider-adapter:8002"
         if not self.srt_provider_adapter_enabled:
             return self
@@ -189,18 +182,14 @@ class Settings(BaseSettings):
         }
         test_only = {
             "TAGO_BASE_URL": f"{FULLSTACK_E2E_UPSTREAM_ORIGIN}/tago",
-            "KORAIL_STATION_DATA_URL": (
-                f"{FULLSTACK_E2E_UPSTREAM_ORIGIN}/station_data.json"
-            ),
+            "KORAIL_STATION_DATA_URL": (f"{FULLSTACK_E2E_UPSTREAM_ORIGIN}/station_data.json"),
         }
         for env_name, value in configured.items():
             if value == official[env_name]:
                 continue
             if self.environment == "test" and value == test_only[env_name]:
                 continue
-            raise ValueError(
-                f"{env_name} may only use the fixed internal fixture URL in test"
-            )
+            raise ValueError(f"{env_name} may only use the fixed internal fixture URL in test")
         self.tago_base_url = configured["TAGO_BASE_URL"]
         if self.srt_fullstack_fixture_url is not None:
             if not (
@@ -208,8 +197,7 @@ class Settings(BaseSettings):
                 and self.srt_fullstack_fixture_url == FULLSTACK_E2E_SRT_FIXTURE_URL
             ):
                 raise ValueError(
-                    "SRT_FULLSTACK_FIXTURE_URL may only use the fixed internal fixture URL "
-                    "in test"
+                    "SRT_FULLSTACK_FIXTURE_URL may only use the fixed internal fixture URL in test"
                 )
         return self
 

@@ -21,6 +21,8 @@ function browserPushChannel(name: string): Record<string, unknown> {
     name,
     enabled: true,
     configured: true,
+    device_key: "A".repeat(43),
+    active_device_count: 1,
     created_at: "2026-08-05T00:00:00Z",
     updated_at: "2026-08-05T00:00:00Z",
   };
@@ -51,6 +53,7 @@ describe("browser push connection", () => {
 
   it("registers the service worker when local development has not registered it yet", async () => {
     const subscription = {
+      endpoint: "https://push.example/subscription",
       toJSON: () => ({ endpoint: "https://push.example/subscription" }),
     };
     const registration = {
@@ -84,8 +87,9 @@ describe("browser push connection", () => {
     expect(result).toMatchObject({ id: "web-push-1", enabled: true });
   });
 
-  it("reuses the current OS subscription and updates an existing server channel", async () => {
+  it("reuses the current OS subscription and upserts it without replacing another device", async () => {
     const subscription = {
+      endpoint: "https://push.example/existing",
       toJSON: () => ({ endpoint: "https://push.example/existing" }),
     };
     const registration = {
@@ -107,11 +111,11 @@ describe("browser push connection", () => {
     vi.stubGlobal("Notification", { permission: "granted", requestPermission: vi.fn().mockResolvedValue("granted") });
     vi.stubGlobal("fetch", fetchMock);
 
-    await connectBrowserPush("내 PC", "web-push-1");
+    await connectBrowserPush("내 PC");
 
     expect(registration.pushManager.subscribe).not.toHaveBeenCalled();
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/notifications/channels/web-push-1");
-    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PATCH" });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/notifications/channels");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
   });
 
   it("unsubscribes this device without requesting notification permission again", async () => {
@@ -133,7 +137,12 @@ describe("browser push connection", () => {
 
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(Notification.requestPermission).not.toHaveBeenCalled();
-    expect(state).toEqual({ support: "supported", permission: "granted", subscribed: false });
+    expect(state).toEqual({
+      support: "supported",
+      permission: "granted",
+      subscribed: false,
+      deviceKey: null,
+    });
   });
 
   it("reports a denied OS permission separately from a missing subscription", async () => {
@@ -147,6 +156,29 @@ describe("browser push connection", () => {
       support: "supported",
       permission: "denied",
       subscribed: false,
+      deviceKey: null,
     });
+  });
+
+  it("derives the stable current-device key from the local endpoint", async () => {
+    const subscription = { endpoint: "https://push.example/current-device" };
+    vi.stubGlobal("navigator", {
+      serviceWorker: {
+        getRegistration: vi.fn().mockResolvedValue({
+          pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) },
+        }),
+      },
+    });
+    vi.stubGlobal("PushManager", class PushManager {});
+    vi.stubGlobal("Notification", { permission: "granted" });
+
+    const state = await readBrowserPushState();
+
+    expect(state).toMatchObject({
+      support: "supported",
+      permission: "granted",
+      subscribed: true,
+    });
+    expect(state.deviceKey).toBe("5cQ_9aZZdP0Q1tDlMIyg-R4lca3Akm2IWJ4CQGdML6M");
   });
 });

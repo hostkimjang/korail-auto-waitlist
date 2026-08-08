@@ -2,31 +2,26 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 
-from .domain import Provider, SeatObservationMode, WatchStatus
-from .schemas import ErrorPolicyResult
-
-RATE_LIMIT_COOLDOWN = timedelta(minutes=30)
-BLOCK_COOLDOWN = timedelta(minutes=5)
-PROTECTION_SIGNALS = frozenset(
-    {
-        "-8002",
-        "-8003",
-        "403",
-        "abnormal_access",
-        "access_denied",
-        "automation_detected",
-        "bot_challenge",
-        "captcha",
-        "code_-8002",
-        "code_-8003",
-        "korail_-8002",
-        "korail_-8003",
-        "macro_err1",
-        "netfunnel",
-        "queue_challenge",
-    }
+from .domain import Provider, SeatObservationMode
+from .watch_management.provider_failure_policy import (
+    BLOCK_COOLDOWN as BLOCK_COOLDOWN,
+)
+from .watch_management.provider_failure_policy import (
+    PROTECTION_SIGNALS as PROTECTION_SIGNALS,
+)
+from .watch_management.provider_failure_policy import (
+    RATE_LIMIT_COOLDOWN as RATE_LIMIT_COOLDOWN,
+)
+from .watch_management.provider_failure_policy import (
+    ErrorPolicyResult as ErrorPolicyResult,
+)
+from .watch_management.provider_failure_policy import (
+    classify_provider_failure as classify_provider_failure,
+)
+from .watch_management.provider_failure_policy import (
+    cooldown_until as cooldown_until,
 )
 
 
@@ -86,45 +81,3 @@ def next_interval(
         max(OBSERVATION_INTERVAL_MIN_SECONDS, observation_interval_seconds),
     )
     return timedelta(seconds=target)
-
-
-def classify_provider_failure(code: int | str, now: datetime | None = None) -> ErrorPolicyResult:
-    now = now or datetime.now(timezone.utc)
-    normalized = str(code).strip().casefold().replace(" ", "_")
-    if normalized == "429":
-        return ErrorPolicyResult(
-            status=WatchStatus.COOLDOWN,
-            cooldown_seconds=int(RATE_LIMIT_COOLDOWN.total_seconds()),
-            requires_manual_resume=False,
-            official_handoff_required=False,
-            reason="provider_rate_limited",
-        )
-    if normalized in PROTECTION_SIGNALS:
-        return ErrorPolicyResult(
-            status=WatchStatus.AUTH_REQUIRED,
-            cooldown_seconds=int(BLOCK_COOLDOWN.total_seconds()),
-            requires_manual_resume=True,
-            official_handoff_required=True,
-            reason="provider_block_or_challenge",
-        )
-    if normalized in {"401", "auth", "login_failed"}:
-        return ErrorPolicyResult(
-            status=WatchStatus.AUTH_REQUIRED,
-            cooldown_seconds=None,
-            requires_manual_resume=True,
-            official_handoff_required=False,
-            reason="provider_authentication_required",
-        )
-    return ErrorPolicyResult(
-        status=WatchStatus.FAILED,
-        cooldown_seconds=None,
-        requires_manual_resume=True,
-        official_handoff_required=False,
-        reason="provider_request_failed",
-    )
-
-
-def cooldown_until(result: ErrorPolicyResult, now: datetime | None = None) -> datetime | None:
-    if result.cooldown_seconds is None:
-        return None
-    return (now or datetime.now(timezone.utc)) + timedelta(seconds=result.cooldown_seconds)

@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from ..domain import SeatClass
 from ..provider_contracts import RouteValidationError
-from ..schemas import (
+from ..timetable_management.schemas import (
     SeatAvailabilityAction,
     SeatAvailabilityNotObservedReason,
     SeatAvailabilityProvenance,

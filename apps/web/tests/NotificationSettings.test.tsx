@@ -18,6 +18,8 @@ function channel(overrides: Partial<NotificationChannel> = {}): NotificationChan
     name: "가족 알림",
     enabled: true,
     configured: true,
+    deviceKey: null,
+    activeDeviceCount: null,
     createdAt: timestamp,
     updatedAt: timestamp,
     ...overrides,
@@ -31,6 +33,7 @@ function browserPushState(
     support: "supported",
     permission: "default",
     subscribed: false,
+    deviceKey: null,
     ...overrides,
   };
 }
@@ -64,6 +67,7 @@ describe("notification channel settings", () => {
     expect(pushToggle.hasAttribute("aria-controls")).toBe(false);
     expect(screen.getByRole("button", { name: "OS 알림 연결 설정 열기" })
       .hasAttribute("aria-controls")).toBe(false);
+    expect(screen.queryByRole("heading", { name: "모바일 팝업 알림 앱 연결" })).toBeNull();
     await user.click(pushToggle);
 
     expect(onConnectWebPush).toHaveBeenCalledOnce();
@@ -291,64 +295,96 @@ describe("notification channel settings", () => {
 
   it.each([
     {
-      name: "checking keeps a configured switch checked but test unavailable",
+      name: "checking leaves this device unselected until its key is known",
       state: browserPushState({ support: "checking" }),
-      checked: true,
+      checked: false,
       switchDisabled: false,
-      testDisabled: true,
-      detail: "이 기기 구독 확인 중…",
+      hasTest: false,
+      detail: "이 기기 구독 확인 중… · 전체 활성 기기 1대",
     },
     {
       name: "unsupported disables setup",
       state: browserPushState({ support: "unsupported" }),
       checked: false,
       switchDisabled: true,
-      testDisabled: true,
-      detail: "이 브라우저는 OS 알림을 지원하지 않음",
+      hasTest: false,
+      detail: "이 브라우저는 OS 알림을 지원하지 않음 · 전체 활성 기기 1대",
     },
     {
       name: "insecure disables setup",
       state: browserPushState({ support: "insecure" }),
       checked: false,
       switchDisabled: true,
-      testDisabled: true,
-      detail: "HTTPS 또는 localhost 접속 필요",
+      hasTest: false,
+      detail: "HTTPS 또는 localhost 접속 필요 · 전체 활성 기기 1대",
     },
     {
       name: "denied is fail-closed",
       state: browserPushState({ permission: "denied" }),
       checked: false,
       switchDisabled: false,
-      testDisabled: true,
-      detail: "브라우저 사이트 설정에서 알림 권한이 차단됨",
+      hasTest: false,
+      detail: "브라우저 사이트 설정에서 알림 권한이 차단됨 · 전체 활성 기기 1대",
     },
     {
       name: "subscribed is ready",
-      state: browserPushState({ permission: "granted", subscribed: true }),
+      state: browserPushState({
+        permission: "granted",
+        subscribed: true,
+        deviceKey: "device-one",
+      }),
       checked: true,
       switchDisabled: false,
-      testDisabled: false,
-      detail: "이 기기의 OS 알림 사용 중",
+      hasTest: true,
+      detail: "이 기기 사용 중 · 전체 활성 기기 1대",
     },
   ])("renders Web Push state: $name", ({
     state,
     checked,
     switchDisabled,
-    testDisabled,
+    hasTest,
     detail,
   }) => {
     renderSettings({
-      channels: [channel({ id: "push-1", kind: "web_push", name: "내 PC" })],
+      channels: [channel({
+        id: "push-1",
+        kind: "web_push",
+        name: "내 PC",
+        deviceKey: "device-one",
+        activeDeviceCount: 1,
+      })],
       browserPushState: state,
     });
 
     const toggle = screen.getByRole("checkbox", { name: `OS 알림 ${checked ? "끄기" : "켜기"}` });
-    const test = screen.getByRole("button", { name: "OS 알림 시험 알림 보내기" });
     expect((toggle as HTMLInputElement).checked).toBe(checked);
     expect((toggle as HTMLInputElement).disabled).toBe(switchDisabled);
-    expect((test as HTMLButtonElement).disabled).toBe(testDisabled);
+    expect(Boolean(screen.queryByRole("button", {
+      name: "OS 알림 시험 알림 보내기",
+    }))).toBe(hasTest);
     expect(screen.getByText(detail)).toBeTruthy();
     expect(within(toggle.closest(".setting-row") as HTMLElement)
-      .getByText(/브라우저를 닫아도 운영체제 알림 영역/)).toBeTruthy();
+      .getByText(/기기·브라우저마다 한 번씩 연결/)).toBeTruthy();
+  });
+
+  it("shows other active devices without treating them as this device", () => {
+    renderSettings({
+      channels: [channel({
+        id: "push-other",
+        kind: "web_push",
+        name: "다른 기기",
+        deviceKey: "device-two",
+        activeDeviceCount: 2,
+      })],
+      browserPushState: browserPushState({
+        permission: "granted",
+        subscribed: true,
+        deviceKey: "device-one",
+      }),
+    });
+
+    expect(screen.getByText("이 기기는 서버에 연결되지 않음 · 전체 활성 기기 2대"))
+      .toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "OS 알림 켜기" })).toBeTruthy();
   });
 });

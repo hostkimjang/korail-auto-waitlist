@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import (
 
 from rail_waitlist.config import get_settings
 from rail_waitlist.domain import Provider
-from rail_waitlist.models import ProviderExecutionLease
+from rail_waitlist.provider_execution.models import ProviderExecutionLease
 from rail_waitlist.provider_execution_lease import (
     ExecutionLeaseGrant,
     ProviderExecutionLeaseService,

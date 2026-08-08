@@ -7,8 +7,8 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import Provider, WatchStatus
-from ..models import SeatObservation, Watch, WatchTransitionHistory
 from ..provider_contracts import ProviderCapabilitySource
+from .models import SeatObservation, Watch, WatchTransitionHistory
 from .transition_policy import (
     AllowedWatchTransition,
     NextCheckPolicy,

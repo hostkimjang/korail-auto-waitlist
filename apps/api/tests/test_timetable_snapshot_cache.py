@@ -5,10 +5,16 @@ import pytest
 
 from rail_waitlist.domain import Provider
 from rail_waitlist.providers import MockProviderAdapter
+from rail_waitlist.timetable_management.contracts import TimetableSnapshotCachePort
 from rail_waitlist.timetable_snapshot_cache import (
     TimetableSnapshotCache,
     TimetableSnapshotKey,
 )
+
+
+def test_snapshot_cache_satisfies_the_timetable_application_contract() -> None:
+    assert isinstance(TimetableSnapshotCache(), TimetableSnapshotCachePort)
+    assert not isinstance(object(), TimetableSnapshotCachePort)
 
 
 def snapshot_key(train_offset: int = 0) -> TimetableSnapshotKey:

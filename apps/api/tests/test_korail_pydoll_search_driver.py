@@ -3,12 +3,12 @@ from __future__ import annotations
 import ast
 from datetime import date
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import rail_waitlist.korail_pydoll_browser as browser_module
-import rail_waitlist.korail_pydoll_search_driver as search_driver_module
+import rail_waitlist.korail_sidecar.pydoll.search_driver as search_driver_module
 from rail_waitlist.korail_browser_automation import BrowserSourceUnavailable
 from rail_waitlist.korail_pydoll_browser import _PydollSession
 from rail_waitlist.korail_pydoll_contracts import PydollPageSnapshot, PydollTrainRow
@@ -132,7 +132,117 @@ async def test_search_driver_resolves_result_growth_seam_after_construction(
 
     assert result.rows == (first, second)
     assert more.clicks == 1
+    assert find_exact.await_count == 2
     growth.assert_awaited_once_with({("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)")})
+
+
+@pytest.mark.asyncio
+async def test_result_growth_evaluates_snapshot_read_at_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    first = PydollTrainRow("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)", ())
+    second = PydollTrainRow("KTX 2", "2", "서울 → 대전(07:00 ~ 08:00)", ())
+    snapshot_reader = AsyncMock(
+        side_effect=[
+            PydollPageSnapshot("A", (first,)),
+            PydollPageSnapshot("A+B", (first, second)),
+        ]
+    )
+    clock = {"now": 0.0}
+
+    def advance_clock(_delay: float) -> None:
+        clock["now"] = 1.0
+
+    sleep = AsyncMock(side_effect=advance_clock)
+    session._search_driver._monotonic = Mock(side_effect=lambda: clock["now"])
+    session._search_driver._sleep = sleep
+    monkeypatch.setattr(session, "_snapshot", snapshot_reader)
+
+    snapshot, progressed = await session._wait_for_result_growth(
+        {("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)")}
+    )
+
+    assert progressed is True
+    assert snapshot.rows == (first, second)
+    sleep.assert_awaited_once_with(0.25)
+
+
+@pytest.mark.asyncio
+async def test_search_driver_stops_repeated_window_after_merging_latest_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    original = PydollTrainRow(
+        "KTX 1",
+        "1",
+        "서울 → 대전(06:00 ~ 07:00)",
+        (),
+        "old",
+    )
+    second = PydollTrainRow("KTX 2", "2", "서울 → 대전(07:00 ~ 08:00)", ())
+    updated = PydollTrainRow(
+        "KTX 1",
+        "1",
+        "서울 → 대전(06:00 ~ 07:00)",
+        (),
+        "latest",
+    )
+    controls = [_ClickControl(), _ClickControl()]
+    find_exact = AsyncMock(side_effect=controls)
+    growth = AsyncMock(
+        side_effect=[
+            (PydollPageSnapshot("B", (second,)), True),
+            (PydollPageSnapshot("A latest", (updated,)), False),
+        ]
+    )
+    monkeypatch.setattr(session, "_find_exact_visible", find_exact)
+    monkeypatch.setattr(session, "_wait_for_result_growth", growth)
+
+    result = await session.expand_results(PydollPageSnapshot("A", (original,)), 19)
+
+    assert result.rows == (updated, second)
+    assert [control.clicks for control in controls] == [1, 1]
+    assert growth.await_args_list[0].args[0] == {("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)")}
+    assert growth.await_args_list[1].args[0] == {
+        ("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)"),
+        ("KTX 2", "2", "서울 → 대전(07:00 ~ 08:00)"),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_actions", [0, -1])
+async def test_search_driver_skips_dom_expansion_for_nonpositive_action_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    max_actions: int,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    initial = PydollPageSnapshot(
+        "A",
+        (PydollTrainRow("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)", ()),),
+    )
+    find_exact = AsyncMock()
+    growth = AsyncMock()
+    monkeypatch.setattr(session, "_find_exact_visible", find_exact)
+    monkeypatch.setattr(session, "_wait_for_result_growth", growth)
+
+    result = await session.expand_results(initial, max_actions)
+
+    assert result == initial
+    find_exact.assert_not_awaited()
+    growth.assert_not_awaited()
 
 
 def test_search_driver_keeps_hour_candidate_compatibility_identity() -> None:
@@ -144,7 +254,9 @@ def test_search_driver_has_no_browser_or_actor_dependencies() -> None:
         Path(__file__).resolve().parents[1]
         / "src"
         / "rail_waitlist"
-        / "korail_pydoll_search_driver.py"
+        / "korail_sidecar"
+        / "pydoll"
+        / "search_driver.py"
     )
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     imported_roots: set[str] = set()

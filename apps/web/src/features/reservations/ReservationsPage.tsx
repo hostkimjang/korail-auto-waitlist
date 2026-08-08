@@ -5,6 +5,13 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 import { ReservationList } from "./ReservationList";
 import { ReservationSummary } from "./ReservationSummary";
 import type { ReservationWatchViewModel } from "./reservationViewModel";
+import {
+  launchOfficialOpenTarget,
+  resolveOfficialOpenTarget,
+  type OfficialHandoffDestination,
+  type OfficialWindowLike,
+  type RailDeepLinkConfig,
+} from "../../shared/lib/officialAppIntentUrl";
 
 export interface ReservationsPageProps {
   watches: ReadonlyArray<ReservationWatchViewModel>;
@@ -14,10 +21,27 @@ export interface ReservationsPageProps {
 
 const ignoreDelete = (_watchId: string): void => undefined;
 
-function openOfficialReservation(watch: ReservationWatchViewModel): void {
-  const officialUrl = watch.officialBookingUrl;
-  if (!officialUrl) return;
-  window.open(officialUrl, "_blank", "noopener,noreferrer");
+export function openOfficialReservation(
+  watch: ReservationWatchViewModel,
+  officialWindow: OfficialWindowLike | undefined = typeof window === "undefined"
+    ? undefined
+    : window,
+  userAgent: unknown = typeof navigator === "undefined" ? "" : navigator.userAgent,
+  deepLinkConfig?: RailDeepLinkConfig,
+): void {
+  const destination: OfficialHandoffDestination =
+    watch.status === "payment_required" || watch.status === "completed"
+      ? "ticket"
+      : "booking";
+  const target = resolveOfficialOpenTarget(
+    watch.provider,
+    watch.officialBookingUrl,
+    userAgent,
+    destination,
+    deepLinkConfig,
+  );
+  if (!target || !officialWindow) return;
+  launchOfficialOpenTarget(target, officialWindow);
 }
 
 export function ReservationsPage({

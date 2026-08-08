@@ -13,9 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from ..domain import Provider, SeatClass
-from ..korail_browser_automation import (
-    FULLSTACK_E2E_PAGE_URL,
-    OFFICIAL_KORAIL_SEARCH_URL,
+from ..korail_sidecar.browser_contracts import (
     BrowserAdapterError,
     BrowserClient,
     BrowserProtectionDetected,
@@ -23,13 +21,21 @@ from ..korail_browser_automation import (
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
-    KorailBrowserAutomation,
 )
-from ..korail_reservation_confirmation import (
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationOutcome,
+    ReservationConfirmationResult,
+    ReservationConfirmationTarget,
+)
+from ..reservations.provider_confirmation.korail import (
     KORAIL_CONFIRMATION_SOURCE,
     normalize_korail_same_session_detail,
 )
-from ..korail_reservation_contract import (
+from .browser_page_contracts import (
+    FULLSTACK_E2E_PAGE_URL,
+    OFFICIAL_KORAIL_SEARCH_URL,
+)
+from .contracts import (
     KorailLoginVerificationOutcomeValue,
     KorailLoginVerifyRequest,
     KorailLoginVerifyResult,
@@ -41,12 +47,8 @@ from ..korail_reservation_contract import (
     KorailSessionActorStateValue,
     KorailSessionStateResult,
 )
-from ..reservation_confirmation import (
-    ReservationConfirmationOutcome,
-    ReservationConfirmationResult,
-    ReservationConfirmationTarget,
-)
 from .runtime import KorailBrowserEngine
+from .search_coordinator import KorailBrowserAutomation
 
 NO_STORE_HEADERS = {"Cache-Control": "no-store"}
 
@@ -352,9 +354,8 @@ def create_adapter_app(
         if client is None:
             raise HTTPException(503, "reservation_not_ready", headers=NO_STORE_HEADERS)
 
-        from ..korail_pydoll_browser import (
-            KorailCredentialInput,
-            KorailLoginMethod,
+        from .pydoll.auth_contracts import KorailCredentialInput, KorailLoginMethod
+        from .pydoll.reservation_contracts import (
             KorailReservationRequest,
             KorailReservationSeatClass,
         )
@@ -481,7 +482,7 @@ def create_adapter_app(
         if client is None or (not callable(prewarm) and not callable(verify)):
             raise HTTPException(503, "login_verification_not_ready", headers=NO_STORE_HEADERS)
 
-        from ..korail_pydoll_browser import KorailCredentialInput, KorailLoginMethod
+        from .pydoll.auth_contracts import KorailCredentialInput, KorailLoginMethod
 
         credential = KorailCredentialInput(
             login_id=request.credential.login_id.get_secret_value(),
@@ -530,7 +531,7 @@ def create_adapter_app(
         if client is None or not callable(prewarm):
             raise HTTPException(503, "login_prewarm_not_ready", headers=NO_STORE_HEADERS)
 
-        from ..korail_pydoll_browser import KorailCredentialInput, KorailLoginMethod
+        from .pydoll.auth_contracts import KorailCredentialInput, KorailLoginMethod
 
         credential = KorailCredentialInput(
             login_id=request.credential.login_id.get_secret_value(),

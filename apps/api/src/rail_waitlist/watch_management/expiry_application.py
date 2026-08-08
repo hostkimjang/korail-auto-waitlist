@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import WatchStatus
-from ..models import Watch
 from ..operational import decide_operational_expiry
+from .models import Watch
 
 EXPIRABLE_WATCH_STATUSES = frozenset(
     {

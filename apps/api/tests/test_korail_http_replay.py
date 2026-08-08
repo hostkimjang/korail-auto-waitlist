@@ -160,9 +160,7 @@ def _json_response(payload: dict[str, Any], status: int = 200) -> httpx.Response
 @pytest.mark.asyncio
 async def test_http_replay_preserves_exact_expected_departure_delay() -> None:
     transport = httpx.MockTransport(
-        lambda _request: _json_response(
-            _payload(_row(expected_delay_minutes="13"))
-        )
+        lambda _request: _json_response(_payload(_row(expected_delay_minutes="13")))
     )
 
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
@@ -204,9 +202,7 @@ async def test_http_replay_preserves_primary_timetable_fields_and_overnight_arri
 async def test_http_replay_omits_ambiguous_fare_instead_of_guessing() -> None:
     transport = httpx.MockTransport(
         lambda _request: _json_response(
-            _payload(
-                _row(standard="예약 가능 성인 59,800원 어린이 29,900원")
-            )
+            _payload(_row(standard="예약 가능 성인 59,800원 어린이 29,900원"))
         )
     )
 
@@ -230,9 +226,7 @@ async def test_http_replay_rejects_non_future_or_malformed_arrival(
     arrival: str,
 ) -> None:
     transport = httpx.MockTransport(
-        lambda _request: _json_response(
-            _payload(_row(arrival_date=arrival_date, arrival=arrival))
-        )
+        lambda _request: _json_response(_payload(_row(arrival_date=arrival_date, arrival=arrival)))
     )
 
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
@@ -480,8 +474,11 @@ async def test_http_statuses_are_classified_without_response_content(
         lambda _request: httpx.Response(status, headers={"location": "https://evil.example"})
     )
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
-        with pytest.raises(error_type):
+        with pytest.raises(error_type) as raised:
             await client.search(_request())
+    if status == 403:
+        assert isinstance(raised.value, HttpReplayProtectionDetected)
+        assert raised.value.trigger == "http_403_business"
 
 
 @pytest.mark.parametrize(
@@ -531,7 +528,17 @@ async def test_json_text_mentioning_login_does_not_trigger_cold_reinit() -> None
 
 @pytest.mark.parametrize(
     "marker",
-    ["-1405", "-8002", "-8003", "macro_err1", "CAPTCHA", "NetFunnel", "미허가", "이용 제한"],
+    [
+        "-1405",
+        "-8002",
+        "-8003",
+        "macro_err1",
+        "CAPTCHA",
+        "NetFunnel",
+        "미허가",
+        "이용 제한",
+        "비정상 접근",
+    ],
 )
 async def test_body_protection_markers_are_separate_typed_errors(marker: str) -> None:
     transport = httpx.MockTransport(lambda _request: httpx.Response(200, content=marker.encode()))

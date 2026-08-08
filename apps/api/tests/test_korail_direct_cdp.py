@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from rail_waitlist.korail_direct_cdp import (
+from rail_waitlist.korail_sidecar.direct_cdp import (
     DirectCdpLaunchError,
     _stop_process,
     _wait_for_debugging_port,
@@ -113,6 +113,26 @@ async def test_invalid_debugging_port_fails_closed(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_debugging_port_wait_fails_when_process_stops_first(tmp_path: Path) -> None:
+    with pytest.raises(DirectCdpLaunchError, match="stopped before"):
+        await _wait_for_debugging_port(
+            tmp_path / "DevToolsActivePort",
+            FinishedProcess(),
+            timeout_ms=1_000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_non_positive_startup_timeout_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(DirectCdpLaunchError, match="startup timed out"):
+        await _wait_for_debugging_port(
+            tmp_path / "DevToolsActivePort",
+            TerminableProcess(),
+            timeout_ms=0,
+        )
+
+
+@pytest.mark.asyncio
 async def test_process_stop_accepts_graceful_browser_close() -> None:
     process = TerminableProcess()
 
@@ -206,7 +226,7 @@ async def test_direct_browser_uses_sanitized_environment_and_removes_profile(
         monkeypatch.setenv(name, f"secret-{name.lower()}")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(
-        "rail_waitlist.korail_direct_cdp._wait_for_debugging_port",
+        "rail_waitlist.korail_sidecar.direct_cdp._wait_for_debugging_port",
         AsyncMock(return_value=43210),
     )
     profile_path: Path | None = None
@@ -241,17 +261,74 @@ async def test_cleanup_failure_does_not_replace_body_failure(
         AsyncMock(return_value=FinishedProcess()),
     )
     monkeypatch.setattr(
-        "rail_waitlist.korail_direct_cdp._wait_for_debugging_port",
+        "rail_waitlist.korail_sidecar.direct_cdp._wait_for_debugging_port",
         AsyncMock(return_value=43210),
     )
     monkeypatch.setattr(
-        "rail_waitlist.korail_direct_cdp._stop_process",
+        "rail_waitlist.korail_sidecar.direct_cdp._stop_process",
         AsyncMock(side_effect=RuntimeError("cleanup failed")),
     )
 
     with pytest.raises(ExpectedFailure):
         async with open_direct_cdp_browser(chromium, timeout_ms=1_000):
             raise ExpectedFailure("protected result")
+
+
+@pytest.mark.asyncio
+async def test_connect_failure_still_reaps_process_and_removes_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingChromium(FakeChromium):
+        async def connect_over_cdp(self, endpoint_url: str, *, timeout: float) -> FakeBrowser:
+            self.endpoints.append(endpoint_url)
+            raise RuntimeError("connect failed")
+
+    process = FinishedProcess()
+    launch_args: tuple[str, ...] = ()
+
+    async def create_process(*args: str, **kwargs: object) -> FinishedProcess:
+        nonlocal launch_args
+        launch_args = args
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(
+        "rail_waitlist.korail_sidecar.direct_cdp._wait_for_debugging_port",
+        AsyncMock(return_value=43210),
+    )
+
+    with pytest.raises(DirectCdpLaunchError, match="launch failed"):
+        async with open_direct_cdp_browser(FailingChromium(), timeout_ms=1_000):
+            pytest.fail("the context must not yield after a connection failure")
+
+    profile_argument = next(value for value in launch_args if value.startswith("--user-data-dir="))
+    profile_path = Path(profile_argument.removeprefix("--user-data-dir="))
+    assert process.wait_count == 1
+    assert not profile_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_without_body_error_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chromium = FakeChromium()
+    monkeypatch.setattr(
+        asyncio,
+        "create_subprocess_exec",
+        AsyncMock(return_value=FinishedProcess()),
+    )
+    monkeypatch.setattr(
+        "rail_waitlist.korail_sidecar.direct_cdp._wait_for_debugging_port",
+        AsyncMock(return_value=43210),
+    )
+    monkeypatch.setattr(
+        "rail_waitlist.korail_sidecar.direct_cdp._stop_process",
+        AsyncMock(side_effect=RuntimeError("cleanup failed")),
+    )
+
+    with pytest.raises(DirectCdpLaunchError, match="cleanup failed"):
+        async with open_direct_cdp_browser(chromium, timeout_ms=1_000):
+            pass
 
 
 @pytest.mark.asyncio
@@ -270,7 +347,7 @@ async def test_cancellation_waits_for_cleanup_and_preserves_cancelled_error(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(
-        "rail_waitlist.korail_direct_cdp._wait_for_debugging_port",
+        "rail_waitlist.korail_sidecar.direct_cdp._wait_for_debugging_port",
         AsyncMock(return_value=43210),
     )
 
@@ -290,9 +367,7 @@ async def test_cancellation_waits_for_cleanup_and_preserves_cancelled_error(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    profile_argument = next(
-        value for value in launch_args if value.startswith("--user-data-dir=")
-    )
+    profile_argument = next(value for value in launch_args if value.startswith("--user-data-dir="))
     profile_path = Path(profile_argument.removeprefix("--user-data-dir="))
     assert browser.session.commands == ["Browser.close"]
     assert browser.close_count == 1

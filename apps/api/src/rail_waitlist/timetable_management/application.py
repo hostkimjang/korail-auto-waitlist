@@ -2,34 +2,24 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..browser_companion.snapshot_overlay import overlay_korail_browser_snapshots
 from ..domain import Provider
-from ..korail_browser_bridge import overlay_korail_browser_snapshots
 from ..korail_browser_seat_source import KorailBrowserTimetableUnavailable
-from ..official_page_confirmations import overlay_official_page_confirmations
+from ..official_page_confirmation.application import overlay_official_page_confirmations
+from ..provider_adapters.srt_seat_source import SrtLiveTimetableUnavailable
 from ..provider_adapters.timetable import OfficialTimetableAdapter
 from ..provider_registry.application import get_execution_provider, get_timetable_provider
-from ..schemas import TimetableItem
-from ..srt_live_timetable import map_srt_live_timetable
-from ..srt_provider_adapter import SrtProviderAdapterUnavailable
-from ..srt_seat_source import SrtLiveTimetableUnavailable
+from ..srt_sidecar.client import SrtProviderAdapterUnavailable
 from ..timetable_evidence import persist_timetable_seat_evidence
 from ..watch_registration_policy import apply_watch_registration_capability
+from .contracts import TimetableApplication
+from .schemas import TimetableItem
+from .srt_live_timetable import map_srt_live_timetable
 
 LOGGER = logging.getLogger(__name__)
-
-
-class TimetableApplicationState(Protocol):
-    station_catalog_service: object
-    korail_browser_seat_source: object
-    srt_seat_source: object
-
-
-class TimetableApplication(Protocol):
-    state: TimetableApplicationState
 
 
 class UnsupportedTimetableProvider(ValueError):
@@ -94,8 +84,7 @@ async def load_timetable_items(
             destination_node_id=destination_node_id,
         )
 
-    has_station_nodes = origin_node_id is not None and destination_node_id is not None
-    if has_station_nodes:
+    if origin_node_id is not None and destination_node_id is not None:
         items = await overlay_official_page_confirmations(
             session,
             items,
@@ -117,7 +106,7 @@ async def load_timetable_items(
         items,
         seat_monitoring_enabled=execution_capabilities.seat_monitoring,
     )
-    if has_station_nodes:
+    if origin_node_id is not None and destination_node_id is not None:
         items = await persist_timetable_seat_evidence(
             session,
             items,

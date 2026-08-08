@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from rail_waitlist.korail_chromium_launch import isolated_test_chromium_arguments
+from rail_waitlist.korail_sidecar.chromium_launch import isolated_test_chromium_arguments
 
 
 @pytest.mark.parametrize("value", ["", "false", "1", "yes"])

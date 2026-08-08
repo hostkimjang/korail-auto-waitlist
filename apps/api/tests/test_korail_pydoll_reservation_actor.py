@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from datetime import date, time
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from rail_waitlist.korail_pydoll_browser import (
     KorailReservationRequest,
     KorailReservationResult,
     KorailReservationSeatClass,
+    KorailSessionActorState,
     PydollKorailBrowserClient,
     PydollPageSnapshot,
 )
@@ -80,6 +82,18 @@ class _ReservationContext:
         _traceback: object,
     ) -> None:
         self.session.closed += 1
+
+
+class _BlockingReservationSession(_ReservationSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.wait_started = asyncio.Event()
+
+    async def wait_for_result(self) -> PydollPageSnapshot:
+        self.events.append("wait")
+        self.wait_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("cancelled reservation wait unexpectedly resumed")
 
 
 def _request() -> KorailReservationRequest:
@@ -156,6 +170,38 @@ async def test_reservation_uses_facade_callbacks_captured_at_construction(
     assert session.closed == 1
 
 
+@pytest.mark.asyncio
+async def test_reservation_cancellation_marks_session_stale_and_closes_context_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def identity_guard(
+        _session: object,
+        _request: KorailReservationRequest,
+        _stage: str,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_reservation_identity",
+        staticmethod(identity_guard),
+    )
+    session = _BlockingReservationSession()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _ReservationContext(session),  # type: ignore[arg-type]
+    )
+
+    task = asyncio.create_task(client.reserve_once(_request()))
+    await asyncio.wait_for(session.wait_started.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.session_snapshot().state is KorailSessionActorState.STALE
+    assert session.closed == 1
+
+
 def test_browser_keeps_reservation_contract_compatibility_exports() -> None:
     assert browser_module.KorailReservationSeatClass is (
         reservation_actor_module.KorailReservationSeatClass
@@ -176,7 +222,9 @@ def test_reservation_actor_has_no_facade_or_peer_actor_dependencies() -> None:
         Path(__file__).resolve().parents[1]
         / "src"
         / "rail_waitlist"
-        / "korail_pydoll_reservation_actor.py"
+        / "korail_sidecar"
+        / "pydoll"
+        / "reservation_actor.py"
     )
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     imported_modules = {

@@ -6,6 +6,7 @@ import {
   detectSeatAvailabilityLostTransitions,
   detectSeatFoundTransitions,
   detectWatchActionTransitions,
+  hydrateCurrentWatchActionTransitions,
   reconcileWatchSnapshots,
   type WatchSnapshot,
 } from "../src/features/app/watchSnapshots";
@@ -147,6 +148,36 @@ describe("watch snapshot reconciliation", () => {
     expect(detectWatchActionTransitions(previous, next).map((item) => item.status))
       .toEqual(["reserving", "payment_required", "auth_required"]);
     expect(detectWatchActionTransitions(next, next)).toEqual([]);
+  });
+
+  it("hydrates only current actionable reservation states and keeps seat-found as baseline", () => {
+    const reserving = {
+      ...watch("reserve", "reserving"),
+      latestReservationAttempt: attempt({ startedAt: "2026-08-03T12:09:45Z" }),
+    };
+    const payment = {
+      ...watch("pay", "payment_required"),
+      latestReservationAttempt: attempt({
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:09:48Z",
+      }),
+    };
+    const auth = {
+      ...watch("auth", "auth_required"),
+      updatedAt: "2026-08-03T12:10:00Z",
+    };
+
+    expect(hydrateCurrentWatchActionTransitions([
+      watch("watching", "watching"),
+      watch("found", "seat_found"),
+      reserving,
+      payment,
+      auth,
+    ])).toMatchObject([
+      { id: "reserve", status: "reserving", revision: "reserving:2026-08-03T12:09:45Z" },
+      { id: "pay", status: "payment_required", revision: "payment_required:2026-08-03T12:09:48Z" },
+      { id: "auth", status: "auth_required", revision: "auth_required:2026-08-03T12:10:00Z" },
+    ]);
   });
 
   it("uses the actual lifecycle stage timestamp instead of an older seat observation", () => {

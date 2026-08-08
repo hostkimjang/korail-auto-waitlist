@@ -2,6 +2,12 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/api/client";
+import {
+  initialNotificationCenterState,
+  pushNotifications as reduceNotifications,
+  type AppNotificationInput,
+  type NotificationCenterState,
+} from "../src/features/app/notificationCenter";
 import type { WatchLifecycleSnapshot } from "../src/features/app/watchLifecycleSnapshot";
 
 const eventApi = vi.hoisted(() => ({
@@ -17,11 +23,12 @@ import { useWatchCollection } from "../src/features/app/useWatchCollection";
 
 interface TestWatch {
   id: string;
-  status: "watching" | "seat_found";
+  status: "watching" | "seat_found" | "reserving" | "payment_required" | "auth_required";
   reservationPolicy: "notify_only" | "reserve_once_before_payment";
 }
 
 function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
+  const hasAttempt = ["reserving", "payment_required", "auth_required"].includes(value.status);
   return {
     id: value.id,
     status: value.status,
@@ -32,14 +39,20 @@ function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
     date: "8월 1일 (토)",
     departure: "14:11",
     arrival: "16:52",
-    latestReservationAttempt: null,
+    latestReservationAttempt: hasAttempt
+      ? {
+          startedAt: "2026-08-03T12:09:45Z",
+          finishedAt: value.status === "reserving" ? null : "2026-08-03T12:09:48Z",
+          paymentHoldEndedAt: null,
+        }
+      : null,
     paymentDeadline: null,
     reservationCandidateContexts: {},
     reservationPolicy: value.reservationPolicy,
     seatFoundObservation: value.status === "seat_found"
       ? { observedAt: "2026-08-01T03:45:00Z" }
       : null,
-    updatedAt: null,
+    updatedAt: hasAttempt ? "2026-08-03T12:09:48Z" : null,
   };
 }
 
@@ -75,6 +88,7 @@ function watch(
 describe("useWatchCollection", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    eventApi.subscribeToEvents.mockImplementation((_handler) => () => undefined);
   });
 
   it("projects lifecycle snapshots without replacing an unchanged actual watch", async () => {
@@ -98,6 +112,120 @@ describe("useWatchCollection", () => {
     await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
     await waitFor(() => expect(result.current.watches[0]).toBe(initial));
 
+    unmount();
+  });
+
+  it("hydrates actionable canonical states on each mount while keeping seat-found as baseline", async () => {
+    const canonical = [
+      { ...watch("reserve_once_before_payment", "reserving"), id: "reserving" },
+      { ...watch("reserve_once_before_payment", "payment_required"), id: "payment" },
+      { ...watch("reserve_once_before_payment", "auth_required"), id: "auth" },
+      { ...watch("notify_only", "seat_found"), id: "seat" },
+    ];
+    const mountCollection = () => {
+      const pushNotifications = vi.fn();
+      const loadWatches = vi.fn().mockResolvedValue(canonical);
+      const onAuthenticationExpired = vi.fn();
+      const onProviderAuthenticationTransition = vi.fn();
+      const rendered = renderHook(() => useWatchCollection({
+        authenticated: true,
+        demo: false,
+        initialWatches: [] as TestWatch[],
+        pollIntervalSeconds: 300,
+        loadWatches,
+        snapshotOf,
+        onAuthenticationExpired,
+        onProviderAuthenticationTransition,
+        pushNotifications,
+      }));
+      return { ...rendered, pushNotifications };
+    };
+
+    const first = mountCollection();
+    await waitFor(() => expect(first.pushNotifications).toHaveBeenCalled());
+    expect(first.pushNotifications).toHaveBeenLastCalledWith(expect.arrayContaining([
+      expect.objectContaining({ subjectKey: "watch:reserving", kind: "reserving" }),
+      expect.objectContaining({ subjectKey: "watch:payment", kind: "payment_required" }),
+      expect.objectContaining({ subjectKey: "watch:auth", kind: "auth_required" }),
+    ]));
+    expect(first.pushNotifications.mock.calls.at(-1)?.[0]).toHaveLength(3);
+    first.unmount();
+
+    const remounted = mountCollection();
+    await waitFor(() => expect(remounted.pushNotifications).toHaveBeenCalled());
+    expect(remounted.pushNotifications.mock.calls.at(-1)?.[0]).toHaveLength(3);
+    remounted.unmount();
+  });
+
+  it("keeps one same-watch notice through SSE, canonical reserving, and terminal result", async () => {
+    const initial = watch("reserve_once_before_payment", "watching");
+    const reserving = watch("reserve_once_before_payment", "reserving");
+    const payment = watch("reserve_once_before_payment", "payment_required");
+    const loadWatches = vi.fn()
+      .mockResolvedValueOnce([initial])
+      .mockResolvedValueOnce([reserving])
+      .mockResolvedValue([payment]);
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    let notificationState: NotificationCenterState = initialNotificationCenterState;
+    const pushNotifications = vi.fn((inputs: ReadonlyArray<AppNotificationInput>) => {
+      notificationState = reduceNotifications(notificationState, inputs);
+    });
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [] as TestWatch[],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      onEvent?.({
+        id: "attempt-one",
+        event_type: "watch.reservation_attempted",
+        aggregate_id: initial.id,
+        created_at: "2026-08-03T12:09:45Z",
+        payload: { watch_id: initial.id, outcome: "pending" },
+      });
+    });
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+    expect(notificationState.notices).toHaveLength(1);
+    expect(notificationState.notices[0]).toMatchObject({
+      subjectKey: `watch:${initial.id}`,
+      kind: "reserving",
+      persistence: "sticky",
+    });
+
+    act(() => {
+      onEvent?.({
+        id: "result-one",
+        event_type: "watch.reservation_result",
+        aggregate_id: initial.id,
+        created_at: "2026-08-03T12:09:48Z",
+        payload: {
+          watch_id: initial.id,
+          attempt_started_at: "2026-08-03T12:09:45Z",
+          attempt_finished_at: "2026-08-03T12:09:48Z",
+          outcome: "payment_required",
+        },
+      });
+    });
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(3));
+    expect(notificationState.notices).toHaveLength(1);
+    expect(notificationState.notices[0]).toMatchObject({
+      subjectKey: `watch:${initial.id}`,
+      kind: "payment_required",
+    });
     unmount();
   });
 
@@ -167,6 +295,64 @@ describe("useWatchCollection", () => {
 
     expect(eventApi.subscribeToEvents).toHaveBeenCalledOnce();
     unmount();
+  });
+
+  it("coalesces duplicate PWA notification hints and removes the listener on cleanup", async () => {
+    const initial = watch("notify_only");
+    const loadWatches = vi.fn()
+      .mockResolvedValueOnce([initial])
+      .mockResolvedValue([watch("notify_only", "seat_found")]);
+    let onPwaNotification: ((event: MessageEvent<unknown>) => void) | undefined;
+    const addEventListener = vi.fn(
+      (_type: "message", listener: (event: MessageEvent<unknown>) => void) => {
+        onPwaNotification = listener;
+      },
+    );
+    const removeEventListener = vi.fn();
+    const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, "serviceWorker");
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: { addEventListener, removeEventListener },
+    });
+    const pushNotifications = vi.fn();
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+
+    act(() => {
+      const data = {
+        type: "railwait:notification",
+        kind: "push",
+        watchId: "watch-one",
+        status: "seat_found",
+      };
+      onPwaNotification?.({ data } as MessageEvent<unknown>);
+      onPwaNotification?.({ data } as MessageEvent<unknown>);
+    });
+
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(pushNotifications.mock.calls.flatMap(([items]) => items))
+      .toContainEqual(expect.objectContaining({ kind: "seat_found" })));
+    expect(loadWatches).toHaveBeenCalledTimes(2);
+
+    unmount();
+    expect(removeEventListener).toHaveBeenCalledWith("message", onPwaNotification);
+    if (originalServiceWorker === undefined) {
+      Reflect.deleteProperty(navigator, "serviceWorker");
+    } else {
+      Object.defineProperty(navigator, "serviceWorker", originalServiceWorker);
+    }
   });
 
   it("rejects a canonical GET snapshot that crosses a reservation-policy mutation", async () => {

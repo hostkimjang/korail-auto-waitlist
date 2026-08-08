@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, time
 from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 import pytest
 
-from rail_waitlist.korail_search_bootstrap import (
-    KorailStationIdentity,
+from rail_waitlist.provider_adapters.korail_search_bootstrap import (
     KorailStationIdentityResolver,
     KorailStationIdentityUnavailable,
-    build_korail_general_search_url,
     parse_korail_station_identities,
+)
+from rail_waitlist.provider_registry.korail_search_contracts import KorailStationIdentity
+from rail_waitlist.provider_registry.korail_search_url_policy import (
+    build_korail_general_search_url,
     validate_korail_general_search_url,
 )
 
@@ -124,4 +127,47 @@ async def test_station_resolver_uses_one_fetch_until_ttl_expires() -> None:
         KorailStationIdentity("0010", "대전"),
         KorailStationIdentity("0001", "서울"),
     )
+    assert requests == 2
+
+
+@pytest.mark.asyncio
+async def test_station_resolver_coalesces_concurrent_cold_fetches() -> None:
+    requests = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        await asyncio.sleep(0)
+        return httpx.Response(200, json=station_payload())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        resolver = KorailStationIdentityResolver(http_client=client)
+        results = await asyncio.gather(
+            resolver.resolve_pair("대전", "서울"),
+            resolver.resolve_pair("대전", "서울"),
+        )
+
+    assert results[0] == results[1]
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_station_resolver_does_not_cache_failed_refresh() -> None:
+    requests = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return httpx.Response(503)
+        return httpx.Response(200, json=station_payload())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        resolver = KorailStationIdentityResolver(http_client=client)
+        with pytest.raises(KorailStationIdentityUnavailable):
+            await resolver.resolve_pair("대전", "서울")
+        resolved = await resolver.resolve_pair("대전", "서울")
+        assert client.is_closed is False
+
+    assert resolved[0] == KorailStationIdentity("0010", "대전")
     assert requests == 2

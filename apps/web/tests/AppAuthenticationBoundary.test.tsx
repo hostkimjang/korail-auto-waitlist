@@ -63,7 +63,7 @@ describe("AppAuthenticationBoundary", () => {
     expect(main?.firstElementChild?.className).toBe("loading-state");
 
     const image = container.querySelector("img");
-    expect(image?.getAttribute("src")).toBe("/icons/app-icon-512.png");
+    expect(image?.getAttribute("src")).toBe("/icons/app-icon-any-512-v2.png");
     expect(image?.getAttribute("alt")).toBe("");
     expect(screen.getByText("안전하게 연결하는 중…")).toBeTruthy();
     expect(screen.queryByTestId("authenticated-content")).toBeNull();

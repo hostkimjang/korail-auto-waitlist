@@ -29,16 +29,7 @@ from rail_waitlist.domain import (
     SeatObservationStatus,
     WatchStatus,
 )
-from rail_waitlist.models import (
-    OutboxEvent,
-    ProviderCircuit,
-    ProviderExecutionLease,
-    ReservationAttempt,
-    SeatObservation,
-    Watch,
-    WatchCandidate,
-    WatchTransitionHistory,
-)
+from rail_waitlist.observations.contracts import SeatObservationResult
 from rail_waitlist.observations.cycle_application import (
     finish_observation_cycle,
     latest_observation_fingerprint,
@@ -54,17 +45,27 @@ from rail_waitlist.observations.group_application import (
     provider_circuit_is_closed,
 )
 from rail_waitlist.outbox import add_outbox_event
+from rail_waitlist.outbox_management.models import OutboxEvent
+from rail_waitlist.provider_circuit.models import ProviderCircuit
+from rail_waitlist.provider_execution.models import ProviderExecutionLease
 from rail_waitlist.provider_execution_lease import (
     ExecutionLeaseGrant,
     ProviderExecutionLeaseService,
     lock_execution_lease_current,
 )
+from rail_waitlist.provider_registry.contracts import ProviderCapabilities
 from rail_waitlist.reservations.attempt_policy import is_confirmed_absent_retry_source
-from rail_waitlist.schemas import ProviderCapabilities, SeatObservationResult
 from rail_waitlist.services import (
     apply_watch_transition,
     get_or_create_provider_circuit,
     record_seat_observation,
+)
+from rail_waitlist.watch_management.models import (
+    ReservationAttempt,
+    SeatObservation,
+    Watch,
+    WatchCandidate,
+    WatchTransitionHistory,
 )
 
 _ISOLATED_OPT_IN = "POSTGRES_ACCEPTANCE_ISOLATED"

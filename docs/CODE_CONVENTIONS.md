@@ -82,23 +82,106 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
   목록에 없는 새 미포맷 파일, 수정됐지만 아직 미포맷인 기존 파일, 이미 포맷돼 불필요해진 목록
   항목은 모두 format ratchet 실패로 처리합니다. 기존 파일을 수정할 때는 목록의 해시를 갱신하지
   않고 해당 파일을 포맷한 뒤 항목을 제거합니다.
-- mypy는 `strict=true`와 Python 3.12로 실행하며, 현재 오류 0인 `provider_contracts.py`,
-  provider base·execution·experimental·KORAIL execution·timetable adapter와 registry application
-  및 observation operational projection·reservation payment-hold·watch transition notification
-  application, observation cycle·idempotency application·watch transition policy/application·watch
-  update application·reservation attempt policy/claim/result application·reservation reconciliation
-  policy/state application·KORAIL sidecar runtime/HTTP·Pydoll browser/page safety/auth contracts·actor·login
-  driver/confirmation reader/HTTP replay manager/read-only search actor·driver/contracts/reservation
-  contracts·actor·driver의 35개 파일을
+- mypy는 `strict=true`와 Python 3.12로 실행하며, 현재 오류 0인 `admin_auth/models.py`·
+  `admin_auth/schemas.py`, `browser_companion/models.py`·`browser_companion/schemas.py`·
+  `browser_companion/http.py`·`browser_companion/snapshot_overlay.py`와 top-level browser bridge exact facade,
+  `event_stream/schemas.py`, `idempotency/models.py`, `notification_management/models.py`,
+  `health/schemas.py`,
+  `outbox_management/models.py`,
+  `official_rail_identity.py`,
+  `official_page_confirmation/application.py`·`official_page_confirmation/models.py`·
+  `official_page_confirmation/schemas.py`, `provider_account_management/models.py`,
+  `provider_account_management/reservation_runtime.py`,
+  `provider_schema_base.py`, `provider_circuit/models.py`, provider execution contracts·models·lease
+  application·lifecycle runtime, top-level `station_catalog_cache.py`·`station_visibility.py` compatibility facade,
+  `timetable_management/application.py`·`timetable_management/catalog_application.py`·
+  `timetable_management/catalog_http.py`·`timetable_management/contracts.py`·
+  `timetable_management/http.py`·`timetable_management/korail_browser_projection.py`·
+  `timetable_management/models.py`·
+  `timetable_management/schemas.py`·`timetable_management/srt_live_timetable.py`·
+  `timetable_management/station_visibility.py`·`timetable_management/tago_timetable_projection.py`,
+  `seat_status_operations/schemas.py`,
+  `provider_contracts.py`,
+  provider base·execution·experimental·KORAIL browser query runtime·browser reservation policy·execution·accountless seat source·reservation
+  control·search bootstrap·
+  SRT identity·seat source·source runtime·station roster·
+  TAGO response parser·timetable adapter와 registry
+  application
+  및 observation contracts·operational projection·recording·reservation payment-hold·watch transition notification
+  application, observation status policy·due provider policy·due runtime·cycle·group runtime·idempotency application·watch
+  create·lookup·arming·command runtime·schemas(등록 충돌·생성·부분 수정 요청)·transition
+  policy/application/command/runtime·provider failure policy·watch
+  update application·provider auth recovery application/runtime·provider circuit application·reservation attempt
+  policy/claim/result application·reservation contracts·execution runtime·KORAIL/SRT provider confirmation·reservation
+  reconciliation policy/state
+  application/runtime·stale attempt recovery
+  application·worker task runtime·KORAIL browser stateful provider composition shell·auth·KST 시간창·관측·예약
+  순수 provider policy·KORAIL sidecar
+  adapter deployment composition root·browser contracts/page contracts/protection·검색 coordinator·검색 결과 policy·
+  Playwright client/search form/result
+  reader·core HTTP
+  replay·contracts/client/runtime/HTTP/direct CDP/Chromium test launch·Pydoll canonical
+  page/auth/reservation contracts·page-safety·search snapshot/hour policy·live DOM control reader·DOM interaction·hour carousel input·
+  hour carousel observation·schedule commit readback·search driver·read-only search actor·auth actor·reservation actor·
+  login driver·reservation driver·Chromium lifecycle·confirmation reader·HTTP replay manager
+  policy·browser·
+  provider account credential leaf·persistence application·login verification·session runtime·SRT fullstack fixture·SRT sidecar
+  session/wire/client/port/application/reservation/runtime/HTTP,
+  `provider_registry/contracts.py`, `provider_registry/korail_search_contracts.py`·
+  `provider_registry/korail_search_url_policy.py`, `provider_registry/official_url_policy.py`,
+  `reservations/contracts.py`,
+  `reservations/attempt_runtime.py`,
+  `reservations/provider_confirmation/contracts.py`·`reservations/provider_confirmation/korail_sidecar_runtime.py`
+  및 중앙 service·worker composition root, 중앙 schema/model compatibility hub,
+  `watch_management/models.py`의 167개 파일을
   명시적 ratchet으로 검사합니다.
   `ignore_missing_imports`, 전역 오류 코드 비활성화,
   광범위한 `type: ignore`로 통과시키지 않습니다. 새 owner는 오류 0을 만든 뒤 대상 목록에
   추가하고 전체 legacy package가 이미 strict라고 표현하지 않습니다.
+- top-level 배포/CLI composition root를 정의 파일 수만 줄이기 위해 억지로 facade와 owner로 다시 나누지 않습니다.
+  route·정책·상태가 canonical owner에 있고 남은 파일이 dependency 조립과 process entrypoint만 제공한다면 exact
+  import·함수·`app`/`main` 경계를 테스트로 고정한 뒤 의도적인 root로 유지합니다.
+- 동결한 stateful provider/browser composition shell에는 새 순수 정책·DOM 판정·독립 상태 전이를 다시
+  추가하지 않습니다. 남은 코드는 canonical actor·driver·lifecycle의 조립과 compatibility seam으로 제한하고,
+  exact local definition·method inventory·production consumer·passive import 계약을 구조 테스트로 고정합니다.
 - API 검증은 첫 단계에서 `uv lock --check`를 실행해 pyproject와 커밋된 lock 불일치를 테스트 전에
   차단하고, mypy는 `uv run --frozen --extra test mypy`로 같은 lock을 사용합니다.
 - FastAPI route는 인증, 요청·응답 검증, 트랜잭션 진입, application 오류의 HTTP 변환만 담당합니다.
 - Pydantic schema는 transport 계약이고 도메인 객체를 대신하지 않습니다. 외부 provider 응답도 경계에서 검증한 뒤 내부 결과로 변환합니다.
+- 외부 provider의 JSON row는 `object`에서 시작해 문자열 키 object인지 각 원소를 검증합니다. pagination
+  aggregate에서 비정상 row를 조용히 제외하면 `totalCount`와 완전성을 증명할 수 없으므로 page 전체를
+  fail-closed로 거절하고, 검증 실패 결과를 cache하지 않습니다.
+- 기능 owner로 옮긴 Pydantic schema와 ORM mapper는 중앙 `schemas.py`·`models.py`에 다시 선언하거나
+  subclass로 호환하지 않습니다. 기존 import가 필요하면 canonical class와 동일한 객체를 alias로 재노출하고,
+  양쪽 import 순서에서 mapper·table이 한 번만 등록되는지 검사합니다. 전체 metadata를 쓰는 main·migration
+  bootstrap은 모든 mapper를 등록하는 중앙 진입점을 먼저 import해야 합니다.
+- PostgreSQL fencing·복구 같은 운영 검증 script는 중앙 `models.py`에서 mapper를 가져오지 않고 각 canonical
+  model owner를 직접 사용합니다. 중앙 model hub 재유입 검사는 production `src`뿐 아니라 `apps/api/scripts`의
+  direct·module·dynamic import 형태도 포함합니다.
+- production 코드와 운영 검증 script는 중앙 `schemas.py`에서 transport·provider 계약을 가져오지 않고 각
+  bounded context의 `schemas.py` 또는 leaf `contracts.py`를 직접 사용합니다. 중앙 schema hub 재유입 검사도
+  `src`와 `apps/api/scripts`의 direct·wildcard·module/package attribute·alias·dynamic import를 함께 다룹니다.
+- 한 transport가 다른 schema의 `default_factory`·중첩 annotation·validator 정책을 직접 캡처하면 개별 class만
+  떼어내지 않습니다. 같은 변경 이유를 가진 aggregate를 한 owner로 함께 옮기고 exact identity, JSON schema,
+  legacy pickle, 양방향 import 순서와 production-wide 중앙 hub 재유입 차단을 한 슬라이스에서 검증합니다.
+- 양방향 relationship, self-reference, 문자열·lambda 정렬식과 외래 키로 결합된 mapper graph는 임의로 class를
+  하나씩 분리하지 않습니다. 독립 lifecycle이 아닌 persistence aggregate는 같은 owner로 함께 옮기고,
+  외부 aggregate 관계는 canonical mapper를 직접 import합니다. 여러 legacy/canonical import 순서에서
+  `configure_mappers()`와 metadata identity를 검증한 뒤 중앙 호환 hub에는 exact alias만 남깁니다.
+- persistence·순수 policy가 enum 같은 공통 결과 계약만 필요하면 Pydantic schema hub나 provider runtime을
+  거치지 않는 side-effect 없는 leaf contract를 직접 사용합니다. leaf contract는 schema·ORM·FastAPI·provider
+  구현을 import하지 않으며, 기존 평면 모듈은 같은 객체의 exact alias만 제공합니다. target·result처럼 더 큰
+  계약을 옮길 때는 먼저 공통 URL·host 정책의 하위 의존을 분리해 feature owner가 중앙 schema hub를
+  역참조하지 않게 합니다. legacy facade의 우발적 wildcard 표면이나 pickle 경로를 보존한다면 exact identity를
+  테스트하고, facade attribute 재할당이 canonical 구현의 dependency injection으로 전달되는지는 명시적으로
+  지원하거나 fail-closed 비지원 계약으로 고정합니다.
+- 기능을 종료하더라도 이미 migration으로 만든 table과 보존 데이터는 forward migration 없이 ORM
+  metadata에서 제거하지 않습니다. 보존 기간에는 feature owner의 비활성 mapper와 중앙 exact alias로
+  Alembic metadata 계약을 유지합니다.
 - application service는 도메인 오류를 반환하거나 발생시키며 `HTTPException`에 의존하지 않습니다.
+- feature runtime은 production dependency를 canonical policy·application에서 직접 조립하고 commit·rollback·
+  refresh를 호출하지 않습니다. 중앙 compatibility wrapper가 남아 있더라도 worker·route·read model의 production
+  dependency로 다시 사용하지 않으며, 도메인 충돌의 HTTP status 변환은 route 경계에서 수행합니다.
 - provider capability는 실제 구현, 설정 gate, 승인 근거의 교집합으로 계산합니다. 구현이나 승인이 없는데 `true`로 노출하지 않습니다.
 - provider 계약은 필요에 따라 timetable, observe, reserve, confirm, lifecycle 역할로 나눕니다. 모든 구현에 넓은 단일 interface를 강제하지 않습니다.
 - 비밀번호, cookie, token, 카드정보, credential fingerprint 원문을 예외, 로그, metric label, fixture, outbox에 넣지 않습니다.
@@ -115,6 +198,13 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
 - timezone-aware datetime과 KST 서비스 날짜를 구분합니다. naive datetime을 새로 만들거나 UTC와 서비스 날짜를 암묵적으로 변환하지 않습니다.
 - commit 이후 enqueue 실패를 상태 변경 실패로 되돌리는 등 이미 확정된 DB 사실을 왜곡하지 않습니다. 재시도 가능한 영속 fallback을 유지합니다.
 - generic repository를 목표로 삼지 않습니다. 테스트 가능한 경계나 다른 구현이 필요한 유스케이스에 최소한의 Protocol을 정의합니다.
+- task-local wrapper가 여러 외부 resource를 소유하면 의존 source를 먼저 닫고, 앞선 종료가 실패해도 뒤쪽
+  client 종료가 실행되도록 `finally`를 사용합니다. 호출자가 주입한 borrowed resource는 wrapper가 닫지
+  않습니다.
+- 동기 worker shell이 `asyncio.run`으로 task-local event loop를 만들면 DB engine 정리도 loop가 닫히기 전에
+  같은 비동기 경계에서 끝냅니다. cleanup owner는 전역 engine이나 Celery를 직접 import하지 않고 disposer를
+  callback으로 받으며, operation·cleanup이 함께 실패할 때의 예외 우선순위와 취소 전파를 계약 테스트로
+  고정합니다.
 
 ## 테스트 규칙
 

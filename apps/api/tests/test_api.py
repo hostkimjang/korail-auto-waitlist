@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from rail_waitlist import services as services_module
 from rail_waitlist.domain import (
     Provider,
     ReservationOutcome,
@@ -27,7 +26,6 @@ from rail_waitlist.models import (
     RailProviderAccount,
     ReservationAttempt,
     SeatObservation,
-    TimetableSeatEvidence,
     Watch,
     WatchCandidate,
     WatchTransitionHistory,
@@ -45,9 +43,11 @@ from rail_waitlist.schemas import (
 )
 from rail_waitlist.services import transition_watch, update_watch
 from rail_waitlist.srt_provider_adapter_contract import SrtTimetableTrain
+from rail_waitlist.timetable_management.models import TimetableSeatEvidence
 from rail_waitlist.timetable_snapshot_cache import TimetableSnapshotCache
 from rail_waitlist.watch_management import application as watch_application_module
 from rail_waitlist.watch_management import http as watch_http_module
+from rail_waitlist.watch_management import transition_runtime as watch_transition_runtime_module
 
 
 def watch_payload(**overrides):
@@ -102,7 +102,11 @@ async def test_verified_auto_reservation_start_enqueues_one_immediate_watch_task
     monkeypatch,
 ) -> None:
     adapter = ImmediateReservationCapabilityAdapter()
-    monkeypatch.setattr(services_module, "get_execution_provider", lambda _provider: adapter)
+    monkeypatch.setattr(
+        watch_transition_runtime_module,
+        "get_execution_provider",
+        lambda _provider: adapter,
+    )
     monkeypatch.setattr(
         watch_application_module,
         "get_execution_provider",
@@ -1192,14 +1196,10 @@ async def test_authenticated_seat_status_refresh_never_uses_server_korail_source
                 departure_to=departure_to,
             )
 
-    class RejectingSeatSource:
-        async def overlay(self, items, **kwargs):
-            raise AssertionError("KORAIL direct source must not be called")
-
     monkeypatch.setattr(
         timetable_application, "get_timetable_provider", lambda provider: KorailTimetableAdapter()
     )
-    app.state.korail_seat_source = RejectingSeatSource()
+    assert not hasattr(app.state, "korail_seat_source")
     request_data = {
         "provider": "korail",
         "origin": "대전",

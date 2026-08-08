@@ -113,24 +113,22 @@ describe("notification center lifecycle", () => {
     expect(dismissed.notices.map((item) => item.kind)).toEqual(["seat_found", "reserving"]);
   });
 
-  it("keeps an active reservation visible until a terminal revision replaces it", () => {
+  it("keeps active reservation progress until a terminal revision replaces it", () => {
     const reserving = pushNotifications(initialNotificationCenterState, [notice({
       title: "예매를 진행하고 있습니다",
       revisionKey: "watch:one:reserving:long",
       revisionAt: "2026-08-03T12:09:45Z",
       kind: "reserving",
-      autoCloseMs: 1_000,
     })]);
 
-    const afterTimedDismiss = notificationCenterReducer(reserving, { type: "dismiss_timed" });
-    expect(afterTimedDismiss.notices).toHaveLength(1);
-    expect(afterTimedDismiss.notices[0]).toMatchObject({
+    expect(reserving.notices).toHaveLength(1);
+    expect(reserving.notices[0]).toMatchObject({
       kind: "reserving",
       persistence: "sticky",
       autoCloseMs: null,
     });
 
-    const completed = pushNotifications(afterTimedDismiss, [notice({
+    const completed = pushNotifications(reserving, [notice({
       title: "좌석이 사라져 다시 감시 중입니다",
       revisionKey: "watch:one:result:long",
       revisionAt: "2026-08-03T12:11:00Z",
@@ -141,7 +139,31 @@ describe("notification center lifecycle", () => {
       title: "좌석이 사라져 다시 감시 중입니다",
       kind: "recovery",
       persistence: "timed",
+      autoCloseMs: 60_000,
     });
+  });
+
+  it("uses 30 seconds for generic information and keeps action notices manual", () => {
+    const state = pushNotifications(initialNotificationCenterState, [
+      notice({ subjectKey: "generic:one", revisionKey: "generic", kind: "generic" }),
+      notice({ subjectKey: "watch:seat", revisionKey: "seat", kind: "seat_found" }),
+      notice({ subjectKey: "watch:payment", revisionKey: "payment", kind: "payment_required" }),
+    ]);
+
+    expect(state.notices.find((item) => item.kind === "generic")).toMatchObject({
+      persistence: "timed",
+      autoCloseMs: 30_000,
+    });
+    expect(state.notices.filter((item) => item.kind !== "generic")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "seat_found", persistence: "sticky", autoCloseMs: null }),
+        expect.objectContaining({
+          kind: "payment_required",
+          persistence: "sticky",
+          autoCloseMs: null,
+        }),
+      ]),
+    );
   });
 
   it("replaces a sticky payment action with terminal cancellation steps", () => {

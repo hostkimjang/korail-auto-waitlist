@@ -4,7 +4,8 @@ from datetime import datetime
 
 from ..config import Settings, get_settings
 from ..domain import Provider
-from ..schemas import ProviderCapabilities, StationCatalog, TimetableItem
+from ..provider_registry.contracts import ProviderCapabilities
+from ..timetable_management.schemas import StationCatalog, TimetableItem
 from .base import RailProviderAdapter
 
 

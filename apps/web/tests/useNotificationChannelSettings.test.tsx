@@ -28,6 +28,7 @@ const supportedState: BrowserPushState = {
   support: "supported",
   permission: "granted",
   subscribed: true,
+  deviceKey: "device-one",
 };
 
 function channel(
@@ -40,6 +41,8 @@ function channel(
     name: kind === "web_push" ? "이 브라우저" : "내 알림",
     enabled: true,
     configured: true,
+    deviceKey: kind === "web_push" ? "device-one" : null,
+    activeDeviceCount: kind === "web_push" ? 1 : null,
     createdAt: "2026-08-05T00:00:00Z",
     updatedAt: "2026-08-05T00:00:00Z",
     ...overrides,
@@ -63,6 +66,7 @@ function deferred<T>(): {
 describe("useNotificationChannelSettings", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    window.localStorage.clear();
     notificationApi.fetchNotificationChannels.mockResolvedValue([]);
     notificationApi.readBrowserPushState.mockResolvedValue(supportedState);
     notificationApi.disconnectBrowserPush.mockResolvedValue(supportedState);
@@ -157,6 +161,7 @@ describe("useNotificationChannelSettings", () => {
       support: "unsupported",
       permission: "default",
       subscribed: false,
+      deviceKey: null,
     }));
   });
 
@@ -299,12 +304,17 @@ describe("useNotificationChannelSettings", () => {
 
   it("enables live web push through the existing channel and then refreshes device state", async () => {
     const webPush = channel("web_push", { enabled: false });
-    const otherWebPush = channel("web_push", { id: "web_push-two", name: "다른 기기" });
+    const otherWebPush = channel("web_push", {
+      id: "web_push-two",
+      name: "다른 기기",
+      deviceKey: "device-two",
+    });
     const enabled = { ...webPush, enabled: true, updatedAt: "2026-08-05T01:00:00Z" };
     const refreshedState: BrowserPushState = {
       support: "supported",
       permission: "granted",
       subscribed: true,
+      deviceKey: webPush.deviceKey,
     };
     const order: string[] = [];
     notificationApi.fetchNotificationChannels.mockResolvedValue([webPush, otherWebPush]);
@@ -330,16 +340,21 @@ describe("useNotificationChannelSettings", () => {
     await act(async () => result.current.toggleChannel(webPush, true));
 
     expect(order).toEqual(["connect", "read"]);
-    expect(notificationApi.connectBrowserPush).toHaveBeenCalledWith(webPush.name, webPush.id);
+    expect(notificationApi.connectBrowserPush).toHaveBeenCalledWith(webPush.name);
     expect(result.current.channels).toEqual([enabled, otherWebPush]);
     expect(result.current.browserPushState).toEqual(refreshedState);
   });
 
   it("disables a web push channel before removing its device subscription", async () => {
-    const webPush = channel("web_push");
-    const otherWebPush = channel("web_push", { id: "web_push-two", name: "다른 기기" });
-    notificationApi.fetchNotificationChannels.mockResolvedValue([webPush, otherWebPush]);
-    const disabled = { ...webPush, enabled: false };
+    const webPush = channel("web_push", { activeDeviceCount: 2 });
+    const otherWebPush = channel("web_push", {
+      id: "web_push-two",
+      name: "다른 기기",
+      deviceKey: "device-two",
+      activeDeviceCount: 2,
+    });
+    notificationApi.fetchNotificationChannels.mockResolvedValue([otherWebPush, webPush]);
+    const disabled = { ...webPush, enabled: false, activeDeviceCount: 1 };
     const order: string[] = [];
     notificationApi.updateNotificationChannel.mockImplementation(async () => {
       order.push("update");
@@ -357,7 +372,7 @@ describe("useNotificationChannelSettings", () => {
       onAuthenticationExpired,
       pushToast,
     }));
-    await waitFor(() => expect(result.current.channels).toEqual([webPush, otherWebPush]));
+    await waitFor(() => expect(result.current.channels).toEqual([otherWebPush, webPush]));
     await waitFor(() => expect(notificationApi.readBrowserPushState).toHaveBeenCalledOnce());
     notificationApi.readBrowserPushState.mockImplementation(async () => {
       order.push("read");
@@ -367,8 +382,13 @@ describe("useNotificationChannelSettings", () => {
     await act(async () => result.current.toggleChannel(webPush, false));
 
     expect(order).toEqual(["update", "disconnect", "read"]);
-    expect(result.current.channels).toEqual([disabled, otherWebPush]);
+    expect(result.current.channels).toEqual([
+      { ...otherWebPush, activeDeviceCount: 1 },
+      disabled,
+    ]);
     expect(result.current.browserPushState.subscribed).toBe(false);
+    expect(result.current.webPushPromptSuppressed).toBe(true);
+    expect(window.localStorage.getItem("railwait:web-push-prompt-suppressed")).toBe("1");
   });
 
   it("fails closed when a web push test has no active device subscription", async () => {
@@ -377,6 +397,7 @@ describe("useNotificationChannelSettings", () => {
       support: "supported",
       permission: "granted",
       subscribed: false,
+      deviceKey: null,
     };
     notificationApi.readBrowserPushState.mockResolvedValue(inactiveState);
     const onAuthenticationExpired = vi.fn();
@@ -415,32 +436,25 @@ describe("useNotificationChannelSettings", () => {
     );
   });
 
-  it.each([
-    {
-      label: "new",
-      loaded: new Array<NotificationChannel>(),
-      expectedName: "이 브라우저",
-      expectedId: null,
-      expectedRemainder: new Array<NotificationChannel>(),
-    },
-    {
-      label: "existing",
-      loaded: [
-        channel("web_push", { id: "web_push-existing", name: "기존 브라우저" }),
-        channel("web_push", { id: "web_push-duplicate", name: "중복 브라우저" }),
-        channel("telegram", { id: "telegram-one" }),
-      ],
-      expectedName: "기존 브라우저",
-      expectedId: "web_push-existing",
-      expectedRemainder: [channel("telegram", { id: "telegram-one" })],
-    },
-  ])("connects a $label live browser and collapses web push channels by kind", async ({
-    loaded,
-    expectedName,
-    expectedId,
-    expectedRemainder,
-  }) => {
-    const saved = channel("web_push", { id: "web_push-saved", name: expectedName });
+  it("adds this browser without collapsing or overwriting other Web Push devices", async () => {
+    const loaded = [
+      channel("web_push", {
+        id: "web_push-existing",
+        name: "기존 브라우저",
+        deviceKey: "device-two",
+      }),
+      channel("web_push", {
+        id: "web_push-another",
+        name: "다른 브라우저",
+        deviceKey: "device-three",
+      }),
+      channel("telegram", { id: "telegram-one" }),
+    ];
+    const saved = channel("web_push", {
+      id: "web_push-saved",
+      name: "이 기기",
+      activeDeviceCount: 3,
+    });
     notificationApi.fetchNotificationChannels.mockResolvedValue(loaded);
     notificationApi.connectBrowserPush.mockResolvedValue(saved);
     const onAuthenticationExpired = vi.fn();
@@ -456,8 +470,13 @@ describe("useNotificationChannelSettings", () => {
 
     await act(async () => result.current.connectWebPushChannel());
 
-    expect(notificationApi.connectBrowserPush).toHaveBeenCalledWith(expectedName, expectedId);
-    expect(result.current.channels).toEqual([saved, ...expectedRemainder]);
+    expect(notificationApi.connectBrowserPush).toHaveBeenCalledWith("이 기기");
+    expect(result.current.channels).toEqual([
+      saved,
+      { ...loaded[0], activeDeviceCount: 3 },
+      { ...loaded[1], activeDeviceCount: 3 },
+      loaded[2],
+    ]);
     expect(pushToast).toHaveBeenLastCalledWith("이 기기의 OS 알림을 연결했습니다.");
   });
 
@@ -479,7 +498,11 @@ describe("useNotificationChannelSettings", () => {
     for (const request of Object.values(notificationApi)) {
       expect(request).not.toHaveBeenCalled();
     }
-    expect(result.current.browserPushState).toEqual(supportedState);
+    expect(result.current.browserPushState).toEqual({
+      ...supportedState,
+      deviceKey: "demo-device",
+    });
+    expect(result.current.webPushPromptSuppressed).toBe(false);
   });
 
   it("resets every channel-owned state", async () => {
@@ -499,10 +522,12 @@ describe("useNotificationChannelSettings", () => {
     act(() => result.current.reset());
 
     expect(result.current.channels).toEqual([]);
+    expect(result.current.channelsLoaded).toBe(false);
     expect(result.current.browserPushState).toEqual({
       support: "checking",
       permission: "default",
       subscribed: false,
+      deviceKey: null,
     });
   });
 });

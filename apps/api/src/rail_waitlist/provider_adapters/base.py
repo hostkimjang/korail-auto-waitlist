@@ -4,21 +4,16 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
 from ..domain import Provider
+from ..observations.contracts import SeatObservationRequest, SeatObservationResult
 from ..provider_contracts import ProviderUnavailable
-from ..reservation_confirmation import (
+from ..provider_registry.contracts import ProviderCapabilities
+from ..reservations.contracts import ReservationRequest, ReservationResult
+from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
-from ..schemas import (
-    ProviderCapabilities,
-    ReservationRequest,
-    ReservationResult,
-    SeatObservationRequest,
-    SeatObservationResult,
-    StationCatalog,
-    TimetableItem,
-)
+from ..timetable_management.schemas import StationCatalog, TimetableItem
 
 OFFICIAL_BOOKING_URLS = {
     Provider.KORAIL: "https://www.korail.com/ticket/search/general",

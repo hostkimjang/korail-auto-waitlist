@@ -7,20 +7,20 @@ from datetime import UTC, datetime, time, timedelta
 import pytest
 from sqlalchemy import select
 
-import rail_waitlist.provider_runtime as provider_runtime_module
+import rail_waitlist.provider_account_management.runtime as provider_runtime_module
 from rail_waitlist.domain import Provider, ReservationPolicy, WatchStatus
 from rail_waitlist.models import RailProviderAccount, Watch, WatchTransitionHistory
+from rail_waitlist.provider_account_management.runtime import (
+    ProviderRuntimePrewarmRegistry,
+    maintain_provider_sessions,
+    prewarm_provider_sessions,
+    recover_provider_sessions_once,
+)
 from rail_waitlist.provider_login_verification import (
     ProviderLoginVerification,
     ProviderLoginVerificationOutcome,
     ProviderSessionRuntimeSnapshot,
     ProviderSessionRuntimeState,
-)
-from rail_waitlist.provider_runtime import (
-    ProviderRuntimePrewarmRegistry,
-    maintain_provider_sessions,
-    prewarm_provider_sessions,
-    recover_provider_sessions_once,
 )
 from rail_waitlist.security import secret_box
 
@@ -126,9 +126,7 @@ async def test_startup_prewarm_recovers_enabled_auth_required_account_and_watch(
     async with app.state.test_session_factory() as session:
         accounts = {
             account.provider: account
-            for account in (
-                await session.scalars(select(RailProviderAccount))
-            ).all()
+            for account in (await session.scalars(select(RailProviderAccount))).all()
         }
         resumed_watch = await session.get(Watch, watch_id)
         assert accounts[Provider.KORAIL].last_auth_status == "authenticated"
@@ -178,9 +176,7 @@ async def test_startup_prewarm_failure_does_not_demote_authenticated_account(
 
     async with app.state.test_session_factory() as session:
         account = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.KORAIL
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
         )
         assert account is not None
         assert account.last_auth_status == "authenticated"
@@ -199,9 +195,7 @@ class ConcurrentCredentialReplacementVerifier(StubRuntimeVerifier):
         assert self.session_factory is not None
         async with self.session_factory() as session:
             account = await session.scalar(
-                select(RailProviderAccount).where(
-                    RailProviderAccount.provider == provider
-                )
+                select(RailProviderAccount).where(RailProviderAccount.provider == provider)
             )
             assert account is not None
             account.credential_version += 1
@@ -237,9 +231,7 @@ async def test_startup_prewarm_success_does_not_persist_stale_credential_generat
 
     async with app.state.test_session_factory() as session:
         account = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.KORAIL
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
         )
         assert account is not None
         assert account.credential_version == 5
@@ -294,23 +286,27 @@ async def test_later_auth_required_revision_is_recovered_once_and_resumes_watch(
     verifier = StubRuntimeVerifier()
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 1
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 0
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 1
+    )
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 0
+    )
     assert verifier.prewarm_calls == [(Provider.KORAIL, 7)]
 
     async with app.state.test_session_factory() as session:
         account = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.KORAIL
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
         )
         resumed_watch = await session.get(Watch, watch_id)
         assert account is not None
@@ -380,23 +376,27 @@ async def test_ready_srt_provider_blocked_session_is_reconciled_without_relogin(
     )
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 1
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 0
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 1
+    )
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 0
+    )
     assert verifier.prewarm_calls == []
 
     async with app.state.test_session_factory() as session:
         account = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.SRT
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
         )
         resumed_watch = await session.get(Watch, watch_id)
         assert account is not None
@@ -452,23 +452,27 @@ async def test_blocked_srt_session_reverification_is_bounded_per_revision(app) -
     )
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 1
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 0
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 1
+    )
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 0
+    )
     assert verifier.prewarm_calls == [(Provider.SRT, 1)]
 
     async with app.state.test_session_factory() as session:
         account = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.SRT
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
         )
         assert account is not None
         assert account.last_auth_status == "provider_blocked"
@@ -500,37 +504,47 @@ async def test_failed_later_auth_recovery_is_not_repeated_until_new_revision(app
     )
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 1
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 0
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 1
+    )
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 0
+    )
 
     async with app.state.test_session_factory() as session:
         account = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.KORAIL
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
         )
         assert account is not None
         account.updated_at = datetime.now(UTC)
         await session.commit()
 
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 1
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory,
-        verifier,
-        registry,
-    ) == 0
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 1
+    )
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 0
+    )
     assert verifier.prewarm_calls == [
         (Provider.KORAIL, 9),
         (Provider.KORAIL, 9),

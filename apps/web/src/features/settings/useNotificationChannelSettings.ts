@@ -23,7 +23,9 @@ export interface UseNotificationChannelSettingsOptions {
 
 export interface NotificationChannelSettingsController {
   channels: readonly NotificationChannel[];
+  channelsLoaded: boolean;
   browserPushState: BrowserPushState;
+  webPushPromptSuppressed: boolean;
   saveChannel: (submission: NotificationChannelEditorSubmission) => Promise<void>;
   toggleChannel: (channel: NotificationChannel, nextEnabled: boolean) => Promise<void>;
   testChannel: (channel: NotificationChannel) => Promise<void>;
@@ -35,13 +37,34 @@ const initialBrowserPushState: BrowserPushState = {
   support: "checking",
   permission: "default",
   subscribed: false,
+  deviceKey: null,
 };
 
 const unavailableBrowserPushState: BrowserPushState = {
   support: "unsupported",
   permission: "default",
   subscribed: false,
+  deviceKey: null,
 };
+
+const WEB_PUSH_PROMPT_SUPPRESSION_KEY = "railwait:web-push-prompt-suppressed";
+
+function readWebPushPromptSuppression(): boolean {
+  try {
+    return window.localStorage.getItem(WEB_PUSH_PROMPT_SUPPRESSION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function persistWebPushPromptSuppression(suppressed: boolean): void {
+  try {
+    if (suppressed) window.localStorage.setItem(WEB_PUSH_PROMPT_SUPPRESSION_KEY, "1");
+    else window.localStorage.removeItem(WEB_PUSH_PROMPT_SUPPRESSION_KEY);
+  } catch {
+    // Storage can be unavailable in privacy modes; the in-memory choice still applies.
+  }
+}
 
 function errorMessage(reason: unknown, fallback: string): string {
   return reason instanceof Error && reason.message ? reason.message : fallback;
@@ -54,6 +77,20 @@ function replaceChannel(
   return [saved, ...channels.filter((channel) => channel.kind !== saved.kind)];
 }
 
+function upsertChannel(
+  channels: readonly NotificationChannel[],
+  saved: NotificationChannel,
+): NotificationChannel[] {
+  const synchronized = saved.kind === "web_push" && saved.activeDeviceCount !== null
+    ? channels.map((channel) => channel.kind === "web_push"
+      ? { ...channel, activeDeviceCount: saved.activeDeviceCount }
+      : channel)
+    : channels;
+  const existingIndex = synchronized.findIndex((channel) => channel.id === saved.id);
+  if (existingIndex === -1) return [saved, ...synchronized];
+  return synchronized.map((channel) => channel.id === saved.id ? saved : channel);
+}
+
 export function useNotificationChannelSettings({
   authenticated,
   demo,
@@ -61,18 +98,27 @@ export function useNotificationChannelSettings({
   pushToast,
 }: UseNotificationChannelSettingsOptions): NotificationChannelSettingsController {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
+  const [channelsLoaded, setChannelsLoaded] = useState(false);
   const [browserPushState, setBrowserPushState] = useState<BrowserPushState>(
     initialBrowserPushState,
+  );
+  const [webPushPromptSuppressed, setWebPushPromptSuppressed] = useState(
+    readWebPushPromptSuppression,
   );
 
   useEffect(() => {
     if (!authenticated || demo) return undefined;
     let active = true;
     void fetchNotificationChannels().then((channelItems) => {
-      if (active) setChannels(channelItems);
+      if (active) {
+        setChannels(channelItems);
+        setChannelsLoaded(true);
+      }
     }).catch((reason: unknown) => {
       if (active && reason instanceof ApiError && reason.status === 401) {
         onAuthenticationExpired();
+      } else if (active) {
+        setChannelsLoaded(true);
       }
     });
     return () => {
@@ -131,16 +177,16 @@ export function useNotificationChannelSettings({
       }
       if (channel.kind === "web_push") {
         if (nextEnabled) {
-          const updated = await connectBrowserPush(channel.name, channel.id);
-          setChannels((items) => items.map((item) => (
-            item.id === channel.id ? updated : item
-          )));
+          const updated = await connectBrowserPush(channel.name);
+          setChannels((items) => upsertChannel(items, updated));
+          persistWebPushPromptSuppression(false);
+          setWebPushPromptSuppressed(false);
         } else {
           const updated = await updateNotificationChannel(channel.id, { enabled: false });
-          setChannels((items) => items.map((item) => (
-            item.id === channel.id ? updated : item
-          )));
+          setChannels((items) => upsertChannel(items, updated));
           await disconnectBrowserPush();
+          persistWebPushPromptSuppression(true);
+          setWebPushPromptSuppressed(true);
         }
         setBrowserPushState(await readBrowserPushState());
         return;
@@ -159,7 +205,12 @@ export function useNotificationChannelSettings({
       if (channel.kind === "web_push") {
         const state = await readBrowserPushState();
         setBrowserPushState(state);
-        if (state.permission !== "granted" || !state.subscribed) {
+        if (
+          state.permission !== "granted"
+          || !state.subscribed
+          || state.deviceKey === null
+          || state.deviceKey !== channel.deviceKey
+        ) {
           throw new ApiError("이 기기의 OS 알림 구독을 먼저 켜 주세요.");
         }
       }
@@ -182,32 +233,40 @@ export function useNotificationChannelSettings({
           configured: true,
           createdAt: now,
           updatedAt: now,
+          deviceKey: "demo-device",
+          activeDeviceCount: 1,
         };
-        setChannels((items) => replaceChannel(items, saved));
-        setBrowserPushState({ support: "supported", permission: "granted", subscribed: true });
+        setChannels((items) => upsertChannel(items, saved));
+        setBrowserPushState({
+          support: "supported",
+          permission: "granted",
+          subscribed: true,
+          deviceKey: saved.deviceKey,
+        });
       } else {
-        const existing = channels.find((channel) => channel.kind === "web_push");
-        const saved = await connectBrowserPush(
-          existing?.name ?? "이 브라우저",
-          existing?.id ?? null,
-        );
-        setChannels((items) => replaceChannel(items, saved));
+        const saved = await connectBrowserPush("이 기기");
+        setChannels((items) => upsertChannel(items, saved));
         setBrowserPushState(await readBrowserPushState());
       }
+      persistWebPushPromptSuppression(false);
+      setWebPushPromptSuppressed(false);
       pushToast("이 기기의 OS 알림을 연결했습니다.");
     } catch (reason: unknown) {
       pushToast(errorMessage(reason, "이 기기의 OS 알림을 연결하지 못했습니다."));
     }
-  }, [channels, demo, pushToast]);
+  }, [demo, pushToast]);
 
   const reset = useCallback((): void => {
     setChannels([]);
+    setChannelsLoaded(false);
     setBrowserPushState(initialBrowserPushState);
   }, []);
 
   return {
     channels,
+    channelsLoaded,
     browserPushState,
+    webPushPromptSuppressed,
     saveChannel,
     toggleChannel,
     testChannel,

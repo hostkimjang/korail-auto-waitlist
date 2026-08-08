@@ -255,8 +255,7 @@ async def test_session_ignores_same_class_unavailable_anchor_when_price_action_i
         (
             PydollPageSnapshot("열차 목록", (), url="https://www.korail.com/ticket/search/list"),
             PydollPageSnapshot(
-                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 "
-                "예약취소 장바구니 결제하기",
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
                 (),
                 url="https://www.korail.com/ticket/reservation/detail",
             ),
@@ -300,8 +299,7 @@ async def test_session_clicks_price_only_anchor_owned_by_exact_seat_class(
         (
             PydollPageSnapshot("열차 목록", (), url="https://www.korail.com/ticket/search/list"),
             PydollPageSnapshot(
-                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 "
-                "예약취소 장바구니 결제하기",
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
                 (),
                 url="https://www.korail.com/ticket/reservation/detail",
             ),
@@ -367,8 +365,7 @@ async def test_session_collapses_equivalent_responsive_seat_actions(
         (
             PydollPageSnapshot("열차 목록", (), url="https://www.korail.com/ticket/search/list"),
             PydollPageSnapshot(
-                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 "
-                "예약취소 장바구니 결제하기",
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
                 (),
                 url="https://www.korail.com/ticket/reservation/detail",
             ),
@@ -467,11 +464,7 @@ async def test_session_ignores_transient_login_route_with_official_session(
     assert result.target_rechecked_at is not None
     assert result.seat_selected_at is not None
     assert result.reservation_requested_at is not None
-    assert (
-        result.target_rechecked_at
-        <= result.seat_selected_at
-        <= result.reservation_requested_at
-    )
+    assert result.target_rechecked_at <= result.seat_selected_at <= result.reservation_requested_at
     assert seat.clicks == reserve.clicks == 1
     official_session_probe.assert_awaited_once_with()
 
@@ -498,8 +491,7 @@ async def test_session_recognizes_exact_payment_required_screen(
         (
             PydollPageSnapshot("열차 목록", (), url="https://www.korail.com/ticket/search/list"),
             PydollPageSnapshot(
-                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 "
-                "예약취소 장바구니 결제하기",
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
                 (),
                 url="https://www.korail.com/ticket/reservation/detail",
             ),
@@ -508,9 +500,7 @@ async def test_session_recognizes_exact_payment_required_screen(
     monkeypatch.setattr(session, "_visible_elements", visible)
     monkeypatch.setattr(session, "_snapshot", AsyncMock(side_effect=lambda: next(snapshots)))
 
-    result = await session.reserve_once(
-        replace(reservation_request(), train_number="00118")
-    )
+    result = await session.reserve_once(replace(reservation_request(), train_number="00118"))
 
     assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
     assert result.seat_clicked is True
@@ -544,8 +534,7 @@ async def test_session_logs_in_place_after_seat_then_reserves_once(
             PydollPageSnapshot("로그인", (), url="https://www.korail.com/ticket/login"),
             PydollPageSnapshot("열차 목록", (), url="https://www.korail.com/ticket/search/list"),
             PydollPageSnapshot(
-                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 "
-                "예약취소 장바구니 결제하기",
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
                 (),
                 url="https://www.korail.com/ticket/reservation/detail",
             ),
@@ -603,8 +592,7 @@ async def test_session_logs_in_place_after_reserve_then_only_observes_detail(
             PydollPageSnapshot("열차 목록", (), url="https://www.korail.com/ticket/search/list"),
             PydollPageSnapshot("로그인", (), url="https://www.korail.com/ticket/login"),
             PydollPageSnapshot(
-                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 "
-                "예약취소 장바구니 결제하기",
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
                 (),
                 url="https://www.korail.com/ticket/reservation/detail",
             ),
@@ -843,10 +831,7 @@ async def test_session_selects_login_method_and_uses_one_scoped_login_button(
             return [active_panel]
         if selector == identity_selector and scope is active_panel:
             return [login_id]
-        if (
-            selector == "input#password[name='password'][type='password']"
-            and scope is active_panel
-        ):
+        if selector == "input#password[name='password'][type='password']" and scope is active_panel:
             return [password]
         if selector == "button,[role='button']" and scope is active_panel:
             return [scoped_login]
@@ -974,10 +959,7 @@ async def test_session_in_place_login_submits_once_without_navigation(
             and scope is active_panel
         ):
             return [login_id]
-        if (
-            selector == "input#password[name='password'][type='password']"
-            and scope is active_panel
-        ):
+        if selector == "input#password[name='password'][type='password']" and scope is active_panel:
             return [password]
         if selector == "button,[role='button']" and scope is active_panel:
             return [submit]
@@ -1132,9 +1114,7 @@ async def test_official_session_probe_returns_only_strict_boolean(
     expected: bool,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
-    execute_script = AsyncMock(
-        return_value={"result": {"result": {"value": value}}}
-    )
+    execute_script = AsyncMock(return_value={"result": {"result": {"value": value}}})
     session._tab = SimpleNamespace(execute_script=execute_script)
 
     authenticated = await session._probe_official_authenticated_session()
@@ -1171,9 +1151,12 @@ async def test_preserved_booking_state_returns_only_boolean_and_reidentifies_exa
         AsyncMock(return_value=(date(2026, 8, 2), 6)),
     )
 
-    assert await session._has_exact_preserved_booking_state(
-        replace(reservation_request(), train_number="00118")
-    ) is True
+    assert (
+        await session._has_exact_preserved_booking_state(
+            replace(reservation_request(), train_number="00118")
+        )
+        is True
+    )
     script = execute_script.await_args.args[0]
     assert "redirectUrl" in script
     assert "reservedTrainList" in script
@@ -1318,8 +1301,7 @@ async def test_post_submit_auth_keeps_observing_login_url_until_exact_detail(
     assert official_session_probe.await_count == 2
 
     snapshot.return_value = PydollPageSnapshot(
-        "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 "
-        "예약취소 장바구니 결제하기",
+        "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
         (),
         url="https://www.korail.com/ticket/reservation/detail",
     )
@@ -1407,10 +1389,7 @@ async def test_session_fails_closed_when_selected_login_form_does_not_match(
             return [active_panel]
         if selector == mismatched_identity_selector and scope is active_panel:
             return [mismatched_id]
-        if (
-            selector == "input#password[name='password'][type='password']"
-            and scope is active_panel
-        ):
+        if selector == "input#password[name='password'][type='password']" and scope is active_panel:
             return [password]
         if selector == "button,[role='button']" and scope is active_panel:
             return [scoped_login]
@@ -1666,9 +1645,7 @@ class ReservationFixtureFactory:
         self.sessions: list[ReservationFixtureSession] = []
         self.authenticated = authenticated
 
-    def __call__(
-        self, page_url: str, timeout_ms: int, headless: bool
-    ) -> ReservationFixtureContext:
+    def __call__(self, page_url: str, timeout_ms: int, headless: bool) -> ReservationFixtureContext:
         session = ReservationFixtureSession(authenticated=self.authenticated)
         self.sessions.append(session)
         return ReservationFixtureContext(session)
@@ -1679,9 +1656,7 @@ class SequenceReservationFixtureFactory:
         self.sessions = list(sessions)
         self.calls = 0
 
-    def __call__(
-        self, page_url: str, timeout_ms: int, headless: bool
-    ) -> ReservationFixtureContext:
+    def __call__(self, page_url: str, timeout_ms: int, headless: bool) -> ReservationFixtureContext:
         session = self.sessions[self.calls]
         self.calls += 1
         return ReservationFixtureContext(session)
@@ -1742,6 +1717,8 @@ async def test_reserve_once_direct_protection_does_not_retry_ui_search() -> None
     assert session.choose_schedule_calls == 0
     assert session.submit_calls == 0
     assert session.reserve_calls == 0
+    assert client.session_snapshot().state is KorailSessionActorState.BLOCKED
+    assert session.closed == 1
 
 
 @pytest.mark.asyncio
@@ -2530,10 +2507,7 @@ def test_internal_reserve_endpoint_is_bearer_protected_and_returns_no_credential
     assert "fixture-login" not in caplog.text
     assert "fixture-password" not in caplog.text
     assert reservation_client.request is not None
-    assert (
-        reservation_client.request.credential.login_method
-        is KorailLoginMethod.MEMBERSHIP_NUMBER
-    )
+    assert reservation_client.request.credential.login_method is KorailLoginMethod.MEMBERSHIP_NUMBER
     assert reservation_client.request.credential.version == "credential-v1"
 
 
@@ -2611,8 +2585,7 @@ def test_internal_login_verification_is_bearer_protected_and_has_no_booking_side
     assert "fixture-password" not in caplog.text
     assert reservation_client.request is None
     assert (
-        reservation_client.verified_credential.login_method
-        is KorailLoginMethod.MEMBERSHIP_NUMBER
+        reservation_client.verified_credential.login_method is KorailLoginMethod.MEMBERSHIP_NUMBER
     )
 
 

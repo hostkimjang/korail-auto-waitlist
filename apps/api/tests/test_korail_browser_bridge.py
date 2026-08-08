@@ -415,6 +415,22 @@ async def test_overlay_uses_latest_exact_fresh_batch_and_preserves_observed_stat
             passenger_count=1,
             now=now + timedelta(minutes=3),
         )
+        expires_now = await overlay_korail_browser_snapshots(
+            session,
+            [timetable_item()],
+            origin="대전",
+            destination="서울",
+            passenger_count=1,
+            now=now + timedelta(minutes=2),
+        )
+        mixed_routes = await overlay_korail_browser_snapshots(
+            session,
+            [timetable_item(), timetable_item(origin="부산")],
+            origin="대전",
+            destination="서울",
+            passenger_count=1,
+            now=now,
+        )
 
     standard, first = exact[0].seat_classes
     assert standard.status == "available"
@@ -422,10 +438,14 @@ async def test_overlay_uses_latest_exact_fresh_batch_and_preserves_observed_stat
     assert first.status == "limited"
     assert first.provenance.kind == "official_page_browser_companion"
     assert first.provenance.source == SOURCE
+    assert first.provenance.observed_at == now
     assert first.provenance.fresh_until == now + timedelta(minutes=2)
     assert wrong_route[0].seat_classes[0].status == "unknown"
     assert wrong_passengers[0].seat_classes[0].status == "unknown"
     assert stale[0].seat_classes[0].status == "unknown"
+    assert expires_now[0].seat_classes[0].status == "unknown"
+    assert mixed_routes[0].seat_classes[0].status == "limited"
+    assert mixed_routes[1].seat_classes[0].status == "unknown"
 
 
 async def test_overlay_recalculates_actions_for_every_bridge_status(db_engine):

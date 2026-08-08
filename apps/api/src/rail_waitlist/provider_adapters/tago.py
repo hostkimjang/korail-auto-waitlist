@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -12,7 +11,15 @@ import httpx
 from ..config import Settings, get_settings
 from ..domain import Provider
 from ..provider_contracts import ProviderUnavailable, RouteValidationError
-from ..schemas import SeatAvailability, StationCatalog, StationItem, TimetableItem
+from ..timetable_management import tago_timetable_projection as _tago_projection_owner
+from ..timetable_management.schemas import SeatAvailability as SeatAvailability
+from ..timetable_management.schemas import (
+    StationCatalog,
+    StationItem,
+    TimetableItem,
+)
+from .tago_response import TagoPage as TagoPage
+from .tago_response import response_page as response_page
 from .timetable_support import (
     normalize_departure_window,
     normalize_station_name,
@@ -24,74 +31,6 @@ STATION_CITY_HINTS = {
     "수서": "서울",
     "부산": "부산",
 }
-
-
-@dataclass(frozen=True)
-class TagoPage:
-    items: list[dict[str, Any]]
-    total_count: int
-    page_no: int
-    num_rows: int
-
-
-def response_page(
-    payload: dict[str, Any],
-    requested_page: int = 1,
-    requested_num_rows: int = 100,
-    *,
-    allow_unpaginated: bool = False,
-) -> TagoPage:
-    if not isinstance(payload, dict) or "response" not in payload:
-        raise ProviderUnavailable("TAGO returned an invalid response envelope")
-    response = payload["response"]
-    if not isinstance(response, dict):
-        raise ProviderUnavailable("TAGO returned an invalid response object")
-    header = response.get("header", {})
-    if not isinstance(header, dict):
-        raise ProviderUnavailable("TAGO returned an invalid response header")
-    if "resultCode" not in header:
-        raise ProviderUnavailable("TAGO response header is missing resultCode")
-    if str(header["resultCode"]) not in {"00", "0"}:
-        raise ProviderUnavailable("TAGO returned an unsuccessful result")
-    if "body" not in response:
-        raise ProviderUnavailable("TAGO response is missing body")
-    body = response["body"]
-    if not isinstance(body, dict):
-        raise ProviderUnavailable("TAGO returned an invalid response body")
-    required_metadata = {"totalCount", "pageNo", "numOfRows"}
-    has_pagination = required_metadata.issubset(body)
-    if not has_pagination and not allow_unpaginated:
-        raise ProviderUnavailable("TAGO response is missing pagination metadata")
-    if "items" not in body:
-        raise ProviderUnavailable("TAGO response is missing items")
-    item_container = body["items"]
-    if item_container is None or item_container == "":
-        items = []
-    elif isinstance(item_container, dict):
-        items = item_container.get("item", [])
-    else:
-        raise ProviderUnavailable("TAGO returned invalid items")
-    if isinstance(items, dict):
-        items = [items]
-    elif not isinstance(items, list):
-        items = []
-
-    def positive_int(field: str, fallback: int) -> int:
-        raw = body.get(field, fallback)
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            raise ProviderUnavailable(f"TAGO returned invalid {field}") from None
-        if value < 0 or (field != "totalCount" and value < 1):
-            raise ProviderUnavailable(f"TAGO returned invalid {field}")
-        return value
-
-    return TagoPage(
-        items=items,
-        total_count=positive_int("totalCount", len(items)),
-        page_no=positive_int("pageNo", requested_page),
-        num_rows=positive_int("numOfRows", requested_num_rows),
-    )
 
 
 class TagoClient:
@@ -448,53 +387,18 @@ class TagoClient:
                 snapshot = await asyncio.shield(task)
         rows = snapshot["rows"]
         retrieved_at = snapshot["retrieved_at"]
-        result: list[TimetableItem] = []
-        for row in rows:
-            grade = str(row.get("traingradename", ""))
-            normalized_grade = grade.upper()
-            if provider == Provider.KORAIL and "KTX" not in normalized_grade:
-                continue
-            if provider == Provider.SRT and "SRT" not in normalized_grade:
-                continue
-            try:
-                departure_at = datetime.strptime(
-                    str(row["depplandtime"]).zfill(14), "%Y%m%d%H%M%S"
-                ).replace(tzinfo=korea)
-                arrival_at = datetime.strptime(
-                    str(row["arrplandtime"]).zfill(14), "%Y%m%d%H%M%S"
-                ).replace(tzinfo=korea)
-            except (KeyError, ValueError):
-                continue
-            if departure_at < local_from:
-                continue
-            if local_to is not None and departure_at > local_to:
-                continue
-            raw_fare = str(row.get("adultcharge", "")).replace(",", "").strip()
-            try:
-                adult_fare = int(raw_fare) if raw_fare else None
-            except ValueError:
-                adult_fare = None
-            result.append(
-                TimetableItem(
-                    provider=provider,
-                    train_number=str(row.get("trainno", "")),
-                    train_type=grade or provider.value,
-                    origin=str(row.get("depplacename", origin)),
-                    destination=str(row.get("arrplacename", destination)),
-                    departure_at=departure_at,
-                    arrival_at=arrival_at,
-                    adult_fare=adult_fare,
-                    timetable_source="TAGO",
-                    timetable_retrieved_at=retrieved_at,
-                    availability=SeatAvailability(status="unavailable"),
-                    seat_classes=official_unknown_seat_classes(
-                        official_booking_url,
-                        reason="source_not_configured",
-                    ),
-                    official_booking_url=official_booking_url,
-                )
-            )
-        return result
+        return _tago_projection_owner.project_tago_timetable_rows(
+            rows,
+            provider=provider,
+            origin=origin,
+            destination=destination,
+            departure_from=local_from,
+            departure_to=local_to,
+            retrieved_at=retrieved_at,
+            official_booking_url=official_booking_url,
+            service_timezone=korea,
+            seat_class_projector=official_unknown_seat_classes,
+        )
 
 
 _default_tago_client: TagoClient | None = None

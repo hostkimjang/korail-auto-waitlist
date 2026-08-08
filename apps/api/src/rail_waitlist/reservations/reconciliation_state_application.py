@@ -8,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import ReservationOutcome, ReservationPolicy, WatchStatus
-from ..models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
-from ..reservation_confirmation import (
+from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )

@@ -1,12 +1,10 @@
 [
   { "file": "src/features/auth/useAuthState.ts", "rule": "react-hooks/set-state-in-effect", "line": 98, "column": 10, "lineHash": "9f8ec639ab9a040a394cf0e5a364252d6ef53816e474cf3985d5d45de9588fc3" },
-  { "file": "src/features/new-wait/CalendarPicker.tsx", "rule": "react-hooks/set-state-in-effect", "line": 89, "column": 16, "lineHash": "a29277f79089825e97b8fc0470f322c69f54f8b4198850cf8a44a3b92361fee6" },
   { "file": "src/features/new-wait/StationCombobox.tsx", "rule": "react-hooks/set-state-in-effect", "line": 50, "column": 19, "lineHash": "fd03c02663b15e6df8acfe1485b558137cea06f9661682cc76f3e9049d6233ef" },
   { "file": "src/features/new-wait/StationCombobox.tsx", "rule": "react-hooks/set-state-in-effect", "line": 51, "column": 19, "lineHash": "6cf77575260fa9533e3267316b7450ed6db4e2c29be4cd565ea3d98ebe39c857" },
   { "file": "src/features/new-wait/StationCombobox.tsx", "rule": "react-hooks/set-state-in-effect", "line": 53, "column": 30, "lineHash": "e32469f69b6953f26f024f69da6cfe40f3418851265029030d82b281a3ef1502" },
   { "file": "src/features/new-wait/StepThreeRefreshControl.tsx", "rule": "react-hooks/set-state-in-effect", "line": 41, "column": 5, "lineHash": "d7937991bda562b3b7159455e1368ea177037f151fb81df985d8b8584f51e3bf" },
   { "file": "src/features/new-wait/StepThreeRefreshControl.tsx", "rule": "react-hooks/refs", "line": 120, "column": 3, "lineHash": "ed990bc805e53b280665c51c5a43adf52d6f66726b34a6ec8cadeb25ceb83de8" },
-  { "file": "src/features/new-wait/StepThreeTimeRange.tsx", "rule": "react-hooks/set-state-in-effect", "line": 57, "column": 5, "lineHash": "b28e845891bd8d513e2cbde2b8597e554ae89c7797290c6a2eb3a64f2e61e75d" },
   { "file": "src/features/settings/TimetableRefreshSettings.tsx", "rule": "react-hooks/set-state-in-effect", "line": 78, "column": 19, "lineHash": "6b829527f70c1048bea48e9ac2478d0c19aa83c0f67e7870c8319301c4879f55" },
   { "file": "src/features/settings/useOperationsSummary.ts", "rule": "react-hooks/set-state-in-effect", "line": 56, "column": 5, "lineHash": "2d5e2c8a77c8686249737a087c75dcf3062b48946181e3a9f00e5779d634db83" },
   { "file": "src/features/settings/useSeatStatusSources.ts", "rule": "react-hooks/set-state-in-effect", "line": 64, "column": 5, "lineHash": "2d5e2c8a77c8686249737a087c75dcf3062b48946181e3a9f00e5779d634db83" },

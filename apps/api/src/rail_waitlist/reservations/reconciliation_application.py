@@ -9,14 +9,16 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import Provider, ReservationOutcome, SeatClass, WatchStatus
-from ..models import RailProviderAccount, ReservationAttempt, Watch, WatchCandidate
+from ..provider_account_management.models import RailProviderAccount
 from ..provider_contracts import (
     ProviderLifecycle,
     ProviderUnavailable,
     ReconciliationExecutionProvider,
 )
-from ..provider_execution_lease import ExecutionLeaseGrant, lock_execution_lease_current
-from ..reservation_confirmation import (
+from ..provider_execution.contracts import AcquireExecutionLease, ExecutionLeaseGrant
+from ..provider_execution.lease_application import lock_execution_lease_current
+from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
+from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
@@ -40,16 +42,6 @@ class AsyncSessionFactory(Protocol):
     def __call__(self) -> AsyncSession: ...
 
 
-class ReconciliationLeaseService(Protocol):
-    async def is_current(self, grant: ExecutionLeaseGrant, *, now: datetime) -> bool: ...
-
-    async def release(self, grant: ExecutionLeaseGrant, *, now: datetime) -> bool: ...
-
-
-AcquireExecutionLease = Callable[
-    [Provider, datetime],
-    Awaitable[tuple[ReconciliationLeaseService, ExecutionLeaseGrant | None]],
-]
 ProviderGetter = Callable[[Provider], ReconciliationExecutionProvider]
 AdapterLifecycle = Callable[[ProviderLifecycle, Provider], Awaitable[None]]
 ProviderCircuitCheck = Callable[[Provider], Awaitable[bool]]

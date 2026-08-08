@@ -7,15 +7,16 @@ import time
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
-from ..korail_browser_automation import (
+from ..provider_adapters.korail_search_bootstrap import KorailStationIdentityResolver
+from .browser_contracts import (
+    BrowserClient,
+)
+from .browser_page_contracts import (
     FULLSTACK_E2E_PAGE_URL,
     OFFICIAL_KORAIL_SEARCH_URL,
-    BrowserClient,
-    KorailBrowserAutomation,
-    PlaywrightKorailBrowserClient,
-    probe_chromium,
 )
-from ..korail_search_bootstrap import KorailStationIdentityResolver
+from .playwright.client import PlaywrightKorailBrowserClient, probe_chromium
+from .search_coordinator import KorailBrowserAutomation
 
 # Preserve the operational logger namespace while the compatibility facade still owns HTTP.
 logger = logging.getLogger("rail_waitlist.korail_browser_adapter_service")
@@ -157,7 +158,7 @@ def readiness_probe_for_engine(
         return probe_chromium
 
     async def probe_selected_pydoll_mode() -> None:
-        from ..korail_pydoll_browser import probe_pydoll_chromium
+        from .pydoll.chromium_lifecycle import probe_pydoll_chromium
 
         await probe_pydoll_chromium(
             headless=not boolean_setting("KORAIL_BROWSER_GUI_ENABLED", False)

@@ -174,3 +174,81 @@ def test_sidecar_dependency_direction_and_lazy_pydoll_imports_are_fixed() -> Non
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
     assert "korail_pydoll_browser" not in top_level_imports
+
+
+def test_adapter_service_remains_the_exact_deployment_composition_root() -> None:
+    facade_path = SOURCE_ROOT / "korail_browser_adapter_service.py"
+    tree = ast.parse(facade_path.read_text(encoding="utf-8"), filename=str(facade_path))
+    imported_modules = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    local_definitions = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    app_assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "app" for target in node.targets)
+    ]
+
+    assert imported_modules == {
+        "__future__",
+        "collections.abc",
+        "fastapi",
+        "file_logging",
+        "korail_sidecar.http",
+        "korail_sidecar.playwright.client",
+        "korail_sidecar.runtime",
+        "korail_sidecar.search_coordinator",
+        "logging",
+        "os",
+        "time",
+        "typing",
+    }
+    assert local_definitions == {"create_adapter_app"}
+    assert len(app_assignments) == 1
+    app_factory = app_assignments[0].value
+    assert isinstance(app_factory, ast.Call)
+    assert isinstance(app_factory.func, ast.Name)
+    assert app_factory.func.id == "create_adapter_app"
+    assert app_factory.args == []
+    assert app_factory.keywords == []
+
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile.browser"
+    docker_lines = [
+        line.strip()
+        for line in dockerfile.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    runtime_starts = [
+        index
+        for index, line in enumerate(docker_lines)
+        if line.casefold() == "from browser-base as runtime"
+    ]
+    assert len(runtime_starts) == 1
+    runtime_start = runtime_starts[0]
+    runtime_end = next(
+        (
+            index
+            for index in range(runtime_start + 1, len(docker_lines))
+            if docker_lines[index].casefold().startswith("from ")
+        ),
+        len(docker_lines),
+    )
+    runtime_stage = docker_lines[runtime_start:runtime_end]
+    expected_cmd = (
+        'CMD ["uvicorn", "rail_waitlist.korail_browser_adapter_service:app", "--host", '
+        '"0.0.0.0", "--port", "8001", "--no-access-log"]'
+    )
+    assert [line for line in runtime_stage if line.casefold().startswith("cmd ")] == [expected_cmd]
+    assert runtime_stage[-1] == expected_cmd

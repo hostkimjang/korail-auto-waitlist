@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import ReservationOutcome, SeatObservationStatus, WatchStatus
-from ..models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
 from .attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
     RESERVATION_RETRY_EDGE_OBSERVATIONS,
@@ -82,9 +82,28 @@ async def begin_reservation_attempt(
         .order_by(ReservationAttempt.attempt_sequence.desc())
         .limit(1)
     )
+    not_available_retry_authorized = False
+    if (
+        latest_attempt is not None
+        and latest_attempt.outcome is ReservationOutcome.NOT_AVAILABLE
+        and normalized_episode_key.startswith("availability-after:")
+    ):
+        retry_edge_id = normalized_episode_key.removeprefix("availability-after:")
+        retry_edge = await session.scalar(
+            select(SeatObservation.id).where(
+                SeatObservation.id == retry_edge_id,
+                SeatObservation.candidate_id == candidate.id,
+                SeatObservation.observed_at
+                > (latest_attempt.finished_at or latest_attempt.started_at),
+                SeatObservation.status.in_(RESERVATION_RETRY_EDGE_OBSERVATIONS),
+            )
+        )
+        not_available_retry_authorized = retry_edge is not None
     confirmed_absent_retry_authorized = False
-    if latest_attempt is not None and normalized_episode_key.startswith(
-        CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX
+    if (
+        latest_attempt is not None
+        and latest_attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+        and normalized_episode_key.startswith(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
     ):
         expected_episode_key = f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
         actionable_after_confirmation = None
@@ -120,18 +139,21 @@ async def begin_reservation_attempt(
             .limit(1)
         )
         payment_hold_retry_edge_observed = retry_edge is not None
-    if latest_attempt is not None and (
-        not retry_authorized
-        or latest_attempt.outcome
-        not in {
-            ReservationOutcome.NOT_AVAILABLE,
+    if latest_attempt is not None:
+        provider_auth_retry_authorized = latest_attempt.outcome in {
             ReservationOutcome.AUTH_REQUIRED,
             ReservationOutcome.PROVIDER_BLOCKED,
         }
-        and not payment_hold_retry_edge_observed
-        and not confirmed_absent_retry_authorized
-    ):
-        return latest_attempt, False
+        retry_permitted = retry_authorized and any(
+            (
+                not_available_retry_authorized,
+                provider_auth_retry_authorized,
+                payment_hold_retry_edge_observed,
+                confirmed_absent_retry_authorized,
+            )
+        )
+        if not retry_permitted:
+            return latest_attempt, False
 
     latest_sequence = latest_attempt.attempt_sequence if latest_attempt is not None else 0
     attempt = ReservationAttempt(
@@ -175,6 +197,7 @@ async def begin_reservation_attempt(
             "watch_id": watch.id,
             "candidate_id": candidate.id,
             "attempt_sequence": attempt.attempt_sequence,
+            "attempt_started_at": attempt.started_at.isoformat(),
             "episode_key": attempt.episode_key,
             "outcome": ReservationOutcome.PENDING.value,
         },

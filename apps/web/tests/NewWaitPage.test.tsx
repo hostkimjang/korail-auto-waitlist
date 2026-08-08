@@ -158,6 +158,28 @@ afterEach(() => {
 });
 
 describe("NewWaitPage behavior", () => {
+  it("shows midnight boundaries while keeping the evening service-date sentinel selectable", async () => {
+    const user = userEvent.setup();
+    render(<OwnedNewWait demo onComplete={vi.fn()} onCancel={vi.fn()} />);
+
+    const presets = screen.getByLabelText("시간대 빠른 선택");
+    const evening = within(presets).getByRole("button", {
+      name: "저녁 18:00부터 익일 00:00까지",
+    });
+    expect(evening.textContent).toContain("18:00–00:00");
+    await user.click(evening);
+
+    const endSlider = screen.getByRole<HTMLInputElement>("slider", { name: "출발 종료 시간" });
+    expect(endSlider.value).toBe("48");
+    expect(endSlider.getAttribute("aria-valuetext")).toBe("익일 00:00까지");
+
+    const dawn = within(presets).getByRole("button", { name: "새벽 00:00부터 09:00까지" });
+    expect(dawn.textContent).toContain("00:00–09:00");
+    await user.click(dawn);
+    expect(screen.getByRole<HTMLInputElement>("slider", { name: "출발 시작 시간" }).value)
+      .toBe("0");
+  });
+
   it("keeps the production wizard on train selection when the official timetable returns 503", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {

@@ -72,6 +72,9 @@ export function ReservationList({ watches, onCreate, onOpenOfficial, onDelete }:
         const showOfficialLink = Boolean(
           (isPayment || watch.status === "scheduled") && watch.officialBookingUrl,
         );
+        const showSrtTicketRefreshHint = showOfficialLink
+          && isPayment
+          && watch.provider === "SRT";
         const canDelete = ["draft", "expired", "failed"].includes(watch.status);
         return (
           <article
@@ -102,6 +105,12 @@ export function ReservationList({ watches, onCreate, onOpenOfficial, onDelete }:
                   ? "공식 확인 열기"
                   : isPayment ? "결제 열기" : "공식 예매 열기"}<ArrowSquareOut />
               </button>
+            ) : null}
+            {showSrtTicketRefreshHint ? (
+              <p className="reservation-srt-refresh-hint" role="note">
+                <strong>SRT 앱 갱신 안내</strong>
+                <span>방금 예약이 비어 보이면 하단 ‘승차권 확인’을 한 번 더 눌러 목록을 갱신하세요.</span>
+              </p>
             ) : null}
             {canDelete ? (
               <button

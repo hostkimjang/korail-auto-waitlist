@@ -8,6 +8,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 
 from ..domain import Provider
 from ..schema_base import ApiModel
+from .contracts import RailLoginMethod as RailLoginMethod
 
 RailProviderAuthStatus = Literal[
     "not_checked",
@@ -16,7 +17,6 @@ RailProviderAuthStatus = Literal[
     "provider_blocked",
     "failed",
 ]
-RailLoginMethod = Literal["membership_number", "email", "phone"]
 
 
 class RailProviderAccountUpsert(ApiModel):

@@ -27,12 +27,10 @@ from .provider_adapters.tago import (
     TagoClient as TagoClient,
 )
 from .provider_adapters.tago import (
-    TagoPage as TagoPage,
-)
-from .provider_adapters.tago import (
     default_tago_client as default_tago_client,
 )
-from .provider_adapters.tago import (
+from .provider_adapters.tago_response import TagoPage as TagoPage
+from .provider_adapters.tago_response import (
     response_page as response_page,
 )
 from .provider_adapters.timetable import (
@@ -59,6 +57,6 @@ from .provider_registry.application import (
     get_timetable_provider as get_timetable_provider,
 )
 from .provider_registry.application import list_capabilities as list_capabilities
-from .schemas import ProviderCapabilities as ProviderCapabilities
-from .schemas import StationCatalog as StationCatalog
-from .schemas import TimetableItem as TimetableItem
+from .provider_registry.contracts import ProviderCapabilities as ProviderCapabilities
+from .timetable_management.schemas import StationCatalog as StationCatalog
+from .timetable_management.schemas import TimetableItem as TimetableItem

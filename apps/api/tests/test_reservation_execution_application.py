@@ -22,7 +22,7 @@ from rail_waitlist.models import (
     Watch,
     WatchCandidate,
 )
-from rail_waitlist.provider_accounts import update_provider_auth_status
+from rail_waitlist.provider_account_management.application import update_provider_auth_status
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,

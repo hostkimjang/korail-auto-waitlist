@@ -8,10 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import ReservationOutcome, WatchStatus
-from ..models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
-from ..reservation_confirmation import ReservationConfirmationResult
-from ..schemas import ReservationResult
+from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from .contracts import ReservationResult
 from .domain import ReservationAttemptResultPolicy
+from .provider_confirmation.contracts import ReservationConfirmationResult
 
 
 class ReservationAttemptAlreadyCompleted(Exception):

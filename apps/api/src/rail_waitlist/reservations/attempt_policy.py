@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Protocol
 
 from ..domain import ReservationOutcome, SeatObservationStatus
-from ..reservation_confirmation import ReservationConfirmationOutcome
+from .provider_confirmation.contracts import ReservationConfirmationOutcome
 
 CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
 
@@ -44,8 +44,6 @@ def is_confirmed_absent_retry_source(attempt: ConfirmedAbsentRetrySource) -> boo
         or attempt.episode_key.startswith(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
     ):
         return False
-    if attempt.outcome is ReservationOutcome.UNKNOWN:
-        return True
     return (
         attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
         and attempt.payment_deadline is None

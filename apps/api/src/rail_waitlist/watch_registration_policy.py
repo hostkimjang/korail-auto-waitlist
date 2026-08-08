@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .schemas import TimetableItem
+from .timetable_management.schemas import TimetableItem
 
 
 def apply_watch_registration_capability(

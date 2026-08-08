@@ -6,8 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import WatchStatus
-from ..models import NotificationChannel, Watch
 from ..outbox import add_outbox_event
+from ..watch_management.models import Watch
+from .models import NotificationChannel
 
 
 async def add_watch_notifications(
@@ -23,6 +24,14 @@ async def add_watch_notifications(
     )
     reservation_failed_monitoring_resumed = (
         target == WatchStatus.WATCHING and reason == "reservation_failed_monitoring_resumed"
+    )
+    reservation_result_requires_manual_check = target == WatchStatus.WATCHING and reason in {
+        "reservation_unknown",
+        "reservation_result_deadline_already_elapsed",
+        "stale_reservation_attempt_requires_manual_check",
+    }
+    reservation_not_available = (
+        target == WatchStatus.WATCHING and reason == "reservation_not_available"
     )
     payment_hold_ended = reason in {
         "confirmed_payment_hold_no_longer_actionable_monitoring_resumed",
@@ -42,6 +51,8 @@ async def add_watch_notifications(
         (
             seat_disappeared,
             reservation_failed_monitoring_resumed,
+            reservation_result_requires_manual_check,
+            reservation_not_available,
             payment_hold_ended,
         )
     ):
@@ -91,6 +102,18 @@ async def add_watch_notifications(
         message = (
             f"{watch.origin} → {watch.destination} 예매 결과를 확정하지 못해 감시를 "
             "다시 시작했습니다. 같은 가용성 구간에서는 다시 예매하지 않습니다."
+        )
+    elif reservation_result_requires_manual_check:
+        message = (
+            f"{watch.origin} → {watch.destination} 예매 결과를 확정하지 못했습니다. "
+            "공식 플랫폼의 예약 내역을 확인해 주세요. 좌석 감시는 계속하지만 "
+            "같은 좌석 가용 상태에서는 자동 예매를 다시 시도하지 않습니다."
+        )
+    elif reservation_not_available:
+        message = (
+            f"{watch.origin} → {watch.destination} 예매 시점에 좌석을 확보하지 못해 "
+            "감시를 계속합니다. 판매 불가 상태를 확인한 뒤 좌석이 다시 가용해지는 "
+            "경우에만 다음 자동 예매를 시도합니다."
         )
     elif payment_hold_ended:
         follow_up = (

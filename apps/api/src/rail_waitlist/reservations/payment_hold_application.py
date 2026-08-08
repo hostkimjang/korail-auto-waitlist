@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ..domain import ReservationOutcome
-from ..models import ReservationAttempt
-from ..reservation_confirmation import ReservationConfirmationOutcome
+from ..watch_management.models import ReservationAttempt
+from .provider_confirmation.contracts import ReservationConfirmationOutcome
 
 
 def _utc_instant(value: datetime) -> datetime:

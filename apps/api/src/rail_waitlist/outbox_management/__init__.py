@@ -1,0 +1,1 @@
+"""Outbox persistence model ownership."""

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import ast
-from datetime import datetime
+import base64
+import hashlib
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rail_waitlist.config import get_settings
 from rail_waitlist.domain import NotificationKind, OutboxStatus
-from rail_waitlist.models import OutboxEvent
+from rail_waitlist.models import NotificationChannel, OutboxEvent
 from rail_waitlist.notification_management.http import router
 from rail_waitlist.notification_management.schemas import (
     NotificationChannelCreate as FeatureNotificationChannelCreate,
@@ -23,6 +28,7 @@ from rail_waitlist.notification_management.schemas import (
 from rail_waitlist.notification_management.schemas import QueuedResponse as FeatureQueuedResponse
 from rail_waitlist.notification_management.service import (
     TEST_NOTIFICATION_MESSAGE,
+    TEST_NOTIFICATION_TITLE,
     create_notification_channel,
     queue_test_notification,
     update_notification_channel,
@@ -40,6 +46,27 @@ from rail_waitlist.security import secret_box
 from rail_waitlist.services import add_outbox_event as compatibility_add_outbox_event
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "rail_waitlist"
+
+
+def _web_push_config(endpoint: str) -> dict[str, str]:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    subscription = {
+        "endpoint": endpoint,
+        "keys": {
+            "p256dh": base64.urlsafe_b64encode(public_key).rstrip(b"=").decode(),
+            "auth": base64.urlsafe_b64encode(b"A" * 16).rstrip(b"=").decode(),
+        },
+    }
+    return {"subscription_info": json.dumps(subscription)}
+
+
+def _expected_device_key(endpoint: str) -> str:
+    digest = hashlib.sha256(endpoint.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
 
 def test_notification_management_schemas_keep_compatibility_exports() -> None:
@@ -82,7 +109,7 @@ async def test_notification_management_service_preserves_encryption_and_outbox_c
     db_engine,
 ) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    requested_at = datetime(2026, 8, 4, 12, 34, 56)
+    requested_at = datetime(2026, 8, 4, 12, 34, 56, tzinfo=UTC)
 
     async with factory() as session:
         channel = await create_notification_channel(
@@ -130,11 +157,161 @@ async def test_notification_management_service_preserves_encryption_and_outbox_c
     assert events[0].aggregate_type == "notification_channel"
     assert events[0].aggregate_id == channel.id
     assert events[0].payload == {
+        "body": TEST_NOTIFICATION_MESSAGE,
         "channel_id": channel.id,
         "message": TEST_NOTIFICATION_MESSAGE,
+        "status": "seat_found",
+        "title": TEST_NOTIFICATION_TITLE,
     }
     assert events[0].dedupe_key == f"notification:{channel.id}:test:{requested_at.isoformat()}"
     assert events[0].status is OutboxStatus.PENDING
+
+
+async def test_web_push_channels_are_device_scoped_and_idempotent(client) -> None:
+    first_endpoint = "https://push.example/subscriptions/chrome"
+    second_endpoint = "https://push.example/subscriptions/edge"
+    first_payload = {
+        "kind": "web_push",
+        "name": "Chrome",
+        "config": _web_push_config(first_endpoint),
+    }
+
+    first = await client.post("/api/v1/notifications/channels", json=first_payload)
+    duplicate = await client.post(
+        "/api/v1/notifications/channels",
+        json={**first_payload, "name": "Chrome 다시 연결"},
+    )
+    second = await client.post(
+        "/api/v1/notifications/channels",
+        json={
+            "kind": "web_push",
+            "name": "Edge",
+            "config": _web_push_config(second_endpoint),
+        },
+    )
+    listed = await client.get("/api/v1/notifications/channels")
+
+    assert first.status_code == duplicate.status_code == second.status_code == 201
+    assert first.json()["id"] == duplicate.json()["id"]
+    assert first.json()["device_key"] == _expected_device_key(first_endpoint)
+    assert duplicate.json()["name"] == "Chrome 다시 연결"
+    assert second.json()["id"] != first.json()["id"]
+    assert second.json()["device_key"] == _expected_device_key(second_endpoint)
+    assert second.json()["active_device_count"] == 2
+    web_push_rows = [row for row in listed.json() if row["kind"] == "web_push"]
+    assert len(web_push_rows) == 2
+    assert {row["active_device_count"] for row in web_push_rows} == {2}
+    assert all("endpoint" not in json.dumps(row) for row in web_push_rows)
+
+
+async def test_web_push_create_backfills_matching_legacy_channel(db_engine) -> None:
+    endpoint = "https://push.example/subscriptions/legacy"
+    config = _web_push_config(endpoint)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        legacy = NotificationChannel(
+            kind=NotificationKind.WEB_PUSH,
+            name="기존 브라우저",
+            config_ciphertext=secret_box.encrypt_dict(config),
+        )
+        session.add(legacy)
+        await session.commit()
+        legacy_id = legacy.id
+
+        resolved = await create_notification_channel(
+            session,
+            FeatureNotificationChannelCreate(
+                kind=NotificationKind.WEB_PUSH,
+                name="기존 브라우저 재연결",
+                config=config,
+            ),
+        )
+        rows = list(
+            (
+                await session.scalars(
+                    select(NotificationChannel).where(
+                        NotificationChannel.kind == NotificationKind.WEB_PUSH
+                    )
+                )
+            ).all()
+        )
+
+    assert resolved.id == legacy_id
+    assert resolved.web_push_device_key == _expected_device_key(endpoint)
+    assert len(rows) == 1
+
+
+async def test_web_push_list_lazy_backfills_and_collapses_legacy_duplicates(
+    client, db_engine
+) -> None:
+    duplicate_endpoint = "https://push.example/subscriptions/duplicate"
+    other_endpoint = "https://push.example/subscriptions/other"
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add_all(
+            [
+                NotificationChannel(
+                    kind=NotificationKind.WEB_PUSH,
+                    name="canonical",
+                    config_ciphertext=secret_box.encrypt_dict(_web_push_config(duplicate_endpoint)),
+                    enabled=False,
+                    created_at=datetime(2026, 8, 7, 1, tzinfo=UTC),
+                ),
+                NotificationChannel(
+                    kind=NotificationKind.WEB_PUSH,
+                    name="duplicate",
+                    config_ciphertext=secret_box.encrypt_dict(_web_push_config(duplicate_endpoint)),
+                    enabled=True,
+                    created_at=datetime(2026, 8, 7, 2, tzinfo=UTC),
+                ),
+                NotificationChannel(
+                    kind=NotificationKind.WEB_PUSH,
+                    name="other",
+                    config_ciphertext=secret_box.encrypt_dict(_web_push_config(other_endpoint)),
+                    enabled=True,
+                ),
+                NotificationChannel(
+                    kind=NotificationKind.WEB_PUSH,
+                    name="invalid legacy row",
+                    config_ciphertext=secret_box.encrypt_dict({"subscription_info": "invalid"}),
+                    enabled=True,
+                ),
+            ]
+        )
+        await session.commit()
+
+    response = await client.get("/api/v1/notifications/channels")
+
+    assert response.status_code == 200
+    web_push_rows = [row for row in response.json() if row["kind"] == "web_push"]
+    assert {row["name"] for row in web_push_rows} == {"canonical", "other"}
+    assert {row["device_key"] for row in web_push_rows} == {
+        _expected_device_key(duplicate_endpoint),
+        _expected_device_key(other_endpoint),
+    }
+    assert {row["active_device_count"] for row in web_push_rows} == {2}
+
+    async with factory() as session:
+        persisted = list(
+            (
+                await session.scalars(
+                    select(NotificationChannel)
+                    .where(NotificationChannel.kind == NotificationKind.WEB_PUSH)
+                    .order_by(NotificationChannel.created_at, NotificationChannel.id)
+                )
+            ).all()
+        )
+    persisted_by_name = {channel.name: channel for channel in persisted}
+    assert persisted_by_name["canonical"].enabled is True
+    assert persisted_by_name["canonical"].web_push_device_key == _expected_device_key(
+        duplicate_endpoint
+    )
+    assert persisted_by_name["duplicate"].enabled is False
+    assert persisted_by_name["duplicate"].web_push_device_key is None
+    assert persisted_by_name["other"].enabled is True
+    assert persisted_by_name["other"].web_push_device_key == _expected_device_key(other_endpoint)
+    assert persisted_by_name["invalid legacy row"].enabled is False
+    assert persisted_by_name["invalid legacy row"].web_push_device_key is None
 
 
 def test_notification_management_router_owns_existing_routes() -> None:
@@ -157,6 +334,35 @@ async def test_notification_management_routes_require_admin_session(public_clien
     response = await public_client.get("/api/v1/notifications/channels")
 
     assert response.status_code == 401
+
+
+async def test_retired_native_notification_routes_are_not_exposed(public_client) -> None:
+    for method, path in (
+        ("post", "/api/v1/notifications/native-pairings"),
+        ("post", "/api/v1/notifications/native-pairings/redeem"),
+        ("put", "/api/v1/notifications/native-registrations/current"),
+        ("delete", "/api/v1/notifications/native-registrations/current"),
+        ("put", "/api/v1/notifications/native-devices/android"),
+        ("post", "/api/v1/notifications/native-devices/android/unregister"),
+    ):
+        response = await getattr(public_client, method)(path)
+        assert response.status_code == 404
+
+
+async def test_retired_native_notification_kind_cannot_be_created(client) -> None:
+    response = await client.post(
+        "/api/v1/notifications/channels",
+        json={
+            "kind": "android_fcm",
+            "name": "retired native channel",
+            "config": {"token": "must-not-be-accepted"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "native push notification channels are no longer supported"
+    }
 
 
 async def test_notification_management_routes_keep_error_details(client) -> None:

@@ -33,6 +33,8 @@ class NotificationChannelRead(ApiModel):
     name: str
     enabled: bool
     configured: bool = True
+    device_key: str | None = None
+    active_device_count: int | None = None
     created_at: datetime
     updated_at: datetime
 

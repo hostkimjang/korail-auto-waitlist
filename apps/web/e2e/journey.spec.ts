@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+import { selectStation } from "./support/stationSelection";
+
 type Provider = "korail" | "srt";
 type SeatClass = "standard" | "first";
 type SeatStatus = "available" | "sold_out" | "waitlist_available" | "unknown";
@@ -373,12 +375,6 @@ async function installLocalApi(page: Page): Promise<void> {
     }
     await json(route, { detail: `unhandled local E2E route: ${request.method()} ${path}` }, 404);
   });
-}
-
-async function selectStation(page: Page, label: "출발역" | "도착역", name: string): Promise<void> {
-  const input = page.getByRole("combobox", { name: label });
-  await input.fill(name);
-  await page.getByRole("option", { name: new RegExp(`^${name}`) }).click();
 }
 
 test.beforeEach(async ({ page }) => {

@@ -31,11 +31,11 @@ from rail_waitlist.provider_adapters.srt_execution import (
     SrtLiveExecutionAdapter as OwnerSrtLiveExecutionAdapter,
 )
 from rail_waitlist.provider_adapters.tago import TagoClient as OwnerTagoClient
-from rail_waitlist.provider_adapters.tago import TagoPage as OwnerTagoPage
 from rail_waitlist.provider_adapters.tago import (
     default_tago_client as owner_default_tago_client,
 )
-from rail_waitlist.provider_adapters.tago import response_page as owner_response_page
+from rail_waitlist.provider_adapters.tago_response import TagoPage as OwnerTagoPage
+from rail_waitlist.provider_adapters.tago_response import response_page as owner_response_page
 from rail_waitlist.provider_adapters.timetable import (
     OfficialTimetableAdapter as OwnerOfficialTimetableAdapter,
 )
@@ -82,7 +82,7 @@ from rail_waitlist.providers import (
     official_unknown_seat_classes,
     response_page,
 )
-from rail_waitlist.srt_reservation import default_srt_reservation_executor
+from rail_waitlist.srt_sidecar.reservation import default_srt_reservation_executor
 
 
 class LifecycleSource:
@@ -131,6 +131,8 @@ def test_provider_facade_reexports_timetable_objects_by_identity() -> None:
     assert OfficialTimetableAdapter is OwnerOfficialTimetableAdapter
     assert TagoPage is OwnerTagoPage
     assert response_page is owner_response_page
+    assert tago_module.TagoPage is OwnerTagoPage
+    assert tago_module.response_page is owner_response_page
     assert normalize_station_name is owner_normalize_station_name
     assert normalize_departure_window is owner_normalize_departure_window
     assert official_unknown_seat_classes is owner_official_unknown_seat_classes

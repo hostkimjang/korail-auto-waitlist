@@ -62,6 +62,7 @@ export interface WatchCreatePayload {
 }
 
 const OFFICIAL_PROVIDERS: ReadonlySet<string> = new Set(["KORAIL", "SRT"]);
+const SERVICE_DATE_END_TIME = "23:59:59";
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -85,6 +86,25 @@ function apiTimeValue(value: unknown): string {
     hourCycle: "h23",
     timeZone: "Asia/Seoul",
   }).format(new Date(value));
+}
+
+function watchWindowEndValue(firstDeparture: unknown, lastArrival: unknown): string {
+  if (!awareTimestamp(firstDeparture) || !awareTimestamp(lastArrival)) {
+    throw new ApiError("열차 운행 시각을 확인할 수 없습니다.");
+  }
+  const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Seoul",
+  });
+  if (
+    dateFormatter.format(new Date(lastArrival))
+    !== dateFormatter.format(new Date(firstDeparture))
+  ) {
+    return SERVICE_DATE_END_TIME;
+  }
+  return apiTimeValue(lastArrival);
 }
 
 function requestedSeatClass(form: WatchCreateForm, train: UnknownRecord | null): WatchSeatClass {
@@ -198,7 +218,9 @@ export function buildWatchCreatePayload(
       : {}),
     travel_date: requiredString(form.date, "여행 날짜를 선택해 주세요."),
     time_from: apiTimeValue(firstDeparture.departure_at),
-    time_to: apiTimeValue(lastArrival.arrival_at),
+    // Watch windows belong to one KST service date. Keep the candidate's full
+    // next-day arrival timestamp, but do not fold 00:xx back before a 23:xx departure.
+    time_to: watchWindowEndValue(firstDeparture.departure_at, lastArrival.arrival_at),
     seat_class: seatClass,
     passenger_count: passengerCount,
     train_numbers: [...new Set(trainNumbers)],

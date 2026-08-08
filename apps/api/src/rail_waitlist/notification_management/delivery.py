@@ -7,9 +7,10 @@ from sqlalchemy import func, select
 from ..database import SessionFactory
 from ..domain import OutboxStatus
 from ..metrics import OUTBOX_DELIVERIES, OUTBOX_PENDING
-from ..models import NotificationChannel, OutboxEvent
 from ..notifications import NotificationDeliveryError, deliver_notification
+from ..outbox_management.models import OutboxEvent
 from ..security import secret_box
+from .models import NotificationChannel
 
 DELIVERABLE_EVENT_TYPES = (
     "notification.test_requested",
@@ -59,7 +60,9 @@ async def deliver_pending_notifications() -> int:
             except NotificationDeliveryError as error:
                 # Never persist provider responses, URLs, tokens, or message bodies.
                 event.last_error = str(error)[:80]
-                if event.attempts >= MAX_DELIVERY_ATTEMPTS:
+                if error.disable_channel:
+                    channel.enabled = False
+                if error.permanent or event.attempts >= MAX_DELIVERY_ATTEMPTS:
                     event.status = OutboxStatus.FAILED
                     event.processed_at = now
                     OUTBOX_DELIVERIES.labels("failed").inc()

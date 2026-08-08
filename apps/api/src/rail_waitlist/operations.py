@@ -13,16 +13,6 @@ from .domain import (
     SeatObservationStatus,
     WatchStatus,
 )
-from .models import (
-    OutboxEvent,
-    ProviderCircuit,
-    ReservationAttempt,
-    SeatObservation,
-    StationCatalogCache,
-    Watch,
-    WatchCandidate,
-    WatchTransitionHistory,
-)
 from .operation_summary.schemas import (
     OperationCurrentCounts,
     OperationEntry,
@@ -34,6 +24,16 @@ from .operation_summary.schemas import (
     OperationStatusCount,
     OperationsWindow,
     OperationWindowCounts,
+)
+from .outbox_management.models import OutboxEvent
+from .provider_circuit.models import ProviderCircuit
+from .timetable_management.models import StationCatalogCache
+from .watch_management.models import (
+    ReservationAttempt,
+    SeatObservation,
+    Watch,
+    WatchCandidate,
+    WatchTransitionHistory,
 )
 
 WINDOW_HOURS = 24
@@ -152,9 +152,7 @@ def _transition_level(status: WatchStatus) -> Literal["info", "warning", "error"
     return "info"
 
 
-async def _recent_entries(
-    session: AsyncSession, window_start: datetime
-) -> list[OperationEntry]:
+async def _recent_entries(session: AsyncSession, window_start: datetime) -> list[OperationEntry]:
     entries: list[OperationEntry] = []
 
     observation_rows = (
@@ -239,16 +237,12 @@ async def _recent_entries(
                             OutboxEvent.created_at >= window_start,
                         ),
                         and_(
-                            OutboxEvent.status.in_(
-                                [OutboxStatus.SENT, OutboxStatus.FAILED]
-                            ),
+                            OutboxEvent.status.in_([OutboxStatus.SENT, OutboxStatus.FAILED]),
                             OutboxEvent.processed_at >= window_start,
                         ),
                     ),
                 )
-                .order_by(
-                    func.coalesce(OutboxEvent.processed_at, OutboxEvent.created_at).desc()
-                )
+                .order_by(func.coalesce(OutboxEvent.processed_at, OutboxEvent.created_at).desc())
                 .limit(RECENT_ENTRY_LIMIT)
             )
         ).all()
@@ -284,9 +278,7 @@ async def _recent_entries(
             OperationEntry(
                 occurred_at=_utc(circuit.updated_at),
                 kind="provider_circuit",
-                level="info"
-                if circuit.state == ProviderCircuitState.CLOSED
-                else "warning",
+                level="info" if circuit.state == ProviderCircuitState.CLOSED else "warning",
                 status=circuit.state.value,
                 provider=circuit.provider,
             )
@@ -328,9 +320,7 @@ async def build_operations_summary(
                 func.sum(
                     case(
                         (
-                            ReservationAttempt.outcome.in_(
-                                RESERVATION_FAILURE_OUTCOMES
-                            ),
+                            ReservationAttempt.outcome.in_(RESERVATION_FAILURE_OUTCOMES),
                             1,
                         ),
                         else_=0,
@@ -361,9 +351,7 @@ async def build_operations_summary(
     ).one()
     transitions = int(transition_stats[0] or 0)
     failed_transitions = int(transition_stats[1] or 0)
-    latest_transition = await _latest_timestamp(
-        session, WatchTransitionHistory.created_at
-    )
+    latest_transition = await _latest_timestamp(session, WatchTransitionHistory.created_at)
 
     notification_condition = OutboxEvent.event_type.in_(NOTIFICATION_EVENT_TYPES)
     notification_events = int(
@@ -428,20 +416,13 @@ async def build_operations_summary(
         await session.execute(select(Watch.status, func.count()).group_by(Watch.status))
     ).all()
     watches_by_status = sorted(
-        (
-            OperationStatusCount(status=status, count=int(count))
-            for status, count in status_rows
-        ),
+        (OperationStatusCount(status=status, count=int(count)) for status, count in status_rows),
         key=lambda item: item.status.value,
     )
     latest_catalog = await session.scalar(select(func.max(StationCatalogCache.retrieved_at)))
 
     circuits = list(
-        (
-            await session.scalars(
-                select(ProviderCircuit).order_by(ProviderCircuit.provider)
-            )
-        ).all()
+        (await session.scalars(select(ProviderCircuit).order_by(ProviderCircuit.provider))).all()
     )
     latest_circuit = max((circuit.updated_at for circuit in circuits), default=None)
 

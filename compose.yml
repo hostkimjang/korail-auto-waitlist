@@ -140,6 +140,15 @@ services:
     image: rail-waitlist-web:local
     build:
       context: ./apps/web
+      args:
+        VITE_KORAIL_BOOKING_DEEPLINK_ENABLED: "${VITE_KORAIL_BOOKING_DEEPLINK_ENABLED:-false}"
+        VITE_KORAIL_BOOKING_VALIDATED_VERSION: "${VITE_KORAIL_BOOKING_VALIDATED_VERSION:-}"
+        VITE_KORAIL_TICKET_DEEPLINK_ENABLED: "${VITE_KORAIL_TICKET_DEEPLINK_ENABLED:-false}"
+        VITE_KORAIL_TICKET_VALIDATED_VERSION: "${VITE_KORAIL_TICKET_VALIDATED_VERSION:-}"
+        VITE_SRT_MAIN_DEEPLINK_ENABLED: "${VITE_SRT_MAIN_DEEPLINK_ENABLED:-false}"
+        VITE_SRT_MAIN_VALIDATED_VERSION: "${VITE_SRT_MAIN_VALIDATED_VERSION:-}"
+        VITE_SRT_TICKET_DEEPLINK_ENABLED: "${VITE_SRT_TICKET_DEEPLINK_ENABLED:-false}"
+        VITE_SRT_TICKET_VALIDATED_VERSION: "${VITE_SRT_TICKET_VALIDATED_VERSION:-}"
     restart: unless-stopped
     init: true
     read_only: true
@@ -175,6 +184,7 @@ services:
 
   api:
     <<: *app-common
+    stop_grace_period: 5m
     command: ["uvicorn", "rail_waitlist.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
     environment:
       <<: *api-environment
@@ -228,6 +238,8 @@ services:
 
   worker:
     <<: *app-common
+    # Celery의 warm shutdown이 진행 중인 예약과 adapter drain을 끝낼 시간을 보장합니다.
+    stop_grace_period: 5m
     command: ["celery", "-A", "rail_waitlist.worker.celery_app", "worker", "--loglevel=INFO", "--queues=rail", "--concurrency=1", "--hostname=rail@%h"]
     environment:
       <<: *api-environment
@@ -255,6 +267,7 @@ services:
 
   notification-worker:
     <<: *app-common
+    stop_grace_period: 5m
     command: ["celery", "-A", "rail_waitlist.worker.celery_app", "worker", "--loglevel=INFO", "--queues=notifications", "--concurrency=1", "--hostname=notifications@%h"]
     environment:
       <<: *api-environment
@@ -323,6 +336,7 @@ services:
   experimental-rail:
     <<: *app-common
     profiles: ["experimental-rail"]
+    stop_grace_period: 5m
     command: ["celery", "-A", "rail_waitlist.worker.celery_app", "worker", "--loglevel=INFO", "--queues=experimental-rail", "--concurrency=1", "--hostname=experimental-rail@%h"]
     environment:
       <<: *api-environment
@@ -354,6 +368,8 @@ services:
       dockerfile: Dockerfile.browser
     restart: unless-stopped
     init: true
+    # 브라우저 호출과 최대 70초 client drain이 SIGKILL 전에 끝나야 합니다.
+    stop_grace_period: 5m
     read_only: true
     user: pwuser
     shm_size: 1gb
@@ -404,6 +420,7 @@ services:
       context: ./apps/api
     restart: unless-stopped
     init: true
+    stop_grace_period: 5m
     read_only: true
     user: app
     cap_drop:

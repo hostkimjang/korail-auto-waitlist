@@ -1,0 +1,390 @@
+from __future__ import annotations
+
+import ast
+import base64
+import json
+import pickle
+import subprocess
+import sys
+from datetime import date, time
+from pathlib import Path
+
+import httpx
+import pytest
+
+from rail_waitlist import korail_browser_seat_source as legacy
+from rail_waitlist.korail_browser_automation import BrowserSeatSearchRequest
+from rail_waitlist.korail_sidecar import client as owner
+from rail_waitlist.korail_sidecar.contracts import (
+    KorailCredentialRequest,
+    KorailReserveOnceRequest,
+)
+
+API_ROOT = Path(__file__).resolve().parents[1]
+MOVED_SYMBOLS = {
+    "BrowserAdapterTransport",
+    "HttpBrowserAdapterTransport",
+    "_AdapterFailure",
+}
+LEGACY_PICKLES = {
+    "BrowserAdapterTransport": (
+        "gASVSAAAAAAAAACMKHJhaWxfd2FpdGxpc3Qua29yYWlsX2Jyb3dzZXJfc2VhdF9zb3VyY2WUjBdC"
+        "cm93c2VyQWRhcHRlclRyYW5zcG9ydJSTlC4="
+    ),
+    "HttpBrowserAdapterTransport": (
+        "gASVTAAAAAAAAACMKHJhaWxfd2FpdGxpc3Qua29yYWlsX2Jyb3dzZXJfc2VhdF9zb3VyY2WUjBtI"
+        "dHRwQnJvd3NlckFkYXB0ZXJUcmFuc3BvcnSUk5Qu"
+    ),
+    "_AdapterFailure": (
+        "gASVQAAAAAAAAACMKHJhaWxfd2FpdGxpc3Qua29yYWlsX2Jyb3dzZXJfc2VhdF9zb3VyY2WUjA9f"
+        "QWRhcHRlckZhaWx1cmWUk5Qu"
+    ),
+}
+
+
+class FakeResponse:
+    def __init__(self, status_code: int, payload: object) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> object:
+        return self._payload
+
+
+class FakeHttpClient:
+    def __init__(
+        self, response: FakeResponse | None = None, error: Exception | None = None
+    ) -> None:
+        self.response = response
+        self.error = error
+        self.requests: list[tuple[str, str, object | None]] = []
+
+    async def post(self, path: str, *, json: object) -> FakeResponse:
+        self.requests.append(("POST", path, json))
+        if self.error is not None:
+            raise self.error
+        assert self.response is not None
+        return self.response
+
+    async def get(self, path: str) -> FakeResponse:
+        self.requests.append(("GET", path, None))
+        if self.error is not None:
+            raise self.error
+        assert self.response is not None
+        return self.response
+
+    async def aclose(self) -> None:
+        return
+
+
+def search_request() -> BrowserSeatSearchRequest:
+    return BrowserSeatSearchRequest(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 3),
+        departure_from=time(14),
+        departure_to=time(18),
+        passenger_count=1,
+    )
+
+
+def transport_with(client: FakeHttpClient) -> owner.HttpBrowserAdapterTransport:
+    transport = object.__new__(owner.HttpBrowserAdapterTransport)
+    transport._client = client  # type: ignore[assignment]
+    return transport
+
+
+def test_transport_leaf_has_exact_legacy_aliases_and_import_boundary() -> None:
+    for symbol in MOVED_SYMBOLS:
+        canonical = getattr(owner, symbol)
+        assert getattr(legacy, symbol) is canonical
+        assert canonical.__module__ == "rail_waitlist.korail_sidecar.client"
+    assert legacy.Protocol is owner.Protocol
+    assert legacy.urlsplit is owner.urlsplit
+    assert legacy.httpx is owner.httpx
+
+    legacy_path = API_ROOT / "src" / "rail_waitlist" / "korail_browser_seat_source.py"
+    legacy_tree = ast.parse(legacy_path.read_text(encoding="utf-8"), filename=str(legacy_path))
+    legacy_definitions = {
+        node.name
+        for node in legacy_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assignments = {
+        target.id: node.value
+        for node in legacy_tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id in MOVED_SYMBOLS
+    }
+    client_imports = {
+        (node.module, node.level, alias.name, alias.asname)
+        for node in legacy_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "korail_sidecar"
+        for alias in node.names
+    }
+
+    assert legacy_definitions.isdisjoint(MOVED_SYMBOLS)
+    assert set(assignments) == MOVED_SYMBOLS
+    assert client_imports == {("korail_sidecar", 1, "client", "_client_owner")}
+    for symbol, value in assignments.items():
+        assert isinstance(value, ast.Attribute)
+        assert value.attr == symbol
+        assert isinstance(value.value, ast.Name)
+        assert value.value.id == "_client_owner"
+
+    owner_path = API_ROOT / "src" / "rail_waitlist" / "korail_sidecar" / "client.py"
+    owner_tree = ast.parse(owner_path.read_text(encoding="utf-8"), filename=str(owner_path))
+    owner_definitions = {
+        node.name
+        for node in owner_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    imports_from = {
+        (node.module, node.level)
+        for node in ast.walk(owner_tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+
+    assert owner_definitions == MOVED_SYMBOLS
+    assert imports_from == {
+        ("__future__", 0),
+        ("typing", 0),
+        ("urllib.parse", 0),
+        ("pydantic", 0),
+        ("browser_contracts", 1),
+        ("timetable_management.schemas", 2),
+        ("contracts", 1),
+    }
+
+
+@pytest.mark.parametrize(("symbol", "payload"), LEGACY_PICKLES.items())
+def test_legacy_transport_pickle_globals_restore_to_the_canonical_owner(
+    symbol: str,
+    payload: str,
+) -> None:
+    assert pickle.loads(base64.b64decode(payload)) is getattr(owner, symbol)
+
+
+@pytest.mark.parametrize("first_import", ["owner", "legacy"])
+def test_transport_import_orders_keep_one_owner_without_canonical_reentry(
+    first_import: str,
+) -> None:
+    script = r"""
+import importlib
+import json
+import sys
+
+modules = {
+    "owner": "rail_waitlist.korail_sidecar.client",
+    "legacy": "rail_waitlist.korail_browser_seat_source",
+}
+importlib.import_module(modules[sys.argv[1]])
+legacy_loaded_before = "rail_waitlist.korail_browser_seat_source" in sys.modules
+owner = importlib.import_module("rail_waitlist.korail_sidecar.client")
+legacy = importlib.import_module("rail_waitlist.korail_browser_seat_source")
+symbols = ("BrowserAdapterTransport", "HttpBrowserAdapterTransport", "_AdapterFailure")
+print(json.dumps({
+    "identity": all(getattr(legacy, symbol) is getattr(owner, symbol) for symbol in symbols),
+    "legacy_loaded_before": legacy_loaded_before,
+}, sort_keys=True))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-W", "error", "-c", script, first_import],
+        cwd=API_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "identity": True,
+        "legacy_loaded_before": first_import == "legacy",
+    }
+
+
+def test_source_resolves_legacy_transport_global_at_construction_time(monkeypatch) -> None:
+    sentinel = object()
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def replacement(*args: object, **kwargs: object) -> object:
+        calls.append((args, kwargs))
+        return sentinel
+
+    monkeypatch.setattr(legacy, "HttpBrowserAdapterTransport", replacement)
+    source = legacy.KorailBrowserSeatSource(
+        enabled=True,
+        adapter_url="http://korail-browser-adapter:8001",
+        cache_ttl_seconds=1,
+        timeout_seconds=30,
+        rate_limit_cooldown_seconds=1800,
+        protection_cooldown_seconds=300,
+    )
+
+    assert source._transport is sentinel
+    assert calls == [
+        (
+            ("http://korail-browser-adapter:8001", 30, None),
+            {"allow_fullstack_test_url": False},
+        )
+    ]
+
+
+async def test_transport_constructor_keeps_exact_internal_origin_and_http_policy(
+    monkeypatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class ClientStub:
+        async def aclose(self) -> None:
+            return
+
+    def client_factory(**kwargs: object) -> ClientStub:
+        captured.append(kwargs)
+        return ClientStub()
+
+    monkeypatch.setattr(owner.httpx, "AsyncClient", client_factory)
+    production = owner.HttpBrowserAdapterTransport(
+        "http://korail-browser-adapter:8001",
+        30,
+        "adapter-token",
+    )
+    fixture = owner.HttpBrowserAdapterTransport(
+        "http://e2e-fake-upstream:8001",
+        30,
+        None,
+        allow_fullstack_test_url=True,
+    )
+    for invalid in (
+        "https://korail-browser-adapter:8001",
+        "http://localhost:8001",
+        "http://user@korail-browser-adapter:8001",
+        "http://korail-browser-adapter:8001/path",
+        "http://korail-browser-adapter:8001?query=1",
+        "http://e2e-fake-upstream:8001",
+    ):
+        with pytest.raises(ValueError, match="exact internal sidecar origin"):
+            owner.HttpBrowserAdapterTransport(invalid, 30, None)
+
+    assert captured[0]["base_url"] == "http://korail-browser-adapter:8001"
+    assert captured[0]["follow_redirects"] is False
+    assert captured[0]["trust_env"] is False
+    assert captured[0]["headers"] == {
+        "Accept": "application/json",
+        "Authorization": "Bearer adapter-token",
+    }
+    assert captured[1]["headers"] == {"Accept": "application/json"}
+    await production.close()
+    await fixture.close()
+
+
+async def test_search_transport_preserves_failure_classification() -> None:
+    cases = (
+        (429, {}, True, False),
+        (403, {}, False, True),
+        (423, {}, False, True),
+        (500, {}, False, False),
+        (200, {}, False, False),
+    )
+    for status, payload, rate_limited, protection in cases:
+        transport = transport_with(FakeHttpClient(FakeResponse(status, payload)))
+        with pytest.raises(owner._AdapterFailure) as captured:
+            await transport.search(search_request())
+        expected_reason = (
+            "provider_access_restricted" if status in {403, 423, 429} else "source_unavailable"
+        )
+        assert captured.value.reason == expected_reason
+        assert captured.value.rate_limited is rate_limited
+        assert captured.value.protection is protection
+
+    timeout = transport_with(FakeHttpClient(error=httpx.ReadTimeout("timeout")))
+    with pytest.raises(owner._AdapterFailure) as captured:
+        await timeout.search(search_request())
+    assert captured.value.reason == "source_unavailable"
+
+
+async def test_session_state_keeps_all_non_200_responses_generic() -> None:
+    for status in (403, 423, 429, 500):
+        transport = transport_with(FakeHttpClient(FakeResponse(status, {})))
+
+        with pytest.raises(owner._AdapterFailure) as captured:
+            await transport.session_state()
+
+        assert captured.value.reason == "source_unavailable"
+        assert captured.value.rate_limited is False
+        assert captured.value.protection is False
+
+
+async def test_reserve_transport_serializes_secret_values_only_at_wire_boundary() -> None:
+    client = FakeHttpClient(
+        FakeResponse(
+            200,
+            {
+                "outcome": "payment_required",
+                "reason": "payment_required",
+                "seat_clicked": True,
+                "reservation_clicked": True,
+            },
+        )
+    )
+    transport = transport_with(client)
+    request = KorailReserveOnceRequest(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 7),
+        train_number="43",
+        train_type="KTX",
+        departure_time=time(12),
+        arrival_time=time(14),
+        seat_class="general",
+        credential=KorailCredentialRequest(
+            login_method="membership_number",
+            login_id="membership-secret",
+            password="password-secret",
+            version="credential:7",
+        ),
+    )
+
+    result = await transport.reserve(request)
+
+    assert result.outcome == "payment_required"
+    _, path, payload = client.requests[0]
+    assert path == "/v1/reserve-once"
+    assert isinstance(payload, dict)
+    assert payload["credential"] == {
+        "login_method": "membership_number",
+        "login_id": "membership-secret",
+        "password": "password-secret",
+        "version": "credential:7",
+    }
+
+
+async def test_login_transports_serialize_secret_values_only_at_wire_boundary() -> None:
+    credential = KorailCredentialRequest(
+        login_method="membership_number",
+        login_id="membership-secret",
+        password="password-secret",
+        version="credential:7",
+    )
+    expected_credential = {
+        "login_method": "membership_number",
+        "login_id": "membership-secret",
+        "password": "password-secret",
+        "version": "credential:7",
+    }
+    for method_name, expected_path in (
+        ("verify_login", "/v1/verify-login"),
+        ("prewarm_login", "/v1/prewarm-login"),
+    ):
+        client = FakeHttpClient(FakeResponse(200, {"outcome": "authenticated"}))
+        transport = transport_with(client)
+
+        result = await getattr(transport, method_name)(
+            owner.KorailLoginVerifyRequest(credential=credential)
+        )
+
+        assert result.outcome == "authenticated"
+        _, path, payload = client.requests[0]
+        assert path == expected_path
+        assert isinstance(payload, dict)
+        assert payload["credential"] == expected_credential

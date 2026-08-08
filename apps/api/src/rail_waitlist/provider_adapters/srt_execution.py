@@ -4,30 +4,25 @@ from datetime import datetime, timezone
 
 from ..config import Settings, get_settings
 from ..domain import Provider, ReservationOutcome
+from ..observations.contracts import SeatObservationRequest, SeatObservationResult
 from ..provider_contracts import ProviderUnavailable
-from ..reservation_confirmation import (
+from ..provider_registry.contracts import ProviderCapabilities
+from ..reservations.contracts import ReservationRequest, ReservationResult
+from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
-from ..schemas import (
-    ProviderCapabilities,
-    ReservationRequest,
-    ReservationResult,
-    SeatObservationRequest,
-    SeatObservationResult,
-    StationCatalog,
-    TimetableItem,
-)
-from ..srt_execution import (
+from ..srt_sidecar.client import SrtProviderAdapterClient
+from ..srt_sidecar.reservation import SrtReservationExecutor, default_srt_reservation_executor
+from ..timetable_management.schemas import StationCatalog, TimetableItem
+from .base import RailProviderAdapter
+from .execution import ProviderCredentialLoader, default_provider_credential_loader
+from .srt_source_runtime import (
     SrtSeatObserver,
     default_srt_execution_source,
     srt_background_monitoring_enabled,
 )
-from ..srt_provider_adapter import SrtProviderAdapterClient
-from ..srt_reservation import SrtReservationExecutor, default_srt_reservation_executor
-from .base import RailProviderAdapter
-from .execution import ProviderCredentialLoader, default_provider_credential_loader
 
 
 class SrtLiveExecutionAdapter(RailProviderAdapter):

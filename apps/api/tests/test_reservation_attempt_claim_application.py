@@ -1,12 +1,14 @@
 from datetime import UTC, date, datetime, time
 from typing import cast
 
+import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import rail_waitlist.services as services_module
 from rail_waitlist.domain import Provider, ReservationOutcome, SeatObservationStatus, WatchStatus
 from rail_waitlist.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
 from rail_waitlist.reservations.attempt_claim_application import (
     ReservationAttemptClaimDependencies,
 )
@@ -129,6 +131,7 @@ async def test_claim_application_preserves_attempt_state_transition_and_event_co
                     "watch_id": watch.id,
                     "candidate_id": candidate.id,
                     "attempt_sequence": 1,
+                    "attempt_started_at": attempt.started_at.isoformat(),
                     "episode_key": "manual:reserve:owner-test",
                     "outcome": ReservationOutcome.PENDING.value,
                 },
@@ -138,10 +141,81 @@ async def test_claim_application_preserves_attempt_state_transition_and_event_co
         assert session.in_transaction() is True
 
 
+@pytest.mark.parametrize(
+    ("outcome", "episode_prefix"),
+    [
+        (ReservationOutcome.NOT_AVAILABLE, "not-available-retry:"),
+        (ReservationOutcome.NOT_AVAILABLE, "availability-after:"),
+        (ReservationOutcome.UNKNOWN, "confirmed-absent-retry:"),
+    ],
+)
+async def test_claim_rejects_same_availability_retry_even_if_caller_marks_it_authorized(
+    db_engine,
+    outcome: ReservationOutcome,
+    episode_prefix: str,
+) -> None:
+    async def fail_transition(*_args: object, **_kwargs: object) -> Watch:
+        raise AssertionError("a fenced retry must not transition the watch")
+
+    async def fail_outbox(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("a fenced retry must not emit an outbox event")
+
+    dependencies = ReservationAttemptClaimDependencies(
+        apply_watch_transition=fail_transition,
+        add_outbox_event=fail_outbox,
+        is_payment_hold_ended=lambda _attempt: False,
+        is_confirmed_absent_retry_source=lambda _attempt: True,
+        actionable_seat_statuses=frozenset({SeatObservationStatus.AVAILABLE}),
+    )
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        watch = make_watch()
+        candidate = make_candidate()
+        watch.candidates.append(candidate)
+        session.add(watch)
+        await session.flush()
+        previous = ReservationAttempt(
+            candidate_id=candidate.id,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key=f"previous-{outcome.value}",
+            outcome=outcome,
+            confirmation_outcome=(
+                ReservationConfirmationOutcome.NOT_FOUND
+                if outcome is ReservationOutcome.UNKNOWN
+                else None
+            ),
+            confirmation_source=(
+                "official-list" if outcome is ReservationOutcome.UNKNOWN else None
+            ),
+            confirmation_observed_at=(
+                datetime(2026, 8, 5, tzinfo=UTC) if outcome is ReservationOutcome.UNKNOWN else None
+            ),
+        )
+        session.add(previous)
+        await session.flush()
+
+        replayed, created = await begin_reservation_attempt_application(
+            session,
+            watch,
+            candidate,
+            f"retry-{outcome.value}",
+            episode_key=f"{episode_prefix}{previous.id}",
+            retry_authorized=True,
+            dependencies=dependencies,
+        )
+
+        assert replayed is previous
+        assert created is False
+        assert watch.status is WatchStatus.SEAT_FOUND
+        assert candidate.state == "seat_found"
+
+
 async def test_services_wrapper_assembles_dependencies_from_current_module_globals(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
+    actionable_statuses = frozenset({SeatObservationStatus.ERROR})
     expected = ReservationAttempt(
         candidate_id="candidate-1",
         attempt_sequence=1,
@@ -175,6 +249,7 @@ async def test_services_wrapper_assembles_dependencies_from_current_module_globa
         "is_confirmed_absent_retry_source",
         confirmed_absent,
     )
+    monkeypatch.setattr(services_module, "ACTIONABLE_SEAT_STATUSES", actionable_statuses)
     monkeypatch.setattr(services_module, "begin_reservation_attempt_application", application)
 
     watch = make_watch()
@@ -198,6 +273,7 @@ async def test_services_wrapper_assembles_dependencies_from_current_module_globa
     assert dependencies.add_outbox_event is outbox
     assert dependencies.is_payment_hold_ended is payment_hold
     assert dependencies.is_confirmed_absent_retry_source is confirmed_absent
+    assert dependencies.actionable_seat_statuses is actionable_statuses
     assert kwargs["episode_key"] == "availability:claim"
     assert kwargs["retry_authorized"] is True
     assert kwargs["credential_version"] == 3

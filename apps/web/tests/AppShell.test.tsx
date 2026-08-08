@@ -48,8 +48,8 @@ describe("AppShell", () => {
     expect(Array.from(sidebar.children).map((child) => child.className)).toEqual([
       "brand",
       "side-nav",
-      "private-badge",
     ]);
+    expect(screen.queryByText("Tailscale 보호됨")).toBeNull();
 
     const main = requiredElement(shell.children.item(1), "메인 콘텐츠");
     expect(Array.from(main.children).map((child) => child.className)).toEqual([

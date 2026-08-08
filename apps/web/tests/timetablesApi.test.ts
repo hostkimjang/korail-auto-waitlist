@@ -387,6 +387,27 @@ describe("timetable API boundary", () => {
     });
   });
 
+  it("sends the displayed evening midnight as the established service-date 23:59 boundary", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchTimetables({
+      providers: ["KORAIL"],
+      origin: "서울",
+      origin_node_id: "N-SEOUL",
+      destination: "부산",
+      destination_node_id: "N-BUSAN",
+      date: "2026-08-01",
+      timeFrom: "18:00",
+      timeTo: "23:59",
+    });
+
+    const [input] = fetchMock.mock.calls[0] ?? [];
+    const params = new URL(String(input), "https://railwait.local").searchParams;
+    expect(params.get("departure_from")).toBe("2026-08-01T18:00:00+09:00");
+    expect(params.get("departure_to")).toBe("2026-08-01T23:59:00+09:00");
+  });
+
   it("applies the same pure timetable filter to demo-shaped items", () => {
     const form: TimetableSearchForm = {
       providers: ["SRT", "KORAIL"],

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -36,11 +36,7 @@ class PendingGauge:
 
 
 def _as_utc(value: datetime) -> datetime:
-    return (
-        value.replace(tzinfo=timezone.utc)
-        if value.tzinfo is None
-        else value.astimezone(timezone.utc)
-    )
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _event(
@@ -78,7 +74,7 @@ async def test_delivery_isolates_decrypt_failure_and_sends_following_event(
     app, db_engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     counter, gauge = _configure_owner(app, monkeypatch)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         poison_channel = NotificationChannel(
@@ -135,7 +131,7 @@ async def test_delivery_marks_missing_and_disabled_channels_terminal(
     app, db_engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     counter, gauge = _configure_owner(app, monkeypatch)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         disabled = NotificationChannel(
@@ -180,6 +176,67 @@ async def test_delivery_marks_missing_and_disabled_channels_terminal(
     assert gauge.values == [0]
 
 
+async def test_expired_web_push_disables_only_that_device(
+    app, db_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter, gauge = _configure_owner(app, monkeypatch)
+    now = datetime.now(UTC)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        expired = NotificationChannel(
+            kind=NotificationKind.WEB_PUSH,
+            name="expired phone",
+            config_ciphertext=secret_box.encrypt_dict({"device": "expired"}),
+        )
+        active = NotificationChannel(
+            kind=NotificationKind.WEB_PUSH,
+            name="active desktop",
+            config_ciphertext=secret_box.encrypt_dict({"device": "active"}),
+        )
+        session.add_all([expired, active])
+        await session.flush()
+        expired_event = _event(
+            expired.id,
+            "expired-web-push",
+            message="expired",
+            created_at=now,
+        )
+        active_event = _event(
+            active.id,
+            "active-web-push",
+            message="active",
+            created_at=now + timedelta(microseconds=1),
+        )
+        session.add_all([expired_event, active_event])
+        await session.commit()
+        expired_id, active_id = expired.id, active.id
+        expired_event_id, active_event_id = expired_event.id, active_event.id
+
+    async def deliver_by_device(_kind, config, _payload) -> None:
+        if config["device"] == "expired":
+            raise NotificationDeliveryError(
+                "webpush_subscription_expired",
+                permanent=True,
+                disable_channel=True,
+            )
+
+    monkeypatch.setattr(delivery_module, "deliver_notification", deliver_by_device)
+    assert await delivery_module.deliver_pending_notifications() == 1
+
+    async with factory() as session:
+        expired = await session.get(NotificationChannel, expired_id)
+        active = await session.get(NotificationChannel, active_id)
+        expired_event = await session.get(OutboxEvent, expired_event_id)
+        active_event = await session.get(OutboxEvent, active_event_id)
+
+    assert expired is not None and expired.enabled is False
+    assert active is not None and active.enabled is True
+    assert expired_event is not None and expired_event.status is OutboxStatus.FAILED
+    assert active_event is not None and active_event.status is OutboxStatus.SENT
+    assert counter.results == ["failed", "sent"]
+    assert gauge.values == [0]
+
+
 @pytest.mark.parametrize(
     ("initial_attempts", "expected_delay_seconds"),
     [(0, 30), (1, 60), (2, 120), (3, 240)],
@@ -192,7 +249,7 @@ async def test_delivery_retries_first_four_failures_with_bounded_backoff(
     expected_delay_seconds: int,
 ) -> None:
     counter, gauge = _configure_owner(app, monkeypatch)
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         channel = NotificationChannel(
@@ -220,7 +277,7 @@ async def test_delivery_retries_first_four_failures_with_bounded_backoff(
 
     monkeypatch.setattr(delivery_module, "deliver_notification", fail_delivery)
     assert await delivery_module.deliver_pending_notifications() == 0
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     async with factory() as session:
         event = await session.get(OutboxEvent, event_id)
@@ -240,7 +297,7 @@ async def test_delivery_marks_fifth_safe_failure_terminal(
     app, db_engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     counter, gauge = _configure_owner(app, monkeypatch)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         channel = NotificationChannel(
@@ -282,7 +339,7 @@ async def test_delivery_filters_orders_and_limits_each_locked_batch(
     app, db_engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _configure_owner(app, monkeypatch)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     base = now - timedelta(minutes=10)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
@@ -365,7 +422,7 @@ async def test_unexpected_delivery_failure_rolls_back_the_whole_batch(
     app, db_engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _configure_owner(app, monkeypatch)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         channel = NotificationChannel(

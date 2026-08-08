@@ -26,12 +26,12 @@ describe("UI preferences API boundary", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({
         timetable_refresh_interval_seconds: 30,
-        seat_observation_interval_seconds: 1,
+        observation_interval_seconds: 1,
         preferences_updated_at: "2026-07-31T06:00:00Z",
       }))
       .mockResolvedValueOnce(response({
         timetable_refresh_interval_seconds: 4,
-        seat_observation_interval_seconds: 0,
+        observation_interval_seconds: 0,
         preferences_updated_at: "not-a-timestamp",
       }));
     vi.stubGlobal("fetch", fetchMock);
@@ -47,7 +47,7 @@ describe("UI preferences API boundary", () => {
   it("PATCHes the unified observation interval with CSRF protection", async () => {
     const fetchMock = vi.fn().mockResolvedValue(response({
       timetable_refresh_interval_seconds: 45,
-      seat_observation_interval_seconds: 5,
+      observation_interval_seconds: 5,
       preferences_updated_at: "2026-07-31T06:00:00Z",
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -66,7 +66,7 @@ describe("UI preferences API boundary", () => {
       cache: "no-store",
       body: JSON.stringify({
         timetable_refresh_interval_seconds: 45,
-        seat_observation_interval_seconds: 5,
+        observation_interval_seconds: 5,
       }),
     }));
     const [, request] = fetchMock.mock.calls[0] ?? [];

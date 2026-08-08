@@ -13,12 +13,16 @@ from SRT.errors import SRTNetFunnelError
 from SRT.reservation import SRTReservation
 
 from rail_waitlist.domain import Provider, ReservationOutcome, SeatClass
+from rail_waitlist.provider_adapters.srt_station_roster import (
+    SrtStationRosterUnavailable,
+)
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationTarget,
 )
 from rail_waitlist.schemas import ReservationRequest
-from rail_waitlist.srt_reservation import (
+from rail_waitlist.srt_sidecar import reservation as srt_reservation_module
+from rail_waitlist.srt_sidecar.reservation import (
     SrtReservationExecutor,
     SrtSessionActorState,
     verify_srt_credentials_once,
@@ -405,6 +409,24 @@ async def test_unavailable_requested_seat_does_not_call_reserve():
 
     assert result.outcome is ReservationOutcome.NOT_AVAILABLE
     assert client.reserve_calls == 0
+
+
+async def test_roster_failure_returns_failed_without_search_or_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_roster() -> object:
+        raise SrtStationRosterUnavailable("dependency detail must not escape")
+
+    monkeypatch.setattr(srt_reservation_module, "load_srt_station_roster", unavailable_roster)
+    client = FakeClient()
+    executor = SrtReservationExecutor(lambda _login_id, _password: client)
+
+    result = await executor.reserve_once(request(), Credentials())
+
+    assert result.outcome is ReservationOutcome.FAILED
+    assert client.search_calls == 0
+    assert client.reserve_calls == 0
+    assert executor.session_snapshot().state is SrtSessionActorState.STALE
 
 
 async def test_credential_version_change_discards_the_authenticated_session():

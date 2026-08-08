@@ -9,6 +9,18 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import rail_waitlist.provider_adapters.srt_seat_source as srt_seat_source_module
+from rail_waitlist.provider_adapters.srt_seat_source import (
+    SrtLiveSeatSource,
+    SrtLiveTimetableUnavailable,
+    _AccountlessSrtClient,
+    map_srt_seat_state,
+    normalize_srt_time,
+    normalize_srt_train_number,
+)
+from rail_waitlist.provider_adapters.srt_station_roster import (
+    SrtStationRosterUnavailable,
+)
 from rail_waitlist.schemas import (
     SeatAvailability,
     SeatAvailabilityAction,
@@ -18,13 +30,6 @@ from rail_waitlist.schemas import (
     TimetableItem,
 )
 from rail_waitlist.seat_status_cooldown import MemoryCooldownStore
-from rail_waitlist.srt_seat_source import (
-    SrtLiveSeatSource,
-    _AccountlessSrtClient,
-    map_srt_seat_state,
-    normalize_srt_time,
-    normalize_srt_train_number,
-)
 
 KOREA = ZoneInfo("Asia/Seoul")
 
@@ -499,6 +504,37 @@ async def test_search_timetable_supports_official_seoul_cross_operation_route():
     assert [(item.train_number, item.origin, item.destination) for item in result] == [
         ("00162", "대전", "서울")
     ]
+
+
+async def test_search_timetable_normalizes_roster_failure_without_upstream_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def unavailable_roster() -> object:
+        raise SrtStationRosterUnavailable("dependency detail must not escape")
+
+    monkeypatch.setattr(srt_seat_source_module, "load_srt_station_roster", unavailable_roster)
+    source = SrtLiveSeatSource(
+        enabled=True,
+        cache_ttl_seconds=30,
+        client_factory=lambda: FakeClient([], calls),
+    )
+
+    with pytest.raises(
+        SrtLiveTimetableUnavailable,
+        match="^SRT station roster is unavailable$",
+    ) as captured:
+        await source.search_timetable(
+            origin="수서",
+            destination="부산",
+            departure_from=datetime(2026, 8, 1, 12, tzinfo=KOREA),
+            departure_to=datetime(2026, 8, 1, 18, tzinfo=KOREA),
+            passenger_count=1,
+        )
+
+    assert isinstance(captured.value.__cause__, SrtStationRosterUnavailable)
+    assert calls == []
 
 
 def test_default_accountless_client_passes_cross_operation_codes_to_srtrain():

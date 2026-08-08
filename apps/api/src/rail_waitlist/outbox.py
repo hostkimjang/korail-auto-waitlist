@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .domain import OutboxStatus
-from .models import OutboxEvent
+from .outbox_management.models import OutboxEvent
 
 OUTBOX_DEDUPE_KEY_MAX_LENGTH = 128
 

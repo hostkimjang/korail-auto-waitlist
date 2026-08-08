@@ -24,7 +24,8 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 - 좌석 확인 기능을 켰을 때 일반실·특실별 대기 등록
 - 좌석 상태와 확인 시각 표시
 - 감시 중인 열차와 결제 필요 항목을 한눈에 확인
-- Web Push, Telegram, Discord, Webhook 알림
+- Chrome·Edge·모바일 등 연결한 각 기기에 함께 보내는 Web Push와 Telegram·Discord·Webhook 알림
+- 공식 예약·결제 페이지를 새 브라우저 창으로 여는 안전한 인계와, 경로별 실기기 검증 뒤에만 켤 수 있는 코레일+·SRT 앱 인계
 - 모바일 PWA와 데스크톱 반응형 화면
 
 ## 화면 미리 보기
@@ -84,6 +85,7 @@ docker compose -f compose.yml up -d --build
 - [시작하기](docs/GETTING_STARTED.md)
 - [사용 안내](docs/USAGE.md)
 - [설치·운영 가이드](docs/OPERATIONS.md)
+- [Android 공식 앱 인계 검증](docs/ANDROID_APP_HANDOFF_QA.md)
 - [시스템 구조](docs/ARCHITECTURE.md)
 - [문서 전체 보기](docs/README.md)
 

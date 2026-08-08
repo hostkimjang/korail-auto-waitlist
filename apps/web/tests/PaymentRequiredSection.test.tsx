@@ -50,6 +50,30 @@ describe("payment required section", () => {
     expect(onOpenPayment).toHaveBeenCalledWith(watch);
   });
 
+  it("shows the warm ticket-list refresh guidance only for SRT payments", () => {
+    const srtPayment: PaymentRequiredViewModel = {
+      ...paymentWatch("srt", null),
+      provider: "SRT",
+      train: "SRT 327",
+      officialBookingUrl: "https://etk.srail.kr",
+    };
+    const { rerender } = render(
+      <PaymentRequiredSection watches={[srtPayment]} onOpenPayment={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("note").textContent).toContain(
+      "하단 ‘승차권 확인’을 한 번 더 눌러 목록을 갱신하세요.",
+    );
+
+    rerender(
+      <PaymentRequiredSection
+        watches={[paymentWatch("korail", null)]}
+        onOpenPayment={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
   it("updates the countdown each second only when the provider supplied an absolute deadline", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-02T00:00:00Z"));

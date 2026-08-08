@@ -14,6 +14,7 @@ import { createReservationPolicyMutationGuard } from "../../shared/lib/reservati
 import { buildLiveReservationNotice } from "./liveReservationNotice";
 import { createLiveDataReloadCoordinator, type LiveDataReloadCoordinator } from "./liveDataReloadCoordinator";
 import type { AppNotificationInput } from "./notificationCenter";
+import { subscribeToPwaNotificationHints } from "./pwaNotificationBridge";
 import {
   buildAvailabilityLostToast,
   buildSeatFoundToast,
@@ -23,6 +24,7 @@ import {
   detectSeatAvailabilityLostTransitions,
   detectSeatFoundTransitions,
   detectWatchActionTransitions,
+  hydrateCurrentWatchActionTransitions,
   reconcileWatchSnapshots,
 } from "./watchSnapshots";
 import {
@@ -98,6 +100,7 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
   );
   const pendingLiveReservationEventsRef = useRef<unknown[]>([]);
   const reloadCoordinatorRef = useRef<LiveDataReloadCoordinator | null>(null);
+  const hasCanonicalSnapshotRef = useRef(false);
   const lifecycleEpochRef = useRef(0);
   const activeLifecycleEpochRef = useRef<number | null>(null);
   const reservationPolicyMutationGuardRef = useRef(createReservationPolicyMutationGuard());
@@ -141,6 +144,8 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
         // the newer ticket-level choice; the mutation schedules a fresh reload.
         return;
       }
+      const isInitialCanonicalSnapshot = !hasCanonicalSnapshotRef.current;
+      hasCanonicalSnapshotRef.current = true;
       const previous = watchesRef.current;
       const previousSnapshots = previous.map((watch) => snapshotOfRef.current(watch));
       const nextSnapshots = watchItems.map((watch) => snapshotOfRef.current(watch));
@@ -168,10 +173,16 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
       const liveNoticeSubjects = new Set(
         liveReservationNotices.map((notice) => notice.subjectKey),
       );
+      const hydratedNotices = isInitialCanonicalSnapshot
+        ? hydrateCurrentWatchActionTransitions(nextSnapshots)
+            .filter((item) => !liveNoticeSubjects.has(`watch:${item.id}`))
+            .map(buildWatchActionToast)
+        : [];
       const lifecycleNotices = actionTransitions
         .filter((item) => !liveNoticeSubjects.has(`watch:${item.id}`))
         .map(buildWatchActionToast);
       pushNotifications([
+        ...hydratedNotices,
         ...transitions.map(buildSeatFoundToast),
         ...lifecycleNotices,
         ...availabilityLosses.map(buildAvailabilityLostToast),
@@ -220,6 +231,10 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
   }, []);
 
   useEffect(() => {
+    if (!authenticated) hasCanonicalSnapshotRef.current = false;
+  }, [authenticated]);
+
+  useEffect(() => {
     if (!authenticated || demo) return undefined;
     const lifecycleEpoch = lifecycleEpochRef.current + 1;
     lifecycleEpochRef.current = lifecycleEpoch;
@@ -249,6 +264,9 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
       },
       () => undefined,
     );
+    const unsubscribePwaNotificationHints = subscribeToPwaNotificationHints(() => {
+      coordinator.request();
+    });
     coordinator.start();
     return () => {
       if (activeLifecycleEpochRef.current === lifecycleEpoch) {
@@ -258,6 +276,7 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
       if (reloadCoordinatorRef.current === coordinator) reloadCoordinatorRef.current = null;
       coordinator.dispose();
       unsubscribe();
+      unsubscribePwaNotificationHints();
       refreshAnimation.generation += 1;
       if (refreshAnimation.stopTimerId !== null) {
         window.clearTimeout(refreshAnimation.stopTimerId);

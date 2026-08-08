@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from .domain import Provider
-from .schemas import TimetableItem
+from .timetable_management.schemas import TimetableItem
 
 TIMETABLE_SNAPSHOT_TTL = timedelta(hours=24)
 TIMETABLE_SNAPSHOT_MAX_ENTRIES = 128
@@ -125,11 +125,7 @@ class TimetableSnapshotCache:
         async with self._lock:
             self._purge_expired(now)
             snapshot = self._entries.get(key)
-            if (
-                snapshot is None
-                or snapshot.refresh_after > now
-                or key in self._refresh_tasks
-            ):
+            if snapshot is None or snapshot.refresh_after > now or key in self._refresh_tasks:
                 return False
             self._refresh_tasks[key] = asyncio.create_task(self._refresh(key, loader))
             return True

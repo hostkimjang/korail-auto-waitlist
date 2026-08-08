@@ -4,8 +4,57 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Reservations } from "../src/App";
 import type { ReservationListWatch } from "../src/features/reservations/ReservationList";
-import { ReservationsPage } from "../src/features/reservations/ReservationsPage";
+import {
+  openOfficialReservation,
+  ReservationsPage,
+} from "../src/features/reservations/ReservationsPage";
 import type { ReservationWatchViewModel } from "../src/features/reservations/reservationViewModel";
+import {
+  buildKorailNavigationIntentUrl,
+  buildSrtTicketIntentUrl,
+  KORAIL_OFFICIAL_RESERVATION_URL,
+  SRT_OFFICIAL_RESERVATION_URL,
+} from "../src/features/official-handoff/officialAppIntentUrl";
+import type { RailDeepLinkConfig } from "../src/features/official-handoff/officialAppIntentUrl";
+
+const ANDROID_CHROME_USER_AGENT =
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36";
+
+const VALIDATED_ALL_CONFIG: RailDeepLinkConfig = {
+  korailBooking: {
+    enabled: true,
+    validatedAndroidAppVersion: "7.0.0+70000006",
+  },
+  korailTicket: {
+    enabled: true,
+    validatedAndroidAppVersion: "7.0.0+70000006",
+  },
+  srtMain: {
+    enabled: true,
+    validatedAndroidAppVersion: "2.0.41+150",
+  },
+  srtTicket: {
+    enabled: true,
+    validatedAndroidAppVersion: "2.0.41+150",
+  },
+};
+
+function fakeOfficialWindow() {
+  const intentAnchor = document.createElement("a");
+  vi.spyOn(intentAnchor, "click").mockImplementation(() => undefined);
+  vi.spyOn(intentAnchor, "remove").mockImplementation(() => undefined);
+  return {
+    open: vi.fn(),
+    location: { assign: vi.fn() },
+    document: {
+      createElement: vi.fn((_tagName: "a") => intentAnchor),
+      body: {
+        appendChild: vi.fn((anchor: HTMLAnchorElement) => anchor),
+      },
+    },
+    intentAnchor,
+  };
+}
 
 const legacyWatch: ReservationListWatch = {
   id: "legacy-scheduled",
@@ -23,6 +72,7 @@ const legacyWatches: ReadonlyArray<ReservationListWatch> = [legacyWatch];
 const watches: ReadonlyArray<ReservationWatchViewModel> = [
   {
     id: "scheduled",
+    provider: "KORAIL",
     status: "scheduled",
     statusLabel: "대기 등록됨",
     route: "서울 → 부산",
@@ -34,6 +84,7 @@ const watches: ReadonlyArray<ReservationWatchViewModel> = [
   },
   {
     id: "payment",
+    provider: "SRT",
     status: "payment_required",
     statusLabel: "결제 필요",
     route: "수서 → 부산",
@@ -45,6 +96,7 @@ const watches: ReadonlyArray<ReservationWatchViewModel> = [
   },
   {
     id: "done",
+    provider: "KORAIL",
     status: "completed",
     statusLabel: "결제 완료",
     route: "서울 → 대전",
@@ -122,7 +174,7 @@ describe("reservations page", () => {
 
     expect(openWindow).toHaveBeenCalledTimes(1);
     expect(openWindow).toHaveBeenCalledWith(
-      "https://www.letskorail.com",
+      "https://www.korail.com/ticket/search/general",
       "_blank",
       "noopener,noreferrer",
     );
@@ -160,6 +212,54 @@ describe("reservations page", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("uses the validated SRT ticket route from payment history", () => {
+    const officialWindow = fakeOfficialWindow();
+    openOfficialReservation({
+      id: "android-payment",
+      provider: "SRT",
+      status: "payment_required",
+      statusLabel: "결제 필요",
+      route: "수서 → 부산",
+      train: "SRT 327",
+      date: "8월 8일",
+      departure: "14:30",
+      paymentDeadline: null,
+      officialBookingUrl: "https://etk.srail.kr",
+    }, officialWindow, ANDROID_CHROME_USER_AGENT, VALIDATED_ALL_CONFIG);
+
+    expect(officialWindow.intentAnchor.href).toBe(
+      buildSrtTicketIntentUrl(SRT_OFFICIAL_RESERVATION_URL),
+    );
+    expect(officialWindow.intentAnchor.target).toBe("_blank");
+    expect(officialWindow.intentAnchor.click).toHaveBeenCalledOnce();
+    expect(officialWindow.location.assign).not.toHaveBeenCalled();
+    expect(officialWindow.open).not.toHaveBeenCalled();
+  });
+
+  it("uses the validated Korail ticket route from payment history", () => {
+    const officialWindow = fakeOfficialWindow();
+    openOfficialReservation({
+      id: "android-korail-payment",
+      provider: "KORAIL",
+      status: "payment_required",
+      statusLabel: "결제 필요",
+      route: "서울 → 부산",
+      train: "KTX 085",
+      date: "8월 8일",
+      departure: "12:00",
+      paymentDeadline: null,
+      officialBookingUrl: "https://www.letskorail.com",
+    }, officialWindow, ANDROID_CHROME_USER_AGENT, VALIDATED_ALL_CONFIG);
+
+    expect(officialWindow.intentAnchor.href).toBe(
+      buildKorailNavigationIntentUrl("ticket", KORAIL_OFFICIAL_RESERVATION_URL),
+    );
+    expect(officialWindow.intentAnchor.target).toBe("_blank");
+    expect(officialWindow.intentAnchor.click).toHaveBeenCalledOnce();
+    expect(officialWindow.location.assign).not.toHaveBeenCalled();
+    expect(officialWindow.open).not.toHaveBeenCalled();
   });
 
   it("allows deleting only a deletable terminal record", async () => {

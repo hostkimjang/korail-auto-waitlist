@@ -13,7 +13,7 @@ export interface UiPreferences {
 
 interface UiPreferencesDto {
   timetable_refresh_interval_seconds: number;
-  seat_observation_interval_seconds: number;
+  observation_interval_seconds: number;
   preferences_updated_at: string;
 }
 
@@ -30,23 +30,23 @@ function parsePreferences(payload: unknown): UiPreferences {
   if (!isRecord(payload)) throw new Error("화면 갱신 설정 응답을 확인할 수 없습니다.");
   const dto: UiPreferencesDto = {
     timetable_refresh_interval_seconds: Number(payload.timetable_refresh_interval_seconds),
-    seat_observation_interval_seconds: Number(payload.seat_observation_interval_seconds),
+    observation_interval_seconds: Number(payload.observation_interval_seconds),
     preferences_updated_at: String(payload.preferences_updated_at ?? ""),
   };
   if (
     !Number.isInteger(dto.timetable_refresh_interval_seconds)
     || dto.timetable_refresh_interval_seconds < MIN_TIMETABLE_REFRESH_INTERVAL_SECONDS
     || dto.timetable_refresh_interval_seconds > MAX_TIMETABLE_REFRESH_INTERVAL_SECONDS
-    || !Number.isInteger(dto.seat_observation_interval_seconds)
-    || dto.seat_observation_interval_seconds < MIN_SEAT_OBSERVATION_INTERVAL_SECONDS
-    || dto.seat_observation_interval_seconds > MAX_SEAT_OBSERVATION_INTERVAL_SECONDS
+    || !Number.isInteger(dto.observation_interval_seconds)
+    || dto.observation_interval_seconds < MIN_SEAT_OBSERVATION_INTERVAL_SECONDS
+    || dto.observation_interval_seconds > MAX_SEAT_OBSERVATION_INTERVAL_SECONDS
     || !Number.isFinite(Date.parse(dto.preferences_updated_at))
   ) {
     throw new Error("화면 갱신 설정 응답이 올바르지 않습니다.");
   }
   return {
     timetableRefreshIntervalSeconds: dto.timetable_refresh_interval_seconds,
-    seatObservationIntervalSeconds: dto.seat_observation_interval_seconds,
+    seatObservationIntervalSeconds: dto.observation_interval_seconds,
     updatedAt: dto.preferences_updated_at,
   };
 }
@@ -89,6 +89,6 @@ export function updateUiPreferences(
 ): Promise<UiPreferences> {
   return preferencesRequest("PATCH", {
     timetable_refresh_interval_seconds: input.timetableRefreshIntervalSeconds,
-    seat_observation_interval_seconds: input.seatObservationIntervalSeconds,
+    observation_interval_seconds: input.seatObservationIntervalSeconds,
   });
 }

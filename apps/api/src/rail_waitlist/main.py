@@ -16,36 +16,37 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import models  # noqa: F401 - registers metadata
 from .auth import router as auth_router
+from .browser_companion.http import (
+    admin_router as browser_companion_admin_router,
+)
+from .browser_companion.http import (
+    router as browser_bridge_router,
+)
 from .config import get_settings
 from .database import SessionFactory, create_schema, get_session
 from .domain import OutboxStatus
 from .event_stream.http import router as event_stream_router
 from .file_logging import configure_service_file_logging
-from .fullstack_srt_fixture import fullstack_srt_client_factory
-from .korail_browser_bridge import (
-    admin_router as browser_companion_admin_router,
-)
-from .korail_browser_bridge import (
-    router as browser_bridge_router,
-)
+from .health.schemas import HealthResponse
 from .korail_browser_seat_source import KorailBrowserSeatSource
-from .korail_seat_source import KorailLiveSeatSource
 from .metrics import HTTP_DURATION, HTTP_REQUESTS, OUTBOX_PENDING
-from .models import OutboxEvent
 from .notification_management.http import router as notification_management_router
 from .operation_summary.http import router as operation_summary_router
+from .outbox_management.models import OutboxEvent
 from .provider_account_management.http import router as provider_account_management_router
+from .provider_account_management.login_verification import ProviderLoginVerifier
+from .provider_account_management.runtime import (
+    ProviderRuntimePrewarmRegistry,
+    run_provider_session_manager,
+)
+from .provider_adapters.srt_fullstack_fixture import fullstack_srt_client_factory
+from .provider_adapters.srt_seat_source import SrtLiveSeatSource
 from .provider_adapters.tago import TagoClient
-from .provider_login_verification import ProviderLoginVerifier
 from .provider_registry.http import router as provider_registry_router
-from .provider_runtime import ProviderRuntimePrewarmRegistry, run_provider_session_manager
-from .schemas import HealthResponse
 from .seat_status_cooldown import RedisCooldownStore
 from .seat_status_operations.http import router as seat_status_operations_router
-from .srt_provider_adapter import SrtProviderAdapterClient
-from .srt_seat_source import SrtLiveSeatSource
-from .station_catalog_cache import StationCatalogService
-from .station_visibility import KorailStationVisibility
+from .srt_sidecar.client import SrtProviderAdapterClient
+from .timetable_management.catalog_application import StationCatalogService
 from .timetable_management.catalog_http import router as station_catalog_router
 from .timetable_management.http import router as timetable_management_router
 from .timetable_management.official_evidence_http import (
@@ -54,6 +55,7 @@ from .timetable_management.official_evidence_http import (
 from .timetable_management.official_evidence_http import (
     snapshot_router as official_snapshot_router,
 )
+from .timetable_management.station_visibility import KorailStationVisibility
 from .timetable_snapshot_cache import TimetableSnapshotCache
 from .ui_preferences.http import router as ui_preferences_router
 from .watch_management.http import router as watch_management_router
@@ -151,14 +153,6 @@ def create_app(
                 else {}
             ),
         )
-    app.state.korail_seat_source = KorailLiveSeatSource(
-        enabled=settings.korail_seat_status_enabled,
-        cache_ttl_seconds=settings.korail_seat_status_cache_ttl_seconds,
-        timeout_seconds=settings.korail_seat_status_timeout_seconds,
-        rate_limit_cooldown_seconds=settings.seat_status_rate_limit_cooldown_seconds,
-        protection_cooldown_seconds=settings.seat_status_protection_cooldown_seconds,
-        cooldown_store=seat_status_cooldown_store,
-    )
     app.state.korail_browser_seat_source = KorailBrowserSeatSource(
         enabled=(settings.experimental_rail_enabled and settings.korail_browser_adapter_enabled),
         adapter_url=settings.korail_browser_adapter_url,

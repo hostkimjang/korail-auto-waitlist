@@ -99,6 +99,35 @@ describe("reservation list", () => {
     expect(onOpenOfficial).toHaveBeenCalledWith(payment);
   });
 
+  it("explains the SRT ticket-list refresh required after a warm app handoff", () => {
+    const srtPayment: ReservationWatchViewModel = {
+      ...watch("srt-payment", "payment_required"),
+      provider: "SRT",
+      train: "SRT 327",
+      officialBookingUrl: "https://etk.srail.kr",
+    };
+    const { rerender } = render(
+      <ReservationList
+        watches={[srtPayment]}
+        onCreate={vi.fn()}
+        onOpenOfficial={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("note").textContent).toContain(
+      "하단 ‘승차권 확인’을 한 번 더 눌러 목록을 갱신하세요.",
+    );
+
+    rerender(
+      <ReservationList
+        watches={[{ ...srtPayment, provider: "KORAIL" }]}
+        onCreate={vi.fn()}
+        onOpenOfficial={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
   it("keeps an elapsed payment record for audit without presenting an active payment CTA", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-02T00:00:00Z"));

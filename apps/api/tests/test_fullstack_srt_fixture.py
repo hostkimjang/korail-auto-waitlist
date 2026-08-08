@@ -5,8 +5,8 @@ from typing import Self
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
-from rail_waitlist import fullstack_srt_fixture
 from rail_waitlist.fullstack_srt_fixture import FullstackSrtFixtureClient
+from rail_waitlist.provider_adapters import srt_fullstack_fixture
 
 
 class _FixtureResponse:
@@ -43,7 +43,7 @@ def test_fullstack_fixture_maps_complete_strict_timetable_identity(monkeypatch) 
         assert timeout == 3
         return _FixtureResponse()
 
-    monkeypatch.setattr(fullstack_srt_fixture, "urlopen", fake_urlopen)
+    monkeypatch.setattr(srt_fullstack_fixture, "urlopen", fake_urlopen)
 
     trains = FullstackSrtFixtureClient("http://e2e-fake-upstream:8001/srt/search").search_train(
         "수서",

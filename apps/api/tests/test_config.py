@@ -23,8 +23,22 @@ def test_live_seat_cache_defaults_to_one_second():
     settings = Settings(_env_file=None)
 
     assert settings.srt_seat_status_cache_ttl_seconds == 1
-    assert settings.korail_seat_status_cache_ttl_seconds == 1
     assert settings.korail_browser_adapter_cache_ttl_seconds == 1
+
+
+def test_removed_accountless_korail_settings_are_ignored(monkeypatch):
+    removed_names = (
+        "KORAIL_SEAT_STATUS_ENABLED",
+        "KORAIL_SEAT_STATUS_CACHE_TTL_SECONDS",
+        "KORAIL_SEAT_STATUS_TIMEOUT_SECONDS",
+    )
+    for name in removed_names:
+        monkeypatch.setenv(name, "retired-setting")
+
+    settings = Settings(_env_file=None)
+
+    for name in removed_names:
+        assert not hasattr(settings, name.casefold())
 
 
 def test_initial_admin_registration_toggle_is_read_from_environment(monkeypatch):
@@ -212,9 +226,7 @@ def test_insecure_auth_cookie_rejects_non_loopback_origin(origin):
 
 
 def test_auth_allowed_origins_are_read_from_comma_separated_environment(monkeypatch):
-    monkeypatch.setenv(
-        "AUTH_ALLOWED_ORIGINS", "http://localhost:3000/, http://127.0.0.1:4173"
-    )
+    monkeypatch.setenv("AUTH_ALLOWED_ORIGINS", "http://localhost:3000/, http://127.0.0.1:4173")
 
     settings = Settings(_env_file=None)
 
@@ -227,9 +239,7 @@ def test_auth_allowed_origins_are_read_from_comma_separated_environment(monkeypa
 def test_fixed_internal_upstream_fixture_is_allowed_only_in_test_environment():
     fixture_values = {
         "tago_base_url": f"{FULLSTACK_E2E_UPSTREAM_ORIGIN}/tago",
-        "korail_station_data_url": (
-            f"{FULLSTACK_E2E_UPSTREAM_ORIGIN}/station_data.json"
-        ),
+        "korail_station_data_url": (f"{FULLSTACK_E2E_UPSTREAM_ORIGIN}/station_data.json"),
     }
 
     settings = Settings(_env_file=None, environment="test", **fixture_values)

@@ -99,6 +99,8 @@ class WatchStatus(StrEnum):
 
 class NotificationKind(StrEnum):
     WEB_PUSH = "web_push"
+    ANDROID_FCM = "android_fcm"
+    IOS_APNS = "ios_apns"
     TELEGRAM = "telegram"
     DISCORD_WEBHOOK = "discord_webhook"
     GENERIC_WEBHOOK = "generic_webhook"

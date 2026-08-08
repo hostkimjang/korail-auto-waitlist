@@ -9,8 +9,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .domain import Provider, SeatObservationStatus
-from .models import TimetableSeatEvidence
-from .schemas import TimetableItem, normalize_official_train_number
+from .official_rail_identity import normalize_official_train_number
+from .timetable_management.models import TimetableSeatEvidence
+from .timetable_management.schemas import TimetableItem
 
 REGISTRATION_WINDOW = timedelta(minutes=5)
 

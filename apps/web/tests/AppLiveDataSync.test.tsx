@@ -171,6 +171,7 @@ describe("App live data synchronization", () => {
 
     act(() => { onEvent?.(); });
     const center = await screen.findByRole("region", { name: "실시간 알림" });
+    fireEvent.click(within(center).getByRole("button", { name: "실시간 알림 펼치기" }));
     expect(within(center).getByText("좌석 발견").nextElementSibling?.textContent).toBe("2건");
     expect(center.textContent).toContain("KTX 003");
     fireEvent.click(within(center).getByRole("button", { name: "추가 1건 보기" }));
@@ -227,14 +228,19 @@ describe("App live data synchronization", () => {
     expect(await screen.findByRole("button", { name: /예매 전 안내 열기/ })).toBeTruthy();
 
     act(() => { onEvent?.(); });
-    expect(await screen.findByText("예매 가능 좌석이 사라져 다시 감시 중입니다")).toBeTruthy();
-    expect(screen.getByText("KORAIL · KTX 022 · 특실")).toBeTruthy();
-    expect(screen.getByText("8월 1일 (토) · 대전 → 서울 · 10:58 → 11:53")).toBeTruthy();
+    const center = await screen.findByRole("region", { name: "실시간 알림" });
+    fireEvent.click(within(center).getByRole("button", { name: "실시간 알림 펼치기" }));
+    expect(within(center).getByText("예매 가능 좌석이 사라져 다시 감시 중입니다"))
+      .toBeTruthy();
+    expect(within(center).getByText("KORAIL · KTX 022 · 특실")).toBeTruthy();
+    expect(within(center).getByText("8월 1일 (토) · 대전 → 서울 · 10:58 → 11:53"))
+      .toBeTruthy();
     expect(screen.queryByRole("button", { name: /예매 전 안내 열기/ })).toBeNull();
 
     act(() => { onEvent?.(); });
     await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(3));
-    expect(screen.getAllByText("예매 가능 좌석이 사라져 다시 감시 중입니다")).toHaveLength(1);
+    expect(within(center).getAllByText("예매 가능 좌석이 사라져 다시 감시 중입니다"))
+      .toHaveLength(1);
   });
 
   it("shows truthful reservation steps and replaces failure with a monitoring-resumed notice", async () => {
@@ -294,11 +300,14 @@ describe("App live data synchronization", () => {
     await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(1));
 
     act(() => { onEvent?.(); });
-    expect(await screen.findByText("예매를 진행하고 있습니다")).toBeTruthy();
-    expect(screen.getByText("KORAIL · KTX 038 · 일반실")).toBeTruthy();
-    expect(screen.getByText("8월 3일 (월) · 대전 → 서울 · 14:35 → 15:39")).toBeTruthy();
-    expect(screen.getByText("예매 시작")).toBeTruthy();
-    expect(screen.getByText("공식 결과 확인")).toBeTruthy();
+    const center = await screen.findByRole("region", { name: "실시간 알림" });
+    fireEvent.click(within(center).getByRole("button", { name: "실시간 알림 펼치기" }));
+    expect(within(center).getByText("예매를 진행하고 있습니다")).toBeTruthy();
+    expect(within(center).getByText("KORAIL · KTX 038 · 일반실")).toBeTruthy();
+    expect(within(center).getByText("8월 3일 (월) · 대전 → 서울 · 14:35 → 15:39"))
+      .toBeTruthy();
+    expect(within(center).getByText("예매 시작")).toBeTruthy();
+    expect(within(center).getByText("공식 결과 확인")).toBeTruthy();
 
     act(() => { onEvent?.({ event_type: "watch.status_changed" }); });
     await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(3));
@@ -318,11 +327,13 @@ describe("App live data synchronization", () => {
         },
       });
     });
-    expect(await screen.findByText("좌석이 사라져 다시 감시 중입니다")).toBeTruthy();
-    expect(screen.getByText("KORAIL · KTX 240 · 특실")).toBeTruthy();
-    expect(screen.getByText(/8월 3일 \(월\) · 대전 → 서울 · 15:11 → 16:22/)).toBeTruthy();
-    expect(screen.getByText("감시·재예매 대기")).toBeTruthy();
-    expect(screen.getByText(/좌석이 다시 확인되면 예매를 다시 시도합니다/)).toBeTruthy();
+    expect(await within(center).findByText("좌석이 사라져 다시 감시 중입니다")).toBeTruthy();
+    expect(within(center).getByText("KORAIL · KTX 240 · 특실")).toBeTruthy();
+    expect(within(center).getByText(/8월 3일 \(월\) · 대전 → 서울 · 15:11 → 16:22/))
+      .toBeTruthy();
+    expect(within(center).getByText("감시·재예매 대기")).toBeTruthy();
+    expect(within(center).getByText(/좌석이 다시 확인되면 예매를 다시 시도합니다/))
+      .toBeTruthy();
   });
 
   it("shows fast attempted and result SSE stages even when REST never exposes reserving", async () => {

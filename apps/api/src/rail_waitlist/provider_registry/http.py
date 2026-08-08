@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
 
 from ..auth import require_admin
-from ..schemas import ProviderCapabilities
 from .application import list_capabilities
+from .contracts import ProviderCapabilities
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
 

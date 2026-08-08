@@ -193,8 +193,72 @@
   width: min(560px, calc(100vw - 48px));
   position: fixed;
   right: 24px;
-  top: max(24px, env(safe-area-inset-top));
+  top: max(24px, calc(env(safe-area-inset-top) + 10px));
   z-index: 102;
+}
+
+.web-push-enrollment {
+  width: min(520px, calc(100vw - 48px));
+  min-height: 72px;
+  position: fixed;
+  right: 24px;
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px));
+  z-index: 101;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 16px;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 15px;
+  background: #0d3148;
+  box-shadow: 0 18px 45px rgba(9, 49, 72, 0.2);
+}
+
+.web-push-enrollment.is-blocked {
+  grid-template-columns: auto minmax(0, 1fr);
+  background: #5a2529;
+}
+
+.web-push-enrollment > svg {
+  flex: 0 0 auto;
+}
+
+.web-push-enrollment > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.web-push-enrollment strong,
+.web-push-enrollment span {
+  line-height: 1.4;
+}
+
+.web-push-enrollment strong {
+  font-size: 14px;
+}
+
+.web-push-enrollment span {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+}
+
+.web-push-enrollment button {
+  min-height: 44px;
+  padding: 0 14px;
+  color: #0d3148;
+  border: 0;
+  border-radius: 10px;
+  background: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.web-push-enrollment button:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .notification-center-surface {
@@ -241,6 +305,87 @@
 .notification-center-toggle:hover,
 .notification-center-toggle:focus-visible {
   background: rgba(255, 255, 255, 0.16);
+}
+
+.notification-center-peek {
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 4px 10px 14px;
+  color: #fff;
+  background: #0d3148;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.notification-center-peek.toast-warning {
+  background: #56370f;
+}
+
+.notification-center-peek.toast-error {
+  background: #5a2529;
+}
+
+.notification-center-peek.toast-success {
+  background: #0b4e4a;
+}
+
+.notification-center-peek-content {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.notification-center-peek-content > span {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.notification-center-peek-content > strong,
+.notification-center-peek-content > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notification-center-peek-content > strong {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.notification-center-peek-content > small {
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 11px;
+}
+
+.notification-center-peek-detail,
+.notification-center-peek-dismiss {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 8px;
+  color: inherit;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.notification-center-peek-detail:hover,
+.notification-center-peek-detail:focus-visible,
+.notification-center-peek-dismiss:hover,
+.notification-center-peek-dismiss:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.notification-center-peek-dismiss {
+  width: 44px;
+  padding: 0;
 }
 
 .notification-center-body {

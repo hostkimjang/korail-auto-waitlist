@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rail_waitlist.domain import Provider, ReservationOutcome, ReservationPolicy, WatchStatus
@@ -16,14 +19,17 @@ from rail_waitlist.models import (
     WatchCandidate,
     WatchTransitionHistory,
 )
-from rail_waitlist.provider_accounts import (
+from rail_waitlist.provider_account_management import application as account_application
+from rail_waitlist.provider_account_management import auth_recovery_runtime
+from rail_waitlist.provider_account_management.application import (
     get_enabled_provider_credentials,
     update_provider_auth_status,
 )
-from rail_waitlist.provider_login_verification import (
+from rail_waitlist.provider_account_management.login_verification import (
     ProviderLoginVerification,
     ProviderLoginVerificationOutcome,
 )
+from rail_waitlist.provider_account_management.schemas import RailProviderAccountUpsert
 
 
 @dataclass
@@ -51,6 +57,29 @@ def verified_provider_login(app):
     verifier = StubProviderLoginVerifier()
     app.state.provider_login_verifier = verifier
     return verifier
+
+
+class _UpsertSessionStub:
+    def __init__(self) -> None:
+        self.added: list[object] = []
+        self.commit_calls = 0
+        self.refresh_calls = 0
+        self.rollback_calls = 0
+
+    async def scalar(self, _query):
+        return None
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+    async def refresh(self, _value: object) -> None:
+        self.refresh_calls += 1
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
 
 
 async def test_provider_account_api_encrypts_and_redacts_credentials(
@@ -364,9 +393,7 @@ async def test_stale_reservation_auth_result_does_not_demote_newer_credentials(
         assert unchanged.last_auth_status == "authenticated"
 
         current = await session.scalar(
-            select(RailProviderAccount).where(
-                RailProviderAccount.provider == Provider.KORAIL
-            )
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
         )
         assert current is not None
         assert current.credential_version == current_version
@@ -476,3 +503,127 @@ async def test_provider_account_validation_never_reflects_the_password(client):
     assert response.headers["cache-control"] == "no-store"
     assert response.json() == {"detail": "request_validation_failed"}
     assert oversized_password not in response.text
+
+
+def test_provider_credential_decryption_is_redacted_and_infers_legacy_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = SimpleNamespace(credentials_ciphertext="opaque-fixture", credential_version=7)
+
+    def fail_decryption(_ciphertext: str) -> dict[str, str]:
+        raise RuntimeError("sensitive fixture detail")
+
+    monkeypatch.setattr(account_application.secret_box, "decrypt_dict", fail_decryption)
+    with pytest.raises(RuntimeError) as decryption_error:
+        account_application._decrypt_credentials(account)
+    assert str(decryption_error.value) == "stored rail provider credentials cannot be decrypted"
+    assert "sensitive fixture detail" not in str(decryption_error.value)
+
+    monkeypatch.setattr(
+        account_application.secret_box,
+        "decrypt_dict",
+        lambda _ciphertext: {"login_id": "fixture-member", "password": ""},
+    )
+    with pytest.raises(RuntimeError) as invalid_error:
+        account_application._decrypt_credentials(account)
+    assert str(invalid_error.value) == "stored rail provider credentials are invalid"
+
+    cases = [
+        ("legacy@example.com", "email"),
+        ("010-1234-5678", "phone"),
+        ("1234567890", "membership_number"),
+    ]
+    for login_id, expected_method in cases:
+        monkeypatch.setattr(
+            account_application.secret_box,
+            "decrypt_dict",
+            lambda _ciphertext, login_id=login_id: {
+                "login_id": login_id,
+                "password": "fixture-password",
+            },
+        )
+        credentials = account_application._decrypt_credentials(account)
+        assert credentials.login_method == expected_method
+        assert credentials.credential_version == 7
+        assert login_id not in repr(credentials)
+        assert "fixture-password" not in repr(credentials)
+
+
+async def test_first_insert_integrity_error_rolls_back_as_generation_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _UpsertSessionStub()
+    expected = IntegrityError("insert", {}, RuntimeError("duplicate provider"))
+
+    async def fail_resume(*_args, **_kwargs) -> None:
+        raise expected
+
+    monkeypatch.setattr(
+        auth_recovery_runtime,
+        "resume_watches_after_verified_provider_login",
+        fail_resume,
+    )
+    monkeypatch.setattr(
+        account_application.secret_box,
+        "encrypt_dict",
+        lambda _payload: "encrypted-fixture",
+    )
+    data = RailProviderAccountUpsert(
+        login_method="membership_number",
+        login_id="fixture-member",
+        password="fixture-password",
+    )
+
+    with pytest.raises(account_application.ProviderAccountGenerationConflict) as raised:
+        await account_application.upsert_provider_account(
+            session,
+            Provider.KORAIL,
+            data,
+            verified_credential_version=1,
+        )
+
+    assert raised.value.__cause__ is expected
+    assert str(raised.value) == "rail provider account changed during login verification"
+    assert len(session.added) == 1
+    assert session.rollback_calls == 1
+    assert session.commit_calls == 0
+    assert session.refresh_calls == 0
+
+
+async def test_first_insert_resume_cancellation_propagates_without_commit_or_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _UpsertSessionStub()
+    expected = asyncio.CancelledError()
+
+    async def cancel_resume(*_args, **_kwargs) -> None:
+        raise expected
+
+    monkeypatch.setattr(
+        auth_recovery_runtime,
+        "resume_watches_after_verified_provider_login",
+        cancel_resume,
+    )
+    monkeypatch.setattr(
+        account_application.secret_box,
+        "encrypt_dict",
+        lambda _payload: "encrypted-fixture",
+    )
+    data = RailProviderAccountUpsert(
+        login_method="membership_number",
+        login_id="fixture-member",
+        password="fixture-password",
+    )
+
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await account_application.upsert_provider_account(
+            session,
+            Provider.SRT,
+            data,
+            verified_credential_version=1,
+        )
+
+    assert raised.value is expected
+    assert len(session.added) == 1
+    assert session.commit_calls == 0
+    assert session.refresh_calls == 0

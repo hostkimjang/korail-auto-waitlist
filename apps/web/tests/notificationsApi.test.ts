@@ -15,6 +15,8 @@ const CHANNEL_DTO = {
   name: "운영 알림",
   enabled: true,
   configured: true,
+  device_key: null,
+  active_device_count: null,
   created_at: "2026-08-05T00:00:00Z",
   updated_at: "2026-08-05T00:01:00Z",
 };
@@ -25,6 +27,8 @@ const CHANNEL = {
   name: "운영 알림",
   enabled: true,
   configured: true,
+  deviceKey: null,
+  activeDeviceCount: null,
   createdAt: "2026-08-05T00:00:00Z",
   updatedAt: "2026-08-05T00:01:00Z",
 };
@@ -125,6 +129,14 @@ describe("notification transport boundary", () => {
     { ...CHANNEL_DTO, created_at: "2026-08-05 00:00:00" },
     { ...CHANNEL_DTO, updated_at: "not-a-time" },
     { ...CHANNEL_DTO, configured: "yes" },
+    { ...CHANNEL_DTO, kind: "web_push", device_key: null, active_device_count: 1 },
+    { ...CHANNEL_DTO, kind: "web_push", device_key: "short", active_device_count: 1 },
+    {
+      ...CHANNEL_DTO,
+      kind: "web_push",
+      device_key: "A".repeat(43),
+      active_device_count: -1,
+    },
   ])("rejects malformed channel DTOs without partially trusting the list", async (invalid) => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([
       CHANNEL_DTO,
@@ -200,7 +212,10 @@ describe("notification transport boundary", () => {
       serviceWorker: { getRegistration: vi.fn() },
     });
     vi.stubGlobal("PushManager", class PushManager {});
-    vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn() });
+    vi.stubGlobal("Notification", {
+      permission: "default",
+      requestPermission: vi.fn().mockResolvedValue("granted"),
+    });
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ key: "AQ" })));
 
     await expect(connectBrowserPush()).rejects.toThrow(
@@ -218,7 +233,10 @@ describe("notification transport boundary", () => {
       serviceWorker: { getRegistration: vi.fn() },
     });
     vi.stubGlobal("PushManager", class PushManager {});
-    vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn() });
+    vi.stubGlobal("Notification", {
+      permission: "default",
+      requestPermission: vi.fn().mockResolvedValue("granted"),
+    });
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(payload)));
 
     await expect(connectBrowserPush()).rejects.toThrow(
@@ -227,7 +245,9 @@ describe("notification transport boundary", () => {
   });
 
   it("reads the public key before creating the exact browser subscription channel", async () => {
+    const callOrder: string[] = [];
     const subscription = {
+      endpoint: "https://push.example/new-device",
       toJSON: () => ({ endpoint: "https://push.example/new-device", keys: { auth: "auth" } }),
     };
     const registration = {
@@ -246,15 +266,23 @@ describe("notification transport boundary", () => {
     vi.stubGlobal("PushManager", class PushManager {});
     vi.stubGlobal("Notification", {
       permission: "granted",
-      requestPermission: vi.fn().mockResolvedValue("granted"),
+      requestPermission: vi.fn().mockImplementation(async () => {
+        callOrder.push("permission");
+        return "granted";
+      }),
     });
     const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ public_key: VALID_PUBLIC_KEY }))
+      .mockImplementationOnce(async () => {
+        callOrder.push("public-key");
+        return jsonResponse({ public_key: VALID_PUBLIC_KEY });
+      })
       .mockResolvedValueOnce(jsonResponse({
         ...CHANNEL_DTO,
         id: "push-1",
         kind: "web_push",
         name: "업무 PC",
+        device_key: "A".repeat(43),
+        active_device_count: 1,
       }, 201));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -287,5 +315,24 @@ describe("notification transport boundary", () => {
       enabled: true,
     });
     expect(registration.pushManager.subscribe).not.toHaveBeenCalled();
+    expect(callOrder.slice(0, 2)).toEqual(["permission", "public-key"]);
+  });
+
+  it("stops before network and service-worker work when OS permission is denied", async () => {
+    const getRegistration = vi.fn();
+    const register = vi.fn();
+    vi.stubGlobal("navigator", { serviceWorker: { getRegistration, register } });
+    vi.stubGlobal("PushManager", class PushManager {});
+    vi.stubGlobal("Notification", {
+      permission: "default",
+      requestPermission: vi.fn().mockResolvedValue("denied"),
+    });
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(connectBrowserPush()).rejects.toThrow("OS 알림 권한이 차단되어 있습니다.");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getRegistration).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 });

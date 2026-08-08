@@ -38,7 +38,7 @@ _SENSITIVE_ASSIGNMENT = re.compile(
 )
 _BEARER = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
 _URL_QUERY = re.compile(r"(https?://[^\s?]+)\?[^\s]+", re.IGNORECASE)
-_RELATIVE_URL_QUERY = re.compile(r'(?P<path>/[^\s?\"]+)\?[^\s\"]+')
+_RELATIVE_URL_QUERY = re.compile(r"(?P<path>/[^\s?\"]+)\?[^\s\"]+")
 _URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", re.IGNORECASE)
 _handler_cache: dict[str, ServiceFileHandler] = {}
 _handler_cache_lock = threading.Lock()
@@ -136,15 +136,11 @@ class ServiceFileHandler(logging.Handler):
             self.handleError(record)
 
     def _rotate(self) -> None:
-        oldest = self.base_filename.with_name(
-            f"{self.base_filename.name}.{self.backup_count}"
-        )
+        oldest = self.base_filename.with_name(f"{self.base_filename.name}.{self.backup_count}")
         oldest.unlink(missing_ok=True)
         for index in range(self.backup_count - 1, 0, -1):
             source = self.base_filename.with_name(f"{self.base_filename.name}.{index}")
-            destination = self.base_filename.with_name(
-                f"{self.base_filename.name}.{index + 1}"
-            )
+            destination = self.base_filename.with_name(f"{self.base_filename.name}.{index + 1}")
             if source.exists():
                 os.replace(source, destination)
         if self.base_filename.exists():
@@ -169,9 +165,7 @@ def _service_file_handler() -> ServiceFileHandler | None:
             max_bytes=_bounded_integer(
                 "APP_LOG_MAX_BYTES", DEFAULT_MAX_BYTES, 64 * 1024, 100 * 1024 * 1024
             ),
-            backup_count=_bounded_integer(
-                "APP_LOG_BACKUP_COUNT", DEFAULT_BACKUP_COUNT, 1, 20
-            ),
+            backup_count=_bounded_integer("APP_LOG_BACKUP_COUNT", DEFAULT_BACKUP_COUNT, 1, 20),
         )
         handler.setLevel(os.getenv("APP_LOG_LEVEL", "INFO").upper())
         _handler_cache[filename] = handler
@@ -187,11 +181,15 @@ def configure_service_file_logging(logger: logging.Logger | None = None) -> None
     # Setting only the handler level is insufficient because the root logger defaults
     # to WARNING and filters application INFO records before they reach the handler.
     logging.getLogger("rail_waitlist").setLevel(handler.level)
-    targets = [logger] if logger is not None else [
-        logging.getLogger(),
-        logging.getLogger("uvicorn"),
-        logging.getLogger("uvicorn.access"),
-    ]
+    targets = (
+        [logger]
+        if logger is not None
+        else [
+            logging.getLogger(),
+            logging.getLogger("uvicorn"),
+            logging.getLogger("uvicorn.access"),
+        ]
+    )
     for target in targets:
         if target is not None and handler not in target.handlers:
             target.addHandler(handler)

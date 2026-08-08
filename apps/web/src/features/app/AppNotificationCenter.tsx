@@ -1,12 +1,19 @@
 import { Bell, CaretDown, CaretUp, X } from "@phosphor-icons/react";
-import { useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
-import type {
-  AppNotificationNotice,
-  NotificationCenterState,
-  NotificationKind,
+import {
+  compareNotifications,
+  type AppNotificationNotice,
+  type NotificationCenterState,
+  type NotificationKind,
 } from "./notificationCenter";
 import { AppToast } from "../../shared/ui/AppToast";
+
+/*
+ * This surface projects the canonical notification reducer state. It must not subscribe to
+ * Push or SSE independently, otherwise the same revision can be presented twice.
+ */
+export const FOREGROUND_NOTIFICATION_PEEK_MS = 8_000;
 
 interface AppNotificationCenterProps {
   state: NotificationCenterState;
@@ -41,11 +48,49 @@ export function AppNotificationCenter({
   onDismissGroup,
   onDismissTimed,
 }: AppNotificationCenterProps): ReactElement | null {
-  const [collapsed, setCollapsed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [peekNoticeId, setPeekNoticeId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<NotificationKind>>(
     () => new Set(),
   );
+  const lastPresentedSequenceRef = useRef(0);
+  const wasEmptyRef = useRef(state.notices.length === 0);
   const groups = useMemo(() => groupNotices(state.notices), [state.notices]);
+  const peekNotice = state.notices.find((notice) => notice.id === peekNoticeId) ?? null;
+
+  useEffect(() => {
+    if (state.notices.length === 0) {
+      wasEmptyRef.current = true;
+      return undefined;
+    }
+    const returnedAfterEmpty = wasEmptyRef.current;
+    wasEmptyRef.current = false;
+    const previousSequence = lastPresentedSequenceRef.current;
+    if (state.sequence <= previousSequence) return undefined;
+    lastPresentedSequenceRef.current = state.sequence;
+    const nextNotice = state.notices
+      .filter((notice) => notice.sequence > previousSequence)
+      .sort(compareNotifications)[0];
+    if (
+      nextNotice === undefined
+      || (expanded && !returnedAfterEmpty)
+      || (typeof document !== "undefined" && document.visibilityState === "hidden")
+    ) {
+      return undefined;
+    }
+    const showTimer = window.setTimeout(() => {
+      if (returnedAfterEmpty) setExpanded(false);
+      setPeekNoticeId(nextNotice.id);
+    }, 0);
+    const hideTimer = window.setTimeout(() => {
+      setPeekNoticeId((current) => current === nextNotice.id ? null : current);
+    }, FOREGROUND_NOTIFICATION_PEEK_MS);
+    return () => {
+      window.clearTimeout(showTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [expanded, state.notices, state.sequence]);
+
   if (state.notices.length === 0) return null;
 
   const timedCount = state.notices.filter((notice) => notice.persistence === "timed").length;
@@ -59,7 +104,9 @@ export function AppNotificationCenter({
   };
 
   return (
-    <aside className={collapsed ? "notification-center is-collapsed" : "notification-center"}>
+    <aside
+      className={`notification-center ${expanded ? "is-expanded" : peekNotice ? "is-peeking" : "is-collapsed"}`}
+    >
       <div
         key={`${state.announcementMode}-${state.sequence}`}
         className="notification-announcer sr-only"
@@ -76,14 +123,45 @@ export function AppNotificationCenter({
           <button
             type="button"
             className="notification-center-toggle"
-            aria-label={collapsed ? "실시간 알림 펼치기" : "실시간 알림 접기"}
-            aria-expanded={!collapsed}
-            onClick={() => setCollapsed((value) => !value)}
+            aria-label={expanded ? "실시간 알림 접기" : "실시간 알림 펼치기"}
+            aria-expanded={expanded}
+            aria-controls="notification-center-body"
+            onClick={() => {
+              setExpanded((value) => !value);
+              setPeekNoticeId(null);
+            }}
           >
-            {collapsed ? <CaretDown size={20} /> : <CaretUp size={20} />}
+            {expanded ? <CaretUp size={20} /> : <CaretDown size={20} />}
           </button>
         </header>
-        <div className="notification-center-body" hidden={collapsed}>
+        {!expanded && peekNotice && (
+          <div className={`notification-center-peek toast-${peekNotice.tone ?? "info"}`}>
+            <div className="notification-center-peek-content">
+              <span>{GROUP_LABELS[peekNotice.kind]}</span>
+              <strong>{peekNotice.title}</strong>
+              {peekNotice.meta && <small>{peekNotice.meta}</small>}
+            </div>
+            <button
+              type="button"
+              className="notification-center-peek-detail"
+              onClick={() => {
+                setExpanded(true);
+                setPeekNoticeId(null);
+              }}
+            >
+              자세히
+            </button>
+            <button
+              type="button"
+              className="notification-center-peek-dismiss"
+              aria-label={`${peekNotice.title} 알림 미리보기 숨기기`}
+              onClick={() => setPeekNoticeId(null)}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        <div id="notification-center-body" className="notification-center-body" hidden={!expanded}>
             {groups.map(([kind, notices]) => {
               const expanded = expandedGroups.has(kind);
               return (
@@ -121,7 +199,7 @@ export function AppNotificationCenter({
             })}
         </div>
         {timedCount > 1 && (
-          <footer className="notification-center-footer" hidden={collapsed}>
+          <footer className="notification-center-footer" hidden={!expanded}>
             <button type="button" onClick={onDismissTimed}>정보 알림 {timedCount}건 모두 닫기</button>
           </footer>
         )}

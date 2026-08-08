@@ -10,18 +10,13 @@ from typing import Protocol
 
 from .domain import Provider
 from .metrics import PROVIDER_OPERATION_DURATION, PROVIDER_OPERATIONS
+from .observations.contracts import SeatObservationRequest, SeatObservationResult
 from .provider_adapters.base import RailProviderAdapter
 from .provider_adapters.timetable import OfficialTimetableAdapter
 from .provider_contracts import ProviderUnavailable
-from .schemas import (
-    ProviderCapabilities,
-    ReservationRequest,
-    ReservationResult,
-    SeatObservationRequest,
-    SeatObservationResult,
-    StationCatalog,
-    TimetableItem,
-)
+from .provider_registry.contracts import ProviderCapabilities
+from .reservations.contracts import ReservationRequest, ReservationResult
+from .timetable_management.schemas import StationCatalog, TimetableItem
 
 _SOURCE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 

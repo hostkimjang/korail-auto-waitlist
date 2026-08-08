@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from rail_waitlist import srt_provider_adapter_service as adapter_service
 from rail_waitlist.config import Settings
 from rail_waitlist.domain import Provider, ReservationOutcome, SeatClass
-from rail_waitlist.provider_accounts import ProviderCredentials
+from rail_waitlist.provider_account_management.contracts import ProviderCredentials
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -24,18 +24,21 @@ from rail_waitlist.schemas import (
     SeatObservationResult,
     TimetableItem,
 )
-from rail_waitlist.srt_provider_adapter import (
+from rail_waitlist.srt_provider_adapter_service import create_srt_provider_adapter_app
+from rail_waitlist.srt_sidecar.client import (
     SRT_PROVIDER_ADAPTER_ORIGIN,
     SrtProviderAdapterClient,
     SrtProviderAdapterUnavailable,
 )
-from rail_waitlist.srt_provider_adapter_contract import (
+from rail_waitlist.srt_sidecar.contracts import (
     SrtCredentialRequest,
     SrtTimetableSearchRequest,
     SrtTimetableTrain,
 )
-from rail_waitlist.srt_provider_adapter_service import create_srt_provider_adapter_app
-from rail_waitlist.srt_reservation import SrtSessionActorSnapshot, SrtSessionActorState
+from rail_waitlist.srt_sidecar.session_contract import (
+    SrtSessionActorSnapshot,
+    SrtSessionActorState,
+)
 
 TOKEN = "srt-sidecar-contract-token-value-32-bytes"
 
@@ -356,6 +359,51 @@ async def test_sidecar_token_auth_and_validation_errors_never_echo_credentials()
     assert invalid.json() == {"detail": "request_validation_failed"}
     assert raw_secret not in invalid.text
     assert invalid.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_exception_reassignment_keeps_outcome_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LegacyLoginError(Exception):
+        pass
+
+    class FailingExecutor(FakeExecutor):
+        async def verify_credentials(self, credentials):
+            raise LegacyLoginError
+
+    monkeypatch.setattr(adapter_service, "SRTLoginError", LegacyLoginError)
+    app = create_srt_provider_adapter_app(
+        source=FakeSource(),
+        executor=FailingExecutor(),
+        token=TOKEN,
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            base_url=SRT_PROVIDER_ADAPTER_ORIGIN,
+            transport=httpx.ASGITransport(app=app),
+            trust_env=False,
+            follow_redirects=False,
+        ) as client,
+    ):
+        response = await client.post(
+            "/v1/prewarm-or-verify-login",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={
+                "operation": "verify",
+                "credential": {
+                    "login_method": "membership_number",
+                    "login_id": "1234567890",
+                    "password": "private-password",
+                    "credential_version": 7,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "auth_required"}
 
 
 @pytest.mark.parametrize(

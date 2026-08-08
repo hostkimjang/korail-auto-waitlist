@@ -8,15 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_admin
 from ..database import get_session
 from ..domain import Provider
-from ..provider_accounts import (
+from .application import (
     ProviderAccountGenerationConflict,
-    ProviderCredentials,
     delete_provider_account,
     get_next_provider_credential_version,
     list_provider_accounts,
     upsert_provider_account,
 )
-from ..provider_login_verification import ProviderLoginVerificationOutcome
+from .contracts import ProviderCredentials
+from .login_verification import ProviderLoginVerificationOutcome
 from .schemas import (
     RailProviderAccountRead,
     RailProviderAccountUpsert,

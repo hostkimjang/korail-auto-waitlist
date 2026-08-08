@@ -1,370 +1,41 @@
-"""Read fail-closed KORAIL reservation evidence from an authenticated Pydoll session.
-
-This module deliberately knows only the semantic read surface needed for a
-same-session confirmation.  Browser lifecycle, credential generation and the
-session lock remain owned by :mod:`korail_pydoll_browser`.
-"""
+"""Compatibility facade for the KORAIL Pydoll confirmation reader."""
 
 from __future__ import annotations
 
-import re
-from collections.abc import Callable
-from datetime import UTC, date, datetime
-from typing import Protocol, runtime_checkable
-from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
+from .korail_sidecar.pydoll import confirmation_reader as _owner
 
-from .korail_browser_automation import (
-    is_rate_limit_response,
-    protection_trigger_from_http_response,
-    protection_trigger_from_text,
-)
-from .korail_reservation_confirmation import (
-    KORAIL_CONFIRMATION_SOURCE,
-    KORAIL_RESERVATION_LIST_SOURCE,
-    KorailSameSessionDetailEvidence,
-)
-from .reservation_confirmation import ReservationConfirmationTarget
-
-
-class KorailConfirmationSnapshot(Protocol):
-    """Secret-free fields exposed by an official read-only reservation surface."""
-
-    @property
-    def body_text(self) -> str: ...
-
-    @property
-    def protection_texts(self) -> tuple[str, ...]: ...
-
-    @property
-    def network_responses(self) -> tuple[tuple[int, str], ...]: ...
-
-    @property
-    def url(self) -> str: ...
-
-    @property
-    def reservation_rows(self) -> tuple[str, ...]: ...
-
-
-@runtime_checkable
-class KorailConfirmationSession(Protocol):
-    """Read-only same-session operations required to confirm a payment hold."""
-
-    async def _snapshot(self) -> KorailConfirmationSnapshot: ...
-
-    async def _probe_official_authenticated_session(self) -> bool: ...
-
-    async def _has_authenticated_header(self) -> bool: ...
-
-
-@runtime_checkable
-class KorailReservationListSession(KorailConfirmationSession, Protocol):
-    async def read_reservation_list(self) -> KorailConfirmationSnapshot: ...
-
-
-PaymentDeadlineParser = Callable[[str], datetime | None]
-
-
-async def read_korail_same_session_confirmation(
-    *,
-    session: KorailConfirmationSession,
-    target: ReservationConfirmationTarget,
-    credential_version: int | None,
-    payment_deadline_parser: PaymentDeadlineParser | None = None,
-) -> KorailSameSessionDetailEvidence:
-    """Read detail then list fallback without taking any action on either page."""
-
-    parser = payment_deadline_parser or _parse_korail_payment_deadline
-    observed_at = datetime.now(UTC)
-    try:
-        snapshot = await session._snapshot()
-    except Exception:  # noqa: BLE001 -- provider backend errors stay opaque.
-        return _inconclusive_evidence(observed_at, credential_version)
-
-    if _confirmation_snapshot_is_blocked(snapshot):
-        return _blocked_evidence(observed_at, KORAIL_CONFIRMATION_SOURCE)
-
-    path = urlsplit(snapshot.url).path.rstrip("/")
-    if path == "/ticket/login" and not await _session_is_authenticated(session):
-        return _auth_required_evidence(
-            observed_at,
-            credential_version,
-            KORAIL_CONFIRMATION_SOURCE,
-        )
-
-    detail = _confirmation_evidence_from_text(
-        target=target,
-        text=snapshot.body_text,
-        observed_at=observed_at,
-        credential_version=credential_version,
-        source=KORAIL_CONFIRMATION_SOURCE,
-        required_path_matched=path == "/ticket/reservation/detail",
-        payment_deadline_parser=parser,
-    )
-    if _is_complete_detail_evidence(detail):
-        return detail
-
-    if not isinstance(session, KorailReservationListSession):
-        return detail
-    try:
-        list_snapshot = await session.read_reservation_list()
-    except Exception:  # noqa: BLE001 -- provider backend errors stay opaque.
-        return detail
-    list_observed_at = datetime.now(UTC)
-    if _confirmation_snapshot_is_blocked(list_snapshot):
-        return _blocked_evidence(list_observed_at, KORAIL_RESERVATION_LIST_SOURCE)
-
-    list_path = urlsplit(list_snapshot.url).path.rstrip("/")
-    if list_path == "/ticket/login" and not await _session_is_authenticated(session):
-        return _auth_required_evidence(
-            list_observed_at,
-            credential_version,
-            KORAIL_RESERVATION_LIST_SOURCE,
-        )
-
-    matches = tuple(
-        evidence
-        for row in list_snapshot.reservation_rows
-        if (
-            evidence := _confirmation_evidence_from_text(
-                target=target,
-                text=row,
-                observed_at=list_observed_at,
-                credential_version=credential_version,
-                source=KORAIL_RESERVATION_LIST_SOURCE,
-                required_path_matched=list_path == "/ticket/reservation/list",
-                payment_deadline_parser=parser,
-            )
-        ).exact_identity_matched
-        and (not evidence.seat_class_match_required or evidence.seat_class_matched)
-        and evidence.passenger_count_matched
-        and evidence.payment_pending_markers_present
-    )
-    if len(matches) == 1:
-        return matches[0]
-    return KorailSameSessionDetailEvidence(
-        observed_at=list_observed_at,
-        credential_version=credential_version,
-        exact_identity_matched=False,
-        payment_pending_markers_present=False,
-        seat_class_match_required=False,
-        official_list_read_completed=list_path == "/ticket/reservation/list",
-        official_list_target_absent=(list_path == "/ticket/reservation/list" and len(matches) == 0),
-        source=KORAIL_RESERVATION_LIST_SOURCE,
-    )
-
-
-async def _session_is_authenticated(session: KorailConfirmationSession) -> bool:
-    """A transient login route is only unauthenticated when both signals agree."""
-
-    officially_authenticated = await session._probe_official_authenticated_session()
-    header_authenticated = await session._has_authenticated_header()
-    return officially_authenticated or header_authenticated
-
-
-def _inconclusive_evidence(
-    observed_at: datetime,
-    credential_version: int | None,
-) -> KorailSameSessionDetailEvidence:
-    return KorailSameSessionDetailEvidence(
-        observed_at=observed_at,
-        credential_version=credential_version,
-        exact_identity_matched=False,
-        payment_pending_markers_present=False,
-    )
-
-
-def _blocked_evidence(
-    observed_at: datetime,
-    source: str,
-) -> KorailSameSessionDetailEvidence:
-    return KorailSameSessionDetailEvidence(
-        observed_at=observed_at,
-        credential_version=None,
-        exact_identity_matched=False,
-        payment_pending_markers_present=False,
-        provider_blocked=True,
-        source=source,
-    )
-
-
-def _auth_required_evidence(
-    observed_at: datetime,
-    credential_version: int | None,
-    source: str,
-) -> KorailSameSessionDetailEvidence:
-    return KorailSameSessionDetailEvidence(
-        observed_at=observed_at,
-        credential_version=credential_version,
-        exact_identity_matched=False,
-        payment_pending_markers_present=False,
-        auth_required=True,
-        source=source,
-    )
-
-
-def _is_complete_detail_evidence(evidence: KorailSameSessionDetailEvidence) -> bool:
-    return (
-        evidence.exact_identity_matched
-        and evidence.seat_class_matched
-        and evidence.passenger_count_matched
-        and evidence.payment_pending_markers_present
-    )
-
-
-def _confirmation_snapshot_is_blocked(snapshot: KorailConfirmationSnapshot) -> bool:
-    if protection_trigger_from_text(snapshot.body_text) is not None or any(
-        protection_trigger_from_text(text) is not None for text in snapshot.protection_texts
-    ):
-        return True
-    return any(
-        is_rate_limit_response(status, resource_type)
-        or protection_trigger_from_http_response(status, resource_type) is not None
-        for status, resource_type in snapshot.network_responses
-    )
-
-
-def _confirmation_evidence_from_text(
-    *,
-    target: ReservationConfirmationTarget,
-    text: str,
-    observed_at: datetime,
-    credential_version: int | None,
-    source: str,
-    required_path_matched: bool,
-    payment_deadline_parser: PaymentDeadlineParser | None = None,
-) -> KorailSameSessionDetailEvidence:
-    """Reduce one official reservation surface to secret-free exact evidence."""
-
-    body = " ".join(text.split())
-    local_departure = target.departure_at.astimezone(ZoneInfo("Asia/Seoul"))
-    local_arrival = (
-        target.arrival_at.astimezone(ZoneInfo("Asia/Seoul"))
-        if target.arrival_at is not None
-        else None
-    )
-    seat_label = "일반실" if target.seat_class.value == "standard" else "특실"
-    seat_class_matched = _has_exact_text_marker(body, seat_label)
-    seat_class_match_required = source != KORAIL_RESERVATION_LIST_SOURCE
-    passenger_markers = (
-        (f"{target.passenger_count}매",)
-        if source == KORAIL_RESERVATION_LIST_SOURCE
-        else (
-            f"총 {target.passenger_count}명",
-            f"성인 {target.passenger_count}명",
-            f"어른 {target.passenger_count}명",
-        )
-    )
-    passenger_count_matched = any(
-        _has_exact_text_marker(body, marker) for marker in passenger_markers
-    )
-    service_date_and_departure_matched = any(
-        re.search(
-            rf"{re.escape(marker)}.{{0,120}}"
-            rf"(?<!\d){re.escape(local_departure.strftime('%H:%M'))}(?!\d)",
-            body,
-        )
-        is not None
-        for marker in _reservation_date_markers(local_departure.date())
-    )
-    exact_identity_matched = (
-        required_path_matched
-        and local_arrival is not None
-        and _has_exact_train_number_marker(body, target.train_number)
-        and _has_exact_text_marker(body, local_departure.strftime("%H:%M"))
-        and _has_exact_text_marker(body, local_arrival.strftime("%H:%M"))
-        and service_date_and_departure_matched
-        and _has_exact_route_markers(body, target.origin, target.destination)
-        and (not seat_class_match_required or seat_class_matched)
-        and passenger_count_matched
-    )
-    payment_pending_markers = (
-        ("예약취소", "예약변경", "결제/발권")
-        if source == KORAIL_RESERVATION_LIST_SOURCE
-        else ("예약취소", "장바구니", "결제하기")
-    )
-    return KorailSameSessionDetailEvidence(
-        observed_at=observed_at,
-        credential_version=credential_version,
-        exact_identity_matched=exact_identity_matched,
-        seat_class_matched=seat_class_matched,
-        passenger_count_matched=passenger_count_matched,
-        seat_class_match_required=seat_class_match_required,
-        official_list_read_completed=(
-            source == KORAIL_RESERVATION_LIST_SOURCE and required_path_matched
-        ),
-        payment_pending_markers_present=all(marker in body for marker in payment_pending_markers),
-        payment_deadline=(payment_deadline_parser or _parse_korail_payment_deadline)(body),
-        source=source,
-    )
-
-
-def _has_exact_train_number_marker(body: str, train_number: str) -> bool:
-    normalized = train_number.lstrip("0") or "0"
-    return re.search(rf"(?<!\d)0*{re.escape(normalized)}(?!\d)", body) is not None
-
-
-def _has_exact_text_marker(body: str, marker: str) -> bool:
-    token = rf"(?<![0-9A-Za-z가-힣]){re.escape(marker)}(?![0-9A-Za-z가-힣])"
-    return re.search(token, body) is not None
-
-
-def _has_exact_route_markers(body: str, origin: str, destination: str) -> bool:
-    origin_match = re.search(
-        rf"(?<![0-9A-Za-z가-힣]){re.escape(_normalize_station(origin))}(?:역)?"
-        r"(?![0-9A-Za-z가-힣])",
-        body,
-    )
-    if origin_match is None:
-        return False
-    return (
-        re.search(
-            rf"(?<![0-9A-Za-z가-힣]){re.escape(_normalize_station(destination))}(?:역)?"
-            r"(?![0-9A-Za-z가-힣])",
-            body[origin_match.end() :],
-        )
-        is not None
-    )
-
-
-def _reservation_date_markers(value: date) -> tuple[str, ...]:
-    return (
-        value.isoformat(),
-        value.strftime("%Y.%m.%d"),
-        value.strftime("%Y. %m. %d"),
-        f"{value.year}년{value.month:02d}월{value.day:02d}일",
-        f"{value.year}년 {value.month}월 {value.day}일",
-        f"{value.month}월 {value.day}일",
-    )
-
-
-def _normalize_station(value: str) -> str:
-    return "".join(value.split()).removesuffix("역")
-
-
-def _parse_korail_payment_deadline(body: str) -> datetime | None:
-    """Parse only an explicit provider date and time; never invent a deadline."""
-
-    patterns = (
-        re.compile(
-            r"결제\s*(?:기한|마감)\s*[:：]?\s*"
-            r"(20\d{2})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})일?"
-            r"(?:\s*[.]\s*|\s+)"
-            r"(\d{1,2}):(\d{2})"
-        ),
-        re.compile(
-            r"결제\s*(?:기한|마감)\s*[:：]?\s*"
-            r"(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일\s+"
-            r"(\d{1,2}):(\d{2})"
-        ),
-    )
-    for pattern in patterns:
-        match = pattern.search(body)
-        if match is None:
-            continue
-        try:
-            year, month, day, hour, minute = (int(part) for part in match.groups())
-            return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("Asia/Seoul"))
-        except ValueError:
-            return None
-    return None
+annotations = _owner.annotations
+re = _owner.re
+Callable = _owner.Callable
+UTC = _owner.UTC
+date = _owner.date
+datetime = _owner.datetime
+Protocol = _owner.Protocol
+runtime_checkable = _owner.runtime_checkable
+urlsplit = _owner.urlsplit
+ZoneInfo = _owner.ZoneInfo
+is_rate_limit_response = _owner.is_rate_limit_response
+protection_trigger_from_http_response = _owner.protection_trigger_from_http_response
+protection_trigger_from_text = _owner.protection_trigger_from_text
+ReservationConfirmationTarget = _owner.ReservationConfirmationTarget
+KORAIL_CONFIRMATION_SOURCE = _owner.KORAIL_CONFIRMATION_SOURCE
+KORAIL_RESERVATION_LIST_SOURCE = _owner.KORAIL_RESERVATION_LIST_SOURCE
+KorailSameSessionDetailEvidence = _owner.KorailSameSessionDetailEvidence
+KorailConfirmationSnapshot = _owner.KorailConfirmationSnapshot
+KorailConfirmationSession = _owner.KorailConfirmationSession
+KorailReservationListSession = _owner.KorailReservationListSession
+PaymentDeadlineParser = _owner.PaymentDeadlineParser
+read_korail_same_session_confirmation = _owner.read_korail_same_session_confirmation
+_session_is_authenticated = _owner._session_is_authenticated
+_inconclusive_evidence = _owner._inconclusive_evidence
+_blocked_evidence = _owner._blocked_evidence
+_auth_required_evidence = _owner._auth_required_evidence
+_is_complete_detail_evidence = _owner._is_complete_detail_evidence
+_confirmation_snapshot_is_blocked = _owner._confirmation_snapshot_is_blocked
+_confirmation_evidence_from_text = _owner._confirmation_evidence_from_text
+_has_exact_train_number_marker = _owner._has_exact_train_number_marker
+_has_exact_text_marker = _owner._has_exact_text_marker
+_has_exact_route_markers = _owner._has_exact_route_markers
+_reservation_date_markers = _owner._reservation_date_markers
+_normalize_station = _owner._normalize_station
+_parse_korail_payment_deadline = _owner._parse_korail_payment_deadline

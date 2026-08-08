@@ -3,7 +3,6 @@ import {
   GearSix,
   House,
   Plus,
-  ShieldCheck,
   Ticket,
   type Icon,
 } from "@phosphor-icons/react";
@@ -54,10 +53,6 @@ function Sidebar({ activeView, onNavigate }: AppNavigationProps) {
           </button>
         ))}
       </nav>
-      <div className="private-badge">
-        <ShieldCheck size={19} weight="fill" />
-        <span>Tailscale 보호됨</span>
-      </div>
     </aside>
   );
 }

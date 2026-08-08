@@ -4,19 +4,14 @@ from datetime import datetime
 from typing import Protocol
 
 from .domain import Provider
-from .reservation_confirmation import (
+from .observations.contracts import SeatObservationRequest, SeatObservationResult
+from .provider_registry.contracts import ProviderCapabilities
+from .reservations.contracts import ReservationRequest, ReservationResult
+from .reservations.provider_confirmation.contracts import (
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
-from .schemas import (
-    ProviderCapabilities,
-    ReservationRequest,
-    ReservationResult,
-    SeatObservationRequest,
-    SeatObservationResult,
-    StationCatalog,
-    TimetableItem,
-)
+from .timetable_management.schemas import StationCatalog, TimetableItem
 
 
 class ProviderUnavailable(RuntimeError):

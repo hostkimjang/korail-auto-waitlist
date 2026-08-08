@@ -156,9 +156,7 @@ async def test_scheduled_watch_is_due_only_when_execution_adapter_can_monitor(
         SeatObservationStatus.STANDING_PLUS_SEAT,
     ],
 )
-async def test_actionable_inventory_transitions_watching_to_seat_found(
-    db_engine, status
-):
+async def test_actionable_inventory_transitions_watching_to_seat_found(db_engine, status):
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     observed_at = datetime.now(UTC)
 
@@ -308,6 +306,98 @@ async def test_reserving_notification_describes_the_current_availability_episode
         assert notification is not None
         assert "이번 좌석 가용성에 대한 예매" in notification.payload["message"]
         assert "1회 예매" not in notification.payload["message"]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "reservation_unknown",
+        "reservation_result_deadline_already_elapsed",
+        "stale_reservation_attempt_requires_manual_check",
+    ],
+)
+async def test_manual_check_monitoring_resume_notifies_external_channels(
+    db_engine,
+    reason: str,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session:
+        watch = make_watch(status=WatchStatus.RESERVING)
+        channel = NotificationChannel(
+            kind=NotificationKind.TELEGRAM,
+            name=f"manual-check-{reason}",
+            config_ciphertext="encrypted-test-placeholder",
+            enabled=True,
+        )
+        session.add_all([watch, channel])
+        await session.flush()
+
+        await apply_watch_transition(
+            session,
+            watch,
+            WatchStatus.WATCHING,
+            reason=reason,
+        )
+        await session.flush()
+
+        notification = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.event_type == "notification.dispatch_requested",
+                OutboxEvent.aggregate_id == channel.id,
+                OutboxEvent.payload["watch_id"].as_string() == watch.id,
+                OutboxEvent.payload["status"].as_string() == WatchStatus.WATCHING.value,
+            )
+        )
+
+        assert notification is not None
+        assert "예매 결과를 확정하지 못했습니다" in notification.payload["message"]
+        assert "공식 플랫폼의 예약 내역을 확인해 주세요" in notification.payload["message"]
+        assert (
+            "같은 좌석 가용 상태에서는 자동 예매를 다시 시도하지 않습니다"
+            in notification.payload["message"]
+        )
+
+
+async def test_not_available_monitoring_resume_explains_the_required_retry_edge(
+    db_engine,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session:
+        watch = make_watch(status=WatchStatus.RESERVING)
+        channel = NotificationChannel(
+            kind=NotificationKind.TELEGRAM,
+            name="not-available-retry-edge",
+            config_ciphertext="encrypted-test-placeholder",
+            enabled=True,
+        )
+        session.add_all([watch, channel])
+        await session.flush()
+
+        await apply_watch_transition(
+            session,
+            watch,
+            WatchStatus.WATCHING,
+            reason="reservation_not_available",
+        )
+        await session.flush()
+
+        notification = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.event_type == "notification.dispatch_requested",
+                OutboxEvent.aggregate_id == channel.id,
+                OutboxEvent.payload["watch_id"].as_string() == watch.id,
+                OutboxEvent.payload["status"].as_string() == WatchStatus.WATCHING.value,
+            )
+        )
+
+        assert notification is not None
+        assert "예매 시점에 좌석을 확보하지 못해" in notification.payload["message"]
+        assert (
+            "판매 불가 상태를 확인한 뒤 좌석이 다시 가용해지는 경우에만"
+            in notification.payload["message"]
+        )
 
 
 async def test_state_notification_skips_disabled_global_channel_even_if_watch_snapshotted_it(
@@ -500,7 +590,7 @@ async def test_reconciliation_negative_evidence_requires_exact_retry_episode(
         assert candidate.state == "observed"
 
 
-async def test_confirmed_absent_unknown_rearms_exactly_once_after_later_actionable_observation(
+async def test_confirmed_absent_unknown_remains_fenced_after_later_actionable_observation(
     db_engine,
 ) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -539,7 +629,7 @@ async def test_confirmed_absent_unknown_rearms_exactly_once_after_later_actionab
         )
         await session.flush()
 
-        second_attempt, created = await begin_reservation_attempt(
+        replayed_attempt, created = await begin_reservation_attempt(
             session,
             watch,
             candidate,
@@ -548,37 +638,8 @@ async def test_confirmed_absent_unknown_rearms_exactly_once_after_later_actionab
             retry_authorized=True,
         )
 
-        assert created is True
-        assert second_attempt.attempt_sequence == 2
-        second_attempt.outcome = ReservationOutcome.UNKNOWN
-        second_attempt.finished_at = confirmed_at + timedelta(seconds=2)
-        second_attempt.confirmation_outcome = ReservationConfirmationOutcome.NOT_FOUND
-        second_attempt.confirmation_source = "srtrain-reservation-list"
-        second_attempt.confirmation_observed_at = confirmed_at + timedelta(seconds=3)
-        candidate.state = "seat_found"
-        watch.status = WatchStatus.SEAT_FOUND
-        session.add(
-            SeatObservation(
-                candidate=candidate,
-                status=SeatObservationStatus.AVAILABLE,
-                source="authorized-provider",
-                observed_at=confirmed_at + timedelta(seconds=4),
-                fresh_until=confirmed_at + timedelta(minutes=1),
-            )
-        )
-        await session.flush()
-
-        repeated, repeated_created = await begin_reservation_attempt(
-            session,
-            watch,
-            candidate,
-            "reserve:confirmed-absent:third",
-            episode_key=f"confirmed-absent-retry:{second_attempt.id}",
-            retry_authorized=True,
-        )
-
-        assert repeated.id == second_attempt.id
-        assert repeated_created is False
+        assert replayed_attempt.id == first_attempt.id
+        assert created is False
 
 
 async def test_legacy_confirmed_absent_payment_hold_rearms_exactly_once(
@@ -901,9 +962,7 @@ async def test_final_not_found_for_confirmed_hold_resumes_monitoring_without_ret
             outcome=ReservationOutcome.PAYMENT_REQUIRED,
             credential_version=3,
             payment_deadline=observed_at - timedelta(minutes=1),
-            confirmation_outcome=(
-                ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-            ),
+            confirmation_outcome=(ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
             confirmation_source="korail-reservation-list",
             confirmation_observed_at=observed_at - timedelta(minutes=2),
             reconciliation_attempt_count=2,
@@ -1038,9 +1097,7 @@ async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_w
             outcome=ReservationOutcome.PAYMENT_REQUIRED,
             credential_version=3,
             payment_deadline=deadline,
-            confirmation_outcome=(
-                ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-            ),
+            confirmation_outcome=(ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
             confirmation_source="srtrain-reservation-list",
             confirmation_observed_at=deadline - timedelta(seconds=30),
             reconciliation_attempt_count=3,
@@ -1060,9 +1117,7 @@ async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_w
                 source="srtrain-reservation-list",
                 observed_at=observed_at,
                 payment_deadline=deadline,
-                official_handoff_url=(
-                    "https://etk.srail.kr/hpg/hra/02/selectReservationList.do"
-                ),
+                official_handoff_url=("https://etk.srail.kr/hpg/hra/02/selectReservationList.do"),
             ),
             reconciled_at=observed_at,
         )
@@ -1251,9 +1306,7 @@ async def test_final_not_found_expires_notify_only_one_off_watch(db_engine) -> N
             outcome=ReservationOutcome.PAYMENT_REQUIRED,
             credential_version=3,
             payment_deadline=observed_at - timedelta(minutes=1),
-            confirmation_outcome=(
-                ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
-            ),
+            confirmation_outcome=(ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
             confirmation_source="korail-reservation-list",
             confirmation_observed_at=observed_at - timedelta(minutes=1),
             reconciliation_attempt_count=3,
@@ -1355,8 +1408,7 @@ async def test_failed_reservation_persists_failure_and_resumes_monitoring(db_eng
         event = await session.scalar(
             select(OutboxEvent).where(
                 OutboxEvent.aggregate_id == watch.id,
-                OutboxEvent.event_type
-                == "watch.reservation_failed_monitoring_resumed",
+                OutboxEvent.event_type == "watch.reservation_failed_monitoring_resumed",
             )
         )
         result_event = await session.scalar(

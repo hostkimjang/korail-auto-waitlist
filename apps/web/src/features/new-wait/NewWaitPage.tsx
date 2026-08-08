@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowsLeftRight,
   CheckCircle,
   Clock,
   Ticket,
@@ -36,10 +35,18 @@ import {
 } from "./reservationPolicy";
 import { ServerSeatStatusPanel } from "./ServerSeatStatusPanel";
 import { summarizeServerSeatStatus } from "./serverSeatStatusSummary";
-import { StationCombobox } from "./StationCombobox";
+import { StationRoutePicker } from "./StationRoutePicker";
 import { StepThreeDateSelector } from "./StepThreeDateSelector";
 import { StepThreeRefreshControl } from "./StepThreeRefreshControl";
 import { StepThreeTimeRange } from "./StepThreeTimeRange";
+import {
+  accessibleTimeBoundary,
+  displayTimeBoundary,
+  displayTimeRange,
+  halfHourBoundaryIndex,
+  halfHourBoundaryValue,
+  NEW_WAIT_TIME_PRESETS,
+} from "./timeRange";
 import {
   TrainResultCard,
   type TrainResultOfficialHandoffComponent,
@@ -76,13 +83,6 @@ const providers: readonly ProviderOption[] = [
   { id: "SRT", name: "SRT", helper: "SRT 시간표" },
 ];
 
-const timePresets = [
-  { label: "새벽", start: "05:00", end: "09:00" },
-  { label: "오전", start: "09:00", end: "12:00" },
-  { label: "오후", start: "12:00", end: "18:00" },
-  { label: "저녁", start: "18:00", end: "23:00" },
-] as const;
-
 interface TimeRangePickerProps {
   start: string;
   end: string;
@@ -90,25 +90,19 @@ interface TimeRangePickerProps {
 }
 
 function TimeRangePicker({ start, end, onChange }: TimeRangePickerProps) {
-  const toIndex = (time: string): number => (
-    Number(time.slice(0, 2)) * 2 + Number(time.slice(3)) / 30
-  );
-  const toTime = (index: number): string => (
-    `${String(Math.floor(index / 2)).padStart(2, "0")}:${index % 2 ? "30" : "00"}`
-  );
-  const startIndex = toIndex(start);
-  const endIndex = toIndex(end);
+  const startIndex = halfHourBoundaryIndex(start);
+  const endIndex = halfHourBoundaryIndex(end);
   return (
     <div className="journey-field time-range-field">
       <span className="journey-label"><Clock size={18} />출발 시간 범위</span>
       <div className="time-range-card">
-        <div className="time-values"><strong>{start}</strong><span>부터</span><strong>{end}</strong><span>까지</span></div>
+        <div className="time-values"><strong>{start}</strong><span>부터</span><strong>{displayTimeBoundary(end)}</strong><span>까지</span></div>
         <div className="range-sliders">
-          <input aria-label="출발 시작 시간" aria-valuetext={`${start}부터`} type="range" min="0" max="46" step="1" value={startIndex} onChange={(event) => onChange(toTime(Math.min(Number(event.target.value), endIndex - 1)), end)} />
-          <input aria-label="출발 종료 시간" aria-valuetext={`${end}까지`} type="range" min="1" max="47" step="1" value={endIndex} onChange={(event) => onChange(start, toTime(Math.max(Number(event.target.value), startIndex + 1)))} />
+          <input aria-label="출발 시작 시간" aria-valuetext={`${start}부터`} type="range" min="0" max="47" step="1" value={startIndex} onChange={(event) => onChange(halfHourBoundaryValue(Math.min(Number(event.target.value), endIndex - 1)), end)} />
+          <input aria-label="출발 종료 시간" aria-valuetext={`${accessibleTimeBoundary(end)}까지`} type="range" min="1" max="48" step="1" value={endIndex} onChange={(event) => onChange(start, halfHourBoundaryValue(Math.max(Number(event.target.value), startIndex + 1)))} />
         </div>
         <div className="time-preset-chips" aria-label="시간대 빠른 선택">
-          {timePresets.map((preset) => <button key={preset.label} type="button" aria-pressed={start === preset.start && end === preset.end} onClick={() => onChange(preset.start, preset.end)}><strong>{preset.label}</strong><span>{preset.start}–{preset.end}</span></button>)}
+          {NEW_WAIT_TIME_PRESETS.map((preset) => <button key={preset.label} type="button" aria-label={`${preset.label} ${preset.start}부터 ${accessibleTimeBoundary(preset.end)}까지`} aria-pressed={start === preset.start && end === preset.end} onClick={() => onChange(preset.start, preset.end)}><strong>{preset.label}</strong><span>{displayTimeRange(preset.start, preset.end)}</span></button>)}
         </div>
       </div>
     </div>
@@ -307,13 +301,18 @@ export function NewWaitPage({
                 })}
               </div>
             </fieldset>
-            <div className="route-fields">
-              <StationCombobox label="출발역" value={form.origin} selectedNodeId={form.origin_node_id} stations={selectableStations} loading={stationState.status === "loading"} disabled={!stationCatalogReady} error={originStationError} onChange={(station) => setForm((value) => ({ ...value, origin: station.name, origin_node_id: station.nodeId }))} />
-              <div className="route-swap-slot">
-                <button className="swap-button" type="button" disabled={!stationCatalogReady || !form.origin_node_id || !form.destination_node_id} aria-label="출발역과 도착역 바꾸기" onClick={swapStations}><ArrowsLeftRight size={23} /></button>
-              </div>
-              <StationCombobox label="도착역" value={form.destination} selectedNodeId={form.destination_node_id} stations={selectableStations} loading={stationState.status === "loading"} disabled={!stationCatalogReady} error={destinationStationError} onChange={(station) => setForm((value) => ({ ...value, destination: station.name, destination_node_id: station.nodeId }))} />
-            </div>
+            <StationRoutePicker
+              origin={{ name: form.origin, nodeId: form.origin_node_id }}
+              destination={{ name: form.destination, nodeId: form.destination_node_id }}
+              originError={originStationError}
+              destinationError={destinationStationError}
+              stations={selectableStations}
+              loading={stationState.status === "loading"}
+              disabled={!stationCatalogReady}
+              onOriginChange={(station) => setForm((value) => ({ ...value, origin: station.name, origin_node_id: station.nodeId }))}
+              onDestinationChange={(station) => setForm((value) => ({ ...value, destination: station.name, destination_node_id: station.nodeId }))}
+              onSwap={swapStations}
+            />
             {stationState.status === "loading" && <div className="station-catalog-state" role="status"><Clock size={19} /><span>선택한 운영사의 역 목록을 불러오고 있습니다.</span></div>}
             {stationState.status === "error" && <div className="form-error station-catalog-error" role="alert"><WarningCircle weight="fill" /><span><strong>역 목록을 불러오지 못했습니다.</strong> {stationState.error}</span><button type="button" className="button button-outline compact" onClick={retryStationCatalog}>다시 불러오기</button></div>}
             {stationNotice && <div className="station-notice" role="note"><WarningCircle size={19} weight="fill" /><span>{stationNotice}</span></div>}
@@ -382,7 +381,7 @@ export function NewWaitPage({
             <div className="train-options">
               {timetableState.loadingProviders.length > 0 && <div className="timetable-state"><Clock size={24} /><span>{timetableState.loadingProviders.join(" · ")} 공식 시간표를 조회하고 있습니다.</span></div>}
               {Object.values(timetableState.providerResults).filter((result): result is TimetableProviderError => result.status === "error").map((result) => <div key={result.provider} className="form-error timetable-error" role="alert"><WarningCircle weight="fill" /><span><strong>{result.provider}</strong> {publicTimetableErrorMessage(result)}</span><button type="button" className="button button-outline compact" disabled={timetableState.loadingProviders.includes(result.provider)} onClick={() => retryTimetableProvider(result.provider)}>이 운영사만 다시 조회</button></div>)}
-              {timetableState.loadingProviders.length === 0 && trains.length > 0 && <div className="timetable-result-summary" aria-label="시간표 조회 결과 요약"><strong>{form.time}–{form.timeEnd}</strong><span>총 {trains.length}개 열차 · KORAIL {visibleProviderCounts.KORAIL ?? 0} · SRT {visibleProviderCounts.SRT ?? 0}</span></div>}
+              {timetableState.loadingProviders.length === 0 && trains.length > 0 && <div className="timetable-result-summary" aria-label="시간표 조회 결과 요약"><strong>{displayTimeRange(form.time, form.timeEnd)}</strong><span>총 {trains.length}개 열차 · KORAIL {visibleProviderCounts.KORAIL ?? 0} · SRT {visibleProviderCounts.SRT ?? 0}</span></div>}
               {timetableState.loadingProviders.length === 0 && trains.length === 0 && Object.values(timetableState.providerResults).some((result) => result.status === "success") && <div className="timetable-state"><Ticket size={24} /><span>선택한 날짜·시간 범위에 맞는 공식 열차가 없습니다.</span></div>}
               {trains.map((train) => {
                 const registrationBySeat = Object.fromEntries(train.seat_classes.map((seat) => [

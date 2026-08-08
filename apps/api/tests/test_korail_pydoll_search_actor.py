@@ -11,7 +11,8 @@ import pytest
 
 from rail_waitlist.korail_browser_automation import BrowserSeatSearchRequest
 from rail_waitlist.korail_pydoll_contracts import PydollPageSnapshot, PydollSeatBox, PydollTrainRow
-from rail_waitlist.korail_pydoll_search_actor import (
+from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
+from rail_waitlist.korail_sidecar.pydoll.search_actor import (
     KorailPydollReadOnlySearchSession,
     PydollReadOnlySearchActor,
 )
@@ -59,6 +60,9 @@ class _ReadOnlySession:
     async def navigate(self, _url: str) -> PydollPageSnapshot:
         raise AssertionError("direct navigation is not expected")
 
+    async def navigate_fresh(self, _url: str) -> PydollPageSnapshot:
+        raise AssertionError("direct navigation is not expected")
+
     async def choose_station(self, kind: str, station: str) -> None:
         self.events.append(f"station:{kind}:{station}")
         self.stations[kind] = station
@@ -99,8 +103,15 @@ class _ReadOnlySession:
 
 
 class _SessionContext:
-    def __init__(self, session: _ReadOnlySession) -> None:
+    def __init__(
+        self,
+        session: _ReadOnlySession,
+        *,
+        fail_on_clean_exit: bool = False,
+    ) -> None:
         self.session = session
+        self.fail_on_clean_exit = fail_on_clean_exit
+        self.exit_exc_type: type[BaseException] | None = None
 
     async def __aenter__(self) -> _ReadOnlySession:
         self.session.events.append("enter")
@@ -112,7 +123,10 @@ class _SessionContext:
         _exc_value: BaseException | None,
         _traceback: object,
     ) -> None:
+        self.exit_exc_type = _exc_type
         self.session.events.append("exit")
+        if self.fail_on_clean_exit and _exc_type is None:
+            raise BrowserSourceUnavailable("browser_close")
 
 
 async def _cleanup(awaitable: Awaitable[object]) -> None:
@@ -163,7 +177,9 @@ def test_search_actor_does_not_reverse_depend_on_pydoll_browser_facade() -> None
         Path(__file__).resolve().parents[1]
         / "src"
         / "rail_waitlist"
-        / "korail_pydoll_search_actor.py"
+        / "korail_sidecar"
+        / "pydoll"
+        / "search_actor.py"
     )
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     imported_modules = {
@@ -173,3 +189,35 @@ def test_search_actor_does_not_reverse_depend_on_pydoll_browser_facade() -> None
     }
 
     assert "korail_pydoll_browser" not in imported_modules
+
+
+@pytest.mark.asyncio
+async def test_search_actor_passes_the_primary_error_to_context_cleanup() -> None:
+    concrete_session = _ReadOnlySession(_snapshot())
+    context = _SessionContext(concrete_session, fail_on_clean_exit=True)
+
+    def reject_loaded_page(_snapshot: PydollPageSnapshot, stage: str) -> None:
+        if stage == "load_page":
+            raise BrowserSourceUnavailable(stage)
+
+    actor = PydollReadOnlySearchActor(
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_: context,
+        session_reuse_ttl_seconds=0,
+        session_reuse_max_searches=1,
+        station_identity_resolver=None,
+        monotonic=lambda: 0,
+        cleanup=_cleanup,
+        response_safety_guard=reject_loaded_page,
+        http_replay_client_factory=lambda *_args, **_kwargs: object(),
+        http_replay_route_cache_size=4,
+        event_logger=logging.getLogger(__name__),
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await actor.search(_request())
+
+    assert raised.value.stage == "load_page"
+    assert context.exit_exc_type is BrowserSourceUnavailable

@@ -14,7 +14,6 @@ from rail_waitlist.models import (
     OutboxEvent,
     ReservationAttempt,
     SeatObservation,
-    TimetableSeatEvidence,
     WatchCandidate,
 )
 from rail_waitlist.providers import MockProviderAdapter, official_unknown_seat_classes
@@ -26,6 +25,7 @@ from rail_waitlist.schemas import (
 )
 from rail_waitlist.timetable_evidence import persist_timetable_seat_evidence
 from rail_waitlist.timetable_management import application as timetable_application
+from rail_waitlist.timetable_management.models import TimetableSeatEvidence
 from rail_waitlist.worker import _process_due_watches
 
 DEPARTURE = datetime(2030, 8, 1, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))

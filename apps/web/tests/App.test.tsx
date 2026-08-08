@@ -616,6 +616,8 @@ describe("RailWait responsive core flow", () => {
     const dialog = screen.getByRole("dialog", { name: "SRT 327 공식 좌석 확인 전 안내" });
     const close = within(dialog).getByRole("button", { name: "공식 좌석 확인 안내 닫기" });
     const official = within(dialog).getByRole("button", { name: /공식 페이지 열기/ });
+    expect(document.documentElement.style.overflow).toBe("hidden");
+    expect(document.body.style.position).toBe("fixed");
     await waitFor(() => expect(document.activeElement).toBe(close));
 
     await user.tab({ shift: true });
@@ -635,7 +637,9 @@ describe("RailWait responsive core flow", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(appShell.inert).toBe(false);
     expect(appShell.getAttribute("aria-hidden")).toBeNull();
+    expect(document.documentElement.style.overflow).toBe("");
     expect(document.body.style.overflow).toBe("");
+    expect(document.body.style.position).toBe("");
   });
 
   it("opens a server-built strict KORAIL search URL with conditions prefilled", async () => {

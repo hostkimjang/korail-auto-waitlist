@@ -44,6 +44,7 @@ import { seatClassNames } from "./features/new-wait/TrainResultCard";
 import type { SeatWatchRegistrationCompletion } from "./features/new-wait/useSeatWatchRegistration";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { useNotificationChannelSettings } from "./features/settings/useNotificationChannelSettings";
+import { WebPushEnrollmentPrompt } from "./features/settings/WebPushEnrollmentPrompt";
 import { useProviderAccountSettings } from "./features/settings/useProviderAccountSettings";
 import { useUiPreferencesSettings } from "./features/settings/useUiPreferencesSettings";
 import { formatNewWaitDateLabel } from "./features/new-wait/newWaitForm";
@@ -89,7 +90,9 @@ export function App(): ReactElement {
   } = useAppNotifications();
   const {
     channels,
+    channelsLoaded,
     browserPushState,
+    webPushPromptSuppressed,
     saveChannel,
     toggleChannel,
     testChannel,
@@ -257,12 +260,22 @@ export function App(): ReactElement {
       <AppShell
         activeView={activeView}
         onNavigate={navigate}
-        overlay={<AppNotificationCenter
-          state={notificationState}
-          onDismiss={dismissNotification}
-          onDismissGroup={dismissNotificationGroup}
-          onDismissTimed={dismissTimedNotifications}
-        />}
+        overlay={<>
+          <WebPushEnrollmentPrompt
+            browserPushState={browserPushState}
+            channels={channels}
+            channelsLoaded={channelsLoaded}
+            demo={auth.demo}
+            suppressed={webPushPromptSuppressed}
+            onConnect={connectWebPushChannel}
+          />
+          <AppNotificationCenter
+            state={notificationState}
+            onDismiss={dismissNotification}
+            onDismissGroup={dismissNotificationGroup}
+            onDismissTimed={dismissTimedNotifications}
+          />
+        </>}
       >
         {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={async (watchId) => { await cancelWatchItem(watchId); }} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
         {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}

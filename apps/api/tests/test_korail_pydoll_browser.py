@@ -280,6 +280,10 @@ class FixtureSession:
         self._submitted = True
         return self.snapshot
 
+    async def navigate_fresh(self, url: str) -> PydollPageSnapshot:
+        self.events.append("navigate_fresh")
+        return await self.navigate(url)
+
     async def expand_results(
         self,
         snapshot: PydollPageSnapshot,
@@ -326,6 +330,7 @@ async def test_direct_bootstrap_skips_picker_input_and_submit() -> None:
 
     result = await client.search(search_request())
 
+    assert "navigate_fresh" in session.events
     assert "navigate" in session.events
     assert "open" not in session.events
     assert not any(event.startswith("station:") for event in session.events)
@@ -352,6 +357,36 @@ async def test_direct_bootstrap_protection_never_falls_back_to_ui_submit() -> No
     assert session.events.count("navigate") == 1
     assert "open" not in session.events
     assert "submit" not in session.events
+
+
+@pytest.mark.asyncio
+async def test_fresh_direct_navigation_rebases_an_active_capture_on_the_new_tab() -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 5_000, True)
+    replacement_tab = SimpleNamespace(
+        get_network_logs=AsyncMock(return_value=[{"event": 1}, {"event": 2}])
+    )
+
+    async def replace_tab() -> None:
+        session._tab = replacement_tab
+
+    session._opened_once = True
+    session._http_capture_start = 7
+    session._replace_tab = AsyncMock(side_effect=replace_tab)  # type: ignore[method-assign]
+    expected = PydollPageSnapshot("열차 조회 결과", ())
+    session.navigate = AsyncMock(return_value=expected)  # type: ignore[method-assign]
+    direct_url = pydoll_module.build_korail_general_search_url(
+        origin=KorailStationIdentity("0001", "서울"),
+        destination=KorailStationIdentity("0020", "부산"),
+        travel_date=date(2026, 8, 3),
+        departure_time=time(14),
+    )
+
+    result = await session.navigate_fresh(direct_url)
+
+    assert result is expected
+    assert session._http_capture_start == 2
+    session._replace_tab.assert_awaited_once_with()
+    session.navigate.assert_awaited_once_with(direct_url)
 
 
 class SequenceSessionFactory:
@@ -561,6 +596,35 @@ async def test_search_uses_response_safety_guard_patched_before_client_construct
         allow_test_loopback=True,
         session_factory=FixtureSessionFactory(session),
     )
+
+    await client.search(search_request())
+
+    assert checked_stages == ["load_page", "wait_result", "expand_results"]
+
+
+@pytest.mark.asyncio
+async def test_search_resolves_module_global_response_guard_after_client_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked_stages: list[str] = []
+    session = FixtureSession(_fixture_snapshot())
+    client = PydollKorailBrowserClient(
+        page_url="http://127.0.0.1:8011/korail_browser_page.html",
+        timeout_seconds=3,
+        allow_test_loopback=True,
+        session_factory=FixtureSessionFactory(session),
+    )
+
+    def patched_guard(
+        _snapshot: PydollPageSnapshot,
+        stage: str,
+        *,
+        event_logger: logging.Logger,
+    ) -> None:
+        assert event_logger is pydoll_module.logger
+        checked_stages.append(stage)
+
+    monkeypatch.setattr(pydoll_module, "assert_pydoll_response_allowed", patched_guard)
 
     await client.search(search_request())
 
@@ -1137,6 +1201,30 @@ async def test_pydoll_client_finishes_session_cleanup_after_repeated_cancellatio
 
 
 @pytest.mark.asyncio
+async def test_pydoll_client_closes_both_actor_owners_before_raising_first_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = PydollKorailBrowserClient()
+    events: list[str] = []
+
+    async def close_search() -> None:
+        events.append("search")
+        raise BrowserSourceUnavailable("browser_close")
+
+    async def close_auth() -> None:
+        events.append("auth")
+
+    monkeypatch.setattr(client._search_actor, "close", close_search)
+    monkeypatch.setattr(client._auth_actor, "close_locked", close_auth)
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await client.close()
+
+    assert raised.value.stage == "browser_close"
+    assert events == ["search", "auth"]
+
+
+@pytest.mark.asyncio
 async def test_enabled_control_uses_live_dom_state_instead_of_cached_attributes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1255,19 +1343,21 @@ async def test_pydoll_result_expansion_stops_on_network_failure(
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 5_000, True)
     snapshot = _fixture_snapshot()
+    added = PydollTrainRow("KTX", "999", "서울 → 부산(17:00 ~ 19:30)", ())
     restricted = PydollPageSnapshot(
         body_text="결과",
-        rows=snapshot.rows,
+        rows=(*snapshot.rows, added),
         network_responses=((429, "xhr"),),
     )
     more = SimpleNamespace(click=AsyncMock())
     monkeypatch.setattr(session, "_find_exact_visible", AsyncMock(return_value=more))
-    growth = AsyncMock(return_value=(restricted, False))
+    growth = AsyncMock(return_value=(restricted, True))
     monkeypatch.setattr(session, "_wait_for_result_growth", growth)
 
     result = await session.expand_results(snapshot, 19)
 
     assert result.network_responses == ((429, "xhr"),)
+    assert result.rows[-1] == added
     more.click.assert_awaited_once_with()
     growth.assert_awaited_once()
 
@@ -1325,7 +1415,7 @@ def test_pydoll_network_listener_keeps_only_business_failures() -> None:
             }
         )
 
-    assert session._network_responses == {(429, "fetch"), (403, "document")}
+    assert tuple(session._network_responses) == ((429, "fetch"), (403, "document"))
 
 
 @pytest.mark.asyncio

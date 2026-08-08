@@ -95,6 +95,44 @@ describe("live reservation notices", () => {
     ]);
   });
 
+  it("does not mix a future REST observation or another attempt into an attempted SSE", () => {
+    const notice = buildLiveReservationNotice({
+      id: "attempt-with-newer-rest",
+      event_type: "watch.reservation_attempted",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:09:45Z",
+      payload: { watch_id: watch.id, candidate_id: "candidate", outcome: "pending" },
+    }, [{
+      ...watch,
+      status: "seat_found",
+      seatFoundObservation: { observedAt: "2026-08-03T12:09:48Z" },
+      latestReservationAttempt: {
+        startedAt: "2026-08-03T12:08:00Z",
+        finishedAt: "2026-08-03T12:08:03Z",
+        paymentHoldEndedAt: null,
+      },
+    }]);
+
+    expect(notice).toMatchObject({
+      startedAt: "2026-08-03T12:09:45Z",
+      revisionAt: "2026-08-03T12:09:45Z",
+    });
+    expect(notice?.steps?.slice(0, 2)).toEqual([
+      {
+        label: "좌석 발견",
+        state: "completed",
+        occurredAt: "2026-08-03T12:09:45Z",
+      },
+      {
+        label: "예매 시작",
+        state: "active",
+        occurredAt: "2026-08-03T12:09:45Z",
+        durationMs: 0,
+        durationPrefix: "대기",
+      },
+    ]);
+  });
+
   it("replaces progress with a timestamped not-available recovery result", () => {
     const notice = buildLiveReservationNotice({
       id: "result-event",

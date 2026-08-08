@@ -1,10 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   ArrowLeft,
   ArrowRight,
   CalendarBlank,
   CaretDown,
 } from "@phosphor-icons/react";
+
+import { useDocumentScrollLock } from "../../hooks/useDocumentScrollLock";
 
 export type CalendarPickerProps = {
   value: string;
@@ -17,7 +28,15 @@ type QuickDateKind = "today" | "tomorrow" | "weekend";
 
 const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const SATURDAY = 6;
+const SHEET_DISMISS_DISTANCE = 96;
+const SHEET_DISMISS_MIN_FLING_DISTANCE = 48;
+const SHEET_DISMISS_VELOCITY = 0.55;
+const SHEET_DISMISS_DURATION = 180;
 const weekdayLabels = ["일", "월", "화", "수", "목", "금", "토"] as const;
+
+type CalendarSheetStyle = CSSProperties & {
+  "--calendar-sheet-drag-y": string;
+};
 
 function seoulDateInput(dayOffset = 0): string {
   const value = new Date(Date.now() + dayOffset * DAY_IN_MILLISECONDS);
@@ -79,20 +98,49 @@ export function CalendarPicker({
 }: CalendarPickerProps) {
   const [open, setOpen] = useState(false);
   const [viewDate, setViewDate] = useState(() => parseDateInput(value));
+  const [dragOffset, setDragOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{ pointerId: number; y: number; startedAt: number } | null>(null);
+  const dragOffsetRef = useRef(0);
+  const dismissTimerRef = useRef<number | null>(null);
   const today = seoulDateInput();
   const resolvedDialogLabel = dialogLabel ?? `${label} 선택`;
   const cells = useMemo(() => calendarCells(viewDate), [viewDate]);
+  useDocumentScrollLock(open);
 
-  useEffect(() => {
-    if (!open) setViewDate(parseDateInput(value));
-  }, [open, value]);
+  const resetDrag = useCallback((): void => {
+    dragStartRef.current = null;
+    dragOffsetRef.current = 0;
+    setDragOffset(0);
+    setDragging(false);
+    setDismissing(false);
+  }, []);
 
-  const closeCalendar = (): void => {
+  const closeCalendar = useCallback((): void => {
+    if (dismissTimerRef.current !== null) {
+      window.clearTimeout(dismissTimerRef.current);
+      dismissTimerRef.current = null;
+    }
+    resetDrag();
     setOpen(false);
     window.setTimeout(() => triggerRef.current?.focus(), 0);
+  }, [resetDrag]);
+
+  const toggleCalendar = (): void => {
+    if (open) {
+      closeCalendar();
+      return;
+    }
+    setViewDate(parseDateInput(value));
+    setOpen(true);
   };
+
+  useEffect(() => () => {
+    if (dismissTimerRef.current !== null) window.clearTimeout(dismissTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -151,6 +199,80 @@ export function CalendarPicker({
     selectDate(nextWeekdayDate(today, SATURDAY));
   };
 
+  const startSheetDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (
+      event.isPrimary === false
+      || !window.matchMedia?.("(max-width: 760px)").matches
+    ) return;
+
+    dragStartRef.current = {
+      pointerId: event.pointerId,
+      y: event.clientY,
+      startedAt: performance.now(),
+    };
+    dragOffsetRef.current = 0;
+    setDragging(true);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  useEffect(() => {
+    if (!dragging) return undefined;
+
+    const moveSheetDrag = (event: PointerEvent): void => {
+      const dragStart = dragStartRef.current;
+      if (!dragStart || dragStart.pointerId !== event.pointerId) return;
+
+      event.preventDefault();
+      const nextOffset = Math.max(0, event.clientY - dragStart.y);
+      dragOffsetRef.current = nextOffset;
+      setDragOffset(nextOffset);
+    };
+
+    const finishSheetDrag = (event: PointerEvent, cancelled = false): void => {
+      const dragStart = dragStartRef.current;
+      if (!dragStart || dragStart.pointerId !== event.pointerId) return;
+
+      dragStartRef.current = null;
+      setDragging(false);
+
+      const elapsed = Math.max(1, performance.now() - dragStart.startedAt);
+      const distance = dragOffsetRef.current;
+      const velocity = distance / elapsed;
+      const shouldDismiss = !cancelled && (
+        distance >= SHEET_DISMISS_DISTANCE
+        || (distance >= SHEET_DISMISS_MIN_FLING_DISTANCE && velocity >= SHEET_DISMISS_VELOCITY)
+      );
+
+      if (!shouldDismiss) {
+        dragOffsetRef.current = 0;
+        setDragOffset(0);
+        return;
+      }
+
+      const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      const dismissDuration = prefersReducedMotion ? 0 : SHEET_DISMISS_DURATION;
+      const offscreenOffset = Math.max(window.innerHeight, distance);
+      dragOffsetRef.current = offscreenOffset;
+      setDismissing(true);
+      setDragOffset(offscreenOffset);
+      dismissTimerRef.current = window.setTimeout(closeCalendar, dismissDuration);
+    };
+
+    const cancelSheetDrag = (event: PointerEvent): void => finishSheetDrag(event, true);
+    window.addEventListener("pointermove", moveSheetDrag, { passive: false });
+    window.addEventListener("pointerup", finishSheetDrag);
+    window.addEventListener("pointercancel", cancelSheetDrag);
+    return () => {
+      window.removeEventListener("pointermove", moveSheetDrag);
+      window.removeEventListener("pointerup", finishSheetDrag);
+      window.removeEventListener("pointercancel", cancelSheetDrag);
+    };
+  }, [closeCalendar, dragging]);
+
+  const calendarSheetStyle: CalendarSheetStyle = {
+    "--calendar-sheet-drag-y": `${dragOffset}px`,
+  };
+
   return (
     <div className="journey-field date-field">
       <span className="journey-label">
@@ -167,7 +289,7 @@ export function CalendarPicker({
         onKeyDown={(event) => {
           if (event.key === "Escape") closeCalendar();
         }}
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggleCalendar}
       >
         <strong>{dateLabel(value)}</strong>
         <span>{value}</span>
@@ -183,13 +305,20 @@ export function CalendarPicker({
           />
           <div
             ref={dialogRef}
-            className="journey-popover calendar-popover"
+            className={`journey-popover calendar-popover${dragging ? " is-dragging" : ""}${dismissing ? " is-dismissing" : ""}`}
             role="dialog"
             aria-modal="true"
             aria-label={resolvedDialogLabel}
             onKeyDown={handleDialogKeyDown}
+            style={calendarSheetStyle}
           >
-            <div className="sheet-handle" aria-hidden="true" />
+            <div
+              className="calendar-drag-region"
+              aria-hidden="true"
+              onPointerDown={startSheetDrag}
+            >
+              <div className="sheet-handle" />
+            </div>
             <div className="calendar-topbar">
               <button
                 type="button"

@@ -10,12 +10,20 @@ from ..auth import require_admin
 from ..database import get_session
 from ..domain import Provider
 from ..provider_contracts import ProviderUnavailable, RouteValidationError
-from ..schemas import SeatStatusRefreshRequest, TimetableItem
 from ..timetable_snapshot_cache import TimetableSnapshotKey
-from .application import TimetableApplication, UnsupportedTimetableProvider, load_timetable_items
+from .application import UnsupportedTimetableProvider, load_timetable_items
+from .contracts import TimetableApplication, TimetableSnapshotCachePort
+from .schemas import SeatStatusRefreshRequest, TimetableItem
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
 Session = Annotated[AsyncSession, Depends(get_session)]
+
+
+def _timetable_snapshot_cache(request: Request) -> TimetableSnapshotCachePort:
+    cache: object = request.app.state.timetable_snapshot_cache
+    if not isinstance(cache, TimetableSnapshotCachePort):
+        raise TypeError("timetable snapshot cache does not satisfy its application contract")
+    return cache
 
 
 @router.get("/timetables", response_model=list[TimetableItem])
@@ -121,10 +129,11 @@ async def timetable_snapshot(
         origin_node_id=origin_node_id,
         destination_node_id=destination_node_id,
     )
-    items = await request.app.state.timetable_snapshot_cache.get(key)
+    cache = _timetable_snapshot_cache(request)
+    items = await cache.get(key)
     if items is None:
         raise HTTPException(404, "timetable snapshot was not found")
-    await request.app.state.timetable_snapshot_cache.refresh_if_due(
+    await cache.refresh_if_due(
         key,
         lambda: _load_timetable_snapshot_in_background(
             request=request,
@@ -198,7 +207,7 @@ async def _store_timetable_snapshot(
         origin_node_id=origin_node_id,
         destination_node_id=destination_node_id,
     )
-    await request.app.state.timetable_snapshot_cache.store(key, items)
+    await _timetable_snapshot_cache(request).store(key, items)
 
 
 async def _load_timetable_snapshot_in_background(

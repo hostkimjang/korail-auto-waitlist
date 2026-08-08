@@ -5,19 +5,21 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rail_waitlist.config import Settings
 from rail_waitlist.domain import Provider
-from rail_waitlist.models import StationCatalogCache
 from rail_waitlist.providers import ProviderUnavailable, TagoClient
-from rail_waitlist.schemas import StationCatalog, StationItem
-from rail_waitlist.station_catalog_cache import (
+from rail_waitlist.timetable_management import catalog_application
+from rail_waitlist.timetable_management.catalog_application import (
     CANONICAL_CACHE_KEY,
     StationCatalogRepository,
     StationCatalogService,
 )
-from rail_waitlist.station_visibility import (
+from rail_waitlist.timetable_management.models import StationCatalogCache
+from rail_waitlist.timetable_management.schemas import StationCatalog, StationItem
+from rail_waitlist.timetable_management.station_visibility import (
     KORAIL_STATION_DATA_URL,
     StationVisibilityRoster,
     normalize_visibility_station_name,
@@ -50,9 +52,15 @@ def visibility_roster(stations: list[StationItem]) -> StationVisibilityRoster:
 
 
 class FakeStationVisibility:
-    def __init__(self, stations: list[StationItem] | None = None) -> None:
+    def __init__(
+        self,
+        stations: list[StationItem] | None = None,
+        *,
+        url: str = KORAIL_STATION_DATA_URL,
+    ) -> None:
         self.roster = visibility_roster(stations or [station()])
         self.load_count = 0
+        self.url = url
 
     async def load_roster(self) -> StationVisibilityRoster:
         self.load_count += 1
@@ -139,6 +147,73 @@ async def test_repository_lease_is_portable_and_fences_late_old_owner(db_engine)
     assert snapshot is not None
     assert [item.node_id for item in snapshot.identity_stations] == ["NEW"]
     assert [item.node_id for item in snapshot.display_stations] == ["NEW"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "station_count"),
+    [
+        (["not-an-object"], 1),
+        (
+            {
+                "stations": [station().model_dump(mode="json")],
+                "display_stations": [station().model_dump(mode="json")],
+                "visibility": "not-an-object",
+            },
+            1,
+        ),
+        (
+            {
+                "stations": [
+                    station("DUP", "중복역").model_dump(mode="json"),
+                    station("DUP", "중복역").model_dump(mode="json"),
+                ],
+                "display_stations": [station("DUP", "중복역").model_dump(mode="json")],
+                "visibility": {
+                    "source": "korail_station_guide",
+                    "url": KORAIL_STATION_DATA_URL,
+                    "retrieved_at": datetime.now(UTC).isoformat(),
+                },
+            },
+            2,
+        ),
+        (
+            {
+                "stations": [station("IDENTITY", "식별역").model_dump(mode="json")],
+                "display_stations": [station("OUTSIDE", "외부역").model_dump(mode="json")],
+                "visibility": {
+                    "source": "korail_station_guide",
+                    "url": KORAIL_STATION_DATA_URL,
+                    "retrieved_at": datetime.now(UTC).isoformat(),
+                },
+            },
+            1,
+        ),
+    ],
+)
+async def test_malformed_persisted_snapshot_payload_fails_closed(
+    db_engine,
+    payload,
+    station_count,
+):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    repository = StationCatalogRepository(factory)
+    await repository.ensure_canonical_row()
+    now = datetime.now(UTC)
+    async with factory() as session:
+        await session.execute(
+            update(StationCatalogCache)
+            .where(StationCatalogCache.cache_key == CANONICAL_CACHE_KEY)
+            .values(
+                payload=payload,
+                station_count=station_count,
+                retrieved_at=now,
+                refresh_after=now + timedelta(hours=24),
+                updated_at=now,
+            )
+        )
+        await session.commit()
+
+    assert await repository.load_snapshot() is None
 
 
 async def test_fresh_snapshot_survives_restart_and_hydrates_l1_without_http(db_engine):
@@ -234,6 +309,42 @@ async def test_concurrent_provider_requests_share_one_initial_collection(db_engi
     assert [item.name for item in korail.stations] == ["서울", "수서"]
     assert [item.name for item in srt.stations] == ["서울", "수서"]
     assert tago.fetch_count == 1
+
+
+async def test_two_service_instances_share_database_lease_and_winner_snapshot(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    gate = asyncio.Event()
+    stations = [station("N-SEOUL", "서울")]
+    winner_tago = FakeTagoClient(upstream_catalog(stations, now), gate=gate)
+    loser_tago = FakeTagoClient(upstream_catalog(stations, now))
+    winner = StationCatalogService(factory, winner_tago, FakeStationVisibility(stations))
+    loser = StationCatalogService(factory, loser_tago, FakeStationVisibility(stations))
+
+    winner_task = asyncio.create_task(winner.get_catalog(Provider.KORAIL))
+    await asyncio.wait_for(winner_tago.fetch_started.wait(), timeout=2)
+    loser_task = asyncio.create_task(loser.get_catalog(Provider.SRT))
+    try:
+        await asyncio.sleep(0.1)
+        assert not loser_task.done()
+        assert loser_tago.fetch_count == 0
+    except BaseException:
+        gate.set()
+        await asyncio.gather(winner_task, loser_task, return_exceptions=True)
+        await asyncio.gather(winner.close(), loser.close())
+        raise
+
+    gate.set()
+    winner_catalog, loser_catalog = await asyncio.wait_for(
+        asyncio.gather(winner_task, loser_task), timeout=2
+    )
+    await asyncio.gather(winner.close(), loser.close())
+
+    assert winner_catalog.provider is Provider.KORAIL
+    assert loser_catalog.provider is Provider.SRT
+    assert [item.node_id for item in loser_catalog.stations] == ["N-SEOUL"]
+    assert winner_tago.fetch_count == 1
+    assert loser_tago.fetch_count == 0
 
 
 async def test_srt_catalog_shares_the_intercity_station_union_with_korail(db_engine):
@@ -334,6 +445,61 @@ async def test_preload_starts_collection_without_blocking_health_startup(db_engi
     await service.close()
 
 
+async def test_close_cancels_owner_refresh_and_releases_database_lease(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    gate = asyncio.Event()
+    tago = FakeTagoClient(
+        upstream_catalog([station()], datetime.now(UTC)),
+        gate=gate,
+    )
+    service = StationCatalogService(factory, tago, FakeStationVisibility())
+
+    request_task = asyncio.create_task(service.get_catalog(Provider.KORAIL))
+    await asyncio.wait_for(tago.fetch_started.wait(), timeout=2)
+    await service.close()
+    result = await asyncio.gather(request_task, return_exceptions=True)
+    async with factory() as session:
+        row = await session.get(StationCatalogCache, CANONICAL_CACHE_KEY)
+
+    assert len(result) == 1
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert row is not None
+    assert row.refresh_owner is None
+    assert row.lease_until is None
+    assert row.last_error_category == "cancelled"
+
+
+async def test_closed_service_rejects_new_refresh(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    service = StationCatalogService(factory, FakeTagoClient(), FakeStationVisibility())
+    await service.close()
+
+    with pytest.raises(ProviderUnavailable, match="service is shutting down"):
+        await service.get_catalog(Provider.KORAIL)
+
+
+async def test_collection_timeout_is_bounded_and_fails_closed(db_engine, monkeypatch):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    gate = asyncio.Event()
+    service = StationCatalogService(
+        factory,
+        FakeTagoClient(upstream_catalog([station()], datetime.now(UTC)), gate=gate),
+        FakeStationVisibility(),
+    )
+    monkeypatch.setattr(catalog_application, "COLLECTION_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(ProviderUnavailable, match="catalog is unavailable"):
+        await asyncio.wait_for(service.get_catalog(Provider.KORAIL), timeout=1)
+    async with factory() as session:
+        row = await session.get(StationCatalogCache, CANONICAL_CACHE_KEY)
+    await service.close()
+
+    assert row is not None
+    assert row.refresh_owner is None
+    assert row.lease_until is None
+    assert row.last_error_category == "upstream_timeout"
+
+
 async def test_snapshot_keeps_raw_identity_catalog_but_returns_only_visible_stations(
     db_engine,
 ):
@@ -354,3 +520,25 @@ async def test_snapshot_keeps_raw_identity_catalog_but_returns_only_visible_stat
     assert [item.node_id for item in snapshot.identity_stations] == ["N1", "N2"]
     assert [item.node_id for item in snapshot.display_stations] == ["N1"]
     assert KORAIL_STATION_DATA_URL.startswith("https://www.korail.com/")
+
+
+async def test_custom_visibility_url_is_persisted_as_snapshot_provenance(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    custom_url = "http://fixture.internal/station_data.json"
+    raw = [station("N1", "서울")]
+    service = StationCatalogService(
+        factory,
+        FakeTagoClient(upstream_catalog(raw, datetime.now(UTC))),
+        FakeStationVisibility(raw, url=custom_url),
+    )
+
+    await service.get_catalog(Provider.KORAIL)
+    async with factory() as session:
+        row = await session.get(StationCatalogCache, CANONICAL_CACHE_KEY)
+    await service.close()
+
+    assert row is not None
+    assert isinstance(row.payload, dict)
+    visibility = row.payload.get("visibility")
+    assert isinstance(visibility, dict)
+    assert visibility.get("url") == custom_url

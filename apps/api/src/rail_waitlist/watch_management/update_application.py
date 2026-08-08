@@ -16,8 +16,9 @@ from ..domain import (
     SeatObservationMode,
     WatchStatus,
 )
-from ..models import NotificationChannel, Watch
-from ..schemas import WatchUpdate
+from ..notification_management.models import NotificationChannel
+from .models import Watch
+from .schemas import WatchUpdate
 
 MAX_FOCUSED_WATCHES_PER_PROVIDER = 3
 

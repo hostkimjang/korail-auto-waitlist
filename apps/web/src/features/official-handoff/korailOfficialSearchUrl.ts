@@ -1,4 +1,4 @@
-const KORAIL_OFFICIAL_ENTRY_URL = "https://www.korail.com/ticket/search/general";
+import { KORAIL_OFFICIAL_ENTRY_URL } from "../../shared/lib/officialAppIntentUrl";
 const KORAIL_OFFICIAL_SEARCH_ORIGIN = "https://www.korail.com";
 const KORAIL_OFFICIAL_SEARCH_PATH = "/ticket/search/list";
 

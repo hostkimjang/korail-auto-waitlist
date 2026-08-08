@@ -13,14 +13,14 @@ from datetime import time as clock_time
 from pathlib import Path
 from typing import Any
 
-from .korail_browser_automation import BrowserAdapterError, BrowserSeatSearchRequest
 from .korail_pydoll_browser import (
     PydollKorailBrowserClient,
     _PydollSession,
     _PydollSessionContext,
 )
-from .korail_pydoll_contracts import PydollPageSnapshot
-from .korail_search_bootstrap import KorailStationIdentityResolver
+from .korail_sidecar.browser_contracts import BrowserAdapterError, BrowserSeatSearchRequest
+from .korail_sidecar.pydoll.page_contracts import PydollPageSnapshot
+from .provider_adapters.korail_search_bootstrap import KorailStationIdentityResolver
 
 
 def require_private_output_platform() -> None:

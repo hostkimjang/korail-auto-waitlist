@@ -6,8 +6,8 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Request, Response
 
 from ..auth import require_admin
-from ..schemas import SeatStatusSourceStatus
 from ..seat_status_cooldown import ProviderCooldown
+from .schemas import SeatStatusSourceStatus
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
 

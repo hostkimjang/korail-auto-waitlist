@@ -132,6 +132,121 @@ async def test_web_push_delivery_normalizes_in_memory_pem_before_sender(monkeypa
     }
 
 
+async def test_web_push_uses_high_urgency_only_for_time_sensitive_payloads(monkeypatch):
+    from rail_waitlist.config import get_settings
+
+    subscription_private_key = ec.generate_private_key(ec.SECP256R1())
+    subscription_public_key = subscription_private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    config = {
+        "subscription_info": {
+            "endpoint": "https://push.example/subscription",
+            "keys": {
+                "p256dh": base64.urlsafe_b64encode(subscription_public_key).rstrip(b"=").decode(),
+                "auth": base64.urlsafe_b64encode(b"A" * 16).rstrip(b"=").decode(),
+            },
+        }
+    }
+    captured: list[dict[str, object]] = []
+
+    def fake_webpush(**kwargs):
+        captured.append(kwargs)
+
+    settings = get_settings()
+    previous = settings.webpush_vapid_private_key
+    settings.webpush_vapid_private_key = base64.urlsafe_b64encode(b"B" * 32).rstrip(b"=").decode()
+    monkeypatch.setattr("rail_waitlist.notifications.webpush", fake_webpush)
+    try:
+        for status in (
+            "official_waitlist",
+            "seat_found",
+            "reserving",
+            "payment_required",
+            "auth_required",
+        ):
+            await deliver_notification(
+                NotificationKind.WEB_PUSH,
+                config,
+                {"watch_id": "watch-one", "status": status, "message": "상태 변경"},
+            )
+        await deliver_notification(
+            NotificationKind.WEB_PUSH,
+            config,
+            {
+                "channel_id": "channel-one",
+                "title": "레일웨잇 시험 알림",
+                "body": "알림 테스트",
+                "message": "알림 테스트",
+                "status": "seat_found",
+            },
+        )
+    finally:
+        settings.webpush_vapid_private_key = previous
+
+    assert len(captured) == 6
+    assert all(call.get("headers") == {"Urgency": "high"} for call in captured)
+
+
+async def test_web_push_does_not_promote_unknown_or_test_lookalike_payloads(monkeypatch):
+    from rail_waitlist.config import get_settings
+
+    subscription_private_key = ec.generate_private_key(ec.SECP256R1())
+    subscription_public_key = subscription_private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    config = {
+        "subscription_info": {
+            "endpoint": "https://push.example/subscription",
+            "keys": {
+                "p256dh": base64.urlsafe_b64encode(subscription_public_key).rstrip(b"=").decode(),
+                "auth": base64.urlsafe_b64encode(b"A" * 16).rstrip(b"=").decode(),
+            },
+        }
+    }
+    captured: list[dict[str, object]] = []
+
+    def fake_webpush(**kwargs):
+        captured.append(kwargs)
+
+    settings = get_settings()
+    previous = settings.webpush_vapid_private_key
+    settings.webpush_vapid_private_key = base64.urlsafe_b64encode(b"B" * 32).rstrip(b"=").decode()
+    monkeypatch.setattr("rail_waitlist.notifications.webpush", fake_webpush)
+    try:
+        for payload in (
+            {"watch_id": "watch-one", "status": "watching", "message": "감시 중"},
+            {"watch_id": "watch-one", "status": "unknown", "message": "알 수 없음"},
+            {
+                "channel_id": "channel-one",
+                "message": "알림 테스트",
+                "unexpected": "field",
+            },
+            {"message": "알림 테스트"},
+        ):
+            await deliver_notification(NotificationKind.WEB_PUSH, config, payload)
+    finally:
+        settings.webpush_vapid_private_key = previous
+
+    assert len(captured) == 4
+    assert all("headers" not in call for call in captured)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [NotificationKind.ANDROID_FCM, NotificationKind.IOS_APNS],
+)
+async def test_retired_native_delivery_fails_closed(kind):
+    with pytest.raises(NotificationDeliveryError) as caught:
+        await deliver_notification(kind, {"token": "legacy-secret"}, {"message": "ignored"})
+
+    assert str(caught.value) == "native_push_retired"
+    assert caught.value.permanent is True
+    assert caught.value.disable_channel is True
+
+
 @pytest.mark.parametrize(
     ("status_code", "category"),
     [
@@ -160,7 +275,7 @@ async def test_web_push_provider_failure_is_safely_classified(monkeypatch, statu
     settings.webpush_vapid_private_key = base64.urlsafe_b64encode(b"B" * 32).rstrip(b"=").decode()
     monkeypatch.setattr("rail_waitlist.notifications.webpush", fake_webpush)
     try:
-        with pytest.raises(NotificationDeliveryError, match=f"^{category}$"):
+        with pytest.raises(NotificationDeliveryError, match=f"^{category}$") as caught:
             await deliver_notification(
                 NotificationKind.WEB_PUSH,
                 {
@@ -178,6 +293,9 @@ async def test_web_push_provider_failure_is_safely_classified(monkeypatch, statu
             )
     finally:
         settings.webpush_vapid_private_key = previous
+
+    assert caught.value.permanent is (status_code in {400, 410})
+    assert caught.value.disable_channel is (status_code in {400, 410})
 
 
 async def test_invalid_web_push_subscription_does_not_call_sender(monkeypatch):

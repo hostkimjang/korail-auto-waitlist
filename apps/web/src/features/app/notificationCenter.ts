@@ -1,4 +1,9 @@
-import type { AppToastInput, AppToastNotice } from "../../shared/ui/AppToast";
+import {
+  IMPORTANT_TOAST_AUTO_CLOSE_MS,
+  TOAST_AUTO_CLOSE_MS,
+  type AppToastInput,
+  type AppToastNotice,
+} from "../../shared/ui/AppToast";
 
 export type NotificationKind =
   | "payment_required"
@@ -57,14 +62,50 @@ const DEFAULTS: Record<NotificationKind, {
   priority: number;
   persistence: NotificationPersistence;
   announcement: NotificationAnnouncement;
+  autoCloseMs: number | null;
 }> = {
-  payment_required: { priority: 100, persistence: "sticky", announcement: "assertive" },
-  manual_check: { priority: 95, persistence: "sticky", announcement: "assertive" },
-  auth_required: { priority: 90, persistence: "sticky", announcement: "assertive" },
-  seat_found: { priority: 80, persistence: "sticky", announcement: "polite" },
-  reserving: { priority: 60, persistence: "sticky", announcement: "polite" },
-  recovery: { priority: 40, persistence: "timed", announcement: "polite" },
-  generic: { priority: 10, persistence: "timed", announcement: "polite" },
+  payment_required: {
+    priority: 100,
+    persistence: "sticky",
+    announcement: "assertive",
+    autoCloseMs: null,
+  },
+  manual_check: {
+    priority: 95,
+    persistence: "sticky",
+    announcement: "assertive",
+    autoCloseMs: null,
+  },
+  auth_required: {
+    priority: 90,
+    persistence: "sticky",
+    announcement: "assertive",
+    autoCloseMs: null,
+  },
+  seat_found: {
+    priority: 80,
+    persistence: "sticky",
+    announcement: "polite",
+    autoCloseMs: null,
+  },
+  reserving: {
+    priority: 60,
+    persistence: "sticky",
+    announcement: "polite",
+    autoCloseMs: null,
+  },
+  recovery: {
+    priority: 40,
+    persistence: "timed",
+    announcement: "polite",
+    autoCloseMs: IMPORTANT_TOAST_AUTO_CLOSE_MS,
+  },
+  generic: {
+    priority: 10,
+    persistence: "timed",
+    announcement: "polite",
+    autoCloseMs: TOAST_AUTO_CLOSE_MS,
+  },
 };
 
 const MAX_SEEN_REVISIONS = 240;
@@ -185,9 +226,7 @@ export function pushNotifications(
       announcement: input.announcement ?? defaults.announcement,
       ...(persistence === "sticky"
         ? { autoCloseMs: null }
-        : autoCloseMs === undefined
-          ? {}
-          : { autoCloseMs }),
+        : { autoCloseMs: autoCloseMs ?? defaults.autoCloseMs }),
       sortAt: input.sortAt ?? null,
       revisionAt: input.revisionAt ?? null,
       occurredAt,

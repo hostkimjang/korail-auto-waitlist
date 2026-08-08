@@ -20,7 +20,7 @@ export function AppAuthenticationBoundary({
     return (
       <main className="auth-page">
         <div className="loading-state">
-          <img src="/icons/app-icon-512.png" alt="" />
+          <img src="/icons/app-icon-any-512-v2.png" alt="" />
           <span>안전하게 연결하는 중…</span>
         </div>
       </main>

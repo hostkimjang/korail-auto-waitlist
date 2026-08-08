@@ -63,6 +63,33 @@ function reservationProgress(value: unknown): ReadonlyArray<ReservationProgressS
   });
 }
 
+function eventTimeNoLaterThan(value: unknown, upperBound: string | null): string | null {
+  const instant = eventInstant(value);
+  if (instant === null || upperBound === null) return instant;
+  return Date.parse(instant) <= Date.parse(upperBound) ? instant : null;
+}
+
+function monotonicReservationProgress(
+  value: unknown,
+  startedAt: string | null,
+  finishedAt: string | null,
+  revisionAt: string | null,
+): ReadonlyArray<ReservationProgressStage> {
+  const lowerBound = startedAt === null ? null : Date.parse(startedAt);
+  const upperBoundValue = finishedAt ?? revisionAt;
+  const upperBound = upperBoundValue === null ? null : Date.parse(upperBoundValue);
+  let previous = lowerBound;
+  return reservationProgress(value).filter((item) => {
+    const current = Date.parse(item.occurredAt);
+    if (
+      (previous !== null && current < previous)
+      || (upperBound !== null && current > upperBound)
+    ) return false;
+    previous = current;
+    return true;
+  });
+}
+
 function candidateContext(
   watch: WatchLifecycleSnapshot,
   candidateId: string | null,
@@ -85,15 +112,19 @@ function transitionFromEvent(
   const candidateId = text(event.payload.candidate_id);
   const revisionAt = eventInstant(event.created_at);
   const revision = text(event.id) ?? revisionAt ?? `${status}:${watchId}`;
-  const observation = watch.seatFoundObservation?.observedAt ?? null;
-  const attempt = watch.latestReservationAttempt;
-  const startedAt = eventInstant(event.payload.attempt_started_at)
-    ?? attempt?.startedAt
-    ?? null;
-  const finishedAt = eventInstant(event.payload.attempt_finished_at)
-    ?? attempt?.finishedAt
-    ?? null;
-  const progress = reservationProgress(event.payload.progress_stages);
+  const startedAt = eventTimeNoLaterThan(event.payload.attempt_started_at, revisionAt);
+  const candidateFinishedAt = eventTimeNoLaterThan(event.payload.attempt_finished_at, revisionAt);
+  const finishedAt = startedAt !== null
+    && candidateFinishedAt !== null
+    && Date.parse(candidateFinishedAt) < Date.parse(startedAt)
+    ? null
+    : candidateFinishedAt;
+  const progress = monotonicReservationProgress(
+    event.payload.progress_stages,
+    startedAt,
+    finishedAt,
+    revisionAt,
+  );
   return {
     id: watchId,
     provider: watch.provider,
@@ -109,7 +140,6 @@ function transitionFromEvent(
     status,
     revision,
     ...(revisionAt === null ? {} : { revisionAt }),
-    ...(observation === null ? {} : { detectedAt: observation }),
     ...(startedAt === null ? {} : { startedAt }),
     ...(finishedAt === null ? {} : { finishedAt }),
     ...(progress.length === 0 ? {} : { reservationProgress: progress }),

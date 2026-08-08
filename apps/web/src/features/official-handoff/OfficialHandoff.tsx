@@ -10,10 +10,15 @@ import {
 } from "@phosphor-icons/react";
 
 import { hasObservedSeatEvidence } from "../../domain/seatEvidence";
+import { useDocumentScrollLock } from "../../hooks/useDocumentScrollLock";
 import {
   KORAIL_OFFICIAL_ENTRY_URL,
   isStrictKorailOfficialSearchUrl,
 } from "./korailOfficialSearchUrl";
+import {
+  resolveOfficialOpenTarget,
+  SRT_OFFICIAL_ENTRY_URL,
+} from "../../shared/lib/officialAppIntentUrl";
 
 type SeatClassId = "standard" | "first" | "any";
 
@@ -66,7 +71,7 @@ const seatClassNames: Readonly<Record<SeatClassId, string>> = {
 
 const officialBookingUrls: Readonly<Record<string, string>> = {
   KORAIL: KORAIL_OFFICIAL_ENTRY_URL,
-  SRT: "https://etk.srail.kr/hpg/hra/01/selectScheduleList.do?pageId=TK0101010000",
+  SRT: SRT_OFFICIAL_ENTRY_URL,
 };
 
 function providerOfficialEntryUrl(provider: string, candidate: string | null): string | null {
@@ -136,6 +141,14 @@ export function OfficialHandoff({
   const titleId = `official-handoff-title-${safeId}`;
   const descriptionId = `official-handoff-description-${safeId}`;
   const action = officialAction(train.provider, actionUrl, searchUrl);
+  const fixedOfficialUrl = officialBookingUrls[train.provider.toUpperCase()] ?? null;
+  const officialOpenTarget = resolveOfficialOpenTarget(train.provider, fixedOfficialUrl);
+  const officialAppIntentUrl = officialOpenTarget?.usesAndroidApp
+    ? officialOpenTarget.url
+    : undefined;
+  const primaryActionUsesAndroidApp = officialAppIntentUrl !== undefined;
+  const primaryActionConditionsPrefilled = action.conditionsPrefilled
+    && !primaryActionUsesAndroidApp;
   const travelDate = train.date ?? dateLabel(String(train.departure_at ?? "").slice(0, 10));
   const journeySummary = `${String(train.departure_at ?? "").slice(0, 10)} / ${train.origin} → ${train.destination} / ${train.name} / ${train.departure ?? "시간 확인"} 출발`;
   const selectedSeat = selectedSeatClass
@@ -147,6 +160,7 @@ export function OfficialHandoff({
     && selectedSeat?.provenance?.kind === "official_provider";
   const modalTitle = seatFoundObservation ? "공식 예매 안내" : "공식 좌석 확인 전 안내";
   const closeLabel = seatFoundObservation ? "공식 예매 안내 닫기" : "공식 좌석 확인 안내 닫기";
+  useDocumentScrollLock(open);
 
   const closeHandoff = () => {
     copyRequestRef.current += 1;
@@ -156,9 +170,7 @@ export function OfficialHandoff({
 
   useEffect(() => {
     if (!open) return undefined;
-    const previousOverflow = document.body.style.overflow;
     const appRoot = triggerRef.current?.closest<HTMLElement>(".app-shell");
-    document.body.style.overflow = "hidden";
     if (appRoot) {
       appRoot.inert = true;
       appRoot.setAttribute("aria-hidden", "true");
@@ -168,7 +180,6 @@ export function OfficialHandoff({
     }, 0);
     return () => {
       window.clearTimeout(focusTimer);
-      document.body.style.overflow = previousOverflow;
       if (appRoot) {
         appRoot.inert = false;
         appRoot.removeAttribute("aria-hidden");
@@ -266,7 +277,9 @@ export function OfficialHandoff({
                       : <div><strong>좌석 상태는 아직 확인되지 않았습니다</strong><span>공식 시간표와 좌석 재고는 별도 정보이므로 공식 화면에서 직접 확인해 주세요.</span></div>}
             </div>
             <p id={descriptionId} className="official-handoff-description">
-              {action.conditionsPrefilled
+              {primaryActionUsesAndroidApp
+                ? "Android에서는 공식 앱 열기를 먼저 시도합니다. 앱이 없거나 연결을 지원하지 않으면 레일웨잇을 유지한 채 외부 브라우저 창에서 고정된 공식 홈페이지를 엽니다. 어느 경로든 좌석 확보나 예약 성공을 뜻하지 않으며, 결과는 공식 화면에서 직접 확인해야 합니다."
+                : primaryActionConditionsPrefilled
                 ? "선택한 여정 조건을 공식 검색 화면에 미리 입력합니다. 특정 열차 선택·좌석 확보·예매 성공을 뜻하지 않습니다. 결과는 공식 화면에서 직접 확인해야 합니다."
                 : "공식 페이지는 새 탭에서 열립니다. 페이지를 열어도 좌석 확보나 예약 성공 상태로 바뀌지 않으며, 결과는 공식 화면에서 직접 확인해야 합니다."}
             </p>
@@ -278,7 +291,18 @@ export function OfficialHandoff({
             {copyState === "error" && <div className="official-handoff-copy-error" role="alert"><strong>자동 복사에 실패했습니다</strong><span>{journeySummary}</span></div>}
             <footer className="official-handoff-actions">
               <button type="button" className="button button-outline" aria-busy={copyState === "pending"} disabled={copyState === "pending"} onClick={handleCopy}><Copy size={20} aria-hidden="true" />{copyState === "pending" ? "복사 중…" : "여정 복사"}</button>
-              <button type="button" className="button button-primary" disabled={!action.url} onClick={() => action.url && window.open(action.url, "_blank", "noopener,noreferrer")}>{action.conditionsPrefilled ? "조건 입력하고 공식 페이지 열기" : "공식 페이지 열기"} <small>(새 탭)</small><ArrowSquareOut size={20} aria-hidden="true" /></button>
+              {primaryActionUsesAndroidApp ? (
+                <a
+                  className="button button-primary"
+                  href={officialAppIntentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  공식 앱 또는 홈페이지 열기 <small>(Android)</small><ArrowSquareOut size={20} aria-hidden="true" />
+                </a>
+              ) : (
+                <button type="button" className="button button-primary" disabled={!action.url} onClick={() => action.url && window.open(action.url, "_blank", "noopener,noreferrer")}>{primaryActionConditionsPrefilled ? "조건 입력하고 공식 페이지 열기" : "공식 페이지 열기"} <small>(새 탭)</small><ArrowSquareOut size={20} aria-hidden="true" /></button>
+              )}
             </footer>
           </section>
         </div>

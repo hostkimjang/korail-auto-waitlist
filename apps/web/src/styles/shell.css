@@ -86,19 +86,6 @@
   background: #eef6fa;
 }
 
-.private-badge {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 12px;
-  color: #1b655f;
-  background: var(--teal-soft);
-  border-radius: 10px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .main-content {
   min-width: 0;
   background: #fff;

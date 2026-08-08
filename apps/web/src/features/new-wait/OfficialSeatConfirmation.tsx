@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowSquareOut, CheckCircle, X } from "@phosphor-icons/react";
 
+import { useDocumentScrollLock } from "../../hooks/useDocumentScrollLock";
 import {
   saveOfficialSeatConfirmation,
   type ConfirmableSeatClass,
@@ -88,6 +89,7 @@ export function OfficialSeatConfirmation({
   const descriptionId = `${useId()}-description`;
   const hasSelection = standard !== "unknown" || first !== "unknown";
   const pending = submitState === "pending";
+  useDocumentScrollLock(open);
 
   const resetForm = () => {
     setStandard("unknown");
@@ -105,9 +107,7 @@ export function OfficialSeatConfirmation({
 
   useEffect(() => {
     if (!open) return undefined;
-    const previousOverflow = document.body.style.overflow;
     const appRoot = triggerRef.current?.closest<HTMLElement>(".app-shell") ?? null;
-    document.body.style.overflow = "hidden";
     if (appRoot) {
       appRoot.inert = true;
       appRoot.setAttribute("aria-hidden", "true");
@@ -117,7 +117,6 @@ export function OfficialSeatConfirmation({
     }, 0);
     return () => {
       window.clearTimeout(focusTimer);
-      document.body.style.overflow = previousOverflow;
       if (appRoot) {
         appRoot.inert = false;
         appRoot.removeAttribute("aria-hidden");

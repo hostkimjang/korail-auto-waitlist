@@ -19,7 +19,16 @@ from .domain import NotificationKind
 
 
 class NotificationDeliveryError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        category: str,
+        *,
+        permanent: bool = False,
+        disable_channel: bool = False,
+    ) -> None:
+        super().__init__(category)
+        self.permanent = permanent
+        self.disable_channel = disable_channel
 
 
 BLOCKED_HOSTNAMES = {
@@ -30,6 +39,38 @@ BLOCKED_HOSTNAMES = {
 
 WEBPUSH_EXPIRED_STATUS_CODES = {404, 410}
 WEBPUSH_VAPID_AUTH_STATUS_CODES = {401, 403}
+WEBPUSH_HIGH_URGENCY_STATUSES = frozenset(
+    {
+        "official_waitlist",
+        "seat_found",
+        "reserving",
+        "payment_required",
+        "auth_required",
+    }
+)
+
+
+def _invalid_webpush_subscription_error() -> NotificationDeliveryError:
+    return NotificationDeliveryError(
+        "webpush_subscription_invalid",
+        permanent=True,
+        disable_channel=True,
+    )
+
+
+def _webpush_delivery_headers(message: dict[str, Any]) -> dict[str, str] | None:
+    """Raise delivery urgency only for explicit time-sensitive internal payloads.
+
+    Urgency helps the push service schedule delivery; it does not guarantee Android
+    heads-up presentation. Test notifications use the explicit ``seat_found`` status
+    so unknown statuses and lookalike payloads remain at the provider default.
+    """
+
+    status = message.get("status")
+    if isinstance(status, str) and status in WEBPUSH_HIGH_URGENCY_STATUSES:
+        return {"Urgency": "high"}
+
+    return None
 
 
 def _decode_base64url(value: str, *, error_category: str) -> bytes:
@@ -56,38 +97,41 @@ def normalize_webpush_subscription(config: dict[str, Any]) -> dict[str, Any]:
         if isinstance(subscription, str):
             subscription = json.loads(subscription)
     except (KeyError, TypeError, json.JSONDecodeError) as error:
-        raise NotificationDeliveryError("webpush_subscription_invalid") from error
+        raise _invalid_webpush_subscription_error() from error
     if not isinstance(subscription, dict):
-        raise NotificationDeliveryError("webpush_subscription_invalid")
+        raise _invalid_webpush_subscription_error()
 
     endpoint = subscription.get("endpoint")
     keys = subscription.get("keys")
     if not isinstance(endpoint, str) or not isinstance(keys, dict):
-        raise NotificationDeliveryError("webpush_subscription_invalid")
+        raise _invalid_webpush_subscription_error()
     try:
         parsed_endpoint = urlsplit(endpoint)
     except (TypeError, ValueError) as error:
-        raise NotificationDeliveryError("webpush_subscription_invalid") from error
+        raise _invalid_webpush_subscription_error() from error
     if (
         parsed_endpoint.scheme.lower() != "https"
         or not parsed_endpoint.hostname
         or parsed_endpoint.username
         or parsed_endpoint.password
     ):
-        raise NotificationDeliveryError("webpush_subscription_invalid")
+        raise _invalid_webpush_subscription_error()
 
     p256dh = keys.get("p256dh")
     auth = keys.get("auth")
     if not isinstance(p256dh, str) or not isinstance(auth, str) or not p256dh or not auth:
-        raise NotificationDeliveryError("webpush_subscription_invalid")
-    public_key = _decode_base64url(p256dh, error_category="webpush_subscription_invalid")
-    auth_secret = _decode_base64url(auth, error_category="webpush_subscription_invalid")
+        raise _invalid_webpush_subscription_error()
+    try:
+        public_key = _decode_base64url(p256dh, error_category="webpush_subscription_invalid")
+        auth_secret = _decode_base64url(auth, error_category="webpush_subscription_invalid")
+    except NotificationDeliveryError as error:
+        raise _invalid_webpush_subscription_error() from error
     try:
         ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), public_key)
     except ValueError as error:
-        raise NotificationDeliveryError("webpush_subscription_invalid") from error
+        raise _invalid_webpush_subscription_error() from error
     if len(auth_secret) != 16:
-        raise NotificationDeliveryError("webpush_subscription_invalid")
+        raise _invalid_webpush_subscription_error()
     return subscription
 
 
@@ -132,16 +176,24 @@ def normalize_webpush_vapid_private_key(private_key: str) -> str:
     return private_key
 
 
-def _classify_webpush_provider_error(error: WebPushException) -> str:
+def _classify_webpush_provider_error(error: WebPushException) -> NotificationDeliveryError:
     response = error.response
     status_code = getattr(response, "status_code", None)
     if status_code in WEBPUSH_EXPIRED_STATUS_CODES:
-        return "webpush_subscription_expired"
+        return NotificationDeliveryError(
+            "webpush_subscription_expired",
+            permanent=True,
+            disable_channel=True,
+        )
     if status_code in WEBPUSH_VAPID_AUTH_STATUS_CODES:
-        return "webpush_vapid_auth_failed"
+        return NotificationDeliveryError("webpush_vapid_auth_failed")
     if status_code == 400:
-        return "webpush_subscription_rejected"
-    return "webpush_provider_error"
+        return NotificationDeliveryError(
+            "webpush_subscription_rejected",
+            permanent=True,
+            disable_channel=True,
+        )
+    return NotificationDeliveryError("webpush_provider_error")
 
 
 def validate_webhook_url_syntax(url: str, *, allow_http: bool = False) -> tuple[str, int]:
@@ -179,7 +231,7 @@ async def validated_webhook_target(url: str) -> tuple[str, str, str]:
             )
         except socket.gaierror as error:
             raise NotificationDeliveryError("webhook_dns_resolution_failed") from error
-        addresses = {item[4][0] for item in resolved}
+        addresses: set[str] = {str(item[4][0]) for item in resolved}
     else:
         addresses = {str(literal)}
     if not addresses:
@@ -191,7 +243,7 @@ async def validated_webhook_target(url: str) -> tuple[str, str, str]:
             raise NotificationDeliveryError("webhook_dns_result_invalid") from error
         if not address.is_global:
             raise NotificationDeliveryError("webhook_private_destination_blocked")
-    selected = sorted(addresses)[0].split("%", 1)[0]
+    selected = min(addresses).split("%", 1)[0]
     parsed = urlsplit(url)
     ip_literal = f"[{selected}]" if ":" in selected else selected
     default_port = 443 if parsed.scheme.lower() == "https" else 80
@@ -211,6 +263,15 @@ async def deliver_notification(
     message: dict[str, Any],
     client: httpx.AsyncClient | None = None,
 ) -> None:
+    if kind in {NotificationKind.ANDROID_FCM, NotificationKind.IOS_APNS}:
+        # These enum values and possible persisted rows are retained only for migration
+        # compatibility. Never reinterpret legacy native credentials as a webhook config.
+        raise NotificationDeliveryError(
+            "native_push_retired",
+            permanent=True,
+            disable_channel=True,
+        )
+
     if kind == NotificationKind.WEB_PUSH:
         try:
             subscription = normalize_webpush_subscription(config)
@@ -219,17 +280,23 @@ async def deliver_notification(
             if not vapid_private_key:
                 raise NotificationDeliveryError("webpush_vapid_key_not_configured")
             normalized_vapid_private_key = normalize_webpush_vapid_private_key(vapid_private_key)
+            delivery_headers = _webpush_delivery_headers(message)
+            webpush_kwargs: dict[str, Any] = {
+                "subscription_info": subscription,
+                "data": json.dumps(message, ensure_ascii=False),
+                "vapid_private_key": normalized_vapid_private_key,
+                "vapid_claims": {"sub": settings.webpush_vapid_subject},
+            }
+            if delivery_headers is not None:
+                webpush_kwargs["headers"] = delivery_headers
             await asyncio.to_thread(
                 webpush,
-                subscription_info=subscription,
-                data=json.dumps(message, ensure_ascii=False),
-                vapid_private_key=normalized_vapid_private_key,
-                vapid_claims={"sub": settings.webpush_vapid_subject},
+                **webpush_kwargs,
             )
         except NotificationDeliveryError:
             raise
         except WebPushException as error:
-            raise NotificationDeliveryError(_classify_webpush_provider_error(error)) from error
+            raise _classify_webpush_provider_error(error) from error
         except (VapidException, ValueError) as error:
             raise NotificationDeliveryError("webpush_vapid_configuration_invalid") from error
         except Exception as error:

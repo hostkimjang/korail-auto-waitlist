@@ -472,6 +472,39 @@ describe("watch API boundary", () => {
     });
   });
 
+  it("keeps an overnight train inside its departure service-date watch window", () => {
+    const payload = buildWatchCreatePayload({
+      provider: "KORAIL",
+      origin: "대전",
+      origin_node_id: "N-DAEJEON",
+      destination: "서울",
+      destination_node_id: "N-SEOUL",
+      date: "2026-08-08",
+      passengers: "1",
+      seat: "일반실",
+    }, [{
+      provider: "KORAIL",
+      train_number: "KTX 222",
+      departure_at: "2026-08-08T23:00:00+09:00",
+      arrival_at: "2026-08-09T00:07:00+09:00",
+      selected_seat_class: "standard",
+      seat_classes: [{
+        seat_class: "standard",
+        registration_evidence_id: "10000000-0000-4000-8000-000000000222",
+      }],
+    }]);
+
+    expect(payload).toMatchObject({
+      travel_date: "2026-08-08",
+      time_from: "23:00:00",
+      time_to: "23:59:59",
+      candidates: [{
+        departure_at: "2026-08-08T23:00:00+09:00",
+        arrival_at: "2026-08-09T00:07:00+09:00",
+      }],
+    });
+  });
+
   it("maps the attempted candidate and preserves every candidate context for result events", () => {
     const attempted = {
       ...apiWatch.candidates[0],

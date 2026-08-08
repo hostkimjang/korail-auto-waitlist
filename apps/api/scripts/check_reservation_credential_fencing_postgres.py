@@ -30,29 +30,26 @@ from rail_waitlist.domain import (
     SeatClass,
     WatchStatus,
 )
-from rail_waitlist.models import (
-    OutboxEvent,
-    ProviderCircuit,
-    RailProviderAccount,
-    ReservationAttempt,
-    Watch,
-    WatchCandidate,
-)
-from rail_waitlist.provider_accounts import (
+from rail_waitlist.outbox_management.models import OutboxEvent
+from rail_waitlist.provider_account_management.application import (
     get_next_provider_credential_version,
     update_provider_auth_status,
     upsert_provider_account,
+)
+from rail_waitlist.provider_account_management.models import RailProviderAccount
+from rail_waitlist.provider_account_management.schemas import (
+    RailProviderAccountUpsert,
+    RailProviderAuthStatus,
+)
+from rail_waitlist.provider_circuit.models import ProviderCircuit
+from rail_waitlist.reservations.contracts import (
+    ReservationRequest,
+    ReservationResult,
 )
 from rail_waitlist.reservations.execution_application import (
     ReservationExecutionDependencies,
     ReservationExecutionTarget,
     execute_reservation,
-)
-from rail_waitlist.schemas import (
-    RailProviderAccountUpsert,
-    RailProviderAuthStatus,
-    ReservationRequest,
-    ReservationResult,
 )
 from rail_waitlist.services import (
     add_outbox_event,
@@ -62,7 +59,8 @@ from rail_waitlist.services import (
     get_or_create_provider_circuit,
     record_reservation_confirmation,
 )
-from rail_waitlist.srt_reservation import SRT_RESERVATION_SOURCE
+from rail_waitlist.srt_sidecar.reservation import SRT_RESERVATION_SOURCE
+from rail_waitlist.watch_management.models import ReservationAttempt, Watch, WatchCandidate
 
 _ISOLATED_OPT_IN = "POSTGRES_ACCEPTANCE_ISOLATED"
 _ISOLATED_DATABASE_PREFIX = "rail_waitlist_acceptance_"

@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..admin_auth.models import AdminAccount
 from ..auth import require_admin
 from ..database import get_session
-from ..models import AdminAccount
 from .application import update_admin_ui_preferences
 from .schemas import UiPreferencesRead, UiPreferencesUpdate
 

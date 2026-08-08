@@ -10,8 +10,8 @@ from sqlalchemy import select
 from ..auth import require_admin
 from ..config import get_settings
 from ..database import SessionFactory
-from ..models import OutboxEvent
-from ..schemas import EventRead
+from ..outbox_management.models import OutboxEvent
+from .schemas import EventRead
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
 

@@ -36,6 +36,7 @@ describe("reservation view model", () => {
 
     expect(mapped).toEqual({
       id: "reservation-1",
+      provider: "KORAIL",
       status: "payment_required",
       statusLabel: "결제 필요",
       route: "서울 → 부산",

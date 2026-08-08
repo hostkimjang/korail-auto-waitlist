@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,6 +16,12 @@ from rail_waitlist.korail_pydoll_browser import (
     PydollKorailBrowserClient,
     _PydollSession,
 )
+from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserProtectionDetected,
+    BrowserRateLimited,
+    BrowserSourceUnavailable,
+)
+from rail_waitlist.korail_sidecar.pydoll.login_driver import login_step
 
 
 def _credential() -> KorailCredentialInput:
@@ -65,12 +72,37 @@ def test_auth_contract_identity_remains_compatible_across_public_facades() -> No
     assert PydollKorailBrowserClient is browser_module.PydollKorailBrowserClient
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        asyncio.CancelledError(),
+        BrowserProtectionDetected(),
+        BrowserRateLimited(),
+        BrowserSourceUnavailable("existing_stage"),
+    ],
+    ids=("cancelled", "protection", "rate_limited", "source_unavailable"),
+)
+async def test_login_step_preserves_cancellation_and_classified_browser_errors(
+    error: BaseException,
+) -> None:
+    async def fail() -> None:
+        raise error
+
+    with pytest.raises(type(error)) as captured:
+        await login_step("new_stage", fail())
+
+    assert captured.value is error
+
+
 def test_login_driver_has_no_browser_or_lifecycle_actor_dependencies() -> None:
     module_path = (
         Path(__file__).resolve().parents[1]
         / "src"
         / "rail_waitlist"
-        / "korail_pydoll_login_driver.py"
+        / "korail_sidecar"
+        / "pydoll"
+        / "login_driver.py"
     )
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     imported_modules = {

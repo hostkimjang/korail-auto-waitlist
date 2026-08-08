@@ -48,20 +48,15 @@ def test_services_reexports_the_canonical_confirmed_absent_policy() -> None:
     assert legacy_is_confirmed_absent_retry_source is is_confirmed_absent_retry_source
 
 
-@pytest.mark.parametrize(
-    "outcome",
-    [ReservationOutcome.UNKNOWN, ReservationOutcome.PAYMENT_REQUIRED],
-)
-def test_exact_confirmed_absence_rearms_supported_legacy_outcomes(
-    outcome: ReservationOutcome,
-) -> None:
-    assert is_confirmed_absent_retry_source(make_attempt(outcome)) is True
+def test_exact_confirmed_absence_rearms_only_legacy_payment_hold_without_deadline() -> None:
+    assert is_confirmed_absent_retry_source(make_attempt(ReservationOutcome.PAYMENT_REQUIRED))
 
 
 @pytest.mark.parametrize(
     "attempt",
     [
         make_attempt(ReservationOutcome.NOT_AVAILABLE),
+        make_attempt(ReservationOutcome.UNKNOWN),
         make_attempt(
             ReservationOutcome.UNKNOWN,
             confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,

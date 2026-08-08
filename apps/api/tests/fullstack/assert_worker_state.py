@@ -18,11 +18,11 @@ from rail_waitlist.models import (
     ProviderExecutionLease,
     ReservationAttempt,
     SeatObservation,
-    TimetableSeatEvidence,
     Watch,
     WatchCandidate,
     WatchTransitionHistory,
 )
+from rail_waitlist.timetable_management.models import TimetableSeatEvidence
 
 EXPECTED = {
     ("9002", "standard"): (WatchStatus.SEAT_FOUND, SeatObservationStatus.AVAILABLE),
@@ -177,6 +177,7 @@ async def _snapshot() -> dict[str, object] | None:
         )
         if korail_lease is None or korail_lease.fencing_token < 1:
             return None
+
         notifications = list(
             (
                 await session.scalars(
@@ -220,7 +221,11 @@ async def _snapshot() -> dict[str, object] | None:
             "watch_statuses": sorted(status.value for status, _ in EXPECTED.values()),
             "observation_statuses": sorted(status.value for _, status in EXPECTED.values()),
             "lease_fencing_token": lease.fencing_token,
-            "lease_released": True,
+            "lease_released": lease.owner_token is None and lease.expires_at is None,
+            "korail_lease_released": (
+                korail_lease.owner_token is None and korail_lease.expires_at is None
+            ),
+            "observation_events": seat_events,
             "notification_events": len(notifications),
             "notification_attempts": sorted(item.attempts for item in notifications),
             "reservation_attempts": reservation_attempts,
@@ -229,6 +234,42 @@ async def _snapshot() -> dict[str, object] | None:
 
 async def _diagnostic() -> dict[str, object]:
     async with SessionFactory() as session:
+        transitions = list(
+            (
+                await session.execute(
+                    select(
+                        WatchTransitionHistory.to_status,
+                        WatchTransitionHistory.reason,
+                        WatchTransitionHistory.observation_id,
+                    ).where(
+                        WatchTransitionHistory.to_status.in_(
+                            [WatchStatus.SEAT_FOUND, WatchStatus.OFFICIAL_WAITLIST]
+                        )
+                    )
+                )
+            ).all()
+        )
+        notifications = list(
+            (
+                await session.execute(
+                    select(
+                        OutboxEvent.status,
+                        OutboxEvent.attempts,
+                    ).where(OutboxEvent.event_type == "notification.dispatch_requested")
+                )
+            ).all()
+        )
+        observation_count, seat_events = (
+            await session.execute(
+                select(
+                    select(func.count()).select_from(SeatObservation).scalar_subquery(),
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(OutboxEvent.event_type == "watch.seat_observed")
+                    .scalar_subquery(),
+                )
+            )
+        ).one()
         rows = list(
             (
                 await session.execute(
@@ -294,6 +335,13 @@ async def _diagnostic() -> dict[str, object]:
             {"provider": Provider.KORAIL, "account_scope": "anonymous/public"},
         )
         return {
+            "actionable_transitions": [
+                [status.value, reason, observation_id]
+                for status, reason, observation_id in transitions
+            ],
+            "notifications": [[status.value, attempts] for status, attempts in notifications],
+            "observation_count": observation_count,
+            "seat_events": seat_events,
             "watches": [
                 [status.value, train_number, seat_class]
                 for status, train_number, seat_class in rows

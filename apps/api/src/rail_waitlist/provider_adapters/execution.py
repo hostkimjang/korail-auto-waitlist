@@ -5,9 +5,11 @@ from datetime import datetime
 
 from ..database import SessionFactory
 from ..domain import Provider
-from ..provider_accounts import ProviderCredentials, get_enabled_provider_credentials
+from ..provider_account_management.application import get_enabled_provider_credentials
+from ..provider_account_management.contracts import ProviderCredentials
 from ..provider_contracts import ProviderUnavailable
-from ..schemas import ProviderCapabilities, StationCatalog, TimetableItem
+from ..provider_registry.contracts import ProviderCapabilities
+from ..timetable_management.schemas import StationCatalog, TimetableItem
 from .base import RailProviderAdapter
 
 ProviderCredentialLoader = Callable[[Provider], Awaitable[ProviderCredentials | None]]

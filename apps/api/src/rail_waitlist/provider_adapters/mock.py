@@ -3,17 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from ..domain import Provider, SeatClass
+from ..observations.contracts import SeatObservationRequest, SeatObservationResult
 from ..provider_contracts import RouteValidationError
-from ..schemas import (
-    ProviderCapabilities,
-    ReservationRequest,
-    ReservationResult,
+from ..provider_registry.contracts import ProviderCapabilities
+from ..reservations.contracts import ReservationRequest, ReservationResult
+from ..timetable_management.schemas import (
     SeatAvailability,
     SeatAvailabilityAction,
     SeatAvailabilityProvenance,
     SeatClassAvailability,
-    SeatObservationRequest,
-    SeatObservationResult,
     StationCatalog,
     StationItem,
     TimetableItem,

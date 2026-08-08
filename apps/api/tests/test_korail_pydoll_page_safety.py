@@ -10,8 +10,14 @@ from rail_waitlist.korail_browser_automation import (
     BrowserProtectionDetected,
     BrowserRateLimited,
 )
-from rail_waitlist.korail_pydoll_contracts import PydollPageSnapshot, PydollTrainRow
-from rail_waitlist.korail_pydoll_page_safety import assert_pydoll_response_allowed
+from rail_waitlist.korail_sidecar.pydoll.page_contracts import (
+    PydollPageSnapshot,
+    PydollTrainRow,
+)
+from rail_waitlist.korail_sidecar.pydoll.page_safety import (
+    assert_pydoll_response_allowed,
+    classify_pydoll_page_block,
+)
 
 EVENT_LOGGER = logging.getLogger("rail_waitlist.korail_pydoll_browser")
 VISIBLE_ROW = PydollTrainRow("KTX", "43", "서울 → 부산(15:00 ~ 17:30)", ())
@@ -56,6 +62,13 @@ def test_page_safety_maps_blocking_evidence_to_existing_adapter_errors(
     expected_exception: type[Exception],
     expected_trigger: str | None,
 ) -> None:
+    block = classify_pydoll_page_block(snapshot)
+    assert block is not None
+    assert block.kind == (
+        "rate_limited" if expected_exception is BrowserRateLimited else "protection"
+    )
+    assert block.trigger == expected_trigger
+
     with pytest.raises(expected_exception) as raised:
         assert_pydoll_response_allowed(snapshot, "wait_result", event_logger=EVENT_LOGGER)
 
@@ -77,7 +90,31 @@ def test_page_safety_maps_blocking_evidence_to_existing_adapter_errors(
 def test_page_safety_preserves_benign_rows_and_subresource_distinctions(
     snapshot: PydollPageSnapshot,
 ) -> None:
+    assert classify_pydoll_page_block(snapshot) is None
     assert_pydoll_response_allowed(snapshot, "wait_result", event_logger=EVENT_LOGGER)
+
+
+@pytest.mark.parametrize(
+    ("network_responses", "expected_exception"),
+    [
+        (((403, "document"), (429, "fetch")), BrowserProtectionDetected),
+        (((429, "fetch"), (403, "document")), BrowserRateLimited),
+    ],
+)
+def test_page_safety_preserves_first_matching_network_evidence_order(
+    network_responses: tuple[tuple[int, str], ...],
+    expected_exception: type[Exception],
+) -> None:
+    snapshot = PydollPageSnapshot("결과", (), network_responses=network_responses)
+    block = classify_pydoll_page_block(snapshot)
+
+    assert block is not None
+    assert block.kind == (
+        "rate_limited" if expected_exception is BrowserRateLimited else "protection"
+    )
+
+    with pytest.raises(expected_exception):
+        assert_pydoll_response_allowed(snapshot, "wait_result", event_logger=EVENT_LOGGER)
 
 
 def test_page_safety_logs_only_sanitized_counts(
@@ -105,7 +142,9 @@ def test_page_safety_does_not_reverse_depend_on_browser_facade() -> None:
         Path(__file__).resolve().parents[1]
         / "src"
         / "rail_waitlist"
-        / "korail_pydoll_page_safety.py"
+        / "korail_sidecar"
+        / "pydoll"
+        / "page_safety.py"
     )
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     imported_modules = {

@@ -88,6 +88,24 @@
   font-size: 22px;
 }
 
+.reservation-srt-refresh-hint {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  margin: -8px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8f3f7;
+  color: #68455f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.reservation-srt-refresh-hint strong {
+  white-space: nowrap;
+}
+
 @media (max-width: 760px) {
   .reservation-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -114,5 +132,11 @@
   .reservation-item > .button {
     grid-column: 1 / -1;
     width: 100%;
+  }
+
+  .reservation-srt-refresh-hint {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr;
+    margin-top: 0;
   }
 }

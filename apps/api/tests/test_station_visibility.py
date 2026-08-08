@@ -5,11 +5,12 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from rail_waitlist.schemas import StationItem
-from rail_waitlist.station_visibility import (
+from rail_waitlist.timetable_management.schemas import StationItem
+from rail_waitlist.timetable_management.station_visibility import (
     KORAIL_STATION_DATA_URL,
     MAX_KORAIL_ROSTER_COUNT,
     MIN_KORAIL_ROSTER_COUNT,
+    REQUEST_TIMEOUT,
     KorailStationVisibility,
     StationVisibilityRoster,
     StationVisibilityUnavailable,
@@ -22,7 +23,11 @@ def station(name: str, node_id: str) -> StationItem:
     return StationItem(node_id=node_id, name=name, city_code="11", city_name="테스트")
 
 
-def roster_rows(*, include_sentinels: bool = True) -> list[dict[str, str]]:
+def roster_rows(
+    *,
+    include_sentinels: bool = True,
+    count: int = MIN_KORAIL_ROSTER_COUNT,
+) -> list[dict[str, str]]:
     names = ["서울", "수서", "대전", "부산"] if include_sentinels else []
     names.extend(
         [
@@ -37,11 +42,8 @@ def roster_rows(*, include_sentinels: bool = True) -> list[dict[str, str]]:
             "옥수",
         ]
     )
-    names.extend(f"테스트{i}" for i in range(MIN_KORAIL_ROSTER_COUNT - len(names)))
-    return [
-        {"stn_cd": f"{index:04d}", "stn_nm": name}
-        for index, name in enumerate(names, start=1)
-    ]
+    names.extend(f"테스트{i}" for i in range(count - len(names)))
+    return [{"stn_cd": f"{index:04d}", "stn_nm": name} for index, name in enumerate(names, start=1)]
 
 
 def test_filter_preserves_station_items_node_ids_and_order_with_explicit_aliases():
@@ -59,9 +61,7 @@ def test_filter_preserves_station_items_node_ids_and_order_with_explicit_aliases
         station("임의의역", "TAGO-UNKNOWN"),
     ]
     roster = StationVisibilityRoster(
-        names=frozenset(
-            normalize_visibility_station_name(row["stn_nm"]) for row in roster_rows()
-        ),
+        names=frozenset(normalize_visibility_station_name(row["stn_nm"]) for row in roster_rows()),
         retrieved_at=datetime.now(UTC),
         etag=None,
         last_modified=None,
@@ -107,12 +107,44 @@ async def test_load_roster_validates_schema_sentinels_and_metadata():
         roster = await KorailStationVisibility(http_client).load_roster()
 
     assert {"서울", "수서", "대전", "부산"}.issubset(roster.names)
-    assert {"광운대", "노량진", "신도림", "서빙고", "왕십리", "옥수"}.isdisjoint(
-        roster.names
-    )
+    assert {"광운대", "노량진", "신도림", "서빙고", "왕십리", "옥수"}.isdisjoint(roster.names)
     assert roster.retrieved_at.tzinfo is UTC
     assert roster.etag == '"station-v1"'
     assert roster.last_modified == "Wed, 29 Jul 2026 00:00:00 GMT"
+
+
+@pytest.mark.parametrize("count", [MIN_KORAIL_ROSTER_COUNT, MAX_KORAIL_ROSTER_COUNT])
+async def test_load_roster_accepts_inclusive_count_boundaries(count: int):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"stns": {"stn": roster_rows(count=count)}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        roster = await KorailStationVisibility(http_client).load_roster()
+
+    assert len(roster.names) == count - 6
+
+
+async def test_custom_fixture_url_is_public_and_used_for_the_exact_request():
+    custom_url = "http://fixture.internal/station_data.json"
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"stns": {"stn": roster_rows()}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        visibility = KorailStationVisibility(http_client, url=custom_url)
+        await visibility.load_roster()
+
+    assert visibility.url == custom_url
+    assert [str(request.url) for request in requests] == [custom_url]
+
+
+def test_request_timeout_contract_is_preserved():
+    assert REQUEST_TIMEOUT.connect == 5.0
+    assert REQUEST_TIMEOUT.read == 10.0
+    assert REQUEST_TIMEOUT.write == 10.0
+    assert REQUEST_TIMEOUT.pool == 10.0
 
 
 @pytest.mark.parametrize(
@@ -125,6 +157,8 @@ async def test_load_roster_validates_schema_sentinels_and_metadata():
         {"stns": {"stn": roster_rows(include_sentinels=False)}},
         {"stns": {"stn": roster_rows() + [{"stn_cd": "0001", "stn_nm": "중복코드"}]}},
         {"stns": {"stn": roster_rows() + [{"stn_cd": "9999", "stn_nm": "서울"}]}},
+        {"stns": {"stn": roster_rows() + [{"stn_cd": " 0001 ", "stn_nm": "새이름"}]}},
+        {"stns": {"stn": roster_rows() + [{"stn_cd": "9998", "stn_nm": " 서울역 "}]}},
         {
             "stns": {
                 "stn": [

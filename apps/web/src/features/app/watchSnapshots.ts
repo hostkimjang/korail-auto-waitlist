@@ -212,6 +212,39 @@ const actionStatuses: ReadonlySet<WatchActionTransition["status"]> = new Set([
   "failed",
 ]);
 
+const hydratableActionStatuses: ReadonlySet<WatchActionTransition["status"]> = new Set([
+  "reserving",
+  "payment_required",
+  "auth_required",
+]);
+
+function hydrateCurrentWatchActionLifecycleTransitions(
+  watches: ReadonlyArray<WatchLifecycleSnapshot>,
+): WatchActionTransition[] {
+  return watches.flatMap((watch) => {
+    const status = watch.status as WatchActionTransition["status"];
+    if (!hydratableActionStatuses.has(status)) return [];
+    return [{
+      ...transitionContext(watch, status),
+      status,
+    }];
+  });
+}
+
+export function hydrateCurrentWatchActionTransitions(
+  watches: ReadonlyArray<WatchLifecycleSnapshot>,
+): WatchActionTransition[];
+export function hydrateCurrentWatchActionTransitions(
+  watches: ReadonlyArray<LegacyWatchSnapshot>,
+): WatchActionTransition[];
+export function hydrateCurrentWatchActionTransitions(
+  watches: ReadonlyArray<LegacyWatchSnapshot | WatchLifecycleSnapshot>,
+): WatchActionTransition[] {
+  return hydrateCurrentWatchActionLifecycleTransitions(
+    watches.map(mapCompatibleWatchLifecycleSnapshot),
+  );
+}
+
 const authenticationRecoveredStatuses: ReadonlySet<string> = new Set([
   "scheduled",
   "watching",

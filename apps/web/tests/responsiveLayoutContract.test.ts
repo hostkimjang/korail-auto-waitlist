@@ -327,11 +327,42 @@ describe("responsive layout CSS contracts", () => {
   it("uses one bounded notification surface without the removed second fixed offset", () => {
     const notificationCenter = extractCssBlock(styles, ".notification-center").body;
     expect(notificationCenter).toMatch(/width:\s*min\(560px, calc\(100vw - 48px\)\)\s*;/);
+    expect(notificationCenter).toContain("env(safe-area-inset-top)");
     const notificationBody = extractCssBlock(styles, ".notification-center-body").body;
     expect(notificationBody).toMatch(/max-height:\s*min\(70dvh, 560px\)\s*;/);
+    const peekDetail = extractCssBlock(styles, ".notification-center-peek-detail,").body;
+    expect(peekDetail).toMatch(/min-width:\s*44px\s*;/);
+    expect(peekDetail).toMatch(/min-height:\s*44px\s*;/);
+    const narrow = extractCssBlock(
+      responsiveStyles,
+      "@media (max-width: 340px)",
+      responsiveStyles.lastIndexOf("@media (max-width: 340px)"),
+    ).body;
+    const narrowPeek = extractCssBlock(narrow, ".notification-center-peek").body;
+    expect(narrowPeek).toContain("grid-template-columns: minmax(0, 1fr) 44px");
     expect(styles).not.toContain(".seat-found-alert");
     expect(styles).not.toContain("+ 184px");
     expect(styles).not.toContain("+ 238px");
+  });
+
+  it("stacks the calendar above notifications and below blocking provider dialogs", () => {
+    const notificationCenter = extractCssBlock(appSurfaceStyles, ".notification-center").body;
+    const calendarScrim = extractCssBlock(featureStyles, ".date-field > .popover-scrim").body;
+    const calendarDialog = extractCssBlock(
+      featureStyles,
+      ".journey-popover.calendar-popover",
+    ).body;
+    const officialHandoff = extractCssBlock(officialHandoffStyles, ".official-handoff-layer").body;
+    const officialConfirmation = extractCssBlock(
+      officialSeatConfirmationStyles,
+      ".official-confirmation-layer",
+    ).body;
+
+    expect(notificationCenter).toMatch(/z-index:\s*102\s*;/);
+    expect(calendarScrim).toMatch(/z-index:\s*109\s*;/);
+    expect(calendarDialog).toMatch(/z-index:\s*110\s*;/);
+    expect(officialHandoff).toMatch(/z-index:\s*120\s*;/);
+    expect(officialConfirmation).toMatch(/z-index:\s*125\s*;/);
   });
 
   it("keeps the notification switch target at least 44px tall", () => {

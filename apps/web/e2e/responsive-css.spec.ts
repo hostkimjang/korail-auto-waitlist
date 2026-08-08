@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 
+import { selectStation } from "./support/stationSelection";
+
 interface ViewportCase {
   name: string;
   width: number;
@@ -15,9 +17,14 @@ interface BrowserTelemetry {
 
 const viewportCases: readonly ViewportCase[] = [
   { name: "desktop", width: 1440, height: 1000 },
+  { name: "768px portrait tablet", width: 768, height: 1024 },
   { name: "320px mobile", width: 320, height: 844 },
   { name: "200% zoom equivalent", width: 720, height: 500 },
 ];
+
+function usesCompactShell(viewport: ViewportCase): boolean {
+  return viewport.width <= 980;
+}
 
 const expectedResponsiveApiPaths = [
   "/api/v1/auth/status",
@@ -208,7 +215,7 @@ async function installMockApi(page: Page, telemetry: BrowserTelemetry): Promise<
       telemetry.handledApiPaths.add(path);
       await json(route, {
         timetable_refresh_interval_seconds: 30,
-        seat_observation_interval_seconds: 5,
+        observation_interval_seconds: 5,
         preferences_updated_at: timestamp(-60_000),
       });
       return;
@@ -335,7 +342,9 @@ async function expectOfficialHandoffWithinBounds(
     "official handoff copy action",
   );
   await expectVisibleActionTarget(
-    dialog.getByRole("button", { name: /공식 페이지 열기/ }),
+    dialog
+      .getByRole("button", { name: /공식 페이지 열기/ })
+      .or(dialog.getByRole("link", { name: /공식 앱 또는 홈페이지 열기/ })),
     "official handoff provider action",
   );
 
@@ -361,7 +370,7 @@ async function expectReservationsWithinBounds(
   viewport: ViewportCase,
 ): Promise<void> {
   const navigation = page.locator(
-    viewport.width <= 720 ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
+    usesCompactShell(viewport) ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
   ).filter({ hasText: "내 예약" });
   await navigation.click();
 
@@ -383,7 +392,7 @@ async function expectReservationsWithinBounds(
     page.locator(".reservation-item > .button").filter({ hasText: "공식 확인 열기" }),
     "elapsed payment official action",
   );
-  const createAction = viewport.width <= 720
+  const createAction = usesCompactShell(viewport)
     ? page.locator(".bottom-nav .bottom-item").filter({ hasText: "새 대기" })
     : page.getByRole("main").getByRole("button", { name: "새 대기" });
   await expectVisibleActionTarget(createAction, "reservation create action");
@@ -409,7 +418,7 @@ async function expectRefreshPreferencesWithinBounds(
   viewport: ViewportCase,
 ): Promise<void> {
   const settingsNavigation = page.locator(
-    viewport.width <= 720 ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
+    usesCompactShell(viewport) ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
   ).filter({ hasText: "설정" });
   await settingsNavigation.click();
   await page.getByRole("navigation", { name: "설정 메뉴" })
@@ -448,17 +457,105 @@ async function expectReservationPolicyWithinBounds(
   viewport: ViewportCase,
 ): Promise<void> {
   const newWaitNavigation = page.locator(
-    viewport.width <= 720 ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
+    usesCompactShell(viewport) ? ".bottom-nav .bottom-item" : ".side-nav .nav-item",
   ).filter({ hasText: "새 대기" });
   await newWaitNavigation.click();
   await expect(page.getByRole("heading", { name: "어디로 떠나세요?" })).toBeVisible();
 
+  if (viewport.width > 760 && usesCompactShell(viewport)) {
+    await expect(page.locator(".sidebar")).toBeHidden();
+    await expect(page.locator(".mobile-header")).toBeVisible();
+    await expect(page.locator(".bottom-nav")).toBeVisible();
+    const scheduleLayout = await page.locator(".journey-schedule-grid").evaluate((element) => {
+      const date = element.querySelector(".date-field")?.getBoundingClientRect();
+      const time = element.querySelector(".time-range-field")?.getBoundingClientRect();
+      return {
+        dateBottom: date?.bottom ?? 0,
+        timeTop: time?.top ?? 0,
+        documentClient: document.documentElement.clientWidth,
+        documentScroll: document.documentElement.scrollWidth,
+        bodyClient: document.body.clientWidth,
+        bodyScroll: document.body.scrollWidth,
+      };
+    });
+    expect(scheduleLayout.timeTop).toBeGreaterThanOrEqual(scheduleLayout.dateBottom);
+    expect(scheduleLayout.documentScroll).toBeLessThanOrEqual(scheduleLayout.documentClient);
+    expect(scheduleLayout.bodyScroll).toBeLessThanOrEqual(scheduleLayout.bodyClient);
+
+    const dateTrigger = page.getByRole("button", { name: /^가는 날:/ });
+    await dateTrigger.click();
+    const calendar = page.getByRole("dialog", { name: "가는 날 선택" });
+    const calendarBounds = await calendar.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+        position: window.getComputedStyle(element).position,
+        viewportWidth: document.documentElement.clientWidth,
+        viewportHeight: document.documentElement.clientHeight,
+      };
+    });
+    expect(calendarBounds.position).toBe("fixed");
+    expect(calendarBounds.top).toBeGreaterThanOrEqual(0);
+    expect(calendarBounds.left).toBeGreaterThanOrEqual(0);
+    expect(calendarBounds.right).toBeLessThanOrEqual(calendarBounds.viewportWidth);
+    expect(calendarBounds.bottom).toBeLessThanOrEqual(calendarBounds.viewportHeight);
+    await page.keyboard.press("Escape");
+    await expect(calendar).toBeHidden();
+    await expect(dateTrigger).toBeFocused();
+  }
+
   await page.getByRole("checkbox", { name: /^SRT/ }).click();
-  for (const [label, station] of [["출발역", "서울"], ["도착역", "부산"]] as const) {
-    const input = page.getByRole("combobox", { name: label });
-    await expect(input).toBeEnabled();
-    await input.fill(station);
-    await page.getByRole("option", { name: new RegExp(`^${station}`) }).click();
+  const inspectDialog = async (dialog: Locator): Promise<void> => {
+    const layer = page.locator(".station-route-dialog-layer");
+    await expectWithinViewport(layer, viewport.width, "station route dialog");
+    const bounds = await layer.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportHeight: window.visualViewport?.height ?? window.innerHeight,
+        viewportTop: window.visualViewport?.offsetTop ?? 0,
+        documentClient: document.documentElement.clientWidth,
+        documentScroll: document.documentElement.scrollWidth,
+        bodyClient: document.body.clientWidth,
+        bodyScroll: document.body.scrollWidth,
+        rootOverflow: document.documentElement.style.overflow,
+        rootOverscrollBehavior: document.documentElement.style.overscrollBehavior,
+        bodyOverflow: document.body.style.overflow,
+        bodyPosition: document.body.style.position,
+      };
+    });
+    expect(bounds.top).toBeGreaterThanOrEqual(bounds.viewportTop - 0.5);
+    expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportTop + bounds.viewportHeight + 0.5);
+    expect(bounds.documentScroll).toBeLessThanOrEqual(bounds.documentClient);
+    expect(bounds.bodyScroll).toBeLessThanOrEqual(bounds.bodyClient);
+    expect(bounds.rootOverflow).toBe("hidden");
+    expect(bounds.rootOverscrollBehavior).toBe("none");
+    expect(bounds.bodyOverflow).toBe("hidden");
+    expect(bounds.bodyPosition).toBe("fixed");
+    await expect(dialog.locator(".station-route-dialog-header")).toBeVisible();
+    await expect(dialog.locator(".station-route-dialog-route")).toBeVisible();
+    await expect(dialog.locator(".station-route-dialog-search")).toBeVisible();
+    await expect(dialog.locator(".station-route-results")).toBeVisible();
+  };
+  await selectStation(page, "출발역", "서울", { onDialogReady: inspectDialog });
+  await selectStation(page, "도착역", "부산", { onDialogReady: inspectDialog });
+  if (usesCompactShell(viewport)) {
+    const restoredScrollStyles = await page.evaluate(() => ({
+      rootOverflow: document.documentElement.style.overflow,
+      rootOverscrollBehavior: document.documentElement.style.overscrollBehavior,
+      bodyOverflow: document.body.style.overflow,
+      bodyPosition: document.body.style.position,
+    }));
+    expect(restoredScrollStyles).toEqual({
+      rootOverflow: "",
+      rootOverscrollBehavior: "",
+      bodyOverflow: "",
+      bodyPosition: "",
+    });
   }
   await page.getByRole("button", { name: /다음/ }).click();
   await expect(page.getByRole("heading", { name: "어떤 좌석을 찾을까요?" })).toBeVisible();
@@ -571,6 +668,15 @@ async function expectMobileReadingOrder(page: Page, viewportHeight: number): Pro
   expect(actionBox.y).toBeGreaterThanOrEqual(-0.5);
   expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(bottomNavBox.y + 0.5);
   expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(viewportHeight + 0.5);
+
+  const enrollment = page.locator(".web-push-enrollment");
+  if (await enrollment.isVisible()) {
+    const enrollmentBox = await enrollment.boundingBox();
+    expect(enrollmentBox).not.toBeNull();
+    if (enrollmentBox !== null) {
+      expect(enrollmentBox.y + enrollmentBox.height).toBeLessThanOrEqual(bottomNavBox.y + 0.5);
+    }
+  }
 }
 
 for (const viewport of viewportCases) {
@@ -618,7 +724,7 @@ for (const viewport of viewportCases) {
     await expectVisibleActionTarget(page.locator(".watch-booking-button"), "official booking action");
     await expectCoreActionTargets(page);
     await expectWatchRegionsDoNotOverlap(page);
-    if (viewport.width <= 720) {
+    if (usesCompactShell(viewport)) {
       const bottomItems = page.locator(".bottom-item");
       await expect(bottomItems).toHaveCount(4);
       for (let index = 0; index < 4; index += 1) {

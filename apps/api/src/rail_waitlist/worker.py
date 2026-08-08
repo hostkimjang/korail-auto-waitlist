@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable
-from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from datetime import datetime, timezone
+from typing import cast
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .celery_app import celery_app
@@ -14,13 +13,10 @@ from .config import get_settings
 from .database import SessionFactory, engine
 from .domain import (
     Provider,
-    ReservationOutcome,
-    WatchStatus,
 )
-from .korail_execution import korail_background_monitoring_enabled
 from .metrics import WATCH_GROUPS, WORKER_RUNS
-from .models import ReservationAttempt, Watch, WatchCandidate
 from .notification_management.delivery import deliver_pending_notifications
+from .observations.contracts import SeatObservationResult
 from .observations.cycle_application import (
     finish_observation_cycle,
     latest_observation_fingerprint,
@@ -29,28 +25,72 @@ from .observations.due_pipeline_application import (
     DuePipelineDependencies,
     process_due_pipeline,
 )
+from .observations.due_provider_policy import (
+    select_provider_arm_targets as select_provider_arm_targets_policy,
+)
+from .observations.due_runtime import DueSweepRuntimeDependencies
+from .observations.due_runtime import process_due_watches as process_due_watches_runtime
 from .observations.group_application import (
+    LockedLeaseCurrent,
     ObservationGroupDependencies,
     ObservationTarget,
     process_watch_group_observation,
     provider_circuit_is_closed,
     watch_group_provider,
 )
-from .provider_accounts import update_provider_auth_status
+from .observations.group_runtime import WatchGroupRuntimeDependencies
+from .observations.group_runtime import (
+    process_watch_group_runtime as process_watch_group_runtime_application,
+)
+from .observations.operational_projection_application import apply_operational_projection
+from .observations.recording_application import ObservationRecordingDependencies
+from .observations.recording_application import (
+    record_seat_observation as record_seat_observation_application,
+)
+from .outbox import add_outbox_event
+from .provider_account_management.application import update_provider_auth_status
+from .provider_account_management.reservation_runtime import (
+    update_provider_auth_status_in_reservation_transaction,
+)
+from .provider_account_management.schemas import RailProviderAuthStatus
+from .provider_adapters.korail_execution import korail_background_monitoring_enabled
+from .provider_circuit.application import get_or_create_provider_circuit
 from .provider_contracts import ExecutionProvider, ProviderLifecycle, ProviderUnavailable
-from .provider_execution_lease import (
-    ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
-    ExecutionLeaseGrant,
+from .provider_execution.contracts import ExecutionLeaseGrant, ExecutionLeaseService
+from .provider_execution.lease_application import (
+    ANONYMOUS_PUBLIC_ACCOUNT_SCOPE as ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
+)
+from .provider_execution.lease_application import (
+    PROVIDER_EXECUTION_LEASE_DURATION as PROVIDER_EXECUTION_LEASE_DURATION,
+)
+from .provider_execution.lease_application import (
+    ExecutionLeaseAcquisitionDependencies,
     ProviderExecutionLeaseService,
+    acquire_anonymous_public_execution_lease,
     lock_execution_lease_current,
 )
+from .provider_execution.lifecycle_runtime import (
+    close_execution_adapter_safely,
+    drain_execution_adapter_safely,
+)
 from .provider_registry.application import get_execution_provider
+from .reservations.attempt_policy import is_confirmed_absent_retry_source
+from .reservations.attempt_result_application import record_reservation_confirmation
+from .reservations.attempt_runtime import (
+    begin_reservation_attempt,
+    complete_reservation_attempt,
+)
 from .reservations.execution_application import (
     ReservationExecutionDependencies,
-    ReservationExecutionTarget,
-    execute_reservation,
+)
+from .reservations.execution_runtime import (
+    ReservationWinnerTarget,
+)
+from .reservations.execution_runtime import (
+    reserve_observation_winner as reserve_observation_winner_application,
 )
 from .reservations.payment_hold_application import _utc_instant
+from .reservations.provider_confirmation.contracts import ReservationConfirmationResult
 from .reservations.reconciliation_application import (
     ReconciliationDependencies,
     _reservation_reconciliation_due_clause,
@@ -61,72 +101,59 @@ from .reservations.reconciliation_application import (
 from .reservations.reconciliation_state_application import (
     ReservationReconciliationStateDependencies,
 )
-from .schemas import RailProviderAuthStatus
-from .services import (
-    add_outbox_event,
-    apply_watch_transition,
-    begin_reservation_attempt,
-    complete_reservation_attempt,
-    get_or_create_provider_circuit,
-    is_confirmed_absent_retry_source,
-    record_reservation_confirmation,
-    record_seat_observation,
+from .reservations.reconciliation_state_runtime import (
+    apply_reservation_reconciliation as apply_reservation_reconciliation_runtime,
 )
-from .srt_reservation import SRT_RESERVATION_SOURCE
+from .reservations.reconciliation_state_runtime import (
+    reservation_reconciliation_state_dependencies,
+)
+from .reservations.stale_attempt_recovery_application import (
+    RESERVATION_ATTEMPT_STALE_AFTER,
+    StaleReservationAttemptRecoveryDependencies,
+    recover_stale_reservation_attempts,
+)
+from .srt_sidecar.reservation import SRT_RESERVATION_SOURCE
+from .watch_management.arming_application import (
+    WatchArmingDependencies,
+)
+from .watch_management.arming_application import (
+    arm_supported_provider_watches as arm_supported_provider_watches_application,
+)
 from .watch_management.expiry_application import (
     WatchExpiryDependencies,
     expire_elapsed_watches,
 )
+from .watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from .watch_management.transition_runtime import apply_watch_transition
+from .worker_task_runtime import run_task_isolated
 
-RESERVATION_ATTEMPT_STALE_AFTER = timedelta(minutes=5)
-PROVIDER_EXECUTION_LEASE_DURATION = timedelta(minutes=2)
-_EXTERNAL_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
 LOGGER = logging.getLogger(__name__)
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 async def _close_execution_adapter(
     adapter: ProviderLifecycle,
     provider: Provider,
 ) -> None:
-    try:
-        await adapter.aclose()
-    except Exception:
-        # Cleanup diagnostics stay categorical; upstream details and credentials must
-        # never be copied into worker logs.  Lease release is handled separately.
-        LOGGER.warning("execution adapter cleanup failed provider=%s", provider.value)
+    await close_execution_adapter_safely(adapter, provider, logger=LOGGER)
 
 
 async def _drain_execution_adapter(
     adapter: ProviderLifecycle,
     provider: Provider,
 ) -> None:
-    try:
-        await adapter.drain_pending_calls()
-    except Exception:
-        # The lease still has to be released if a provider drain reports a cleanup
-        # failure. Keep diagnostics categorical for the same reason as aclose().
-        LOGGER.warning("execution adapter drain failed provider=%s", provider.value)
+    await drain_execution_adapter_safely(adapter, provider, logger=LOGGER)
 
 
 async def _run_isolated(operation: Awaitable[int]) -> int:
     """Celery의 작업별 event loop가 닫히기 전에 asyncpg 연결 풀도 함께 정리한다."""
-    try:
-        return await operation
-    finally:
-        await engine.dispose()
+    return await run_task_isolated(operation, dispose_engine=engine.dispose)
 
 
 def _watch_expiry_dependencies() -> WatchExpiryDependencies:
     return WatchExpiryDependencies(apply_watch_transition=apply_watch_transition)
 
 
-async def _expire_elapsed_watches(session, now: datetime) -> int:
+async def _expire_elapsed_watches(session: AsyncSession, now: datetime) -> int:
     return await expire_elapsed_watches(
         session,
         now,
@@ -134,66 +161,16 @@ async def _expire_elapsed_watches(session, now: datetime) -> int:
     )
 
 
-async def _recover_stale_reservation_attempts(session, now: datetime) -> int:
-    """Fence abandoned provider calls whose hold result can no longer be proven."""
-    rows = list(
-        (
-            await session.execute(
-                select(ReservationAttempt, WatchCandidate, Watch)
-                .join(
-                    WatchCandidate,
-                    WatchCandidate.id == ReservationAttempt.candidate_id,
-                )
-                .join(Watch, Watch.id == WatchCandidate.watch_id)
-                .where(
-                    ReservationAttempt.outcome == ReservationOutcome.PENDING,
-                    ReservationAttempt.started_at <= now - RESERVATION_ATTEMPT_STALE_AFTER,
-                )
-                # registration_evidence is a nullable joined relationship. Lock
-                # only the required rows so PostgreSQL does not try to lock the
-                # nullable side of that LEFT OUTER JOIN.
-                .with_for_update(
-                    of=(ReservationAttempt, WatchCandidate, Watch),
-                    skip_locked=True,
-                )
-            )
-        ).all()
+async def _recover_stale_reservation_attempts(session: AsyncSession, now: datetime) -> int:
+    return await recover_stale_reservation_attempts(
+        session,
+        now,
+        stale_after=RESERVATION_ATTEMPT_STALE_AFTER,
+        dependencies=StaleReservationAttemptRecoveryDependencies(
+            apply_watch_transition=apply_watch_transition,
+            add_outbox_event=add_outbox_event,
+        ),
     )
-    for attempt, candidate, watch in rows:
-        attempt.outcome = ReservationOutcome.UNKNOWN
-        attempt.finished_at = now
-        if watch.status == WatchStatus.RESERVING:
-            # A process restart/timeout leaves the provider result unknown. Resume
-            # observation without claiming an authentication failure. The completed
-            # UNKNOWN remains a durable ambiguous-result fence for this candidate.
-            candidate.state = "observed"
-            await apply_watch_transition(
-                session,
-                watch,
-                WatchStatus.WATCHING,
-                reason="stale_reservation_attempt_requires_manual_check",
-            )
-            if watch.next_check_at is None:
-                watch.next_check_at = now
-        elif watch.status == WatchStatus.EXPIRED:
-            candidate.state = "expired"
-        elif candidate.state == "reservation_attempted":
-            candidate.state = "observed"
-        await add_outbox_event(
-            session,
-            aggregate_type="watch",
-            aggregate_id=watch.id,
-            event_type="watch.reservation_attempt_recovery_required",
-            payload={
-                "watch_id": watch.id,
-                "candidate_id": candidate.id,
-                "reason": "reservation_attempt_result_unknown_after_restart",
-            },
-            dedupe_key=f"reservation-attempt-recovery:{attempt.id}",
-        )
-    if rows:
-        await session.commit()
-    return len(rows)
 
 
 async def _provider_circuit_is_closed(provider: Provider) -> bool:
@@ -211,38 +188,16 @@ async def _arm_supported_provider_watches(
     *,
     adapter: ExecutionProvider | None = None,
 ) -> int:
-    """Activate pre-existing official watches after an execution adapter becomes effective."""
-    if provider not in _EXTERNAL_PROVIDERS:
-        return 0
-    execution_adapter = adapter or get_execution_provider(provider)
-    if not execution_adapter.capabilities().seat_monitoring:
-        return 0
-    async with SessionFactory() as session:
-        watches = list(
-            (
-                await session.scalars(
-                    select(Watch)
-                    .where(
-                        Watch.provider == provider,
-                        Watch.mode == "official",
-                        Watch.status.in_(
-                            [
-                                WatchStatus.SCHEDULED,
-                                WatchStatus.OFFICIAL_WAITLIST,
-                                WatchStatus.SEAT_FOUND,
-                            ]
-                        ),
-                        Watch.next_check_at.is_(None),
-                    )
-                    .with_for_update(skip_locked=True)
-                )
-            ).all()
-        )
-        for watch in watches:
-            watch.next_check_at = now
-        if watches:
-            await session.commit()
-        return len(watches)
+    """Compose the canonical arming UoW from replaceable worker dependencies."""
+    return await arm_supported_provider_watches_application(
+        provider,
+        now,
+        adapter=adapter,
+        dependencies=WatchArmingDependencies(
+            session_factory=SessionFactory,
+            get_execution_provider=get_execution_provider,
+        ),
+    )
 
 
 async def _arm_supported_srt_watches(
@@ -254,24 +209,15 @@ async def _arm_supported_srt_watches(
     return await _arm_supported_provider_watches(Provider.SRT, now, adapter=adapter)
 
 
-def _execution_lease_service() -> ProviderExecutionLeaseService:
-    # SessionFactory is replaceable in isolated tests, so construct this lazily.
-    return ProviderExecutionLeaseService(SessionFactory)
-
-
 async def _acquire_execution_lease(
     provider: Provider,
     now: datetime,
 ) -> tuple[ProviderExecutionLeaseService, ExecutionLeaseGrant | None]:
-    service = _execution_lease_service()
-    grant = await service.acquire(
+    return await acquire_anonymous_public_execution_lease(
         provider,
-        ANONYMOUS_PUBLIC_ACCOUNT_SCOPE,
-        uuid4().hex,
-        now=now,
-        expires_at=now + PROVIDER_EXECUTION_LEASE_DURATION,
+        now,
+        dependencies=ExecutionLeaseAcquisitionDependencies(session_factory=SessionFactory),
     )
-    return service, grant
 
 
 async def _update_provider_auth_status_in_reservation_transaction(
@@ -281,12 +227,12 @@ async def _update_provider_auth_status_in_reservation_transaction(
     *,
     expected_credential_version: int,
 ) -> None:
-    await update_provider_auth_status(
+    await update_provider_auth_status_in_reservation_transaction(
         session,
         provider,
         status,
         expected_credential_version=expected_credential_version,
-        commit=False,
+        persist_auth_status=update_provider_auth_status,
     )
 
 
@@ -307,40 +253,49 @@ def _reservation_execution_dependencies() -> ReservationExecutionDependencies:
 
 async def _reserve_winner(adapter: ExecutionProvider, target: ObservationTarget) -> None:
     """Compatibility wiring for worker and focused integration tests."""
-    await execute_reservation(
+    await reserve_observation_winner_application(
         adapter,
-        ReservationExecutionTarget(
-            watch_id=target.watch_id,
-            candidate_id=target.candidate_id,
-            provider=target.provider,
-            origin=target.origin,
-            destination=target.destination,
-            origin_node_id=target.origin_node_id,
-            destination_node_id=target.destination_node_id,
-            train_number=target.train_number,
-            departure_at=target.departure_at,
-            arrival_at=target.arrival_at,
-            seat_class=target.seat_class,
-            passenger_count=target.passenger_count,
-            reservation_episode_key=target.reservation_episode_key,
-        ),
+        cast(ReservationWinnerTarget, target),
         dependencies=_reservation_execution_dependencies(),
     )
 
 
 def _observation_group_dependencies(
-    lease_service: ProviderExecutionLeaseService | None = None,
+    lease_service: ExecutionLeaseService | None = None,
     adapter: ExecutionProvider | None = None,
 ) -> ObservationGroupDependencies:
     async def lease_is_current(grant: object, *, now: datetime) -> bool:
         if lease_service is None:
             return True
+        if not isinstance(grant, ExecutionLeaseGrant):
+            return False
         return await lease_service.is_current(grant, now=now)
 
     async def reserve_winner(target: ObservationTarget) -> None:
         if adapter is None:
             raise RuntimeError("reservation adapter is unavailable")
         await _reserve_winner(adapter, target)
+
+    async def record_seat_observation(
+        session: AsyncSession,
+        watch: Watch,
+        candidate: WatchCandidate,
+        result: SeatObservationResult,
+        *,
+        apply_status_transition: bool = True,
+    ) -> SeatObservation:
+        return await record_seat_observation_application(
+            session,
+            watch,
+            candidate,
+            result,
+            apply_status_transition=apply_status_transition,
+            dependencies=ObservationRecordingDependencies(
+                apply_operational_projection=apply_operational_projection,
+                add_outbox_event=add_outbox_event,
+                apply_watch_transition=apply_watch_transition,
+            ),
+        )
 
     return ObservationGroupDependencies(
         session_factory=SessionFactory,
@@ -353,7 +308,10 @@ def _observation_group_dependencies(
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
         reserve_winner=reserve_winner,
         lease_is_current=lease_is_current,
-        lease_is_current_in_session=lock_execution_lease_current,
+        lease_is_current_in_session=cast(
+            LockedLeaseCurrent,
+            lock_execution_lease_current,
+        ),
         provider_call_errors=(ProviderUnavailable, RuntimeError, ValueError),
     )
 
@@ -365,45 +323,22 @@ async def _process_watch_group(
     provider: Provider | None = None,
     adapter: ExecutionProvider | None = None,
 ) -> None:
-    provider = provider or await watch_group_provider(
+    await process_watch_group_runtime_application(
         watch_ids,
-        session_factory=SessionFactory,
+        now,
+        provider=provider,
+        adapter=adapter,
+        dependencies=WatchGroupRuntimeDependencies(
+            session_factory=SessionFactory,
+            watch_group_provider=watch_group_provider,
+            acquire_execution_lease=_acquire_execution_lease,
+            get_execution_provider=get_execution_provider,
+            observation_group_dependencies=_observation_group_dependencies,
+            process_watch_group_observation=process_watch_group_observation,
+            drain_execution_adapter=_drain_execution_adapter,
+            close_execution_adapter=_close_execution_adapter,
+        ),
     )
-    if provider is None:
-        return
-    owns_adapter = adapter is None
-    lease_service: ProviderExecutionLeaseService | None = None
-    lease_grant: ExecutionLeaseGrant | None = None
-    if provider in _EXTERNAL_PROVIDERS:
-        lease_service, lease_grant = await _acquire_execution_lease(provider, now)
-        if lease_grant is None:
-            return
-
-    try:
-        if adapter is None:
-            adapter = get_execution_provider(provider)
-        await process_watch_group_observation(
-            watch_ids,
-            now,
-            provider=provider,
-            adapter=adapter,
-            lease_grant=lease_grant,
-            dependencies=_observation_group_dependencies(lease_service, adapter),
-        )
-    finally:
-        try:
-            if adapter is not None:
-                await _drain_execution_adapter(adapter, provider)
-        finally:
-            try:
-                if owns_adapter and adapter is not None:
-                    await _close_execution_adapter(adapter, provider)
-            finally:
-                if lease_grant is not None:
-                    await lease_service.release(
-                        lease_grant,
-                        now=datetime.now(timezone.utc),
-                    )
 
 
 def _due_pipeline_dependencies() -> DuePipelineDependencies:
@@ -420,22 +355,55 @@ def _due_pipeline_dependencies() -> DuePipelineDependencies:
     )
 
 
-async def _process_due_watches() -> int:
-    providers_to_arm = [Provider.SRT]
-    if korail_background_monitoring_enabled(get_settings()):
-        providers_to_arm.append(Provider.KORAIL)
-    group_count = await process_due_pipeline(
-        providers_to_arm,
-        dependencies=_due_pipeline_dependencies(),
+def _due_sweep_runtime_dependencies() -> DueSweepRuntimeDependencies:
+    return DueSweepRuntimeDependencies(
+        korail_background_enabled=lambda: korail_background_monitoring_enabled(get_settings()),
+        select_provider_arm_targets=select_provider_arm_targets_policy,
+        process_due_pipeline=process_due_pipeline,
+        due_pipeline_dependencies=_due_pipeline_dependencies,
+        record_group_count=WATCH_GROUPS.inc,
     )
-    WATCH_GROUPS.inc(group_count)
-    return group_count
+
+
+async def _process_due_watches() -> int:
+    return await process_due_watches_runtime(
+        dependencies=_due_sweep_runtime_dependencies(),
+    )
 
 
 async def _process_watch_now(watch_id: str) -> int:
     """Process one newly started watch through the normal lease and reservation fences."""
     await _process_watch_group([watch_id], datetime.now(timezone.utc))
     return 1
+
+
+def _reconciliation_state_dependencies() -> ReservationReconciliationStateDependencies:
+    return reservation_reconciliation_state_dependencies(
+        apply_watch_transition_override=apply_watch_transition,
+        add_outbox_event_override=add_outbox_event,
+        record_reservation_confirmation_override=record_reservation_confirmation,
+        utc_instant_override=_utc_instant,
+    )
+
+
+async def _apply_reservation_reconciliation(
+    session: AsyncSession,
+    watch: Watch,
+    candidate: WatchCandidate,
+    attempt: ReservationAttempt,
+    confirmation: ReservationConfirmationResult,
+    *,
+    reconciled_at: datetime,
+) -> None:
+    await apply_reservation_reconciliation_runtime(
+        session,
+        watch,
+        candidate,
+        attempt,
+        confirmation,
+        reconciled_at=reconciled_at,
+        dependencies=_reconciliation_state_dependencies(),
+    )
 
 
 def _reconciliation_dependencies() -> ReconciliationDependencies:
@@ -446,12 +414,7 @@ def _reconciliation_dependencies() -> ReconciliationDependencies:
         drain_execution_adapter=_drain_execution_adapter,
         close_execution_adapter=_close_execution_adapter,
         provider_circuit_is_closed=_provider_circuit_is_closed,
-        state_dependencies=ReservationReconciliationStateDependencies(
-            apply_watch_transition=apply_watch_transition,
-            add_outbox_event=add_outbox_event,
-            record_reservation_confirmation=record_reservation_confirmation,
-            utc_instant=_utc_instant,
-        ),
+        apply_reconciliation=_apply_reservation_reconciliation,
     )
 
 
@@ -467,7 +430,7 @@ async def _reconcile_reservation_attempt(
     )
 
 
-@celery_app.task(name="rail_waitlist.worker.process_due_watches")
+@celery_app.task(name="rail_waitlist.worker.process_due_watches")  # type: ignore[untyped-decorator]
 def process_due_watches() -> int:
     try:
         result = asyncio.run(_run_isolated(_process_due_watches()))
@@ -478,7 +441,7 @@ def process_due_watches() -> int:
     return result
 
 
-@celery_app.task(name="rail_waitlist.worker.process_watch_now")
+@celery_app.task(name="rail_waitlist.worker.process_watch_now")  # type: ignore[untyped-decorator]
 def process_watch_now(watch_id: str) -> int:
     try:
         result = asyncio.run(_run_isolated(_process_watch_now(watch_id)))
@@ -489,7 +452,9 @@ def process_watch_now(watch_id: str) -> int:
     return result
 
 
-@celery_app.task(name="rail_waitlist.worker.reconcile_reservation_attempt")
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="rail_waitlist.worker.reconcile_reservation_attempt"
+)
 def reconcile_reservation_attempt(attempt_id: str) -> int:
     try:
         result = asyncio.run(_run_isolated(_reconcile_reservation_attempt(attempt_id)))
@@ -500,7 +465,7 @@ def reconcile_reservation_attempt(attempt_id: str) -> int:
     return result
 
 
-@celery_app.task(name="rail_waitlist.worker.deliver_outbox")
+@celery_app.task(name="rail_waitlist.worker.deliver_outbox")  # type: ignore[untyped-decorator]
 def deliver_outbox() -> int:
     try:
         result = asyncio.run(_run_isolated(deliver_pending_notifications()))

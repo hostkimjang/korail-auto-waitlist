@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..domain import Provider, ReservationOutcome, WatchStatus
-from ..models import ReservationAttempt, Watch, WatchCandidate
 from ..provider_contracts import ExecutionProvider, ProviderLifecycle
+from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
 
 LOGGER = logging.getLogger(__name__)
 EXTERNAL_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})

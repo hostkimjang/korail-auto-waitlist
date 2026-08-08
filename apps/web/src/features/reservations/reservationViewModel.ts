@@ -2,12 +2,17 @@ import {
   safeOfficialChannelUrl,
   type WatchReadModel,
 } from "../../api/watchProjection";
-import { isWatchStatus, type WatchStatus } from "../../domain/watch";
+import {
+  isWatchStatus,
+  type WatchProvider,
+  type WatchStatus,
+} from "../../domain/watch";
 
 export type ReservationDisplayStatus = WatchStatus | "unknown";
 
 export interface ReservationWatchViewModel {
   id: string;
+  provider?: WatchProvider;
   status: ReservationDisplayStatus;
   statusLabel: string;
   route: string;
@@ -20,6 +25,7 @@ export interface ReservationWatchViewModel {
 
 export interface LegacyReservationListWatch {
   id: string;
+  provider?: WatchProvider;
   status: string;
   statusLabel: string;
   route: string;
@@ -33,6 +39,7 @@ export interface LegacyReservationListWatch {
 export function mapReservationWatch(watch: WatchReadModel): ReservationWatchViewModel {
   return {
     id: watch.id,
+    provider: watch.provider,
     status: watch.status,
     statusLabel: watch.statusLabel,
     route: watch.route,
@@ -49,6 +56,7 @@ export function mapLegacyReservationWatch(
 ): ReservationWatchViewModel {
   return {
     id: watch.id,
+    ...(watch.provider ? { provider: watch.provider } : {}),
     status: isWatchStatus(watch.status) ? watch.status : "unknown",
     statusLabel: watch.statusLabel,
     route: watch.route,

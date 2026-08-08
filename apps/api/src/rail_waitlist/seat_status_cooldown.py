@@ -7,7 +7,7 @@ from typing import Protocol
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
-from .schemas import SeatAvailabilityNotObservedReason
+from .timetable_management.schemas import SeatAvailabilityNotObservedReason
 
 
 @dataclass(frozen=True)

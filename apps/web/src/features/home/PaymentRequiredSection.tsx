@@ -67,6 +67,11 @@ function PaymentRequiredCard({ watch, onOpenPayment, now }: {
         >
           공식 결제 열기 <ArrowRight size={22} aria-hidden="true" />
         </button>
+        {watch.provider === "SRT" ? (
+          <p className="payment-srt-refresh-hint" role="note">
+            방금 예약이 비어 보이면 하단 ‘승차권 확인’을 한 번 더 눌러 목록을 갱신하세요.
+          </p>
+        ) : null}
       </div>
     </article>
   );

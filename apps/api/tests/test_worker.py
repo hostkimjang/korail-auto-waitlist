@@ -27,7 +27,6 @@ from rail_waitlist.models import (
     RailProviderAccount,
     ReservationAttempt,
     SeatObservation,
-    TimetableSeatEvidence,
     Watch,
     WatchCandidate,
     WatchTransitionHistory,
@@ -53,6 +52,9 @@ from rail_waitlist.reservations.reconciliation_application import (
 from rail_waitlist.reservations.reconciliation_application import (
     reconcile_reservation_attempt as run_reservation_reconciliation,
 )
+from rail_waitlist.reservations.stale_attempt_recovery_application import (
+    build_stale_reservation_attempts_query,
+)
 from rail_waitlist.schemas import (
     ProviderCapabilities,
     ReservationResult,
@@ -69,6 +71,8 @@ from rail_waitlist.services import (
     record_seat_observation,
     resume_watches_after_verified_provider_login,
 )
+from rail_waitlist.timetable_management.models import TimetableSeatEvidence
+from rail_waitlist.watch_management import transition_runtime as transition_runtime_module
 from rail_waitlist.worker import (
     _acquire_execution_lease,
     _arm_supported_provider_watches,
@@ -213,8 +217,10 @@ async def test_worker_reconciliation_delegate_wires_runtime_dependencies(monkeyp
     assert dependencies.close_execution_adapter is worker_module._close_execution_adapter
     assert dependencies.provider_circuit_is_closed is worker_module._provider_circuit_is_closed
     assert dependencies.lease_is_current_in_session is lock_execution_lease_current
-    state_dependencies = dependencies.state_dependencies
-    assert state_dependencies is not None
+    assert dependencies.state_dependencies is None
+    assert dependencies.apply_reconciliation is worker_module._apply_reservation_reconciliation
+
+    state_dependencies = worker_module._reconciliation_state_dependencies()
     assert state_dependencies.apply_watch_transition is worker_module.apply_watch_transition
     assert state_dependencies.add_outbox_event is worker_module.add_outbox_event
     assert (
@@ -820,22 +826,10 @@ def test_expired_payment_hold_and_legacy_stuck_row_get_one_cleanup_read() -> Non
     assert _reservation_reconciliation_is_due(attempt, watch, now) is False
 
 
-def test_stale_reservation_lock_query_does_not_join_nullable_evidence() -> None:
-    """Guard the PostgreSQL FOR UPDATE query against nullable eager joins."""
-    cutoff = datetime(2026, 7, 30, tzinfo=timezone.utc)
-    statement = (
-        select(ReservationAttempt, WatchCandidate, Watch)
-        .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
-        .join(Watch, Watch.id == WatchCandidate.watch_id)
-        .where(
-            ReservationAttempt.outcome == ReservationOutcome.PENDING,
-            ReservationAttempt.started_at <= cutoff,
-        )
-        .with_for_update(
-            of=(ReservationAttempt, WatchCandidate, Watch),
-            skip_locked=True,
-        )
-    )
+def test_stale_reservation_lock_query_does_not_lock_nullable_evidence() -> None:
+    """Guard the PostgreSQL lock target while the eager LEFT JOIN remains present."""
+    now = datetime(2026, 7, 30, 0, 5, tzinfo=timezone.utc)
+    statement = build_stale_reservation_attempts_query(now)
 
     compiled = str(
         statement.compile(
@@ -844,6 +838,8 @@ def test_stale_reservation_lock_query_does_not_join_nullable_evidence() -> None:
         )
     )
 
+    assert "reservation_attempts.outcome = 'PENDING'" in compiled
+    assert "reservation_attempts.started_at <= '2026-07-30 00:00:00+00:00'" in compiled
     assert "LEFT OUTER JOIN timetable_seat_evidence" in compiled
     assert "FOR UPDATE OF reservation_attempts, watch_candidates, watches SKIP LOCKED" in compiled
 
@@ -1527,7 +1523,8 @@ async def test_official_watch_without_execution_capability_never_becomes_watchin
 ):
     disabled_adapter = DisabledExecutionAdapter()
     monkeypatch.setattr(
-        "rail_waitlist.services.get_execution_provider",
+        transition_runtime_module,
+        "get_execution_provider",
         lambda provider: disabled_adapter,
     )
     monkeypatch.setattr(
@@ -1695,7 +1692,7 @@ async def test_failed_immediate_reservation_resumes_monitoring_without_second_at
         assert await session.scalar(select(func.count()).select_from(ReservationAttempt)) == 1
 
 
-async def test_not_available_allows_one_race_retry_then_waits_for_new_availability_edge(
+async def test_not_available_retries_only_after_conclusive_unavailable_availability_edge(
     client,
     app,
     db_engine,
@@ -1716,9 +1713,9 @@ async def test_not_available_allows_one_race_retry_then_waits_for_new_availabili
     await client.post(f"/api/v1/watches/{watch_id}/start")
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    expected_attempt_counts = [1, 2, 2, 2, 3, 4, 4, 4, 5, 6]
+    expected_attempt_counts = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3]
     actual_attempt_counts: list[int] = []
-    for expected_attempt_count in expected_attempt_counts:
+    for _expected_attempt_count in expected_attempt_counts:
         async with factory() as session:
             watch = await session.get(Watch, watch_id)
             watch.next_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -1762,19 +1759,20 @@ async def test_not_available_allows_one_race_retry_then_waits_for_new_availabili
                 )
             ).all()
         )
-        assert [attempt.attempt_sequence for attempt in attempts] == [1, 2, 3, 4, 5, 6]
+        assert [attempt.attempt_sequence for attempt in attempts] == [1, 2, 3]
         assert all(attempt.outcome is ReservationOutcome.NOT_AVAILABLE for attempt in attempts)
-        assert len({attempt.episode_key for attempt in attempts}) == 6
-        assert attempts[1].episode_key == f"not-available-retry:{attempts[0].id}"
-        assert attempts[3].episode_key == f"not-available-retry:{attempts[2].id}"
-        assert attempts[5].episode_key == f"not-available-retry:{attempts[4].id}"
-        assert sum(event.payload.get("to") == "seat_found" for event in status_events) == 6
+        assert len({attempt.episode_key for attempt in attempts}) == 3
+        assert attempts[0].episode_key.startswith("availability:")
+        assert all(
+            attempt.episode_key.startswith("availability-after:") for attempt in attempts[1:]
+        )
+        assert sum(event.payload.get("to") == "seat_found" for event in status_events) == 3
         assert all(event.payload["retryable"] is True for event in result_events)
         assert all(
             event.payload["retry_condition"] == "new_availability_episode"
             for event in result_events
         )
-    assert adapter.reserve_calls == 6
+    assert adapter.reserve_calls == 3
 
 
 @pytest.mark.parametrize(
@@ -1851,7 +1849,7 @@ async def test_ambiguous_hold_or_generic_failure_never_rearms_candidate(
         )
 
 
-async def test_confirmed_absent_unknown_emits_one_retry_episode_after_later_observation(
+async def test_confirmed_absent_unknown_stays_fenced_during_continued_availability(
     db_engine,
 ) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -1901,15 +1899,6 @@ async def test_confirmed_absent_unknown_emits_one_retry_episode_after_later_obse
         session.add_all([attempt, observation])
         await session.flush()
 
-        episode_key = await _retryable_reservation_episode_key(
-            session,
-            candidate,
-            observation,
-            Provider.SRT,
-        )
-        assert episode_key == f"confirmed-absent-retry:{attempt.id}"
-
-        attempt.episode_key = f"confirmed-absent-retry:{attempt.id}"
         assert (
             await _retryable_reservation_episode_key(
                 session,
@@ -2785,7 +2774,8 @@ async def test_disabled_official_providers_never_become_due(client, app, db_engi
         raising=False,
     )
     monkeypatch.setattr(
-        "rail_waitlist.services.get_execution_provider",
+        transition_runtime_module,
+        "get_execution_provider",
         lambda provider: adapter,
     )
     watch_ids: list[str] = []

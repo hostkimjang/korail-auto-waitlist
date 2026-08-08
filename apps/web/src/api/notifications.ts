@@ -14,6 +14,8 @@ export interface NotificationChannel {
   name: string;
   enabled: boolean;
   configured: boolean;
+  deviceKey: string | null;
+  activeDeviceCount: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -75,6 +77,7 @@ export interface BrowserPushState {
   support: BrowserPushSupport;
   permission: NotificationPermission;
   subscribed: boolean;
+  deviceKey: string | null;
 }
 
 const NOTIFICATION_CHANNEL_KINDS: ReadonlySet<string> = new Set([
@@ -109,6 +112,17 @@ export function mapNotificationChannel(value: unknown): NotificationChannel {
   const id = requiredString(value.id);
   const kind = requiredString(value.kind);
   const name = requiredString(value.name);
+  const deviceKey = requiredString(value.device_key);
+  const activeDeviceCount = typeof value.active_device_count === "number"
+    && Number.isInteger(value.active_device_count)
+    && value.active_device_count >= 0
+    ? value.active_device_count
+    : null;
+  const validWebPushMetadata = kind === "web_push"
+    ? deviceKey !== null
+      && /^[A-Za-z0-9_-]{43}$/.test(deviceKey)
+      && activeDeviceCount !== null
+    : value.device_key === null && value.active_device_count === null;
   if (
     id === null
     || kind === null
@@ -116,6 +130,7 @@ export function mapNotificationChannel(value: unknown): NotificationChannel {
     || name === null
     || typeof value.enabled !== "boolean"
     || typeof value.configured !== "boolean"
+    || !validWebPushMetadata
     || !awareTimestamp(value.created_at)
     || !awareTimestamp(value.updated_at)
   ) {
@@ -127,6 +142,8 @@ export function mapNotificationChannel(value: unknown): NotificationChannel {
     name,
     enabled: value.enabled,
     configured: value.configured,
+    deviceKey,
+    activeDeviceCount,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -214,10 +231,20 @@ function requireBrowserPushSupport(): void {
 
 export async function readBrowserPushState(): Promise<BrowserPushState> {
   if (!browserPushSupported()) {
-    return { support: "unsupported", permission: "default", subscribed: false };
+    return {
+      support: "unsupported",
+      permission: "default",
+      subscribed: false,
+      deviceKey: null,
+    };
   }
   if (window.isSecureContext === false) {
-    return { support: "insecure", permission: Notification.permission, subscribed: false };
+    return {
+      support: "insecure",
+      permission: Notification.permission,
+      subscribed: false,
+      deviceKey: null,
+    };
   }
   const registration = await navigator.serviceWorker.getRegistration();
   const subscription = registration
@@ -227,6 +254,7 @@ export async function readBrowserPushState(): Promise<BrowserPushState> {
     support: "supported",
     permission: Notification.permission,
     subscribed: subscription !== null,
+    deviceKey: subscription === null ? null : await webPushDeviceKey(subscription.endpoint),
   };
 }
 
@@ -261,15 +289,21 @@ function fromBase64Url(value: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
 }
 
+async function webPushDeviceKey(endpoint: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(endpoint),
+  );
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
 export async function connectBrowserPush(
   name = "이 브라우저",
-  existingChannelId: string | null = null,
 ): Promise<NotificationChannel> {
   requireBrowserPushSupport();
-  const publicKey = publicKeyFrom(await request("/notifications/web-push/public-key"));
-  const existingRegistration = await navigator.serviceWorker.getRegistration();
-  if (!existingRegistration) await navigator.serviceWorker.register("/sw.js");
-  const registration = await waitForServiceWorkerRegistration();
+  // iOS/iPadOS only keeps the Web Push permission prompt inside the direct user gesture.
+  // Do not put network or service-worker awaits before this request.
   const permission = await Notification.requestPermission();
   if (permission === "denied") {
     throw new ApiError(
@@ -279,6 +313,10 @@ export async function connectBrowserPush(
   if (permission !== "granted") {
     throw new ApiError("OS 알림 권한을 허용해야 연결할 수 있습니다.");
   }
+  const publicKey = publicKeyFrom(await request("/notifications/web-push/public-key"));
+  const existingRegistration = await navigator.serviceWorker.getRegistration();
+  if (!existingRegistration) await navigator.serviceWorker.register("/sw.js");
+  const registration = await waitForServiceWorkerRegistration();
   const subscription = await registration.pushManager.getSubscription()
     ?? await registration.pushManager.subscribe({
       userVisibleOnly: true,
@@ -289,6 +327,5 @@ export async function connectBrowserPush(
     config: { subscription_info: JSON.stringify(subscription.toJSON()) },
     enabled: true,
   };
-  if (existingChannelId) return updateNotificationChannel(existingChannelId, payload);
   return createNotificationChannel({ kind: "web_push", ...payload });
 }

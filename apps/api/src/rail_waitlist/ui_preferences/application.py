@@ -7,10 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..admin_auth.models import AdminAccount
 from ..domain import WatchStatus
-from ..models import AdminAccount, ProviderExecutionLease, Watch
 from ..policy import next_interval
-from ..provider_execution_lease import ANONYMOUS_PUBLIC_ACCOUNT_SCOPE
+from ..provider_execution.lease_application import ANONYMOUS_PUBLIC_ACCOUNT_SCOPE
+from ..provider_execution.models import ProviderExecutionLease
+from ..watch_management.models import Watch
 from .schemas import UiPreferencesUpdate
 
 ACTIVE_OBSERVATION_STATUSES = frozenset(

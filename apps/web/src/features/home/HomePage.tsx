@@ -13,6 +13,12 @@ import {
   type PaymentRequiredViewModel,
 } from "./PaymentRequiredSection";
 import type { LegacyPaymentRequiredWatch } from "./paymentRequiredViewModel";
+import {
+  launchOfficialOpenTarget,
+  resolveOfficialOpenTarget,
+  type OfficialWindowLike,
+  type RailDeepLinkConfig,
+} from "../../shared/lib/officialAppIntentUrl";
 
 export interface HomeWatchRefreshState {
   isRefreshing: boolean;
@@ -20,11 +26,6 @@ export interface HomeWatchRefreshState {
 }
 
 type HomeToast = (message: string) => void;
-type OpenOfficialWindow = (
-  url: string,
-  target: "_blank",
-  features: "noopener,noreferrer",
-) => WindowProxy | null;
 
 export interface HomePageProps {
   watches: ActiveWatch[];
@@ -86,16 +87,27 @@ function WatchManagementHero({ onCreate }: { onCreate: () => void }): ReactEleme
 export function openHomeOfficialPayment(
   watch: PaymentRequiredViewModel,
   onToast: HomeToast,
-  openWindow: OpenOfficialWindow = (url, target, features) => (
-    window.open(url, target, features)
-  ),
+  officialWindow: OfficialWindowLike | undefined = typeof window === "undefined"
+    ? undefined
+    : window,
+  userAgent: unknown = typeof navigator === "undefined" ? "" : navigator.userAgent,
+  deepLinkConfig?: RailDeepLinkConfig,
 ): void {
-  if (!watch.officialBookingUrl) {
+  const target = resolveOfficialOpenTarget(
+    watch.provider,
+    watch.officialBookingUrl,
+    userAgent,
+    "ticket",
+    deepLinkConfig,
+  );
+  if (!target || !officialWindow) {
     onToast("공식 예매 주소를 확인할 수 없습니다.");
     return;
   }
-  onToast("공식 결제 화면을 새 창에서 엽니다.");
-  openWindow(watch.officialBookingUrl, "_blank", "noopener,noreferrer");
+  onToast(target.usesAndroidApp
+    ? "공식 앱 열기를 시도합니다. 연결되지 않으면 외부 브라우저에서 공식 홈페이지를 엽니다."
+    : "공식 결제 화면을 새 창에서 엽니다.");
+  launchOfficialOpenTarget(target, officialWindow);
 }
 
 export function HomePage({

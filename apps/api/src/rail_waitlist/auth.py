@@ -18,10 +18,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .admin_auth.models import AdminAccount, AdminSession
+from .admin_auth.schemas import AuthStatus, LoginResult, UsernamePasswordCredentials
 from .config import Settings, get_settings
 from .database import get_session
-from .models import AdminAccount, AdminSession
-from .schemas import AuthStatus, LoginResult, UsernamePasswordCredentials
 
 SESSION_COOKIE = "rail_admin_session"
 CSRF_COOKIE = "rail_csrf"
@@ -244,9 +244,7 @@ async def register(
     session: SessionDependency,
 ) -> LoginResult:
     require_trusted_origin(request)
-    await auth_rate_limiter.check(
-        "registration", request, REGISTRATION_ATTEMPTS_PER_MINUTE
-    )
+    await auth_rate_limiter.check("registration", request, REGISTRATION_ATTEMPTS_PER_MINUTE)
     if await count_accounts(session):
         raise HTTPException(409, "admin account is already configured")
     if not get_settings().auth_initial_registration_enabled:
@@ -265,9 +263,7 @@ async def register(
         await session.rollback()
         raise HTTPException(409, "admin account is already configured") from None
 
-    set_auth_cookies(
-        response, signed_token, csrf, admin_session.expires_at, get_settings()
-    )
+    set_auth_cookies(response, signed_token, csrf, admin_session.expires_at, get_settings())
     return LoginResult(authenticated=True, expires_at=admin_session.expires_at)
 
 
@@ -294,9 +290,7 @@ async def login(
     account.last_login_at = utcnow()
     admin_session, signed_token, csrf = prepare_session(session)
     await session.commit()
-    set_auth_cookies(
-        response, signed_token, csrf, admin_session.expires_at, get_settings()
-    )
+    set_auth_cookies(response, signed_token, csrf, admin_session.expires_at, get_settings())
     return LoginResult(authenticated=True, expires_at=admin_session.expires_at)
 
 

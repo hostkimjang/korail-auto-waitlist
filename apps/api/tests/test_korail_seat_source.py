@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from korail2.korail2 import KorailError, NoResultsError
 from requests.adapters import HTTPAdapter
 
-from rail_waitlist.korail_seat_source import (
+from rail_waitlist.provider_adapters.korail_seat_source import (
     KorailLiveSeatSource,
     _DefaultTimeoutAdapter,
     map_korail_seat_state,
@@ -228,9 +228,7 @@ async def test_non_protection_korail_error_uses_short_source_unavailable_hold() 
     assert cooldown.reason == "source_unavailable"
     assert cooldown.retry_after_seconds == 30
     for result in (first, second):
-        assert {seat.provenance.reason for seat in result[0].seat_classes} == {
-            "source_unavailable"
-        }
+        assert {seat.provenance.reason for seat in result[0].seat_classes} == {"source_unavailable"}
 
 
 async def test_shared_cooldown_store_blocks_a_second_api_instance() -> None:

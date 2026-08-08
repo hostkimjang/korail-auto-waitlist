@@ -11,6 +11,7 @@
 ## 직접 운영하는 분
 
 - [설치·운영 가이드](OPERATIONS.md): 시작, 업데이트, 접속, 알림, 백업, 문제 해결
+- [Android 공식 앱 인계 검증](ANDROID_APP_HANDOFF_QA.md): 코레일+ 딥링크와 SRT 웹 인계의 ADB·실기기 QA 절차
 - [환경 설정 예시](../.env.example): 필수 값과 선택 기능의 설정 형식
 - [컨테이너 구성 안내](../infra/README.md): Compose 프로필과 인프라 개요
 

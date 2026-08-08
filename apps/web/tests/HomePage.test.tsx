@@ -10,6 +10,52 @@ import {
   type HomePageProps,
 } from "../src/features/home/HomePage";
 import type { PaymentRequiredViewModel } from "../src/features/home/paymentRequiredViewModel";
+import {
+  buildKorailNavigationIntentUrl,
+  buildSrtTicketIntentUrl,
+  KORAIL_OFFICIAL_RESERVATION_URL,
+  SRT_OFFICIAL_RESERVATION_URL,
+} from "../src/features/official-handoff/officialAppIntentUrl";
+import type { RailDeepLinkConfig } from "../src/features/official-handoff/officialAppIntentUrl";
+
+const ANDROID_CHROME_USER_AGENT =
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36";
+
+const VALIDATED_ALL_CONFIG: RailDeepLinkConfig = {
+  korailBooking: {
+    enabled: true,
+    validatedAndroidAppVersion: "7.0.0+70000006",
+  },
+  korailTicket: {
+    enabled: true,
+    validatedAndroidAppVersion: "7.0.0+70000006",
+  },
+  srtMain: {
+    enabled: true,
+    validatedAndroidAppVersion: "2.0.41+150",
+  },
+  srtTicket: {
+    enabled: true,
+    validatedAndroidAppVersion: "2.0.41+150",
+  },
+};
+
+function fakeOfficialWindow() {
+  const intentAnchor = document.createElement("a");
+  vi.spyOn(intentAnchor, "click").mockImplementation(() => undefined);
+  vi.spyOn(intentAnchor, "remove").mockImplementation(() => undefined);
+  return {
+    open: vi.fn(),
+    location: { assign: vi.fn() },
+    document: {
+      createElement: vi.fn((_tagName: "a") => intentAnchor),
+      body: {
+        appendChild: vi.fn((anchor: HTMLAnchorElement) => anchor),
+      },
+    },
+    intentAnchor,
+  };
+}
 
 function activeWatch(overrides: Partial<ActiveWatch> = {}): ActiveWatch {
   return {
@@ -94,7 +140,7 @@ describe("home page", () => {
 
   it("fails closed with a readable toast when the official payment URL is missing", () => {
     const onToast = vi.fn();
-    const openWindow = vi.fn(() => null);
+    const officialWindow = fakeOfficialWindow();
     const payment: PaymentRequiredViewModel = {
       id: "missing-url",
       provider: "KORAIL",
@@ -110,11 +156,12 @@ describe("home page", () => {
       officialBookingUrl: null,
     };
 
-    openHomeOfficialPayment(payment, onToast, openWindow);
+    openHomeOfficialPayment(payment, onToast, officialWindow);
 
     expect(onToast).toHaveBeenCalledTimes(1);
     expect(onToast).toHaveBeenCalledWith("공식 예매 주소를 확인할 수 없습니다.");
-    expect(openWindow).not.toHaveBeenCalled();
+    expect(officialWindow.open).not.toHaveBeenCalled();
+    expect(officialWindow.location.assign).not.toHaveBeenCalled();
   });
 
   it("opens a valid official payment URL only after the user action", async () => {
@@ -148,9 +195,85 @@ describe("home page", () => {
     expect(onToast).toHaveBeenCalledWith("공식 결제 화면을 새 창에서 엽니다.");
     expect(openWindow).toHaveBeenCalledTimes(1);
     expect(openWindow).toHaveBeenCalledWith(
-      "https://etk.srail.kr",
+      SRT_OFFICIAL_RESERVATION_URL,
       "_blank",
       "noopener,noreferrer",
+    );
+  });
+
+  it("uses the validated SRT ticket route for a payment-required watch", () => {
+    const onToast = vi.fn();
+    const officialWindow = fakeOfficialWindow();
+    const payment: PaymentRequiredViewModel = {
+      id: "android-srt",
+      provider: "SRT",
+      train: "SRT 370",
+      origin: "대전",
+      destination: "수서",
+      route: "대전 → 수서",
+      departure: "22:06",
+      arrival: "23:12",
+      date: "8월 8일",
+      seatClassLabel: "일반실",
+      paymentDeadline: null,
+      officialBookingUrl: "https://etk.srail.kr",
+    };
+
+    openHomeOfficialPayment(
+      payment,
+      onToast,
+      officialWindow,
+      ANDROID_CHROME_USER_AGENT,
+      VALIDATED_ALL_CONFIG,
+    );
+
+    expect(officialWindow.intentAnchor.href).toBe(
+      buildSrtTicketIntentUrl(SRT_OFFICIAL_RESERVATION_URL),
+    );
+    expect(officialWindow.intentAnchor.target).toBe("_blank");
+    expect(officialWindow.intentAnchor.click).toHaveBeenCalledOnce();
+    expect(officialWindow.location.assign).not.toHaveBeenCalled();
+    expect(officialWindow.open).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith(
+      "공식 앱 열기를 시도합니다. 연결되지 않으면 외부 브라우저에서 공식 홈페이지를 엽니다.",
+    );
+  });
+
+  it("uses the validated Korail ticket route for a payment-required watch", () => {
+    const onToast = vi.fn();
+    const officialWindow = fakeOfficialWindow();
+    const payment: PaymentRequiredViewModel = {
+      id: "android-korail",
+      provider: "KORAIL",
+      train: "KTX 085",
+      origin: "서울",
+      destination: "부산",
+      route: "서울 → 부산",
+      departure: "12:00",
+      arrival: "14:30",
+      date: "8월 8일",
+      seatClassLabel: "일반실",
+      paymentDeadline: null,
+      officialBookingUrl: "https://www.letskorail.com",
+    };
+
+    openHomeOfficialPayment(
+      payment,
+      onToast,
+      officialWindow,
+      ANDROID_CHROME_USER_AGENT,
+      VALIDATED_ALL_CONFIG,
+    );
+
+    expect(officialWindow.intentAnchor.href).toBe(
+      buildKorailNavigationIntentUrl("ticket", KORAIL_OFFICIAL_RESERVATION_URL),
+    );
+    expect(officialWindow.intentAnchor.target).toBe("_blank");
+    expect(officialWindow.intentAnchor.click).toHaveBeenCalledOnce();
+    expect(officialWindow.location.assign).not.toHaveBeenCalled();
+    expect(officialWindow.open).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith(
+      "공식 앱 열기를 시도합니다. 연결되지 않으면 외부 브라우저에서 공식 홈페이지를 엽니다.",
     );
   });
 

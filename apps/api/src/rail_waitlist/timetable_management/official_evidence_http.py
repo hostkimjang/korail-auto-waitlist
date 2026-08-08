@@ -8,12 +8,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_admin
+from ..browser_companion.models import KorailBrowserSnapshotBatch
+from ..browser_companion.schemas import KorailBrowserSnapshotRevision
 from ..database import get_session
 from ..idempotency.application import IdempotencyConflict
-from ..models import KorailBrowserSnapshotBatch
-from ..official_page_confirmations import upsert_official_page_confirmations
-from ..schemas import (
-    KorailBrowserSnapshotRevision,
+from ..official_page_confirmation.application import upsert_official_page_confirmations
+from ..official_page_confirmation.schemas import (
     OfficialPageSeatConfirmationCreate,
     OfficialPageSeatConfirmationRead,
 )

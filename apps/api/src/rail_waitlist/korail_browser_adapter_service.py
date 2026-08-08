@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from .file_logging import configure_service_file_logging
-from .korail_browser_automation import KorailBrowserAutomation
-from .korail_browser_automation import probe_chromium as probe_chromium
 from .korail_sidecar.http import AdapterHttpDependencies as _AdapterHttpDependencies
 from .korail_sidecar.http import create_adapter_app as _create_adapter_http_app
+from .korail_sidecar.playwright.client import probe_chromium as probe_chromium
 from .korail_sidecar.runtime import (
     KorailBrowserEngine as KorailBrowserEngine,
 )
@@ -23,6 +22,7 @@ from .korail_sidecar.runtime import build_browser_client as _build_browser_clien
 from .korail_sidecar.runtime import float_setting as _float_setting
 from .korail_sidecar.runtime import integer_setting as integer_setting
 from .korail_sidecar.runtime import readiness_probe_for_engine as _readiness_probe_for_engine
+from .korail_sidecar.search_coordinator import KorailBrowserAutomation
 
 if TYPE_CHECKING:
     from .korail_sidecar.http import _ReservationClient

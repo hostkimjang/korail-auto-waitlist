@@ -17,21 +17,18 @@ from ..domain import (
     SeatClass,
     WatchStatus,
 )
-from ..models import (
-    OutboxEvent,
-    ProviderCircuit,
-    RailProviderAccount,
-    ReservationAttempt,
-    Watch,
-    WatchCandidate,
-)
+from ..outbox_management.models import OutboxEvent
+from ..provider_account_management.models import RailProviderAccount
+from ..provider_account_management.schemas import RailProviderAuthStatus
+from ..provider_circuit.models import ProviderCircuit
 from ..provider_contracts import ReservationExecutionProvider
-from ..reservation_confirmation import (
+from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
+from .contracts import ReservationRequest, ReservationResult
+from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
-from ..schemas import RailProviderAuthStatus, ReservationRequest, ReservationResult
 
 EXTERNAL_RESERVATION_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
 

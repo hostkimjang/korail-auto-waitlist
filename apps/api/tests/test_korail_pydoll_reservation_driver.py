@@ -11,7 +11,8 @@ import pytest
 import rail_waitlist.korail_pydoll_browser as browser_module
 import rail_waitlist.korail_pydoll_reservation_actor as reservation_actor_module
 import rail_waitlist.korail_pydoll_reservation_contracts as reservation_contracts_module
-import rail_waitlist.korail_pydoll_reservation_driver as reservation_driver_module
+import rail_waitlist.korail_pydoll_reservation_driver as legacy_reservation_driver_module
+import rail_waitlist.korail_sidecar.pydoll.reservation_driver as reservation_driver_module
 from rail_waitlist.korail_pydoll_auth_contracts import KorailCredentialInput
 from rail_waitlist.korail_pydoll_browser import _PydollSession
 
@@ -128,6 +129,10 @@ def test_reservation_contract_identity_remains_compatible_across_facades() -> No
     assert (
         browser_module._ReservationAttemptState is reservation_driver_module.ReservationAttemptState
     )
+    assert (
+        legacy_reservation_driver_module.ReservationAttemptState
+        is reservation_driver_module.ReservationAttemptState
+    )
 
 
 def test_reservation_driver_keeps_css_metadata_bounded_like_browser_controls() -> None:
@@ -143,7 +148,9 @@ def test_reservation_driver_has_no_browser_or_actor_dependencies() -> None:
         Path(__file__).resolve().parents[1]
         / "src"
         / "rail_waitlist"
-        / "korail_pydoll_reservation_driver.py"
+        / "korail_sidecar"
+        / "pydoll"
+        / "reservation_driver.py"
     )
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     imported_modules = {

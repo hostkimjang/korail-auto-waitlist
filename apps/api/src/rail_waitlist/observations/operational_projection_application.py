@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from ..domain import BookingWindowStatus, OperationalStatus, SeatObservationStatus
-from ..schemas import SeatObservationResult
+from .contracts import SeatObservationResult
 
 _BOOKING_OPEN_OBSERVATIONS = frozenset(
     {

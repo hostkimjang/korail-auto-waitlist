@@ -194,10 +194,14 @@ describe("OfficialSeatConfirmation", () => {
     const trigger = screen.getByRole("button", { name: "KTX 26 공식 페이지에서 확인한 좌석 상태 입력" });
     await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "공식 좌석 상태 입력" });
+    expect(document.documentElement.style.overflow).toBe("hidden");
+    expect(document.body.style.position).toBe("fixed");
     const closeButton = within(dialog).getByRole("button", { name: "공식 좌석 상태 입력 닫기" });
     await waitFor(() => expect(document.activeElement).toBe(closeButton));
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "공식 좌석 상태 입력" })).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(document.documentElement.style.overflow).toBe("");
+    expect(document.body.style.position).toBe("");
   });
 });

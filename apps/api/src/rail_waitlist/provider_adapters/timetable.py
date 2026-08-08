@@ -5,14 +5,15 @@ from datetime import datetime
 from ..config import Settings, get_settings
 from ..domain import Provider
 from ..provider_contracts import ProviderUnavailable, RouteValidationError
-from ..schemas import ProviderCapabilities, StationCatalog, TimetableItem
-from ..srt_station_roster import (
+from ..provider_registry.contracts import ProviderCapabilities
+from ..timetable_management.schemas import StationCatalog, TimetableItem
+from . import tago
+from .base import RailProviderAdapter
+from .srt_station_roster import (
     SrtStationRoster,
     SrtStationRosterUnavailable,
     load_srt_station_roster,
 )
-from . import tago
-from .base import RailProviderAdapter
 from .timetable_support import normalize_station_name
 
 

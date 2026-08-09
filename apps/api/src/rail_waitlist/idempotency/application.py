@@ -5,6 +5,8 @@ import json
 from typing import Literal, Protocol, cast
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import IdempotencyRecord
@@ -51,3 +53,37 @@ async def remember_idempotency(
                 scope=scope, key=key, resource_id=resource_id, request_hash=payload_hash
             )
         )
+
+
+async def claim_idempotency_resource(
+    session: AsyncSession,
+    scope: str,
+    key: str,
+    resource_id: str,
+    payload_hash: str,
+) -> bool:
+    """Claim one key as the first write in a caller-owned SQLite/PostgreSQL transaction."""
+    values = {
+        "scope": scope,
+        "key": key,
+        "resource_id": resource_id,
+        "request_hash": payload_hash,
+    }
+    dialect_name = session.get_bind().dialect.name
+    if dialect_name == "sqlite":
+        sqlite_statement = sqlite_insert(IdempotencyRecord).values(**values)
+        claimed_id = await session.scalar(
+            sqlite_statement.on_conflict_do_nothing(
+                index_elements=[IdempotencyRecord.scope, IdempotencyRecord.key]
+            ).returning(IdempotencyRecord.id)
+        )
+    elif dialect_name == "postgresql":
+        postgresql_statement = postgresql_insert(IdempotencyRecord).values(**values)
+        claimed_id = await session.scalar(
+            postgresql_statement.on_conflict_do_nothing(
+                index_elements=[IdempotencyRecord.scope, IdempotencyRecord.key]
+            ).returning(IdempotencyRecord.id)
+        )
+    else:
+        raise RuntimeError(f"unsupported idempotency claim dialect: {dialect_name}")
+    return claimed_id is not None

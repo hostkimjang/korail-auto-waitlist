@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import pytest
 from pydantic import BaseModel
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rail_waitlist import services
 from rail_waitlist.idempotency import application as idempotency_application
@@ -17,6 +17,12 @@ from rail_waitlist.idempotency.application import (
     request_hash,
 )
 from rail_waitlist.models import IdempotencyRecord
+from rail_waitlist.official_page_confirmation import application as confirmation_application
+from rail_waitlist.official_page_confirmation.application import (
+    upsert_official_page_confirmations,
+)
+from rail_waitlist.official_page_confirmation.models import OfficialPageSeatConfirmation
+from rail_waitlist.official_page_confirmation.schemas import OfficialPageSeatConfirmationCreate
 from rail_waitlist.timetable_management import official_evidence_http
 
 CONFLICT_DETAIL = "Idempotency-Key was already used with a different request"
@@ -195,6 +201,107 @@ async def test_official_evidence_concurrent_replay_persists_one_batch(client, db
             )
         )
     assert records == 1
+
+
+async def test_official_evidence_claim_and_batch_follow_caller_transaction(db_engine) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    data = OfficialPageSeatConfirmationCreate.model_validate(_confirmation_payload())
+    key = "official-caller-transaction-boundary"
+
+    async with factory() as session:
+        confirmations, created_count, replayed = await upsert_official_page_confirmations(
+            session,
+            data,
+            idempotency_key=key,
+        )
+        async with factory() as observer:
+            claim_count = await observer.scalar(
+                select(func.count())
+                .select_from(IdempotencyRecord)
+                .where(IdempotencyRecord.key == key)
+            )
+            confirmation_count = await observer.scalar(
+                select(func.count()).select_from(OfficialPageSeatConfirmation)
+            )
+        assert (claim_count, confirmation_count) == (0, 0)
+        await session.rollback()
+
+    assert len(confirmations) == created_count == len(data.seat_classes)
+    assert replayed is False
+    async with factory() as observer:
+        claim_count = await observer.scalar(
+            select(func.count()).select_from(IdempotencyRecord).where(IdempotencyRecord.key == key)
+        )
+        confirmation_count = await observer.scalar(
+            select(func.count()).select_from(OfficialPageSeatConfirmation)
+        )
+    assert (claim_count, confirmation_count) == (0, 0)
+
+
+async def test_official_evidence_concurrent_claim_waits_for_complete_owner_batch(
+    db_engine, monkeypatch
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    data = OfficialPageSeatConfirmationCreate.model_validate(_confirmation_payload())
+    key = "official-wait-for-owner-boundary"
+    replay_claim_started = asyncio.Event()
+    original_claim = confirmation_application.claim_idempotency_resource
+
+    async with factory() as owner, factory() as replay_session:
+
+        async def observed_claim(
+            session: AsyncSession,
+            scope: str,
+            claim_key: str,
+            resource_id: str,
+            payload_hash: str,
+        ) -> bool:
+            if session is replay_session:
+                replay_claim_started.set()
+            return await original_claim(session, scope, claim_key, resource_id, payload_hash)
+
+        monkeypatch.setattr(
+            confirmation_application,
+            "claim_idempotency_resource",
+            observed_claim,
+        )
+        owner_rows, owner_created_count, owner_replayed = await upsert_official_page_confirmations(
+            owner, data, idempotency_key=key
+        )
+        replay_task = asyncio.create_task(
+            upsert_official_page_confirmations(replay_session, data, idempotency_key=key)
+        )
+        await asyncio.wait_for(replay_claim_started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert replay_task.done() is False
+
+        await owner.commit()
+        replay_rows, replay_created_count, replayed = await asyncio.wait_for(replay_task, timeout=1)
+
+    assert len(owner_rows) == owner_created_count == len(data.seat_classes)
+    assert owner_replayed is False
+    assert len(replay_rows) == len(data.seat_classes)
+    assert replay_created_count == 0
+    assert replayed is True
+
+
+async def test_official_evidence_rejects_persisted_incomplete_batch(db_engine) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    data = OfficialPageSeatConfirmationCreate.model_validate(_confirmation_payload())
+    key = "official-incomplete-batch-boundary"
+    async with factory() as session:
+        await remember_idempotency(
+            session,
+            "official-page-seat-confirmation.create",
+            key,
+            "missing-confirmation-batch",
+            request_hash(data),
+        )
+        await session.commit()
+
+    async with factory() as session:
+        with pytest.raises(ValueError, match="idempotent confirmation batch is incomplete"):
+            await upsert_official_page_confirmations(session, data, idempotency_key=key)
 
 
 @pytest.mark.parametrize(

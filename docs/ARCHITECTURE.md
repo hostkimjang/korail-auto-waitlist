@@ -906,8 +906,12 @@ package attribute·alias·`getattr`·`importlib`·`__import__` 형태의 중앙 
 
 사용자가 공식 화면에서 직접 확인한 좌석 근거는 `official_page_confirmation` bounded context가 소유합니다.
 `schemas.py`는 source·status를 포함한 transport 심볼 6개, `models.py`는 append-only confirmation mapper,
-`application.py`는 idempotent batch 저장과 시간표 overlay를 담당합니다. 시간표 application과 HTTP는 canonical
-owner를 직접 사용하고 중앙 `schemas.py`·`models.py`는 같은 객체만 호환 alias로 노출합니다. 기존 plural
+`application.py`는 idempotent batch 저장과 시간표 overlay를 담당합니다. SQLite·PostgreSQL의 멱등성 owner
+claim은 `INSERT ... ON CONFLICT DO NOTHING RETURNING`을 첫 경합 DML로 사용합니다. 같은 키의 동시 재요청은
+owner transaction의 commit 또는 rollback을 기다린 뒤 완성된 배치를 재사용하거나 새 owner가 되며, 멱등성
+레코드와 confirmation 행은 호출자가 소유한 transaction에서 함께 commit·rollback됩니다. 시간표 application과
+HTTP는 canonical owner를 직접 사용하고 중앙 `schemas.py`·`models.py`는 같은 객체만 호환 alias로 노출합니다.
+기존 plural
 `official_page_confirmations.py`는 외부 import 호환을 위한 얇은 facade이며 정책이나 persistence를 새로
 소유하지 않습니다.
 

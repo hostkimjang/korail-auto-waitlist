@@ -728,6 +728,32 @@ describe("watch API boundary", () => {
     });
   });
 
+  it("keeps official registration evidence when the latest observation expires", () => {
+    const mapped = mapWatch({
+      ...apiWatch,
+      candidates: [{
+        ...apiWatch.candidates[0],
+        registration_evidence: {
+          ...apiWatchCandidate().registration_evidence,
+          status: "sold_out",
+        },
+        latest_observation: {
+          status: "sold_out",
+          source: "authorized-test",
+          observed_at: "2020-07-31T03:46:00Z",
+          fresh_until: "2020-07-31T03:46:01Z",
+          error_category: null,
+        },
+      }],
+    });
+
+    expect(mapped).toMatchObject({
+      seatEvidenceLabel: "일반실 · 관측 만료 · 다시 확인 중 · 최근 관측 12:46",
+      registrationEvidenceLabel: "일반실 · 매진 · 공식 관측 12:34",
+      seatFoundObservation: null,
+    });
+  });
+
   it("maps user-confirmed, not-observed, and legacy candidate evidence explicitly", () => {
     const baseCandidate = apiWatchCandidate();
     const userConfirmed = mapWatch({

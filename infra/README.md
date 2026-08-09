@@ -16,15 +16,15 @@
 
 ## 선택 프로필
 
-- `--profile experimental-rail`: KORAIL Chromium sidecar, SRT provider sidecar와 별도 experimental worker를 시작합니다. `.env.example`은 `COMPOSE_PROFILES=experimental-rail`과 운영사별 좌석 감시 gate를 기본 활성화합니다. 실제 due 감시 작업은 `rail` queue의 기본 worker가 소비하므로 `scripts/ops.ps1 experimental`로 API·sidecar·기본 worker·experimental worker를 함께 재생성합니다. 예매 시도는 기본적으로 꺼진 별도 운영사 gate, 로그인 확인된 활성 계정과 작업별 `reserve_once_before_payment` 정책까지 모두 만족할 때만 가용성 에피소드당 최대 한 번 실행하고 결제 전에 멈춥니다.
+- `--profile experimental-rail`: KORAIL Chromium sidecar, SRT provider sidecar와 별도 experimental worker를 시작합니다. `.env.example`은 `COMPOSE_PROFILES=experimental-rail`과 운영사별 좌석 감시 gate를 기본 활성화합니다. 실제 due 감시 작업은 `rail` queue의 기본 worker가 소비하므로 Linux에서는 `bash scripts/ops.sh experimental`, Windows에서는 `scripts/ops.ps1 experimental`로 API·sidecar·기본 worker·experimental worker를 함께 재생성합니다. 예매 시도는 기본적으로 꺼진 별도 운영사 gate, 로그인 확인된 활성 계정과 작업별 `reserve_once_before_payment` 정책까지 모두 만족할 때만 가용성 에피소드당 최대 한 번 실행하고 결제 전에 멈춥니다. Chromium 이미지는 현재 `linux/amd64` 전용입니다.
 - `--profile monitoring`: Prometheus와 Grafana를 실행합니다. Grafana는 `/ops/grafana/`에서 접근하며 자체 관리자 로그인이 필요합니다.
 - `--profile ntfy`: 내부 알림용 ntfy를 실행합니다. 기본 접근 정책은 `deny-all`입니다.
 - `--profile backup`: 암호화 백업 daemon을 실행합니다.
 
-예시는 `scripts/ops.ps1` 또는 `Makefile`을 사용합니다. `docker compose up --scale scheduler=2`처럼 scheduler를 확장하면 중복 주기 작업이 발생하므로 금지합니다.
+운영 예시는 Linux의 `scripts/ops.sh`, Windows의 `scripts/ops.ps1` 또는 Linux `Makefile`을 사용합니다. Make 운영 target은 Bash 스크립트로 위임해 같은 drain·복원 안전 계약을 사용합니다. `docker compose up --scale scheduler=2`처럼 scheduler를 확장하면 중복 주기 작업이 발생하므로 금지합니다.
 
 ## 백업과 복원
 
 `age-keygen`으로 키를 만들고 공개 수신자 키를 `.env`의 `BACKUP_AGE_RECIPIENT`에, 한 줄짜리 비밀키를 `BACKUP_AGE_IDENTITY`에 둡니다. 백업은 PostgreSQL custom dump를 만든 뒤 age로 암호화하며 평문 dump를 볼륨에 남기지 않습니다. 비밀 identity와 암호화 dump는 서로 다른 저장소에 보관합니다.
 
-수동 백업은 `scripts/ops.ps1 backup`, 복원은 `scripts/ops.ps1 restore /backups/<파일>.dump.age`를 사용합니다. 복원은 기존 데이터베이스 내용을 교체할 수 있으므로 `RESTORE_CONFIRM=RESTORE`가 없으면 실행되지 않습니다. 정기적으로 별도 테스트 인스턴스에서 실제 복원을 확인해야 합니다.
+Linux 수동 백업은 `bash scripts/ops.sh backup`, 복원은 `bash scripts/ops.sh restore /backups/<파일>.dump.age`를 사용합니다. Windows에서는 같은 위치에서 `scripts/ops.ps1`을 사용합니다. 복원은 기존 데이터베이스 내용을 교체할 수 있으므로 `RESTORE_CONFIRM=RESTORE`가 없으면 실행되지 않습니다. 정기적으로 별도 테스트 인스턴스에서 실제 복원을 확인해야 합니다.

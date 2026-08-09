@@ -57,6 +57,18 @@ README와 핵심 문서, 소개·데모 영상, MIT 라이선스, 공개 제외 
 
 비밀값이 출력되지 않는 명령만 사용합니다.
 
+Linux Bash:
+
+```bash
+docker compose -f compose.yml config --quiet
+bash ./scripts/ops.sh verify
+git diff --check
+git status --short
+git ls-files
+```
+
+Windows PowerShell:
+
 ```powershell
 docker compose -f compose.yml config --quiet
 ./scripts/ops.ps1 verify

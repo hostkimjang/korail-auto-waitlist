@@ -16,10 +16,12 @@ on:
       - ".env.example"
       - "README.md"
       - "CHECKLIST.md"
+      - "CONTRIBUTING.md"
       - "docs/**"
       - "infra/**"
+      - ".gitattributes"
       - "Makefile"
-      - "scripts/ops.ps1"
+      - "scripts/**"
       - ".github/workflows/web-journey.yml"
   pull_request:
     paths:
@@ -29,10 +31,12 @@ on:
       - ".env.example"
       - "README.md"
       - "CHECKLIST.md"
+      - "CONTRIBUTING.md"
       - "docs/**"
       - "infra/**"
+      - ".gitattributes"
       - "Makefile"
-      - "scripts/ops.ps1"
+      - "scripts/**"
       - ".github/workflows/web-journey.yml"
 
 jobs:
@@ -61,7 +65,10 @@ jobs:
         working-directory: apps/web
       - run: npx playwright install --with-deps chromium
         working-directory: apps/web
-      - run: make config verify-api verify-web-core
+      - run: bash -n scripts/*.sh
+      - run: bash scripts/ops.sh config
+      - run: make verify-ops
+      - run: make verify-api verify-web-core
   postgres-execution-lease-fencing:
     name: PostgreSQL fencing acceptance
     runs-on: ubuntu-latest

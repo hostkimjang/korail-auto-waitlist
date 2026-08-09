@@ -38,6 +38,17 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 
 Node.js 22가 설치되어 있다면 Docker나 외부 API 없이 데모를 실행할 수 있습니다.
 
+Linux Bash:
+
+```bash
+cd apps/web
+npm ci
+export VITE_DEMO_MODE=true
+npm run dev
+```
+
+Windows PowerShell:
+
 ```powershell
 cd apps/web
 npm ci
@@ -51,10 +62,21 @@ npm run dev
 
 Docker Compose로 실행합니다. 처음 설치하는 방법은 [시작하기](docs/GETTING_STARTED.md)에 순서대로 정리했습니다.
 
+Linux Bash:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+${EDITOR:-vi} .env
+bash ./scripts/ops.sh experimental
+```
+
+Windows PowerShell:
+
 ```powershell
 Copy-Item .env.example .env
-docker compose -f compose.yml config --quiet
-docker compose -f compose.yml up -d --build
+notepad .env
+./scripts/ops.ps1 experimental
 ```
 
 기본 설정에서는 설치한 컴퓨터에서만 접속할 수 있습니다. 다른 기기에서 안전하게 사용하려면 Tailscale 또는 HTTPS를 구성하세요. `.env.example`은 KORAIL·SRT 좌석 조회와 감시 gate, 필요한 `experimental-rail` 프로필을 켜 둡니다. 시작하기 문서에 따라 두 sidecar 내부 token까지 채워야 하며, 자동 예매 gate는 별도로 꺼져 있습니다.
@@ -110,6 +132,14 @@ VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
 ## 개발
 
 전체 검증은 저장소 루트에서 실행합니다.
+
+Linux Bash:
+
+```bash
+bash ./scripts/ops.sh verify
+```
+
+Windows PowerShell:
 
 ```powershell
 ./scripts/ops.ps1 verify

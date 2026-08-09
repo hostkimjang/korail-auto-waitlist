@@ -9,21 +9,26 @@
 - Compose 설정은 항상 `config --quiet`로 확인합니다.
 - 기본 포트는 로컬 컴퓨터에만 열립니다.
 - 인터넷에 공개할 때는 HTTPS와 보안 쿠키를 함께 설정합니다.
+- Linux 명령은 Bash와 Docker Compose v2를 기준으로 하며, Docker는 현재 사용자로 실행할 수 있어야 합니다.
+- 실험 Chromium 프로필은 현재 `linux/amd64`만 지원합니다. 기본 프로필과 네이티브 Ubuntu 장기 운영 검증 범위는 [체크리스트](../CHECKLIST.md)에서 구분합니다.
 
 ## 기본 명령
 
 저장소 루트에서 실행합니다.
 
-```powershell
-./scripts/ops.ps1 config
-./scripts/ops.ps1 up
-./scripts/ops.ps1 status
-./scripts/ops.ps1 logs
-```
+| 작업 | Linux Bash | Windows PowerShell |
+| --- | --- | --- |
+| 설정 검사 | `bash ./scripts/ops.sh config` | `./scripts/ops.ps1 config` |
+| 현재 `.env.example` 기반 전체 프로필 빌드·시작 | `bash ./scripts/ops.sh experimental` | `./scripts/ops.ps1 experimental` |
+| 실험 프로필을 사용하지 않는 기본 구성 빌드·시작 | `bash ./scripts/ops.sh up` | `./scripts/ops.ps1 up` |
+| 상태 확인 | `bash ./scripts/ops.sh status` | `./scripts/ops.ps1 status` |
+| 로그 보기 | `bash ./scripts/ops.sh logs` | `./scripts/ops.ps1 logs` |
+
+Linux에서는 같은 명령을 `make config`, `make experimental`, `make status`, `make logs`로도 실행할 수 있습니다. 운영 관련 Make target은 `ops.sh`로 위임하므로 같은 단계적 종료와 실패 복구 계약을 사용합니다. `COMPOSE_PROFILES=experimental-rail`을 제거하고 실험 서비스를 사용하지 않는 환경에서만 `make up`을 사용합니다.
 
 직접 Compose를 사용할 수도 있습니다.
 
-```powershell
+```console
 docker compose -f compose.yml config --quiet
 docker compose -f compose.yml up -d --build
 docker compose -f compose.yml ps
@@ -31,11 +36,11 @@ docker compose -f compose.yml ps
 
 서비스를 중지할 때는 다음 명령을 사용합니다.
 
-```powershell
+```console
 docker compose -f compose.yml down
 ```
 
-데이터를 보존하려면 `down -v`를 실행하거나 Docker 볼륨을 삭제하지 마세요.
+Linux의 `bash ./scripts/ops.sh down`은 모든 Compose 프로필을 대상으로 하며, 백업이나 복원이 실행 중이면 중단합니다. 데이터를 보존하려면 `down -v`를 실행하거나 Docker 볼륨을 삭제하지 마세요.
 
 ## 환경 설정
 
@@ -74,7 +79,7 @@ docker compose -f compose.yml down
 
 각 enabled 값은 대응하는 검증 버전이 함께 있어야 동작합니다. 코레일+ 예매·승차권, SRT 예매 홈·승차권 확인을 독립적으로 켭니다. SRT ticket은 `srapp://main`에 고정 문자열 extra `btnNo=2`만 전달합니다. 이 경로는 웜 실행에서 `승차권 확인` 화면을 열어도 기존 WebView 목록을 다시 조회하지 않을 수 있으므로, 결제 카드에는 방금 예약이 비어 보일 때 하단 `승차권 확인`을 한 번 더 누르라는 안내를 표시합니다. 공개 refresh extra가 없는 상태에서 두 번째 intent나 내부 클릭을 자동화하지 않습니다. 검증된 intent는 사용자 클릭에서 외부 anchor로 열어 앱이 없을 때 공식 HTTPS fallback이 PWA를 덮지 않고 Custom Tab에서 열리게 합니다. SRT main은 웜 실행에서 현재 SRT 화면을 유지할 수 있으므로 목적 화면 행렬을 통과하기 전 켜지 않습니다. 이 값들은 Vite 빌드 입력이므로 변경 후 전체 Compose 이미지를 다시 빌드·생성해야 합니다. PWA가 설치 앱 버전을 확인하는 기능은 아니며 앱 업데이트가 확인되면 해당 플래그를 먼저 끄고 재검증합니다. 절차와 합격 기준은 [Android 공식 앱 인계 검증](ANDROID_APP_HANDOFF_QA.md)을 따릅니다.
 
-딥링크 QA 값을 PowerShell 프로세스의 임시 `$env:`에만 넣으면 그 프로세스가 끝난 뒤 다음 build에서 Compose 기본값 `false`가 적용됩니다. 같은 장비에서 재부팅·재빌드 뒤에도 유지할 QA 값은 커밋하지 않는 로컬 `.env`에 기록합니다. 빌드 직전 `docker compose --profile experimental-rail config --format json`의 `services.web.build.args`를 확인하고, 빌드 뒤 배포 JavaScript에 enabled 값과 대응 검증 버전이 들어갔는지 확인합니다. 기존 Chrome 탭과 실행 중 PWA는 이미 로드한 JavaScript를 자동 교체하지 않으므로 배포 뒤 완전히 새로고침하거나 닫고 다시 엽니다.
+딥링크 QA 값을 Bash의 임시 `export NAME=value`나 PowerShell 프로세스의 `$env:NAME="value"`에만 넣으면 그 프로세스가 끝난 뒤 다음 build에서 Compose 기본값 `false`가 적용됩니다. 같은 장비에서 재부팅·재빌드 뒤에도 유지할 QA 값은 커밋하지 않는 로컬 `.env`에 기록합니다. 빌드 직전 `docker compose --profile experimental-rail config --format json`의 `services.web.build.args`를 확인하고, 빌드 뒤 배포 JavaScript에 enabled 값과 대응 검증 버전이 들어갔는지 확인합니다. 기존 Chrome 탭과 실행 중 PWA는 이미 로드한 JavaScript를 자동 교체하지 않으므로 배포 뒤 완전히 새로고침하거나 닫고 다시 엽니다.
 
 비밀값을 바꿀 때는 기존 데이터와의 호환성을 먼저 확인하세요. 특히 `SECRET_ENCRYPTION_KEY`를 잃어버리면 저장된 철도 계정과 알림 비밀값을 복구할 수 없습니다.
 
@@ -87,7 +92,7 @@ docker compose -f compose.yml down
 3. 값을 다시 `false`로 바꿉니다.
 4. API 서비스를 다시 만듭니다.
 
-```powershell
+```console
 docker compose -f compose.yml up -d --force-recreate api
 ```
 
@@ -103,7 +108,7 @@ docker compose -f compose.yml up -d --force-recreate api
 
 개인용으로 운영한다면 Tailnet 내부에서만 접속할 수 있도록 구성하는 방식을 권장합니다.
 
-```powershell
+```console
 tailscale serve --bg http://127.0.0.1:80
 ```
 
@@ -128,11 +133,12 @@ HTTPS 주소를 사용하면 `AUTH_COOKIE_SECURE=true`로 설정하고, 허용 �
 
 코드, Dockerfile, Compose 또는 실행 이미지를 바꿨다면 일부 서비스만 이전 버전으로 남겨 두지 말고 모두 같은 버전으로 다시 만듭니다. 실행 중인 예약 호출을 보호하려면 raw `docker compose up -d --force-recreate` 대신 운영 스크립트를 사용합니다.
 
-```powershell
-./scripts/ops.ps1 drain-status
-./scripts/ops.ps1 up
-./scripts/ops.ps1 status
-```
+| 작업 | Linux Bash | Windows PowerShell |
+| --- | --- | --- |
+| 실행 작업 요약 | `bash ./scripts/ops.sh drain-status` | `./scripts/ops.ps1 drain-status` |
+| 현재 `.env.example` 기반 안전한 전체 재배포 | `bash ./scripts/ops.sh experimental` | `./scripts/ops.ps1 experimental` |
+| 실험 프로필을 사용하지 않는 기본 구성 재배포 | `bash ./scripts/ops.sh up` | `./scripts/ops.ps1 up` |
+| 재배포 뒤 상태 | `bash ./scripts/ops.sh status` | `./scripts/ops.ps1 status` |
 
 `drain-status`는 worker별 진행 중 작업 수와 task 이름만 보여 주며 task 인자나 계정 정보를 출력하지 않습니다. 결과는 그 순간의 참고값이고, 확인 직후 새 작업이 시작될 수 있으므로 `0건`만을 안전 조건으로 사용하지 않습니다.
 
@@ -143,23 +149,25 @@ HTTPS 주소를 사용하면 `AUTH_COOKIE_SECURE=true`로 설정하고, 허용 �
 3. Celery worker에 정상 종료를 요청하고 실행 중 작업이 끝날 때까지 기다립니다. worker의 5분 종료 유예 동안 KORAIL·SRT sidecar는 계속 실행됩니다.
 4. API의 진행 중 요청을 종료한 뒤 나머지 서비스를 같은 revision으로 강제 재생성합니다.
 
-KORAIL·SRT 실험 프로필이 실행 중이면 기본 `up`은 중단하고 `./scripts/ops.ps1 experimental`을 사용하도록 안내합니다. 이 명령도 같은 drain 순서를 적용한 뒤 sidecar를 포함한 프로필 전체를 다시 만듭니다. 백업·복원이 실행 중일 때는 재배포하지 않습니다.
+KORAIL·SRT 실험 프로필이 실행 중이면 기본 `up`은 중단하고 Linux에서는 `bash ./scripts/ops.sh experimental`, Windows에서는 `./scripts/ops.ps1 experimental`을 사용하도록 안내합니다. 이 명령도 같은 drain 순서를 적용한 뒤 sidecar를 포함한 프로필 전체를 다시 만듭니다. 백업·복원이 실행 중일 때는 재배포하지 않습니다.
 
 현재 `experimental` 명령은 `compose.yml`만 사용하므로 KORAIL GUI override를 자동으로 포함하지 않습니다.
 GUI/non-headless가 운영 계약인 환경에서는 전체 profile을 안전하게 재배포한 뒤, 같은 새 browser image를
 사용하는 adapter 한 개만 overlay와 함께 다시 생성합니다. `--no-deps`를 유지해 이미 drain·재생성한 DB,
 Redis, API와 worker를 다시 건드리지 않습니다.
 
-```powershell
-./scripts/ops.ps1 experimental
+```bash
+bash ./scripts/ops.sh experimental
 docker compose -f compose.yml -f compose.korail-gui.yml --profile experimental-rail config --quiet
 docker compose -f compose.yml -f compose.korail-gui.yml --profile experimental-rail up -d --force-recreate --no-deps korail-browser-adapter
 ```
 
+Windows PowerShell에서는 첫 줄만 `./scripts/ops.ps1 experimental`로 바꾸고 나머지 Compose 명령을 그대로 실행합니다.
+
 마지막에는 adapter의 `DISPLAY=:99`, X 접근, `/readyz`와 전체 profile health를 다시 확인합니다. 운영 스크립트에
 GUI override 선택 경로가 추가되기 전까지는 이 수동 후속 단계가 필요합니다.
 
-단계적 종료 중 Docker 오류가 발생하면 새 이미지 재생성을 강행하지 않고, 그 전에 실행 중이던 proxy·scheduler·worker·API 컨테이너를 다시 시작한 뒤 오류를 반환합니다. 이 자동 복구도 실패했다는 경고가 나오면 `./scripts/ops.ps1 status`로 중간 종료 상태를 확인하고 같은 프로필의 기존 컨테이너를 먼저 복구합니다.
+단계적 종료 중 Docker 오류가 발생하면 새 이미지 재생성을 강행하지 않고, 그 전에 실행 중이던 proxy·scheduler·worker·API 컨테이너를 다시 시작한 뒤 오류를 반환합니다. 이 자동 복구도 실패했다는 경고가 나오면 플랫폼별 운영 스크립트의 `status`로 중간 종료 상태를 확인하고 같은 프로필의 기존 컨테이너를 먼저 복구합니다.
 
 수동 `docker compose up -d --force-recreate`가 종료 유예 중 끊기면 Compose가 만든 `<기존 ID>_<서비스명>` 교체 컨테이너와 기존 stateful service가 동시에 남을 수 있습니다. 특히 같은 volume을 공유하는 Redis가 둘 이상 실행된 상태를 정상으로 간주하지 않습니다. project·service label로 중복을 확인하고 기존 container와 생성된 교체본을 구분해 단일 instance로 복구한 뒤 `rdb_last_bgsave_status`와 `aof_last_write_status`가 `ok`인지 확인하고, 그 사이 Redis 오류를 관측한 worker를 다시 시작합니다. volume을 삭제하거나 `down -v`로 복구하지 않습니다. 가능하면 이 상태를 만들지 않도록 위 운영 스크립트를 사용합니다.
 
@@ -179,9 +187,9 @@ worker, API와 두 sidecar에는 5분의 `stop_grace_period`가 적용됩니다.
 
 ### 철도사 실험 기능
 
-```powershell
-./scripts/ops.ps1 experimental
-```
+| Linux Bash | Windows PowerShell |
+| --- | --- |
+| `bash ./scripts/ops.sh experimental` | `./scripts/ops.ps1 experimental` |
 
 이 명령은 KORAIL Chromium과 SRT 연동 서비스를 포함한 `experimental-rail` 프로필 전체를 다시 빌드하고, 진행 중 worker와 API를 먼저 drain한 뒤 생성합니다.
 
@@ -194,17 +202,17 @@ KORAIL adapter를 GUI 모드로 운용한다면 위 "업데이트와 재배포" 
 
 ### 모니터링
 
-```powershell
-./scripts/ops.ps1 monitoring
-```
+| Linux Bash | Windows PowerShell |
+| --- | --- |
+| `bash ./scripts/ops.sh monitoring` | `./scripts/ops.ps1 monitoring` |
 
 Prometheus와 Grafana를 실행합니다. Grafana는 별도 관리자 비밀번호를 사용합니다.
 
 ### 내부 ntfy
 
-```powershell
-./scripts/ops.ps1 ntfy
-```
+| Linux Bash | Windows PowerShell |
+| --- | --- |
+| `bash ./scripts/ops.sh ntfy` | `./scripts/ops.ps1 ntfy` |
 
 기본 접근 정책은 `deny-all`입니다. 외부에 그대로 공개하지 마세요.
 
@@ -264,13 +272,13 @@ Webhook은 HTTPS 주소만 허용합니다. 사설망 주소, 이 컴퓨터를 �
 
 실시간 로그:
 
-```powershell
+```console
 docker compose -f compose.yml logs -f --tail=200
 ```
 
 특정 서비스만 볼 수도 있습니다.
 
-```powershell
+```console
 docker compose -f compose.yml logs -f --tail=200 api worker notification-worker
 ```
 
@@ -290,15 +298,17 @@ docker compose -f compose.yml logs -f --tail=200 api worker notification-worker
 
 수동 백업:
 
-```powershell
-./scripts/ops.ps1 backup
-```
+| Linux Bash | Windows PowerShell |
+| --- | --- |
+| `bash ./scripts/ops.sh backup` | `./scripts/ops.ps1 backup` |
 
 복원:
 
-```powershell
-./scripts/ops.ps1 restore /backups/<파일>.dump.age
-```
+| Linux Bash | Windows PowerShell |
+| --- | --- |
+| `bash ./scripts/ops.sh restore /backups/<파일>.dump.age` | `./scripts/ops.ps1 restore /backups/<파일>.dump.age` |
+
+Linux 운영 스크립트는 `/backups/*.dump.age` 경로와 복호화 가능 여부를 먼저 읽기 전용으로 확인하고, 다른 백업·복원이 실행 중이면 서비스를 멈추기 전에 거절합니다. 사전검사가 통과하면 proxy·scheduler·worker·API를 단계적으로 중지하고 복원과 migration 성공 뒤 원래 실행 중이던 컨테이너만 다시 시작합니다. 중지 단계가 실패하면 기존 서비스를 복구하고, 데이터 복원이나 migration이 실패하면 추가 쓰기를 막기 위해 maintenance 상태를 유지합니다.
 
 복원은 기존 데이터를 바꿀 수 있습니다. 운영 인스턴스에 적용하기 전에 별도 테스트 인스턴스에서 실제 복원을 확인하세요.
 
@@ -321,6 +331,12 @@ docker compose -f compose.yml logs -f --tail=200 api worker notification-worker
 2. `docker compose -f compose.yml ps -a`
 3. 데이터베이스 준비 작업, API, 작업자 로그 확인
 4. 필수 환경변수와 포트 충돌 확인
+
+### WSL 빌드 컨텍스트의 xattr 권한 오류
+
+Windows 드라이브(`/mnt/c` 등)의 저장소에서 `failed to xattr ... .tmp-pytest-* : permission denied`가 나오면 BuildKit이 오래된 테스트 임시 디렉터리의 Windows ACL을 읽지 못한 상태입니다. `.dockerignore`에 포함된 경로도 전송 준비 중 metadata 조회에서 먼저 실패할 수 있습니다.
+
+`git status --short --untracked-files=all`로 해당 경로가 Git 비추적 임시 디렉터리인지 확인한 뒤 그 경로만 Windows에서 권한을 복구하거나 저장소 밖으로 이동하세요. 접근 거부로 정리할 수 없으면 WSL 내부 파일시스템(`~/...`)의 clean clone에서 설치 절차를 다시 실행합니다. 이 문제를 고치기 위해 Compose volume을 삭제하거나 `down -v`를 실행하지 마세요.
 
 ### 로그인할 수 없음
 
@@ -355,10 +371,10 @@ docker compose -f compose.yml logs -f --tail=200 api worker notification-worker
 
 저장소 전체 검증:
 
-```powershell
-./scripts/ops.ps1 verify
-```
+| Linux Bash | Windows PowerShell |
+| --- | --- |
+| `bash ./scripts/ops.sh verify` | `./scripts/ops.ps1 verify` |
 
-GitHub Actions에서는 핵심 저장소 검증과 KORAIL Chromium 컨테이너 검증을 분리합니다. 핵심 검증은 Compose 설정, API, 웹, PostgreSQL 경합 계약을 담당하고, `experimental-browser-verify`는 외부 요청 없이 고정 fixture로 실제 Chromium 실행 경계를 확인합니다. 실험 브라우저 테스트 이미지와 격리 full-stack E2E는 GitHub runner의 사용자 네임스페이스 제한 때문에 Chromium 내부 sandbox만 끄지만, 비루트 사용자, 읽기 전용 루트, capability 제거와 권한 상승 금지 경계를 유지하고 전용 fixture 네트워크만 사용합니다. 운영 Chromium 서비스에는 이 실행 래퍼와 opt-in 환경값을 적용하지 않습니다.
+GitHub Actions에서는 Ubuntu에서 Bash 구문, `ops.sh config`, 운영 명령의 stop 순서·실패 복구·profile·복원 무파괴 계약 테스트, API, 웹, PostgreSQL 경합 계약을 확인하고 KORAIL Chromium 컨테이너 검증은 별도 workflow로 분리합니다. `experimental-browser-verify`는 외부 요청 없이 고정 fixture로 실제 Chromium 실행 경계를 확인합니다. 실험 브라우저 테스트 이미지와 격리 full-stack E2E는 GitHub runner의 사용자 네임스페이스 제한 때문에 Chromium 내부 sandbox만 끄지만, 비루트 사용자, 읽기 전용 루트, capability 제거와 권한 상승 금지 경계를 유지하고 전용 fixture 네트워크만 사용합니다. 운영 Chromium 서비스에는 이 실행 래퍼와 opt-in 환경값을 적용하지 않습니다.
 
 실제 외부 알림 채널, 공개 도메인, 철도사 계정, 실기기 동작은 자동 테스트와 별도로 확인합니다. Windows Chrome·Edge와 Android PWA를 각각 연결한 뒤 전체 활성 기기 수와 한 상태 변화의 세 기기 동시 수신은 아직 운영 환경에서 확인해야 합니다. Android에서는 PWA를 제거·재설치한 뒤 마스커블 런처 아이콘의 여백과 이전 아이콘 캐시를 먼저 확인합니다. 이어서 알림창 수신, 화면 위 팝업, 실행 중 PWA 포커스, 종료된 PWA 열기와 캐시된 첫 화면 표시 시간, 접속 중 `실시간 알림`을 확인합니다. 공식 인계는 기본 HTTPS 새 창 동작을 KORAIL·SRT 각각 확인하고, 코레일+ booking·ticket과 SRT main·ticket은 별도 QA 문서의 경로별 ADB·목적 화면·설치/미설치 브라우저 행렬을 통과하기 전까지 활성화하지 않습니다. SRT main과 고정 extra `btnNo=2` ticket을 서로 다른 목적지로 확인합니다. iPhone·iPad에서는 16.4 이상 홈 화면 설치, 사용자 탭에서의 권한 요청, foreground 간략 팝업, background 알림센터 수신, 알림 클릭 뒤 기존 PWA 포커스와 미실행 PWA 열기를 각각 확인합니다. Apple banner·Focus 결과는 foreground 팝업 검증과 구분합니다.

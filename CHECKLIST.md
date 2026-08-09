@@ -38,6 +38,7 @@
 - [x] PostgreSQL·Redis·Celery·FastAPI 기반 백엔드
 - [x] Docker Compose 실행과 health check
 - [x] `.env.example` 기반 KORAIL·SRT 좌석 조회·감시 기본 활성화, 예약 gate 분리, 300초 호출 제한·60초 보호 cooldown과 숫자형 설정 범위 문서화
+- [x] Linux Bash 운영 진입점, 무파괴 stop·복구·profile·복원 계약 테스트와 WSL2 Ubuntu 전체 프로필 재빌드·재생성·health 확인
 - [x] Windows PowerShell 5.1 호환 필수 비밀값 생성 절차에서 다섯 값의 이름·고유성·48바이트 길이 검증
 - [x] 효과 없는 KORAIL accountless 설정·앱 조립 제거와 browser sidecar HTTP client 기능 owner 분리
 - [x] KORAIL browser adapter service의 route/runtime 정책 분리 완료와 top-level ASGI composition root·Docker entrypoint 유지 계약 고정
@@ -103,6 +104,7 @@
 - [x] 공개 제외 자료를 로컬·원격 브랜치와 태그의 전체 Git 이력에서 제거
 - [ ] GitHub 비공개 취약점 신고 기능 활성화
 - [ ] clean clone에서 설치 절차 재검증
+- [ ] 네이티브 Ubuntu Docker Engine clean clone에서 기본 build·migration·장기 서비스 health·로컬 접속 확인
 - [x] `repository-verify`가 발견한 공식 페이지 확인의 동시 멱등성 201/409 경쟁 조건 수정 및 로컬 회귀 검증
 - [x] 알림 채널 편집기의 지연 초점 이동이 빠른 입력을 중단하던 CI 경쟁 조건 수정 및 회귀 검증
 - [x] 격리 fullstack E2E가 등록 근거와 최신 관측의 fresh·만료 전이를 분리하도록 시간 경쟁 제거
@@ -142,6 +144,8 @@
 - [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
 - [ ] 실제 KORAIL·SRT 예매 진행 중 단계적 재배포에서 작업 완료 또는 안전한 재조정과 상태 연속성 확인
+- [ ] 네이티브 Ubuntu에서 단계적 재배포의 drain·실패 복구와 재부팅 뒤 볼륨·로그 권한·데이터 유지 확인
+- [ ] Linux 별도 인스턴스에서 암호화 백업 생성과 복원 round-trip 확인
 - [ ] 보호 응답과 호출 제한 뒤 정상 복구 확인
 
 ## 유지 원칙

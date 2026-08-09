@@ -35,6 +35,19 @@
 
 ## 개발
 
+Linux Bash:
+
+```bash
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[test]'
+export DATABASE_URL='sqlite+aiosqlite:///./dev.db'
+export AUTO_CREATE_SCHEMA=true
+python -m uvicorn rail_waitlist.main:app --reload
+```
+
+Windows PowerShell:
+
 ```powershell
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e ".[test]"
@@ -54,9 +67,9 @@ private key를 알림 채널 요청에 넣지 않습니다.
 `WEBPUSH_VAPID_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"`처럼
 줄바꿈을 `\n`으로 이스케이프하면 런타임에서 PEM 줄바꿈으로 복원합니다.
 
-Celery worker와 beat는 각각 다음 명령으로 실행합니다.
+가상환경을 활성화한 뒤 Celery worker와 beat는 각각 다음 명령으로 실행합니다.
 
-```powershell
+```console
 celery -A rail_waitlist.worker.celery_app worker --loglevel=INFO --concurrency=1
 celery -A rail_waitlist.worker.celery_app beat --loglevel=INFO
 ```
@@ -106,6 +119,15 @@ KORAIL·SRT 동시 요청은 provider와 무관한 원본 시간표 캐시와 si
 기존 결과를 재사용하며, 다른 작업에 키를 재사용하면 `409`를 반환합니다.
 
 ## 검증
+
+Linux Bash:
+
+```bash
+. .venv/bin/activate
+python -m pytest
+```
+
+Windows PowerShell:
 
 ```powershell
 .venv\Scripts\python -m pytest

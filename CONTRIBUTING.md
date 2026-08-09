@@ -18,6 +18,17 @@
 
 웹 개발:
 
+Linux Bash:
+
+```bash
+cd apps/web
+npm ci
+export VITE_DEMO_MODE=true
+npm run dev
+```
+
+Windows PowerShell:
+
 ```powershell
 cd apps/web
 npm ci
@@ -41,6 +52,14 @@ API 개발과 전체 실행 방법은 [apps/api/README.md](apps/api/README.md)�
 
 전체 저장소:
 
+Linux Bash:
+
+```bash
+bash ./scripts/ops.sh verify
+```
+
+Windows PowerShell:
+
 ```powershell
 ./scripts/ops.ps1 verify
 ```
@@ -49,7 +68,7 @@ Pull Request의 핵심 GitHub Actions 검증은 Compose 설정, API, 웹과 Post
 
 웹 변경:
 
-```powershell
+```console
 cd apps/web
 npm run lint
 npm run typecheck
@@ -60,7 +79,7 @@ npm run test:sites
 
 API 변경:
 
-```powershell
+```console
 cd apps/api
 uv lock --check
 uv run --extra test pytest

@@ -38,6 +38,7 @@
 - [x] PostgreSQL·Redis·Celery·FastAPI 기반 백엔드
 - [x] Docker Compose 실행과 health check
 - [x] `.env.example` 기반 KORAIL·SRT 좌석 조회·감시 기본 활성화, 예약 gate 분리, 300초 호출 제한·60초 보호 cooldown과 숫자형 설정 범위 문서화
+- [x] Windows PowerShell 5.1 호환 필수 비밀값 생성 절차에서 다섯 값의 이름·고유성·48바이트 길이 검증
 - [x] 효과 없는 KORAIL accountless 설정·앱 조립 제거와 browser sidecar HTTP client 기능 owner 분리
 - [x] KORAIL browser adapter service의 route/runtime 정책 분리 완료와 top-level ASGI composition root·Docker entrypoint 유지 계약 고정
 - [x] KORAIL browser companion HTTP/UoW와 read-only snapshot overlay owner 분리, canonical consumer·legacy import/pickle 호환 보존

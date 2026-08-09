@@ -34,21 +34,56 @@ Copy-Item .env.example .env
 
 ## 2. 필수 값 설정하기
 
-`.env`에서 다음 다섯 값을 서로 다른 무작위 값으로 채웁니다.
+새로 설치할 때 `.env`의 다음 다섯 값을 각각 다른 무작위 값으로 채웁니다. 아래 명령은 48바이트 난수를 Base64로 바꿔 각 값에 필요한 충분한 길이를 만듭니다.
 
-- `POSTGRES_PASSWORD`
-- `SECRET_ENCRYPTION_KEY`
-- `AUTH_SESSION_SECRET`
-- `KORAIL_BROWSER_ADAPTER_TOKEN`
-- `SRT_PROVIDER_ADAPTER_TOKEN`
+| 이름 | 용도와 변경 시 주의사항 |
+| --- | --- |
+| `POSTGRES_PASSWORD` | PostgreSQL 접속 비밀번호입니다. 기존 DB 볼륨을 유지하면서 바꾸면 애플리케이션이 DB에 연결하지 못할 수 있습니다. |
+| `SECRET_ENCRYPTION_KEY` | 알림 채널과 외부 credential을 암호화합니다. 잃어버리거나 바꾸면 기존 암호문을 복구할 수 없습니다. |
+| `AUTH_SESSION_SECRET` | 관리자 세션을 서명합니다. 바꾸면 기존 로그인 세션이 무효화됩니다. |
+| `KORAIL_BROWSER_ADAPTER_TOKEN` | API와 KORAIL 좌석 감시 sidecar 사이의 내부 인증값입니다. 철도사 계정 비밀번호가 아닙니다. |
+| `SRT_PROVIDER_ADAPTER_TOKEN` | API와 SRT 좌석 감시 sidecar 사이의 내부 인증값입니다. 철도사 계정 비밀번호가 아닙니다. |
 
-PowerShell에서는 다음 명령으로 무작위 값을 만들 수 있습니다.
+기존 설치를 업데이트하는 중이라면 빈 값만 새로 채우고, 이미 사용 중인 값은 그대로 유지하세요. DB 볼륨이나 암호화된 데이터가 남아 있는 상태에서 `POSTGRES_PASSWORD` 또는 `SECRET_ENCRYPTION_KEY`를 다시 생성하면 접속 또는 복호화에 문제가 생길 수 있습니다.
 
-```powershell
-[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
+Linux Bash에서는 다음 블록을 한 번 실행합니다.
+
+```bash
+for name in \
+  POSTGRES_PASSWORD \
+  SECRET_ENCRYPTION_KEY \
+  AUTH_SESSION_SECRET \
+  KORAIL_BROWSER_ADAPTER_TOKEN \
+  SRT_PROVIDER_ADAPTER_TOKEN
+do
+  printf '%s=%s\n' "$name" "$(openssl rand -base64 48)"
+done
 ```
 
-위 명령을 다섯 번 실행해 서로 다른 값을 사용합니다. 두 adapter token은 `.env.example`에서 기본 활성화한 좌석 감시 sidecar의 내부 인증에만 사용하며 로그나 화면에 노출하지 않습니다.
+Windows PowerShell 5.1 또는 PowerShell 7에서는 다음 블록을 한 번 실행합니다.
+
+```powershell
+$names = @(
+    'POSTGRES_PASSWORD'
+    'SECRET_ENCRYPTION_KEY'
+    'AUTH_SESSION_SECRET'
+    'KORAIL_BROWSER_ADAPTER_TOKEN'
+    'SRT_PROVIDER_ADAPTER_TOKEN'
+)
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    foreach ($name in $names) {
+        $bytes = New-Object byte[] 48
+        $rng.GetBytes($bytes)
+        '{0}={1}' -f $name, [Convert]::ToBase64String($bytes)
+    }
+}
+finally {
+    $rng.Dispose()
+}
+```
+
+Windows PowerShell 5.1에는 `RandomNumberGenerator.GetBytes(48)` 정적 메서드가 없으므로, 위 명령은 호환되는 인스턴스 메서드를 사용합니다. 실행 결과로 나오는 `이름=값` 다섯 줄을 복사해 `.env`의 같은 이름을 가진 빈 줄을 통째로 교체하세요. 파일 끝에 같은 이름을 다시 추가하면 어떤 값이 적용되는지 혼동할 수 있습니다.
 
 처음 관리자 계정을 만들 때만 아래 값을 `true`로 바꿉니다.
 
@@ -56,7 +91,7 @@ PowerShell에서는 다음 명령으로 무작위 값을 만들 수 있습니다
 AUTH_INITIAL_REGISTRATION_ENABLED=true
 ```
 
-실제 비밀값은 `.env`에만 보관하세요. 이슈, 로그, 스크린샷에 붙여 넣지 마세요.
+명령이 출력한 값은 모두 비밀정보입니다. `.env`에만 보관하고 이슈, 로그, 채팅, 스크린샷에 붙여 넣지 마세요. 저장소에도 커밋하지 않습니다.
 
 실제 KTX·SRT 시간표를 검색하려면 공공데이터포털에서 발급받은 일반 인증키를 `TAGO_SERVICE_KEY`에 설정해야 합니다. 키가 없어도 데모는 실행할 수 있지만 실제 시간표 검색은 사용할 수 없습니다.
 

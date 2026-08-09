@@ -46,6 +46,10 @@ docker compose -f compose.yml down
 - `POSTGRES_PASSWORD`
 - `SECRET_ENCRYPTION_KEY`
 - `AUTH_SESSION_SECRET`
+- `KORAIL_BROWSER_ADAPTER_TOKEN`
+- `SRT_PROVIDER_ADAPTER_TOKEN`
+
+`.env.example`은 두 좌석 감시 sidecar를 기본 구성에 포함하므로 내부 인증 token도 비워 둘 수 없습니다. 새 설치의 다섯 값 생성과 기존 값 보존 기준은 [시작하기](GETTING_STARTED.md#2-필수-값-설정하기)를 따릅니다.
 
 처음 관리자 계정을 만들 때만 사용하는 값:
 

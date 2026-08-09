@@ -116,9 +116,16 @@ describe("notification channel settings", () => {
     renderSettings();
 
     await user.click(screen.getByRole("checkbox", { name: "텔레그램 켜기" }));
-    expect(screen.getByRole("heading", { name: "텔레그램 연결" })).toBeTruthy();
+    const heading = screen.getByRole("heading", { name: "텔레그램 연결" });
+    const displayName = screen.getByLabelText("표시 이름") as HTMLInputElement;
+    expect(heading).toBeTruthy();
+    expect(document.activeElement).toBe(heading);
     expect((screen.getByLabelText("Bot token") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("Chat ID") as HTMLInputElement).value).toBe("");
+
+    await user.type(displayName, "빠른 입력");
+    expect(displayName.value).toBe("빠른 입력");
+    expect(document.activeElement).toBe(displayName);
   });
 
   it.each([

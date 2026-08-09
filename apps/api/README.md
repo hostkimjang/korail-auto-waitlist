@@ -62,10 +62,11 @@ $env:AUTO_CREATE_SCHEMA="true"
 
 TAGO는 `TAGO_SERVICE_KEY`를 사용합니다. Web Push VAPID private/public
 키는 각각 `WEBPUSH_VAPID_PRIVATE_KEY`, `WEBPUSH_VAPID_PUBLIC_KEY` 환경 변수로 전달하며,
-private key를 알림 채널 요청에 넣지 않습니다.
+`WEBPUSH_VAPID_SUBJECT`에는 실제 연락 가능한 `mailto:` 또는 HTTPS URI를 사용합니다. private key를 알림 채널 요청에 넣지 않습니다.
 새 VAPID 키는 한 줄 base64url 형식을 권장합니다. 기존 PEM private key를 옮길 때는
 `WEBPUSH_VAPID_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"`처럼
 줄바꿈을 `\n`으로 이스케이프하면 런타임에서 PEM 줄바꿈으로 복원합니다.
+private/public key는 반드시 같은 P-256 키 쌍이어야 하며, 기존 브라우저 구독을 유지하려면 배포 때 재생성하지 않습니다. 생성·교체와 보안 컨텍스트 절차는 [시작하기](../../docs/GETTING_STARTED.md#web-push를-사용할-때선택)를 따릅니다.
 
 가상환경을 활성화한 뒤 Celery worker와 beat는 각각 다음 명령으로 실행합니다.
 

@@ -118,6 +118,43 @@ AUTH_INITIAL_REGISTRATION_ENABLED=true
 
 명령이 출력한 값은 모두 비밀정보입니다. `.env`에만 보관하고 이슈, 로그, 채팅, 스크린샷에 붙여 넣지 마세요. 저장소에도 커밋하지 않습니다.
 
+### Web Push를 사용할 때(선택)
+
+Web Push를 사용하지 않으면 `WEBPUSH_VAPID_PRIVATE_KEY`와 `WEBPUSH_VAPID_PUBLIC_KEY`는 비워 둘 수 있습니다. 이 경우 앱은 실행되지만 브라우저의 `OS 알림 켜기`로 기기를 연결할 수 없습니다. 앱을 열어 둔 동안의 `실시간 알림`과 Telegram·Discord·Webhook은 별도 기능입니다.
+
+Web Push를 사용하려면 일반 무작위 문자열 두 개가 아니라 서로 짝인 P-256 VAPID 키 한 쌍이 필요합니다. Docker가 실행 중인 상태에서 다음 명령을 한 번만 실행하세요. 처음 실행하면 키 생성에 사용할 Node 이미지를 내려받습니다.
+
+```console
+docker run --rm node:22-alpine npx --yes web-push generate-vapid-keys --json
+```
+
+출력은 다음 모양의 JSON입니다.
+
+```json
+{"publicKey":"<publicKey 값>","privateKey":"<privateKey 값>"}
+```
+
+같은 실행에서 나온 값을 `.env`의 대응하는 줄에 넣고, `SUBJECT`는 실제로 확인하는 연락처로 바꿉니다.
+
+```dotenv
+WEBPUSH_VAPID_PRIVATE_KEY=<privateKey 값>
+WEBPUSH_VAPID_PUBLIC_KEY=<publicKey 값>
+WEBPUSH_VAPID_SUBJECT=mailto:admin@your-domain.example
+```
+
+`privateKey`와 `publicKey`를 서로 바꾸거나 다른 실행에서 나온 값을 섞지 마세요. private key는 서버만 보관하는 비밀정보입니다. public key는 브라우저에 전달되고 subject는 Push 서비스의 운영자 연락처로 사용됩니다. `admin@your-domain.example`은 설명용 주소이므로 실제 이메일 주소로 교체하거나, subject에 운영자가 확인하는 HTTPS 연락처를 사용하세요.
+
+키 쌍은 앱을 업데이트할 때 다시 만들지 말고 `.env`와 안전한 백업에서 계속 유지합니다. 키를 교체하면 기존 브라우저 구독이 새 키와 맞지 않으므로 연결했던 모든 브라우저와 설치형 PWA에서 `OS 알림`을 껐다가 다시 켜고 시험 알림 수신까지 확인해야 합니다.
+
+Web Push 연결은 보안 컨텍스트에서만 동작합니다. 설치한 컴퓨터의 `http://localhost`와 `http://127.0.0.1`은 사용할 수 있지만, 휴대전화나 다른 PC에서 `http://사설-IP`로 접속하면 연결할 수 없습니다. 다른 기기에서는 Tailscale Serve 또는 리버스 프록시로 구성한 HTTPS 주소를 사용하세요.
+
+이미 서비스를 시작한 뒤 값을 설정하거나 교체했다면 Compose 구성을 검사하고 키를 사용하는 서비스를 다시 만듭니다. Compose 검사는 키 쌍의 일치 여부까지 확인하지 않으므로 재시작 뒤 실제 시험 알림도 확인해야 합니다.
+
+```console
+docker compose -f compose.yml config --quiet
+docker compose -f compose.yml up -d --force-recreate api notification-worker
+```
+
 실제 KTX·SRT 시간표를 검색하려면 공공데이터포털에서 발급받은 일반 인증키를 `TAGO_SERVICE_KEY`에 설정해야 합니다. 키가 없어도 데모는 실행할 수 있지만 실제 시간표 검색은 사용할 수 없습니다.
 
 ## 3. 구성 확인하기

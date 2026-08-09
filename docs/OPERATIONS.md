@@ -66,7 +66,7 @@ Linux의 `bash ./scripts/ops.sh down`은 모든 Compose 프로필을 대상으�
 
 선택 기능에 필요한 값:
 
-- Web Push: `WEBPUSH_VAPID_PRIVATE_KEY`, `WEBPUSH_VAPID_PUBLIC_KEY`
+- Web Push: `WEBPUSH_VAPID_PRIVATE_KEY`, `WEBPUSH_VAPID_PUBLIC_KEY`, `WEBPUSH_VAPID_SUBJECT`
 - 모니터링: `GRAFANA_ADMIN_PASSWORD`
 - 암호화 백업: `BACKUP_AGE_IDENTITY`, `BACKUP_AGE_RECIPIENT`
 
@@ -235,6 +235,10 @@ Prometheus와 Grafana를 실행합니다. Grafana는 별도 관리자 비밀번�
 - Telegram
 - Discord
 - HTTPS Webhook
+
+Web Push를 사용하려면 같은 실행에서 만든 VAPID private/public key 쌍과 실제 연락 가능한 subject를 설정해야 합니다. public key가 비어 있거나 잘못되면 기기 연결이 실패하고, private key가 비어 있거나 잘못됐거나 두 키가 같은 쌍이 아니면 실제 발송이 실패합니다. 생성과 `.env` 입력 방법은 [시작하기](GETTING_STARTED.md#web-push를-사용할-때선택)를 따릅니다.
+
+VAPID 키 쌍은 일반 배포나 앱 업데이트 때 회전하지 않습니다. 불가피하게 교체하면 연결했던 모든 브라우저와 설치형 PWA에서 OS 알림을 껐다가 다시 켜 새 public key로 재구독하고, 기기별 시험 전송을 확인합니다. `localhost`가 아닌 다른 기기에서는 HTTPS 주소로 접속해야 Web Push를 연결할 수 있습니다.
 
 채널을 저장한 뒤 설정 화면의 테스트 전송을 사용하세요. 설정 화면의 성공은 요청이 접수됐다는 뜻이며, 실제 기기나 외부 서비스에서 수신했는지는 직접 확인해야 합니다.
 

@@ -40,6 +40,7 @@
 - [x] `.env.example` 기반 KORAIL·SRT 좌석 조회·감시 기본 활성화, 예약 gate 분리, 300초 호출 제한·60초 보호 cooldown과 숫자형 설정 범위 문서화
 - [x] Linux Bash 운영 진입점, 무파괴 stop·복구·profile·복원 계약 테스트와 WSL2 Ubuntu 전체 프로필 재빌드·재생성·health 확인
 - [x] Windows PowerShell 5.1 호환 필수 비밀값 생성 절차에서 다섯 값의 이름·고유성·48바이트 길이 검증
+- [x] Web Push VAPID Docker 생성 명령의 P-256 키 쌍 검증과 subject·키 보존·교체 시 재구독·HTTPS 조건 문서화
 - [x] 효과 없는 KORAIL accountless 설정·앱 조립 제거와 browser sidecar HTTP client 기능 owner 분리
 - [x] KORAIL browser adapter service의 route/runtime 정책 분리 완료와 top-level ASGI composition root·Docker entrypoint 유지 계약 고정
 - [x] KORAIL browser companion HTTP/UoW와 read-only snapshot overlay owner 분리, canonical consumer·legacy import/pickle 호환 보존

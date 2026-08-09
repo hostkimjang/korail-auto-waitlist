@@ -107,9 +107,9 @@
 - [x] `docs/research/`와 `docs/design/`을 현재 공개 후보에서 제거
 - [x] 공개 제외 자료를 로컬·원격 브랜치와 태그의 전체 Git 이력에서 제거
 - [ ] GitHub 비공개 취약점 신고 기능 활성화
-- [ ] clean clone에서 설치 절차 재검증
-- [ ] 네이티브 Ubuntu Docker Engine clean clone에서 기본 build·migration·장기 서비스 health·로컬 접속 확인
-- [x] OCI ARM64 네이티브 Linux 최초 clone에서 전체 프로필 재배포, migration·log-init `exited 0`, 11개 장기 서비스 `healthy`와 로컬 접속 확인
+- [x] 커밋 `fe4b364`의 OCI Ubuntu 20.04 ARM64 clean clone에서 운영 `.env`를 별도 프로젝트·포트로 격리한 뒤 README 최초 설치 절차 재검증
+- [ ] 네이티브 Ubuntu `linux/amd64` Docker Engine clean clone에서 기본 build·migration·장기 서비스 health·로컬 접속 확인
+- [x] OCI ARM64 clean clone의 전체 프로필 최초 기동, migration·log-init `exited 0`, 11개 장기 서비스 `healthy`, 웹 200과 최초 관리자 등록·등록 잠금·새 세션 로그인 확인
 - [x] `repository-verify`가 발견한 공식 페이지 확인의 동시 멱등성 201/409 경쟁 조건 수정 및 로컬 회귀 검증
 - [x] 알림 채널 편집기의 지연 초점 이동이 빠른 입력을 중단하던 CI 경쟁 조건 수정 및 회귀 검증
 - [x] 격리 fullstack E2E가 등록 근거와 최신 관측의 fresh·만료 전이를 분리하도록 시간 경쟁 제거
@@ -152,6 +152,7 @@
 - [x] OCI ARM64 네이티브 환경에서 KORAIL sidecar `/readyz`와 보호 응답 뒤 HTTP 423 cooldown·fail-closed 동작 확인
 - [x] OCI ARM64 네이티브 환경의 Pydoll GUI/non-headless 1회 읽기 조회에서 서울→부산 열차 13개와 좌석 상태 판독, page·desktop 캡처 확인
 - [x] 기본 배포를 noVNC listener 없는 내부 Xvfb Pydoll non-headless 모드로 전환하고 전체 재배포 뒤 sidecar HTTP 경계의 서울→부산 열차 13개·좌석 상태 판독 확인
+- [x] 격리된 OCI ARM64 clean clone의 빈 DB 최초 설치에서 KORAIL 서울→부산 13개와 SRT 수서→부산 12개 읽기 조회를 각각 1회 확인
 - [ ] 선택 가능한 headless KORAIL sidecar가 보호 신호 없이 안정적으로 성공하는 환경과 GUI 실행의 응답 차이 판정
 - [ ] 실제 KORAIL·SRT 예매 진행 중 단계적 재배포에서 작업 완료 또는 안전한 재조정과 상태 연속성 확인
 - [ ] 네이티브 Ubuntu에서 단계적 재배포의 drain·실패 복구와 재부팅 뒤 볼륨·로그 권한·데이터 유지 확인

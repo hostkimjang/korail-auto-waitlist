@@ -208,6 +208,8 @@ KORAIL adapter의 기본 non-headless 가상 화면은 외부에 공개되지 �
 
 운영 구성은 Playwright v1.55.0 seccomp 프로필과 `SYS_CHROOT` 하나를 KORAIL adapter에만 적용합니다. `pwuser` 비루트 실행, 읽기 전용 루트 파일시스템, `cap_drop: ALL`, `no-new-privileges`는 유지하며, Chrome을 `--no-sandbox`로 실행하거나 `seccomp=unconfined` 또는 `SYS_ADMIN`을 주지 않습니다. 이전 headless 서울→부산 조회 3회는 모두 HTTP 423이었고 `wait_result` 단계의 `marker_unauthorized_tool` 보호 신호를 확인했습니다. 같은 OCI·ARM64 이미지의 Pydoll GUI/non-headless 1회 조회가 열차 13개를 정상 판독한 뒤, 기본 배포를 원격 화면 listener가 없는 내부 Xvfb non-headless 모드로 바꿨습니다. 전체 프로필 재배포 후 실제 배포된 sidecar HTTP 경계에서도 같은 열차 13개와 좌석 상태를 정상 판독했습니다. 이는 검증된 실행 모드를 기본 배포와 일치시킨 결과이며 보호 우회를 보장하지 않습니다. 보호 신호가 나타난 실행은 cooldown 중 재시도하지 않습니다.
 
+같은 날 커밋 `fe4b364`를 OCI Ubuntu 20.04 ARM64의 별도 경로에 clean clone하고, 운영 `.env`를 복제하되 Compose 프로젝트명·host 포트·origin과 빈 named volume을 격리했습니다. README의 `bash ./scripts/ops.sh experimental` 최초 설치는 exit 0으로 끝났고 migration·log-init, 11개 장기 서비스 health, 웹 200, 최초 관리자 등록 뒤 gate 잠금과 새 세션 로그인까지 통과했습니다. 실제 읽기 호출은 재시도 없이 KORAIL 서울→부산 13개, SRT 수서→부산 12개를 반환했습니다. 검증 뒤 clean 프로젝트는 `stop`으로 정지하고 4개 named volume은 증거로 보존했으며, 기존 운영 프로젝트가 계속 healthy임을 확인했습니다. 이 결과는 OCI ARM64 범위이며 네이티브 Ubuntu `linux/amd64`, 외부 알림과 백업 복원 검증을 대신하지 않습니다.
+
 ### 모니터링
 
 | Linux Bash | Windows PowerShell |

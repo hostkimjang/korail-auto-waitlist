@@ -36,7 +36,7 @@ npm run dev
 - Linux에서는 Bash, OpenSSL과 현재 사용자로 실행 가능한 Docker Engine
 - Windows에서는 Docker Desktop과 PowerShell 7
 
-Linux 명령은 Ubuntu 계열의 Bash를 기준으로 합니다. Ubuntu GitHub Actions는 Bash 구문, 운영 명령의 무파괴 계약 테스트와 Compose 설정 검사를 실행하며, WSL2 Ubuntu에서는 실제 Docker Compose 설정과 전체 프로필 재배포를 확인합니다. 실험 Chromium 이미지는 `linux/amd64`와 `linux/arm64` 빌드 대상을 지원합니다. 기본 KORAIL adapter는 원격 화면이나 noVNC 포트를 열지 않고 내부 Xvfb에서 Pydoll non-headless Chrome을 실행합니다. OCI ARM64 네이티브 환경에서는 이미지 빌드, 외부 요청 없는 151개 fixture, 전체 프로필 재배포, sidecar `/readyz`와 배포된 sidecar HTTP 경계의 서울→부산 열차 13개 읽기 조회까지 통과했습니다. [ARM64 네이티브 Chromium 판정](OPERATIONS.md#arm64-네이티브-chromium-판정)과 [체크리스트](../CHECKLIST.md)를 함께 확인합니다.
+Linux 명령은 Ubuntu 계열의 Bash를 기준으로 합니다. Ubuntu GitHub Actions는 Bash 구문, 운영 명령의 무파괴 계약 테스트와 Compose 설정 검사를 실행하며, WSL2 Ubuntu에서는 실제 Docker Compose 설정과 전체 프로필 재배포를 확인합니다. 실험 Chromium 이미지는 `linux/amd64`와 `linux/arm64` 빌드 대상을 지원합니다. 기본 KORAIL adapter는 원격 화면이나 noVNC 포트를 열지 않고 내부 Xvfb에서 Pydoll non-headless Chrome을 실행합니다. OCI Ubuntu 20.04 ARM64에서는 커밋 `fe4b364`의 clean clone과 격리된 새 볼륨으로 README 최초 설치를 재현해 전체 프로필, 최초 관리자 등록·등록 잠금·로그인, KORAIL 서울→부산 13개와 SRT 수서→부산 12개 읽기 조회까지 통과했습니다. 네이티브 Ubuntu `linux/amd64` clean install은 [체크리스트](../CHECKLIST.md)의 별도 미검증 항목입니다. [ARM64 네이티브 Chromium 판정](OPERATIONS.md#arm64-네이티브-chromium-판정)도 함께 확인합니다.
 
 ## 1. 저장소 내려받기
 

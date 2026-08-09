@@ -6,6 +6,17 @@
 
 데모는 저장소에 포함된 예시 데이터만 사용합니다. 철도사 계정이나 외부 API가 필요하지 않습니다.
 
+Linux Bash:
+
+```bash
+cd apps/web
+npm ci
+export VITE_DEMO_MODE=true
+npm run dev
+```
+
+Windows PowerShell:
+
 ```powershell
 cd apps/web
 npm ci
@@ -22,9 +33,23 @@ npm run dev
 - Git
 - Docker Desktop 또는 Docker Engine
 - Docker Compose v2
-- 운영 스크립트를 사용할 경우 PowerShell 7
+- Linux에서는 Bash, OpenSSL과 현재 사용자로 실행 가능한 Docker Engine
+- Windows에서는 Docker Desktop과 PowerShell 7
+
+Linux 명령은 Ubuntu 계열의 Bash를 기준으로 합니다. Ubuntu GitHub Actions는 Bash 구문, 운영 명령의 무파괴 계약 테스트와 Compose 설정 검사를 실행하며, WSL2 Ubuntu에서는 실제 Docker Compose 설정과 전체 프로필 재배포를 확인합니다. 실험 Chromium 프로필과 전체 브라우저 검증은 현재 `linux/amd64`만 지원합니다. 네이티브 Ubuntu Docker Engine의 clean clone 설치·재부팅·파일 권한은 [체크리스트](../CHECKLIST.md)의 운영 확인 항목으로 남아 있습니다.
 
 ## 1. 저장소 내려받기
+
+Linux Bash:
+
+```bash
+git clone https://github.com/hostkimjang/korail-auto-waitlist.git
+cd korail-auto-waitlist
+cp .env.example .env
+chmod 600 .env
+```
+
+Windows PowerShell:
 
 ```powershell
 git clone https://github.com/hostkimjang/korail-auto-waitlist.git
@@ -97,7 +122,7 @@ AUTH_INITIAL_REGISTRATION_ENABLED=true
 
 ## 3. 구성 확인하기
 
-```powershell
+```console
 docker compose -f compose.yml config --quiet
 ```
 
@@ -105,7 +130,7 @@ docker compose -f compose.yml config --quiet
 
 ## 4. 서비스 시작하기
 
-```powershell
+```console
 docker compose -f compose.yml up -d --build
 docker compose -f compose.yml ps
 ```
@@ -122,7 +147,7 @@ AUTH_INITIAL_REGISTRATION_ENABLED=false
 
 API 서비스를 다시 만듭니다.
 
-```powershell
+```console
 docker compose -f compose.yml up -d --force-recreate api
 ```
 

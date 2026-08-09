@@ -1,8 +1,11 @@
 COMPOSE := docker compose -f compose.yml
 
-.PHONY: config build up down status logs migrate experimental monitoring ntfy backup restore verify verify-api verify-browser verify-web-core verify-web
+.PHONY: config build up down status logs drain-status migrate configure-browser experimental monitoring ntfy backup restore verify verify-ops verify-api verify-browser verify-web-core verify-web
 
-verify: config verify-browser verify-api verify-web
+verify: config verify-ops verify-browser verify-api verify-web
+
+verify-ops:
+	bash scripts/test-ops.sh
 
 verify-api:
 	cd apps/api && uv lock --check && uv run --extra test pytest && uvx --from ruff==0.12.12 ruff check --select E,F,I . && uv run --extra test python scripts/check_ruff_format_ratchet.py && uv run --frozen --extra test --extra browser mypy
@@ -21,35 +24,41 @@ config:
 	$(COMPOSE) config --quiet
 
 build:
-	$(COMPOSE) build
+	bash scripts/ops.sh build
 
 up:
-	$(COMPOSE) up -d --build
+	bash scripts/ops.sh up
 
 down:
-	$(COMPOSE) down
+	bash scripts/ops.sh down
 
 status:
-	$(COMPOSE) ps
+	bash scripts/ops.sh status
 
 logs:
-	$(COMPOSE) logs -f --tail=200
+	bash scripts/ops.sh logs
+
+drain-status:
+	bash scripts/ops.sh drain-status
 
 migrate:
-	$(COMPOSE) run --rm migration
+	bash scripts/ops.sh migrate
+
+configure-browser:
+	bash scripts/ops.sh configure-browser
 
 experimental:
-	$(COMPOSE) --profile experimental-rail up -d --build api worker korail-browser-adapter experimental-rail
+	bash scripts/ops.sh experimental
 
 monitoring:
-	$(COMPOSE) --profile monitoring up -d prometheus grafana
+	bash scripts/ops.sh monitoring
 
 ntfy:
-	$(COMPOSE) --profile ntfy up -d ntfy
+	bash scripts/ops.sh ntfy
 
 backup:
-	$(COMPOSE) --profile backup run --rm backup once
+	bash scripts/ops.sh backup
 
 restore:
 	@test -n "$(FILE)" || (echo "FILE=/backups/<name>.dump.age 를 지정하세요" && exit 1)
-	$(COMPOSE) --profile restore run --rm -e RESTORE_CONFIRM=RESTORE -e BACKUP_FILE=$(FILE) restore
+	bash scripts/ops.sh restore "$(FILE)"

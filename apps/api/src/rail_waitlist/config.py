@@ -60,8 +60,8 @@ class Settings(BaseSettings):
     srt_provider_adapter_url: str = "http://srt-provider-adapter:8002"
     srt_provider_adapter_token: str | None = None
     srt_provider_adapter_timeout_seconds: float = Field(default=30, ge=3, le=120)
-    seat_status_rate_limit_cooldown_seconds: int = Field(default=1800, ge=60, le=86400)
-    seat_status_protection_cooldown_seconds: int = Field(default=300, ge=300, le=86400)
+    seat_status_rate_limit_cooldown_seconds: int = Field(default=300, ge=60, le=86400)
+    seat_status_protection_cooldown_seconds: int = Field(default=60, ge=60, le=86400)
     korail_browser_bridge_enabled: bool = False
     korail_browser_adapter_enabled: bool = False
     korail_seat_monitoring_enabled: bool = False

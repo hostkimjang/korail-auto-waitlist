@@ -57,7 +57,25 @@ docker compose -f compose.yml config --quiet
 docker compose -f compose.yml up -d --build
 ```
 
-기본 설정에서는 설치한 컴퓨터에서만 접속할 수 있습니다. 다른 기기에서 안전하게 사용하려면 Tailscale 또는 HTTPS를 구성하세요.
+기본 설정에서는 설치한 컴퓨터에서만 접속할 수 있습니다. 다른 기기에서 안전하게 사용하려면 Tailscale 또는 HTTPS를 구성하세요. `.env.example`은 KORAIL·SRT 좌석 조회와 감시 gate, 필요한 `experimental-rail` 프로필을 켜 둡니다. 시작하기 문서에 따라 두 sidecar 내부 token까지 채워야 하며, 자동 예매 gate는 별도로 꺼져 있습니다.
+
+## Android 공식 앱 인계 QA
+
+`.env.example`은 검증되지 않은 앱 업데이트에서 딥링크가 자동으로 활성화되지 않도록 네 경로를 모두 꺼 둡니다. 현재 기록된 코레일+·SRT 버전으로 네 경로를 함께 검증하거나, 해당 검증 결과를 승인한 배포를 만들 때는 커밋하지 않는 로컬 `.env`에 다음 값을 사용합니다.
+
+```dotenv
+# Android 공식 앱 인계 QA. 앱 버전 변경 시 먼저 끄고 경로별로 다시 검증합니다.
+VITE_KORAIL_BOOKING_DEEPLINK_ENABLED=true
+VITE_KORAIL_BOOKING_VALIDATED_VERSION=7.0.0+70000006
+VITE_KORAIL_TICKET_DEEPLINK_ENABLED=true
+VITE_KORAIL_TICKET_VALIDATED_VERSION=7.0.0+70000006
+VITE_SRT_MAIN_DEEPLINK_ENABLED=true
+VITE_SRT_MAIN_VALIDATED_VERSION=2.0.41+150
+VITE_SRT_TICKET_DEEPLINK_ENABLED=true
+VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
+```
+
+앱 업데이트를 확인하면 대응하는 `VITE_*_DEEPLINK_ENABLED`를 먼저 `false`로 바꾸고 웹 이미지를 다시 만드세요. 새 버전에서 resolver, 목적 화면, 설치·미설치 브라우저 동작을 경로별로 다시 확인한 뒤 검증 버전과 플래그를 갱신합니다. 전체 절차와 아직 남은 환경별 확인 항목은 [Android 공식 앱 인계 검증](docs/ANDROID_APP_HANDOFF_QA.md)을 따릅니다.
 
 ## 사용 흐름
 
@@ -72,7 +90,7 @@ docker compose -f compose.yml up -d --build
 ## 꼭 알아두세요
 
 - 이 프로젝트는 한국철도공사(KORAIL) 또는 주식회사 에스알(SR)의 공식 서비스나 제휴 제품이 아닙니다.
-- 기본 설치에서는 철도사 좌석 감시와 예매 시도 기능이 꺼져 있습니다.
+- `.env.example` 기반 설치에서는 철도사 좌석 조회·감시가 활성화되고, 보호·호출 제한 응답이 확인되면 설정된 cooldown 동안 해당 운영사 요청을 중단합니다. 예매 시도 기능은 별도 gate로 꺼져 있습니다.
 - 좌석 정보가 확인되지 않으면 임의로 추정하지 않고 `확인 필요`로 표시합니다.
 - 좌석과 예약 상태는 언제든 바뀔 수 있으므로 공식 앱이나 홈페이지에서 다시 확인해야 합니다.
 - 결제 정보는 저장하지 않으며 결제를 자동으로 진행하지 않습니다.

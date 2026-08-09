@@ -129,7 +129,7 @@ owner입니다. 공통 provider protocol·adapter와 registry application·HTTP�
 않습니다. capability의 기본값과 공개 OpenAPI component는 이동 전과 같으며, 실제 기능·설정·승인 근거의
 교집합보다 넓은 값을 만들지 않는 정책도 그대로입니다.
 
-KORAIL Chromium과 SRT 연동 모듈은 선택 프로필에서만 실행됩니다. 기본 설치에서는 좌석 감시와 예매 시도가 꺼져 있습니다.
+KORAIL Chromium과 SRT 연동 모듈은 `experimental-rail` 프로필에서 실행됩니다. `.env.example`은 이 프로필과 운영사별 좌석 조회·감시 gate를 켜 두며, 환경변수가 누락된 직접 실행은 fail-closed합니다. 계정 기반 예매 시도 gate는 좌석 감시와 분리해 기본적으로 꺼 둡니다.
 
 ## 주요 흐름
 

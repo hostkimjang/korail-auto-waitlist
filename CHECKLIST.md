@@ -37,6 +37,7 @@
 - [x] 별도 APK 없이 PWA Web Push와 접속 중 `실시간 알림`만 사용하는 모바일 알림 범위
 - [x] PostgreSQL·Redis·Celery·FastAPI 기반 백엔드
 - [x] Docker Compose 실행과 health check
+- [x] `.env.example` 기반 KORAIL·SRT 좌석 조회·감시 기본 활성화, 예약 gate 분리, 300초 호출 제한·60초 보호 cooldown과 숫자형 설정 범위 문서화
 - [x] 효과 없는 KORAIL accountless 설정·앱 조립 제거와 browser sidecar HTTP client 기능 owner 분리
 - [x] KORAIL browser adapter service의 route/runtime 정책 분리 완료와 top-level ASGI composition root·Docker entrypoint 유지 계약 고정
 - [x] KORAIL browser companion HTTP/UoW와 read-only snapshot overlay owner 분리, canonical consumer·legacy import/pickle 호환 보존
@@ -130,7 +131,7 @@
 - [x] Android 16/API 36 일반 Chrome의 실제 SRT `공식 결제 열기`와 기존 코레일 사용자 클릭이 설치 앱으로 전환되는지 확인
 - [x] Android 16/API 36 일반 Chrome·설치형 WebAPK에서 `bookedTicket` 동일 anchor가 코레일+ `예약 승차권 조회 · 취소` 화면을 여는지 확인
 - [ ] Android 16/API 36 일반 Chrome·설치형 PWA의 실제 코레일 `공식 결제 열기`가 `bookedTicket`의 `예약 승차권 조회 · 취소` 화면을 여는지 확인
-- [x] 로컬 QA 딥링크 enabled·검증 버전을 `.env`에 지속하고 effective Compose build args·배포 번들을 함께 확인
+- [x] 로컬 QA 딥링크 enabled·검증 버전을 `.env`에 지속하고 effective Compose build args·배포 번들을 함께 확인하며, 안전 기본값과 네 경로 전체 QA 설정을 README·QA 문서에 구분해 기록
 - [ ] SRT main 웜 실행이 기존 앱 화면을 유지하는 제한을 해소하거나 예매 홈 목적 화면을 보장할 수 없음을 제품 UI에 반영
 - [ ] 코레일+·SRT 설치·미설치 각각에서 Chrome·삼성 인터넷의 브라우저 탭·설치형 PWA 사용자 클릭, fallback 외부 창과 뒤로가기 확인
 - [ ] SRT ticket intent의 삼성 인터넷 `btnNo=2`, 실제 앱 제거 상태의 발권·취소 조회 외부 창과 갤럭시 폴드7 동작 확인

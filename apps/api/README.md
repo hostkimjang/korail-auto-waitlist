@@ -8,9 +8,10 @@
 - 공식 provider는 [TAGO 열차정보 API](https://www.data.go.kr/data/15098552/openapi.do)의
   역 목록과 시간표만 조회합니다. 서비스 키가 없으면 합성 결과 대신 `503`을 반환합니다.
 - 합성 시간표와 예약 상태 전이는 `mock` provider에서만 제공합니다.
-- `EXPERIMENTAL_RAIL_ENABLED` 기본값은 `false`입니다. 실험 프로필은 명시적으로 활성화한
-  KORAIL Chromium·SRT provider sidecar를 사용하며, 좌석 감시와 예매 capability는 운영사별
-  추가 gate가 모두 충족될 때만 열립니다. CAPTCHA 우회, 자동 결제, 프록시/IP/계정 회전 기능은 없습니다.
+- 환경변수가 없는 `Settings`의 `EXPERIMENTAL_RAIL_ENABLED` 기본값은 `false`로 fail-closed합니다.
+  저장소의 `.env.example`은 표준 Compose 운영을 위해 `experimental-rail`과 KORAIL Chromium·SRT provider
+  sidecar의 좌석 감시 gate를 명시적으로 켭니다. 예매 capability는 별도 운영사 gate까지 충족될 때만
+  열립니다. CAPTCHA 우회, 자동 결제, 프록시/IP/계정 회전 기능은 없습니다.
 - KORAIL·SRT 철도 계정은 `회원번호 / 이메일 / 휴대전화` 방식과 ID·비밀번호를 암호화해 저장합니다. 저장 전에 로그인만 한 번 확인하고 성공한 값만 commit하며, 원문 credential·cookie·세션은 API 응답과 로그에 노출하지 않습니다.
 - 카드, CVC, 간편결제·결제 인증정보를 위한 데이터 모델은 없습니다.
 - 알림 채널 secret은 암호화해서 저장하고 API 응답과 로그에는 돌려주지 않습니다.

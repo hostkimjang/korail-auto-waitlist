@@ -82,10 +82,10 @@ def build_default_source(
         cache_ttl_seconds=int(number_reader("SRT_SEAT_STATUS_CACHE_TTL_SECONDS", 1, 1, 300)),
         timeout_seconds=number_reader("SRT_SEAT_STATUS_TIMEOUT_SECONDS", 8, 3, 30),
         rate_limit_cooldown_seconds=int(
-            number_reader("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", 1800, 60, 86400)
+            number_reader("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", 300, 60, 86400)
         ),
         protection_cooldown_seconds=int(
-            number_reader("SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 300, 300, 86400)
+            number_reader("SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 60, 60, 86400)
         ),
         cooldown_store=dependencies.cooldown_store_factory(redis),
     )

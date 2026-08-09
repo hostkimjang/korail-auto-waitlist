@@ -137,7 +137,29 @@ SRT 예매 홈과 승차권 확인 화면을 각각 확인합니다.
 
 ## 기능 플래그
 
-경로별 검증을 모두 통과한 값만 `.env`에 기록합니다.
+경로별 검증을 모두 통과한 값만 실제 배포용 `.env`에 기록합니다. `.env.example`은 앱 업데이트 뒤 이전 검증 결과를 잘못 재사용하지 않도록 항상 모든 경로를 꺼 둡니다.
+
+### 네 경로 전체 QA 설정
+
+현재 기록된 앱 버전에서 코레일+ booking·ticket과 SRT main·ticket을 같은 QA 배포에서 모두 확인할 때는 커밋하지 않는 로컬 `.env`에 다음 값을 사용합니다.
+
+```dotenv
+# Android 공식 앱 인계 QA. 앱 버전 변경 시 먼저 끄고 경로별로 다시 검증합니다.
+VITE_KORAIL_BOOKING_DEEPLINK_ENABLED=true
+VITE_KORAIL_BOOKING_VALIDATED_VERSION=7.0.0+70000006
+VITE_KORAIL_TICKET_DEEPLINK_ENABLED=true
+VITE_KORAIL_TICKET_VALIDATED_VERSION=7.0.0+70000006
+VITE_SRT_MAIN_DEEPLINK_ENABLED=true
+VITE_SRT_MAIN_VALIDATED_VERSION=2.0.41+150
+VITE_SRT_TICKET_DEEPLINK_ENABLED=true
+VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
+```
+
+이 블록은 네 경로를 활성화해 QA를 수행하기 위한 설정이며, 아래 브라우저·PWA 합격 행렬 전체가 통과했다는 증거를 대신하지 않습니다. 각 경로를 실제 배포에서 계속 켤지는 해당 경로의 현재 검증 결과로 결정합니다.
+
+### 현재 증거에 따른 보수적 활성 후보
+
+현재 문서에 완료로 기록된 목적 화면과 외부 fallback 근거만 적용하면 다음과 같습니다.
 
 ```dotenv
 VITE_KORAIL_BOOKING_DEEPLINK_ENABLED=true
@@ -150,7 +172,7 @@ VITE_SRT_TICKET_DEEPLINK_ENABLED=true
 VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
 ```
 
-위 예시는 목적 화면과 외부 fallback 검증 상태를 구분한 보수적 후보입니다. 코레일 ticket은 `bookedTicket` 제품 버튼, SRT main은 웜 실행 목적 화면, 삼성 인터넷 행렬을 통과하기 전까지 문서 예시에서 꺼 둡니다. Vite 빌드 입력이므로 값을 바꾸면 전체 이미지를 다시 만듭니다.
+코레일 ticket은 `bookedTicket` 제품 버튼, SRT main은 웜 실행 목적 화면, 삼성 인터넷 행렬을 통과하기 전까지 보수적 활성 후보에서 꺼 둡니다. Vite 빌드 입력이므로 값을 바꾸면 전체 이미지를 다시 만듭니다.
 
 ```powershell
 docker compose config --quiet

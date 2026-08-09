@@ -2,7 +2,7 @@
 
 ## 최초 설정
 
-1. `.env.example`을 `.env`로 복사하고 형식 안내에 따라 비밀값을 채웁니다. 실제 `.env`는 커밋하지 않습니다.
+1. `.env.example`을 `.env`로 복사하고 형식 안내에 따라 필수 비밀값과 두 sidecar 내부 token을 채웁니다. 실제 `.env`는 커밋하지 않습니다.
 2. `docker compose -f compose.yml config --quiet`으로 설정을 검증합니다.
 3. `docker compose -f compose.yml up -d --build`로 기본 서비스를 시작합니다.
 
@@ -16,7 +16,7 @@
 
 ## 선택 프로필
 
-- `--profile experimental-rail`: KORAIL Chromium sidecar, SRT provider sidecar와 별도 experimental worker를 시작합니다. 실제 due 감시 작업은 `rail` queue의 기본 worker가 소비하므로 `scripts/ops.ps1 experimental`로 API·sidecar·기본 worker·experimental worker를 함께 재생성합니다. 운영사별 좌석 감시는 세 환경변수가 모두 켜졌을 때만 활성화됩니다. 예매 시도는 별도 운영사 gate, 로그인 확인된 활성 계정과 작업별 `reserve_once_before_payment` 정책까지 모두 만족할 때만 가용성 에피소드당 최대 한 번 실행하고 결제 전에 멈춥니다. 기본값은 모두 비활성입니다.
+- `--profile experimental-rail`: KORAIL Chromium sidecar, SRT provider sidecar와 별도 experimental worker를 시작합니다. `.env.example`은 `COMPOSE_PROFILES=experimental-rail`과 운영사별 좌석 감시 gate를 기본 활성화합니다. 실제 due 감시 작업은 `rail` queue의 기본 worker가 소비하므로 `scripts/ops.ps1 experimental`로 API·sidecar·기본 worker·experimental worker를 함께 재생성합니다. 예매 시도는 기본적으로 꺼진 별도 운영사 gate, 로그인 확인된 활성 계정과 작업별 `reserve_once_before_payment` 정책까지 모두 만족할 때만 가용성 에피소드당 최대 한 번 실행하고 결제 전에 멈춥니다.
 - `--profile monitoring`: Prometheus와 Grafana를 실행합니다. Grafana는 `/ops/grafana/`에서 접근하며 자체 관리자 로그인이 필요합니다.
 - `--profile ntfy`: 내부 알림용 ntfy를 실행합니다. 기본 접근 정책은 `deny-all`입니다.
 - `--profile backup`: 암호화 백업 daemon을 실행합니다.

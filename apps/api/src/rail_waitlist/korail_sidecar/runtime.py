@@ -192,9 +192,9 @@ def build_automation(
             "KORAIL_BROWSER_CACHE_TTL_SECONDS", 1, minimum=1, maximum=300
         ),
         rate_limit_cooldown_seconds=integer_setting(
-            "SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", 1800, minimum=60, maximum=86400
+            "SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", 300, minimum=60, maximum=86400
         ),
         protection_cooldown_seconds=integer_setting(
-            "SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 300, minimum=300, maximum=86400
+            "SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 60, minimum=60, maximum=86400
         ),
     )

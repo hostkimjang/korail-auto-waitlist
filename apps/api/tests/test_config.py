@@ -15,8 +15,11 @@ def test_initial_admin_registration_is_disabled_by_default():
     assert Settings(_env_file=None).auth_initial_registration_enabled is False
 
 
-def test_protection_cooldown_defaults_to_five_minutes():
-    assert Settings(_env_file=None).seat_status_protection_cooldown_seconds == 300
+def test_seat_status_cooldowns_use_operational_defaults():
+    settings = Settings(_env_file=None)
+
+    assert settings.seat_status_rate_limit_cooldown_seconds == 300
+    assert settings.seat_status_protection_cooldown_seconds == 60
 
 
 def test_live_seat_cache_defaults_to_one_second():

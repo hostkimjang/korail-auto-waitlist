@@ -34,17 +34,21 @@ Copy-Item .env.example .env
 
 ## 2. 필수 값 설정하기
 
-`.env`에서 다음 세 값을 서로 다른 무작위 값으로 채웁니다.
+`.env`에서 다음 다섯 값을 서로 다른 무작위 값으로 채웁니다.
 
 - `POSTGRES_PASSWORD`
 - `SECRET_ENCRYPTION_KEY`
 - `AUTH_SESSION_SECRET`
+- `KORAIL_BROWSER_ADAPTER_TOKEN`
+- `SRT_PROVIDER_ADAPTER_TOKEN`
 
 PowerShell에서는 다음 명령으로 무작위 값을 만들 수 있습니다.
 
 ```powershell
 [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
 ```
+
+위 명령을 다섯 번 실행해 서로 다른 값을 사용합니다. 두 adapter token은 `.env.example`에서 기본 활성화한 좌석 감시 sidecar의 내부 인증에만 사용하며 로그나 화면에 노출하지 않습니다.
 
 처음 관리자 계정을 만들 때만 아래 값을 `true`로 바꿉니다.
 
@@ -62,7 +66,7 @@ AUTH_INITIAL_REGISTRATION_ENABLED=true
 docker compose -f compose.yml config --quiet
 ```
 
-명령이 아무 내용 없이 끝나면 형식 검사가 통과한 것입니다. 비밀값이 출력될 수 있으므로 `--quiet`를 빼지 마세요.
+명령이 아무 내용 없이 끝나면 형식 검사가 통과한 것입니다. 비밀값이 출력될 수 있으므로 `--quiet`를 빼지 마세요. `.env.example`의 `COMPOSE_PROFILES=experimental-rail`이 KORAIL·SRT sidecar와 실험 worker를 기본 구성에 포함합니다.
 
 ## 4. 서비스 시작하기
 
@@ -71,7 +75,7 @@ docker compose -f compose.yml up -d --build
 docker compose -f compose.yml ps
 ```
 
-브라우저에서 `http://127.0.0.1`을 엽니다. 장기 실행 서비스의 상태가 모두 `healthy`로 바뀐 뒤 사용하세요.
+브라우저에서 `http://127.0.0.1`을 엽니다. API·worker·scheduler와 KORAIL·SRT sidecar를 포함한 장기 실행 서비스가 모두 `healthy`로 바뀐 뒤 사용하세요. 좌석 조회·감시는 켜져 있지만 계정 기반 예매 시도 gate는 기본적으로 꺼져 있습니다.
 
 ## 5. 첫 관리자 계정 만들기
 

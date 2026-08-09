@@ -296,14 +296,18 @@ def test_gui_mode_rejects_the_legacy_playwright_engine(
         )
 
 
-def test_browser_automation_cache_defaults_to_one_second(
+def test_browser_automation_uses_operational_cache_and_cooldown_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("KORAIL_BROWSER_CACHE_TTL_SECONDS", raising=False)
+    monkeypatch.delenv("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", raising=False)
+    monkeypatch.delenv("SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", raising=False)
 
     automation = adapter_service.build_automation(browser_client=FakeClient())
 
     assert automation._cache_ttl_seconds == 1
+    assert automation._rate_limit_cooldown_seconds == 300
+    assert automation._protection_cooldown_seconds == 60
 
 
 def test_pydoll_engine_readiness_uses_selected_probe_without_network(

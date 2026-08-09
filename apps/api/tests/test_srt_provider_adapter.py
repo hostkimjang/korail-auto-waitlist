@@ -43,14 +43,18 @@ from rail_waitlist.srt_sidecar.session_contract import (
 TOKEN = "srt-sidecar-contract-token-value-32-bytes"
 
 
-async def test_srt_sidecar_cache_defaults_to_one_second(
+async def test_srt_sidecar_uses_operational_cache_and_cooldown_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("SRT_SEAT_STATUS_CACHE_TTL_SECONDS", raising=False)
+    monkeypatch.delenv("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", raising=False)
+    monkeypatch.delenv("SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", raising=False)
 
     source, redis = adapter_service._build_default_source()
     try:
         assert source.cache_ttl_seconds == 1
+        assert source.rate_limit_cooldown_seconds == 300
+        assert source.protection_cooldown_seconds == 60
     finally:
         await redis.aclose()
 

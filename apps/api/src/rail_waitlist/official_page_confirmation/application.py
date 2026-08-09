@@ -5,13 +5,12 @@ from datetime import UTC, datetime, timedelta
 
 from pydantic import AnyHttpUrl
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import Provider, SeatObservationStatus
 from ..idempotency.application import (
+    claim_idempotency_resource,
     get_idempotent_resource,
-    remember_idempotency,
     request_hash,
 )
 from ..official_rail_identity import normalize_official_train_number
@@ -69,19 +68,17 @@ async def upsert_official_page_confirmations(
         if len(replayed) != len(data.seat_classes):
             raise ValueError("idempotent confirmation batch is incomplete")
         return replayed, 0, True
+
     batch_id = str(uuid.uuid4())
     if idempotency_key:
-        try:
-            async with session.begin_nested():
-                await remember_idempotency(
-                    session,
-                    IDEMPOTENCY_SCOPE,
-                    idempotency_key,
-                    batch_id,
-                    payload_hash,
-                )
-                await session.flush()
-        except IntegrityError:
+        claimed = await claim_idempotency_resource(
+            session,
+            IDEMPOTENCY_SCOPE,
+            idempotency_key,
+            batch_id,
+            payload_hash,
+        )
+        if not claimed:
             replay_resource = await get_idempotent_resource(
                 session, IDEMPOTENCY_SCOPE, idempotency_key, payload_hash
             )
@@ -94,9 +91,8 @@ async def upsert_official_page_confirmations(
 
     observed_at = _as_utc(now or datetime.now(UTC))
     fresh_until = observed_at + CONFIRMATION_FRESHNESS
-    results: list[OfficialPageSeatConfirmation] = []
-    for item in data.seat_classes:
-        row = OfficialPageSeatConfirmation(
+    results = [
+        OfficialPageSeatConfirmation(
             batch_id=batch_id,
             provider=data.provider,
             origin_node_id=data.origin_node_id,
@@ -110,9 +106,9 @@ async def upsert_official_page_confirmations(
             observed_at=observed_at,
             fresh_until=fresh_until,
         )
-        session.add(row)
-        results.append(row)
-
+        for item in data.seat_classes
+    ]
+    session.add_all(results)
     await session.flush()
     return results, len(results), False
 

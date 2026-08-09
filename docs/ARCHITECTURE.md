@@ -46,6 +46,9 @@ Docker Compose는 위 서비스를 하나의 배포 단위로 실행합니다. �
 - 알림·철도 계정·화면 설정
 - 공식 앱 또는 홈페이지로 이동하기 전 안내
 
+알림 채널 편집기는 렌더링 직후 제목에 초점을 두고, 지연 callback으로 이미 시작된 사용자 입력의 초점을
+빼앗지 않습니다. 비밀 입력값은 실패 시 재시도할 수 있도록 유지하고 취소·성공 뒤에만 비웁니다.
+
 화면은 API 응답을 그대로 표시하지 않습니다. 외부 응답을 검증한 뒤 화면에 필요한 형태로 바꾸며, 출처가 불명확한 좌석은 `확인 필요`로 표시합니다.
 
 화면 갱신·좌석 관측 간격 API는 `observation_interval_seconds`를 전역 관측 주기의 단일 DTO 필드로 사용합니다. 웹 API 경계는 이 필드를 검증해 화면 모델로 명시적으로 변환하고, 저장 요청에도 같은 필드명을 사용합니다.
@@ -906,8 +909,12 @@ package attribute·alias·`getattr`·`importlib`·`__import__` 형태의 중앙 
 
 사용자가 공식 화면에서 직접 확인한 좌석 근거는 `official_page_confirmation` bounded context가 소유합니다.
 `schemas.py`는 source·status를 포함한 transport 심볼 6개, `models.py`는 append-only confirmation mapper,
-`application.py`는 idempotent batch 저장과 시간표 overlay를 담당합니다. 시간표 application과 HTTP는 canonical
-owner를 직접 사용하고 중앙 `schemas.py`·`models.py`는 같은 객체만 호환 alias로 노출합니다. 기존 plural
+`application.py`는 idempotent batch 저장과 시간표 overlay를 담당합니다. SQLite·PostgreSQL의 멱등성 owner
+claim은 `INSERT ... ON CONFLICT DO NOTHING RETURNING`을 첫 경합 DML로 사용합니다. 같은 키의 동시 재요청은
+owner transaction의 commit 또는 rollback을 기다린 뒤 완성된 배치를 재사용하거나 새 owner가 되며, 멱등성
+레코드와 confirmation 행은 호출자가 소유한 transaction에서 함께 commit·rollback됩니다. 시간표 application과
+HTTP는 canonical owner를 직접 사용하고 중앙 `schemas.py`·`models.py`는 같은 객체만 호환 alias로 노출합니다.
+기존 plural
 `official_page_confirmations.py`는 외부 import 호환을 위한 얇은 facade이며 정책이나 persistence를 새로
 소유하지 않습니다.
 

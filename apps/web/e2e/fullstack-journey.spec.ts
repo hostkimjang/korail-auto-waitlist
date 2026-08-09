@@ -269,8 +269,12 @@ test.describe("격리 Compose 전체 스택", () => {
     const standard9003 = page.locator(".watch-row")
       .filter({ hasText: "9003" }).filter({ hasText: "일반실" });
     await expect(first9001).toContainText("감시 중", { timeout: 60_000 });
+    await expect(first9001.locator(".watch-registration-evidence")).toHaveText(
+      /^등록 당시 특실 · 매진 · 공식 관측 \d{2}:\d{2}$/,
+      { timeout: 60_000 },
+    );
     await expect(first9001.locator(".watch-seat-evidence")).toHaveText(
-      /^특실 · 매진 · 공식 관측 \d{2}:\d{2}$/,
+      /^특실 · (?:매진|관측 만료 · 다시 확인 중) · 최근 관측 \d{2}:\d{2}$/,
     );
     await expect(standard9002).toContainText("좌석 발견", { timeout: 60_000 });
     await expect(first9002).toContainText("감시 중", { timeout: 60_000 });

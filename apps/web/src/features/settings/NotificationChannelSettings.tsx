@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bell,
   DiscordLogo,
@@ -154,6 +154,11 @@ export function NotificationChannelSettings({
       : webPushChannels.find((channel) => channel.deviceKey === browserPushState.deviceKey),
     [browserPushState.deviceKey, webPushChannels],
   );
+
+  useLayoutEffect(() => {
+    if (editingKind !== null) editorHeadingRef.current?.focus();
+  }, [editingKind]);
+
   const activeWebPushDeviceCount = useMemo(() => {
     const reportedCount = webPushChannels.find(
       (channel) => channel.activeDeviceCount !== null,
@@ -196,7 +201,6 @@ export function NotificationChannelSettings({
     setDraft({ ...emptyDraft(), name: existing?.name ?? "" });
     setEditorError(null);
     setEditingKind(kind);
-    window.requestAnimationFrame(() => editorHeadingRef.current?.focus());
   };
 
   const saveDraft = async (): Promise<void> => {

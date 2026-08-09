@@ -375,12 +375,22 @@ services:
     shm_size: 1gb
     cap_drop:
       - ALL
+    # Chromium creates a user namespace, then chroots into an empty procfs
+    # directory. Keep the bounding set otherwise empty.
+    cap_add:
+      - SYS_CHROOT
     security_opt:
       - no-new-privileges:true
+      - seccomp:./infra/docker/playwright-seccomp-v1.55.0.json
     environment:
       TZ: ${TZ:-Asia/Seoul}
       KORAIL_BROWSER_ENGINE: ${KORAIL_BROWSER_ENGINE:-pydoll}
-      KORAIL_BROWSER_GUI_ENABLED: "false"
+      # KORAIL의 실제 OCI 검증을 통과한 Pydoll non-headless 경로를 내부 Xvfb에서
+      # 실행합니다. noVNC는 compose.korail-gui.yml을 명시한 진단에서만 열립니다.
+      KORAIL_BROWSER_GUI_ENABLED: "${KORAIL_BROWSER_GUI_ENABLED:-true}"
+      KORAIL_NOVNC_ENABLED: "false"
+      DISPLAY: :99
+      XAUTHORITY: /tmp/korail-gui/Xauthority
       KORAIL_BROWSER_PAGE_URL: https://www.korail.com/ticket/search/general
       KORAIL_BROWSER_ADAPTER_TOKEN: ${KORAIL_BROWSER_ADAPTER_TOKEN:-}
       KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS: ${KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS:-25}

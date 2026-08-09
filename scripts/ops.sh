@@ -195,10 +195,24 @@ restore_drained_services() {
         fi
     done
     if ((${#services_to_restore[@]} > 0)); then
-        echo '재배포가 완료되지 않아 기존 컨테이너를 다시 시작합니다.' >&2
+        echo '재배포가 완료되지 않아 중지했던 서비스의 실행 상태를 복구합니다.' >&2
         if ! compose "${profile_arguments[@]}" start "${services_to_restore[@]}"; then
-            echo '기존 서비스 자동 복구도 실패했습니다. 중간 종료 상태를 확인하세요.' >&2
+            echo '중지했던 서비스의 실행 상태 복구도 실패했습니다. 중간 종료 상태를 확인하세요.' >&2
         fi
+    fi
+}
+
+show_experimental_service_states() {
+    local services=(
+        proxy web api scheduler worker notification-worker postgres redis
+        experimental-rail korail-browser-adapter srt-provider-adapter
+    )
+
+    echo '실험 프로필 서비스가 제한 시간 안에 준비되지 않았습니다. 현재 상태:' >&2
+    if ! compose --profile experimental-rail ps --all \
+        --format 'table {{.Service}}\t{{.State}}\t{{.Health}}' \
+        "${services[@]}" >&2; then
+        echo '서비스 상태를 조회하지 못했습니다.' >&2
     fi
 }
 
@@ -206,15 +220,23 @@ graceful_recreate() {
     local include_experimental_rail="$1"
     shift
     local profile_arguments=("$@")
+    local up_arguments=(up --detach --force-recreate)
     local stop_status
+
+    if [[ "$include_experimental_rail" == true ]]; then
+        up_arguments+=(--wait --wait-timeout 180)
+    fi
 
     show_celery_active_task_summary
     load_running_services
     if stop_services_for_graceful_recreate "$include_experimental_rail" "${profile_arguments[@]}"; then
-        if compose "${profile_arguments[@]}" up --detach --force-recreate; then
+        if compose "${profile_arguments[@]}" "${up_arguments[@]}"; then
             return 0
         else
             stop_status=$?
+            if [[ "$include_experimental_rail" == true ]]; then
+                show_experimental_service_states
+            fi
         fi
     else
         stop_status=$?

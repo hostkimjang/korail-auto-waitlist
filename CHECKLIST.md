@@ -38,6 +38,9 @@
 - [x] PostgreSQL·Redis·Celery·FastAPI 기반 백엔드
 - [x] Docker Compose 실행과 health check
 - [x] `.env.example` 기반 KORAIL·SRT 좌석 조회·감시 기본 활성화, 예약 gate 분리, 300초 호출 제한·60초 보호 cooldown과 숫자형 설정 범위 문서화
+- [x] KORAIL Chromium 이미지의 `linux/amd64`·`linux/arm64`별 Chrome 패키지 선택과 미지원 아키텍처 fail-fast 빌드 계약
+- [x] OCI ARM64 네이티브 환경의 KORAIL Chromium 이미지 빌드와 외부 요청 없는 151개 fixture 검증
+- [x] OCI ARM64 첫 전체 배포의 전체 이미지 빌드·migration 성공과 seccomp 사용자 네임스페이스 거부에 따른 adapter readiness 실패 확인
 - [x] Linux Bash 운영 진입점, 무파괴 stop·복구·profile·복원 계약 테스트와 WSL2 Ubuntu 전체 프로필 재빌드·재생성·health 확인
 - [x] Windows PowerShell 5.1 호환 필수 비밀값 생성 절차에서 다섯 값의 이름·고유성·48바이트 길이 검증
 - [x] Web Push VAPID Docker 생성 명령의 P-256 키 쌍 검증과 subject·키 보존·교체 시 재구독·HTTPS 조건 문서화
@@ -87,7 +90,7 @@
 - [x] test-only SRT fullstack transport fixture를 provider adapter owner로 이동하고 legacy import·pickle 호환 보존
 - [x] KORAIL sidecar 예약 확인 요청 생성·실패·wire 결과 정규화 read-only runtime 기능 owner 분리
 - [x] 재배포 시 ingress·scheduler를 먼저 차단하고 Celery worker/API를 sidecar보다 먼저 drain하는 단계적 종료와 5분 유예
-- [ ] `scripts/ops.ps1 experimental`에 GUI Compose override 선택 경로를 추가해 수동 adapter 재생성을 제거
+- [ ] `scripts/ops.ps1 experimental`에 noVNC 화면 진단 override 선택 경로를 추가해 수동 adapter 재생성을 제거
 - [x] 외부 요청 없는 데모 모드와 자동 테스트
 - [x] 결제정보 미저장과 자동 결제 금지
 - [x] 보호 응답과 호출 제한을 우선하는 중단 정책
@@ -106,6 +109,7 @@
 - [ ] GitHub 비공개 취약점 신고 기능 활성화
 - [ ] clean clone에서 설치 절차 재검증
 - [ ] 네이티브 Ubuntu Docker Engine clean clone에서 기본 build·migration·장기 서비스 health·로컬 접속 확인
+- [x] OCI ARM64 네이티브 Linux 최초 clone에서 전체 프로필 재배포, migration·log-init `exited 0`, 11개 장기 서비스 `healthy`와 로컬 접속 확인
 - [x] `repository-verify`가 발견한 공식 페이지 확인의 동시 멱등성 201/409 경쟁 조건 수정 및 로컬 회귀 검증
 - [x] 알림 채널 편집기의 지연 초점 이동이 빠른 입력을 중단하던 CI 경쟁 조건 수정 및 회귀 검증
 - [x] 격리 fullstack E2E가 등록 근거와 최신 관측의 fresh·만료 전이를 분리하도록 시간 경쟁 제거
@@ -144,6 +148,11 @@
 - [ ] 별도 인스턴스에서 암호화 백업 복원 확인
 - [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
+- [x] Playwright v1.55.0 Chromium seccomp 프로필과 최소 `SYS_CHROOT` capability를 KORAIL adapter에만 적용하고 `pwuser`·읽기 전용 루트·`cap_drop: ALL`·`no-new-privileges`를 보존한 재배포 확인
+- [x] OCI ARM64 네이티브 환경에서 KORAIL sidecar `/readyz`와 보호 응답 뒤 HTTP 423 cooldown·fail-closed 동작 확인
+- [x] OCI ARM64 네이티브 환경의 Pydoll GUI/non-headless 1회 읽기 조회에서 서울→부산 열차 13개와 좌석 상태 판독, page·desktop 캡처 확인
+- [x] 기본 배포를 noVNC listener 없는 내부 Xvfb Pydoll non-headless 모드로 전환하고 전체 재배포 뒤 sidecar HTTP 경계의 서울→부산 열차 13개·좌석 상태 판독 확인
+- [ ] 선택 가능한 headless KORAIL sidecar가 보호 신호 없이 안정적으로 성공하는 환경과 GUI 실행의 응답 차이 판정
 - [ ] 실제 KORAIL·SRT 예매 진행 중 단계적 재배포에서 작업 완료 또는 안전한 재조정과 상태 연속성 확인
 - [ ] 네이티브 Ubuntu에서 단계적 재배포의 drain·실패 복구와 재부팅 뒤 볼륨·로그 권한·데이터 유지 확인
 - [ ] Linux 별도 인스턴스에서 암호화 백업 생성과 복원 round-trip 확인

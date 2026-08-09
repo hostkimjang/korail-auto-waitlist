@@ -2,6 +2,7 @@ services:
   korail-browser-adapter:
     environment:
       KORAIL_BROWSER_GUI_ENABLED: "true"
+      KORAIL_NOVNC_ENABLED: "true"
       KORAIL_NOVNC_PASSWORD_FILE: /run/secrets/korail_novnc_password
       KORAIL_VNC_GEOMETRY: ${KORAIL_VNC_GEOMETRY:-1440x1000}
       DISPLAY: :99

@@ -25,7 +25,7 @@ docker() {
 
     if [[ "$rendered" == *'ps --status running --services'* ]]; then
         printf '%s\n' proxy scheduler worker notification-worker api
-        if [[ "$OPS_SMOKE_CASE" == experimental || "$OPS_SMOKE_CASE" == restore-* ]]; then
+        if [[ "$OPS_SMOKE_CASE" == experimental* || "$OPS_SMOKE_CASE" == restore-* ]]; then
             printf '%s\n' experimental-rail korail-browser-adapter srt-provider-adapter
         fi
         if [[ "$OPS_SMOKE_CASE" == *-maintenance ]]; then
@@ -39,6 +39,25 @@ docker() {
     fi
     if [[ "$OPS_SMOKE_CASE" == recreate-failure && "$rendered" == *'up --detach --force-recreate'* ]]; then
         return 23
+    fi
+    if [[ "$OPS_SMOKE_CASE" == experimental-unhealthy && "$rendered" == *'up --detach --force-recreate --wait --wait-timeout 180'* ]]; then
+        return 41
+    fi
+    if [[ "$OPS_SMOKE_CASE" == experimental-unhealthy && "$rendered" == *'ps --all --format'* ]]; then
+        printf '%s\n' \
+            'SERVICE                     STATE      HEALTH' \
+            'proxy                       running    healthy' \
+            'web                         running    healthy' \
+            'api                         running    healthy' \
+            'scheduler                   running    healthy' \
+            'worker                      running    healthy' \
+            'notification-worker         running    healthy' \
+            'postgres                    running    healthy' \
+            'redis                       running    healthy' \
+            'experimental-rail           running    healthy' \
+            'korail-browser-adapter      running    unhealthy' \
+            'srt-provider-adapter        running    healthy'
+        return 0
     fi
     if [[ "$OPS_SMOKE_CASE" == restore-migration-failure && "$rendered" == *'run --rm migration'* ]]; then
         return 31
@@ -118,6 +137,7 @@ assert_trace_order \
     'stop --timeout 300 worker notification-worker' \
     'stop --timeout 300 api' \
     'up --detach --force-recreate'
+assert_trace_excludes '--wait'
 
 OPS_SMOKE_CASE='stop-failure'
 run_ops 17 up
@@ -139,7 +159,19 @@ assert_trace_order \
     '--profile experimental-rail stop --timeout 300 scheduler' \
     '--profile experimental-rail stop --timeout 300 worker experimental-rail notification-worker' \
     '--profile experimental-rail stop --timeout 300 api' \
-    '--profile experimental-rail up --detach --force-recreate'
+    '--profile experimental-rail up --detach --force-recreate --wait --wait-timeout 180'
+
+OPS_SMOKE_CASE='experimental-unhealthy'
+run_ops 41 experimental
+assert_trace_order \
+    '--profile experimental-rail up --detach --force-recreate --wait --wait-timeout 180' \
+    '--profile experimental-rail ps --all --format' \
+    '--profile experimental-rail start proxy scheduler worker experimental-rail notification-worker api'
+assert_trace_contains 'proxy web api scheduler worker notification-worker postgres redis experimental-rail korail-browser-adapter srt-provider-adapter'
+grep -Fq '실험 프로필 서비스가 제한 시간 안에 준비되지 않았습니다. 현재 상태:' "$stderr_file" || \
+    fail '실험 프로필 준비 실패 설명이 stderr에 없습니다.'
+grep -Fq 'korail-browser-adapter      running    unhealthy' "$stderr_file" || \
+    fail '준비 실패한 adapter 상태가 stderr에 없습니다.'
 
 OPS_SMOKE_CASE='restore-success'
 run_ops 0 restore /backups/test.dump.age

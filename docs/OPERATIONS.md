@@ -10,7 +10,7 @@
 - 기본 포트는 로컬 컴퓨터에만 열립니다.
 - 인터넷에 공개할 때는 HTTPS와 보안 쿠키를 함께 설정합니다.
 - Linux 명령은 Bash와 Docker Compose v2를 기준으로 하며, Docker는 현재 사용자로 실행할 수 있어야 합니다.
-- 실험 Chromium 프로필은 현재 `linux/amd64`만 지원합니다. 기본 프로필과 네이티브 Ubuntu 장기 운영 검증 범위는 [체크리스트](../CHECKLIST.md)에서 구분합니다.
+- 실험 Chromium 이미지는 `linux/amd64`와 `linux/arm64` 빌드 대상을 지원합니다. 별도 Chromium 자동 검증은 현재 `linux/amd64`에서 실행합니다. 기본 adapter는 내부 Xvfb의 Pydoll non-headless 모드이며 noVNC listener를 시작하지 않습니다. ARM64 네이티브 배포의 전체 서비스 health, sidecar readiness와 실제 읽기 조회는 OCI에서 확인했습니다.
 
 ## 기본 명령
 
@@ -151,21 +151,21 @@ HTTPS 주소를 사용하면 `AUTH_COOKIE_SECURE=true`로 설정하고, 허용 �
 
 KORAIL·SRT 실험 프로필이 실행 중이면 기본 `up`은 중단하고 Linux에서는 `bash ./scripts/ops.sh experimental`, Windows에서는 `./scripts/ops.ps1 experimental`을 사용하도록 안내합니다. 이 명령도 같은 drain 순서를 적용한 뒤 sidecar를 포함한 프로필 전체를 다시 만듭니다. 백업·복원이 실행 중일 때는 재배포하지 않습니다.
 
-현재 `experimental` 명령은 `compose.yml`만 사용하므로 KORAIL GUI override를 자동으로 포함하지 않습니다.
-GUI/non-headless가 운영 계약인 환경에서는 전체 profile을 안전하게 재배포한 뒤, 같은 새 browser image를
-사용하는 adapter 한 개만 overlay와 함께 다시 생성합니다. `--no-deps`를 유지해 이미 drain·재생성한 DB,
-Redis, API와 worker를 다시 건드리지 않습니다.
+현재 `experimental` 명령은 `compose.yml`의 기본 KORAIL 구성을 사용합니다. 이 구성은 내부 Xvfb에서
+non-headless Chrome을 실행하지만 x11vnc·websockify와 host 6080 포트는 시작하지 않습니다. 따라서 실제
+운영에 `compose.korail-gui.yml`을 추가할 필요가 없습니다.
+
+화면을 직접 확인해야 하는 짧은 진단에서만 [KORAIL 브라우저 화면 진단](../apps/api/KORAIL_BROWSER_DIAGNOSTICS.md)에
+따라 noVNC overlay로 adapter 한 개를 다시 만듭니다. `--no-deps`를 유지해 이미 drain·재생성한 DB, Redis,
+API와 worker를 다시 건드리지 않습니다.
 
 ```bash
-bash ./scripts/ops.sh experimental
 docker compose -f compose.yml -f compose.korail-gui.yml --profile experimental-rail config --quiet
 docker compose -f compose.yml -f compose.korail-gui.yml --profile experimental-rail up -d --force-recreate --no-deps korail-browser-adapter
 ```
 
-Windows PowerShell에서는 첫 줄만 `./scripts/ops.ps1 experimental`로 바꾸고 나머지 Compose 명령을 그대로 실행합니다.
-
-마지막에는 adapter의 `DISPLAY=:99`, X 접근, `/readyz`와 전체 profile health를 다시 확인합니다. 운영 스크립트에
-GUI override 선택 경로가 추가되기 전까지는 이 수동 후속 단계가 필요합니다.
+진단이 끝나면 `compose.yml`만 사용해 adapter를 다시 만들고 비밀번호 파일을 제거합니다. 마지막에는
+adapter의 `DISPLAY=:99`, X 접근, `/readyz`와 전체 profile health를 다시 확인합니다.
 
 단계적 종료 중 Docker 오류가 발생하면 새 이미지 재생성을 강행하지 않고, 그 전에 실행 중이던 proxy·scheduler·worker·API 컨테이너를 다시 시작한 뒤 오류를 반환합니다. 이 자동 복구도 실패했다는 경고가 나오면 플랫폼별 운영 스크립트의 `status`로 중간 종료 상태를 확인하고 같은 프로필의 기존 컨테이너를 먼저 복구합니다.
 
@@ -181,6 +181,8 @@ worker, API와 두 sidecar에는 5분의 `stop_grace_period`가 적용됩니다.
 - API의 `/healthz`, `/readyz`가 정상인지
 - 최근 로그에 반복되는 오류가 없는지
 
+Linux의 `experimental` 명령은 `docker compose up --wait --wait-timeout 180`을 사용하므로 성공 종료 시 선택 프로필의 장기 서비스가 실행·healthy 상태입니다. 제한 시간 안에 준비되지 않으면 서비스 상태 표를 출력하고 원래 오류 코드를 반환합니다. 이 판정은 migration·log-init의 성공 종료나 실제 운영사 접근 성공을 대신하지 않으므로 `status`, 일회성 작업의 `exited 0`, 각 sidecar의 `/readyz`와 실제 읽기 조회 결과를 별도로 기록합니다.
+
 문서나 공개 이미지 파일만 바꾼 경우에는 전체 서비스 재배포가 필요하지 않습니다.
 
 ## 선택 프로필
@@ -193,12 +195,18 @@ worker, API와 두 sidecar에는 5분의 `stop_grace_period`가 적용됩니다.
 
 이 명령은 KORAIL Chromium과 SRT 연동 서비스를 포함한 `experimental-rail` 프로필 전체를 다시 빌드하고, 진행 중 worker와 API를 먼저 drain한 뒤 생성합니다.
 
-KORAIL adapter를 GUI 모드로 운용한다면 위 "업데이트와 재배포" 절의 GUI overlay 후속 재생성 절차도 함께
-적용합니다.
+KORAIL adapter의 기본 non-headless 가상 화면은 외부에 공개되지 않습니다. noVNC overlay는 위 "업데이트와
+재배포" 절처럼 화면이 꼭 필요한 짧은 진단에서만 적용합니다.
 
 `.env.example`은 `experimental-rail` 프로필과 KORAIL·SRT 좌석 확인·백그라운드 감시 설정을 기본 활성화합니다. adapter token을 각각 32바이트 이상 무작위 값으로 채운 뒤 위 명령으로 전체 프로필을 실행해야 하며, 코드 설정이나 환경변수가 누락된 직접 실행은 fail-closed합니다. 예매 시도는 기본적으로 꺼진 별도 운영사 gate, 로그인 확인을 마친 철도 계정과 작업별 정책이 추가로 필요합니다.
 
 실험 기능은 안정적인 성공을 보장하지 않습니다. 보호 안내나 호출 제한이 나타나면 반복 실행하지 말고 중단 시간을 지키세요.
+
+#### ARM64 네이티브 Chromium 판정
+
+2026년 8월 9일 OCI ARM64 네이티브 환경에서 KORAIL Chromium 이미지 빌드와 외부 요청 없는 151개 fixture를 통과했습니다. 첫 전체 배포에서는 Chrome 사용자 네임스페이스 생성이 기본 seccomp에서 거부됐고, 공식 Playwright v1.55.0 seccomp 프로필 적용 뒤에는 `cap_drop: ALL`로 비워진 capability bounding set 때문에 sandbox의 안전한 빈 디렉터리 `chroot`가 다시 거부됐습니다. adapter에만 `SYS_CHROOT`를 되돌린 뒤 sandboxed Chrome, sidecar `/readyz`, migration·log-init과 11개 장기 서비스 health, 로컬 접속을 모두 확인했습니다.
+
+운영 구성은 Playwright v1.55.0 seccomp 프로필과 `SYS_CHROOT` 하나를 KORAIL adapter에만 적용합니다. `pwuser` 비루트 실행, 읽기 전용 루트 파일시스템, `cap_drop: ALL`, `no-new-privileges`는 유지하며, Chrome을 `--no-sandbox`로 실행하거나 `seccomp=unconfined` 또는 `SYS_ADMIN`을 주지 않습니다. 이전 headless 서울→부산 조회 3회는 모두 HTTP 423이었고 `wait_result` 단계의 `marker_unauthorized_tool` 보호 신호를 확인했습니다. 같은 OCI·ARM64 이미지의 Pydoll GUI/non-headless 1회 조회가 열차 13개를 정상 판독한 뒤, 기본 배포를 원격 화면 listener가 없는 내부 Xvfb non-headless 모드로 바꿨습니다. 전체 프로필 재배포 후 실제 배포된 sidecar HTTP 경계에서도 같은 열차 13개와 좌석 상태를 정상 판독했습니다. 이는 검증된 실행 모드를 기본 배포와 일치시킨 결과이며 보호 우회를 보장하지 않습니다. 보호 신호가 나타난 실행은 cooldown 중 재시도하지 않습니다.
 
 ### 모니터링
 
@@ -318,7 +326,7 @@ Linux 운영 스크립트는 `/backups/*.dump.age` 경로와 복호화 가능 �
 
 ## KORAIL 브라우저 진단
 
-기본 KORAIL Chromium 서비스는 화면 없이 실행됩니다. 브라우저 화면을 확인해야 할 때만 로컬 noVNC 진단 구성을 사용합니다.
+기본 KORAIL Chromium 서비스는 내부 Xvfb를 사용하되 화면 listener 없이 실행됩니다. 브라우저 화면을 확인해야 할 때만 로컬 noVNC 진단 구성을 사용합니다.
 
 - noVNC는 설치한 컴퓨터에서만 접속할 수 있도록 엽니다.
 - 원본 VNC 포트는 외부에 게시하지 않습니다.
@@ -379,6 +387,6 @@ Windows 드라이브(`/mnt/c` 등)의 저장소에서 `failed to xattr ... .tmp-
 | --- | --- |
 | `bash ./scripts/ops.sh verify` | `./scripts/ops.ps1 verify` |
 
-GitHub Actions에서는 Ubuntu에서 Bash 구문, `ops.sh config`, 운영 명령의 stop 순서·실패 복구·profile·복원 무파괴 계약 테스트, API, 웹, PostgreSQL 경합 계약을 확인하고 KORAIL Chromium 컨테이너 검증은 별도 workflow로 분리합니다. `experimental-browser-verify`는 외부 요청 없이 고정 fixture로 실제 Chromium 실행 경계를 확인합니다. 실험 브라우저 테스트 이미지와 격리 full-stack E2E는 GitHub runner의 사용자 네임스페이스 제한 때문에 Chromium 내부 sandbox만 끄지만, 비루트 사용자, 읽기 전용 루트, capability 제거와 권한 상승 금지 경계를 유지하고 전용 fixture 네트워크만 사용합니다. 운영 Chromium 서비스에는 이 실행 래퍼와 opt-in 환경값을 적용하지 않습니다.
+GitHub Actions에서는 Ubuntu에서 Bash 구문, `ops.sh config`, 운영 명령의 stop 순서·실패 복구·profile·복원 무파괴 계약 테스트, API, 웹, PostgreSQL 경합 계약을 확인하고 KORAIL Chromium 컨테이너 검증은 별도 workflow로 분리합니다. `experimental-browser-verify`는 `linux/amd64`에서 외부 요청 없이 고정 fixture로 실제 Chromium 실행 경계를 확인합니다. `linux/arm64` 이미지 빌드 계약, OCI ARM64 네이티브 non-headless 실행과 배포 sidecar의 실제 읽기 조회는 별도 검증으로 완료했습니다. 실험 브라우저 테스트 이미지와 격리 full-stack E2E는 GitHub runner의 사용자 네임스페이스 제한 때문에 Chromium 내부 sandbox만 끄지만, 비루트 사용자, 읽기 전용 루트, capability 제거와 권한 상승 금지 경계를 유지하고 전용 fixture 네트워크만 사용합니다. 운영 Chromium 서비스에는 이 실행 래퍼와 opt-in 환경값을 적용하지 않습니다.
 
 실제 외부 알림 채널, 공개 도메인, 철도사 계정, 실기기 동작은 자동 테스트와 별도로 확인합니다. Windows Chrome·Edge와 Android PWA를 각각 연결한 뒤 전체 활성 기기 수와 한 상태 변화의 세 기기 동시 수신은 아직 운영 환경에서 확인해야 합니다. Android에서는 PWA를 제거·재설치한 뒤 마스커블 런처 아이콘의 여백과 이전 아이콘 캐시를 먼저 확인합니다. 이어서 알림창 수신, 화면 위 팝업, 실행 중 PWA 포커스, 종료된 PWA 열기와 캐시된 첫 화면 표시 시간, 접속 중 `실시간 알림`을 확인합니다. 공식 인계는 기본 HTTPS 새 창 동작을 KORAIL·SRT 각각 확인하고, 코레일+ booking·ticket과 SRT main·ticket은 별도 QA 문서의 경로별 ADB·목적 화면·설치/미설치 브라우저 행렬을 통과하기 전까지 활성화하지 않습니다. SRT main과 고정 extra `btnNo=2` ticket을 서로 다른 목적지로 확인합니다. iPhone·iPad에서는 16.4 이상 홈 화면 설치, 사용자 탭에서의 권한 요청, foreground 간략 팝업, background 알림센터 수신, 알림 클릭 뒤 기존 PWA 포커스와 미실행 PWA 열기를 각각 확인합니다. Apple banner·Focus 결과는 foreground 팝업 검증과 구분합니다.

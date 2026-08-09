@@ -1,5 +1,7 @@
 FROM mcr.microsoft.com/playwright/python:v1.55.0-noble AS browser-base
 
+ARG TARGETARCH
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome
@@ -20,8 +22,12 @@ RUN apt-get update \
         x11vnc \
         xauth \
         xvfb \
+    && case "${TARGETARCH}" in \
+        amd64|arm64) ;; \
+        *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 64 ;; \
+    esac \
     && curl -fsSLo /tmp/google-chrome-stable.deb \
-        https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+        "https://dl.google.com/linux/direct/google-chrome-stable_current_${TARGETARCH}.deb" \
     && apt-get install -y --no-install-recommends /tmp/google-chrome-stable.deb \
     && rm -f /tmp/google-chrome-stable.deb \
     && rm -rf /var/lib/apt/lists/*

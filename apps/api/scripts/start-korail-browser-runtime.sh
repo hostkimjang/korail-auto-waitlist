@@ -2,7 +2,16 @@
 set -Eeuo pipefail
 
 gui_enabled="${KORAIL_BROWSER_GUI_ENABLED:-false}"
+novnc_enabled="${KORAIL_NOVNC_ENABLED:-false}"
+if [[ "${novnc_enabled}" != "true" && "${novnc_enabled}" != "false" ]]; then
+  echo "KORAIL_NOVNC_ENABLED must be true or false" >&2
+  exit 64
+fi
 if [[ "${gui_enabled}" == "false" ]]; then
+  if [[ "${novnc_enabled}" == "true" ]]; then
+    echo "KORAIL_NOVNC_ENABLED=true requires KORAIL_BROWSER_GUI_ENABLED=true" >&2
+    exit 64
+  fi
   exec "$@"
 fi
 if [[ "${gui_enabled}" != "true" ]]; then
@@ -11,8 +20,8 @@ if [[ "${gui_enabled}" != "true" ]]; then
 fi
 
 password_file="${KORAIL_NOVNC_PASSWORD_FILE:-}"
-if [[ -z "${password_file}" || ! -r "${password_file}" ]]; then
-  echo "GUI mode requires a readable KORAIL_NOVNC_PASSWORD_FILE" >&2
+if [[ "${novnc_enabled}" == "true" && ( -z "${password_file}" || ! -r "${password_file}" ) ]]; then
+  echo "KORAIL_NOVNC_ENABLED=true requires a readable KORAIL_NOVNC_PASSWORD_FILE" >&2
   exit 64
 fi
 
@@ -28,9 +37,11 @@ cookie="$(mcookie)"
 xauth -f "${XAUTHORITY}" add "${DISPLAY}" . "${cookie}"
 unset cookie
 
-vnc_password_file="${runtime_dir}/vnc-password"
-umask 077
-python - "${password_file}" "${vnc_password_file}" <<'PY'
+vnc_password_file=""
+if [[ "${novnc_enabled}" == "true" ]]; then
+  vnc_password_file="${runtime_dir}/vnc-password"
+  umask 077
+  python - "${password_file}" "${vnc_password_file}" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -49,6 +60,7 @@ target = Path(sys.argv[2])
 target.write_bytes(raw + b"\n")
 os.chmod(target, 0o600)
 PY
+fi
 unset KORAIL_NOVNC_PASSWORD_FILE
 
 geometry="${KORAIL_VNC_GEOMETRY:-1440x1000}"
@@ -69,13 +81,6 @@ fi
 
 openbox --sm-disable >"${runtime_dir}/openbox.log" 2>&1 &
 pids+=("$!")
-x11vnc -display "${DISPLAY}" -auth "${XAUTHORITY}" -localhost -rfbport 5900 \
-  -forever -shared -viewonly -noclipboard -nosetclipboard -passwdfile "${vnc_password_file}" \
-  -quiet >"${runtime_dir}/x11vnc.log" 2>&1 &
-pids+=("$!")
-websockify --web=/usr/share/novnc 6080 127.0.0.1:5900 \
-  >"${runtime_dir}/websockify.log" 2>&1 &
-pids+=("$!")
 
 port_ready() {
   python - "$1" <<'PY'
@@ -90,15 +95,25 @@ connection.close()
 PY
 }
 
-for _ in $(seq 1 100); do
-  if port_ready 5900 && port_ready 6080; then
-    break
+if [[ "${novnc_enabled}" == "true" ]]; then
+  x11vnc -display "${DISPLAY}" -auth "${XAUTHORITY}" -localhost -rfbport 5900 \
+    -forever -shared -viewonly -noclipboard -nosetclipboard \
+    -passwdfile "${vnc_password_file}" -quiet >"${runtime_dir}/x11vnc.log" 2>&1 &
+  pids+=("$!")
+  websockify --web=/usr/share/novnc 6080 127.0.0.1:5900 \
+    >"${runtime_dir}/websockify.log" 2>&1 &
+  pids+=("$!")
+
+  for _ in $(seq 1 100); do
+    if port_ready 5900 && port_ready 6080; then
+      break
+    fi
+    sleep 0.1
+  done
+  if ! port_ready 5900 || ! port_ready 6080; then
+    echo "VNC/noVNC proxy did not become ready" >&2
+    exit 70
   fi
-  sleep 0.1
-done
-if ! port_ready 5900 || ! port_ready 6080; then
-  echo "VNC/noVNC proxy did not become ready" >&2
-  exit 70
 fi
 
 "$@" &

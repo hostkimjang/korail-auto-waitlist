@@ -36,7 +36,7 @@ npm run dev
 - Linux에서는 Bash, OpenSSL과 현재 사용자로 실행 가능한 Docker Engine
 - Windows에서는 Docker Desktop과 PowerShell 7
 
-Linux 명령은 Ubuntu 계열의 Bash를 기준으로 합니다. Ubuntu GitHub Actions는 Bash 구문, 운영 명령의 무파괴 계약 테스트와 Compose 설정 검사를 실행하며, WSL2 Ubuntu에서는 실제 Docker Compose 설정과 전체 프로필 재배포를 확인합니다. 실험 Chromium 프로필과 전체 브라우저 검증은 현재 `linux/amd64`만 지원합니다. 네이티브 Ubuntu Docker Engine의 clean clone 설치·재부팅·파일 권한은 [체크리스트](../CHECKLIST.md)의 운영 확인 항목으로 남아 있습니다.
+Linux 명령은 Ubuntu 계열의 Bash를 기준으로 합니다. Ubuntu GitHub Actions는 Bash 구문, 운영 명령의 무파괴 계약 테스트와 Compose 설정 검사를 실행하며, WSL2 Ubuntu에서는 실제 Docker Compose 설정과 전체 프로필 재배포를 확인합니다. 실험 Chromium 이미지는 `linux/amd64`와 `linux/arm64` 빌드 대상을 지원합니다. 기본 KORAIL adapter는 원격 화면이나 noVNC 포트를 열지 않고 내부 Xvfb에서 Pydoll non-headless Chrome을 실행합니다. OCI ARM64 네이티브 환경에서는 이미지 빌드, 외부 요청 없는 151개 fixture, 전체 프로필 재배포, sidecar `/readyz`와 배포된 sidecar HTTP 경계의 서울→부산 열차 13개 읽기 조회까지 통과했습니다. [ARM64 네이티브 Chromium 판정](OPERATIONS.md#arm64-네이티브-chromium-판정)과 [체크리스트](../CHECKLIST.md)를 함께 확인합니다.
 
 ## 1. 저장소 내려받기
 
@@ -172,7 +172,9 @@ docker compose -f compose.yml up -d --build
 docker compose -f compose.yml ps
 ```
 
-브라우저에서 `http://127.0.0.1`을 엽니다. API·worker·scheduler와 KORAIL·SRT sidecar를 포함한 장기 실행 서비스가 모두 `healthy`로 바뀐 뒤 사용하세요. 좌석 조회·감시는 켜져 있지만 계정 기반 예매 시도 gate는 기본적으로 꺼져 있습니다.
+브라우저에서 `http://127.0.0.1`을 엽니다. API·worker·scheduler와 KORAIL·SRT sidecar를 포함한 장기 실행 서비스가 모두 `healthy`로 바뀐 뒤 사용하세요. KORAIL Chrome은 내부 Xvfb의 non-headless 모드로 실행되며 5900·6080 포트를 열지 않습니다. 좌석 조회·감시는 켜져 있지만 계정 기반 예매 시도 gate는 기본적으로 꺼져 있습니다.
+
+Linux의 `bash ./scripts/ops.sh experimental`은 Compose `--wait`로 선택 프로필의 장기 서비스가 180초 안에 실행·healthy 상태가 되어야 성공합니다. 그래도 migration·log-init의 `exited 0`, KORAIL sidecar `/readyz`, 실제 운영사 접근 성공은 서로 다른 경계이므로 각각 확인합니다. adapter가 unhealthy이거나 보호 신호가 기록되면 실제 좌석 조회를 반복하지 마세요.
 
 ## 5. 첫 관리자 계정 만들기
 

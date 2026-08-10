@@ -2902,7 +2902,7 @@ async def test_stale_pending_attempt_recovers_without_second_provider_call(
         attempt = await session.scalar(select(ReservationAttempt))
         event = await session.scalar(
             select(OutboxEvent).where(
-                OutboxEvent.event_type == "watch.reservation_attempt_recovery_required",
+                OutboxEvent.event_type == "watch.reservation_result_requires_manual_check",
                 OutboxEvent.aggregate_id == watch_id,
             )
         )

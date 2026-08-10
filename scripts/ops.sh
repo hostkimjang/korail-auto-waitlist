@@ -90,7 +90,7 @@ show_celery_active_task_summary() {
     local candidate
     load_running_services
 
-    for candidate in worker experimental-rail notification-worker; do
+    for candidate in worker experimental-rail notification-worker maintenance-worker; do
         if contains_service "$candidate"; then
             probe_service="$candidate"
             break
@@ -170,7 +170,7 @@ stop_services_for_graceful_recreate() {
         fi
     done
 
-    for stage_services in 'proxy' 'scheduler' 'worker experimental-rail notification-worker' 'api'; do
+    for stage_services in 'proxy' 'scheduler' 'worker experimental-rail notification-worker maintenance-worker' 'api'; do
         services_to_stop=()
         for service in $stage_services; do
             if contains_service "$service"; then
@@ -187,7 +187,7 @@ restore_drained_services() {
     local profile_arguments=("$@")
     local service
     local services_to_restore=()
-    local ordered_services=(proxy scheduler worker experimental-rail notification-worker api)
+    local ordered_services=(proxy scheduler worker experimental-rail notification-worker maintenance-worker api)
 
     for service in "${ordered_services[@]}"; do
         if contains_service "$service"; then
@@ -204,7 +204,7 @@ restore_drained_services() {
 
 show_experimental_service_states() {
     local services=(
-        proxy web api scheduler worker notification-worker postgres redis
+        proxy web api scheduler worker notification-worker maintenance-worker postgres redis
         experimental-rail korail-browser-adapter srt-provider-adapter
     )
 
@@ -273,7 +273,7 @@ age --decrypt --identity "$identity_file" "$BACKUP_FILE" > /dev/null
 
 restore_backup() {
     local backup_file="$1"
-    local maintenance_services=(proxy api worker notification-worker scheduler experimental-rail)
+    local maintenance_services=(proxy api worker notification-worker maintenance-worker scheduler experimental-rail)
     local services_to_restore=()
     local service
     local stop_status

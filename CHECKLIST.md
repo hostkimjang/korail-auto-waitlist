@@ -27,6 +27,7 @@
 - [x] 설정 화면 밖 전역 OS 알림 연결 CTA와 직접 사용자 행동 권한 요청, 명시적 기기 해제 뒤 재안내 억제
 - [x] 만료된 Web Push 구독만 비활성화하고 다른 활성 기기의 발송을 유지하는 실패 격리
 - [x] Web Push의 접속 중 상태 갱신 힌트와 알림 클릭 시 PWA 포커스·navigate 복구·열기 계약
+- [x] PWA 온라인 navigation의 현재 문서 우선·오프라인 shell fallback, 이전 해시 asset 404와 navigation preload 계약
 - [x] 중요 상태·시험 Web Push의 높은 전달 우선순위와 진동 힌트, `reserving` 긴급 갱신 계약
 - [x] 상태 전이 알림의 실제 후보 열차·운행일·출도착시각·좌석등급·인원과 예약 단계 구조화, 근거 없는 후보 추정 금지
 - [x] Android·Apple 공통 foreground 8초 상단 간략 알림과 비차단 접힘·펼침 동작
@@ -35,6 +36,7 @@
 - [x] 실제 좌석 감지→예매 시작 시각만 사용하는 대기시간과 감지시각 누락 시 합성 0초 금지, 공식 확인 재투영 뒤에도 provider 단계 시각 보존·이전 단계 대비·전체 처리시간 회고 표시
 - [x] KORAIL 실제 브라우저 단계의 인증된 NDJSON 진행 스트림, 단계별 durable outbox·누적 SSE 갱신, 최종 결과 우선과 stream 불확실 종료의 무재전송·`UNKNOWN` 처리
 - [x] 예매 진행 카드의 확인된 단계만 실시간 표시, progressed 이벤트의 전체 대기 재조회 생략, 활성 spinner 반복과 reduced-motion 정지
+- [x] provider·알림 worker 중단과 독립된 전용 maintenance stale recovery, 표준 수동 확인 result, 새로고침·동일 상태 갱신의 누적 단계·실제 후보·만료 상태 복원, terminal 이후 늦은 progress 차단
 - [x] iOS·iPadOS 홈 화면 PWA의 사용자 행동 안에서 시작하는 Web Push 권한 요청 계약
 - [x] 일반·마스커블·Apple Touch·브라우저 탭 16·32px favicon·알림 배지 아이콘 자산 분리
 - [x] 예매 단계와 결제·예약 확인 단계를 구분한 KORAIL·SRT 고정 HTTPS 새 창 인계

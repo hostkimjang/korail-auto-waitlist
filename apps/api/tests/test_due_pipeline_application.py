@@ -256,16 +256,18 @@ async def test_due_pipeline_preserves_sweep_order_grouping_reuse_and_unique_clos
     )
 
     assert group_count == 2
-    assert events[:7] == [
-        "get-srt",
-        "arm-srt",
+    assert events[:10] == [
         "session-enter",
         "expire",
         "recover",
+        "session-exit",
+        "get-srt",
+        "arm-srt",
+        "session-enter",
         "query-1",
         "query-2",
+        "session-exit",
     ]
-    assert events[7] == "session-exit"
     assert provider_requests == [Provider.SRT, Provider.MOCK, Provider.KORAIL]
     srt_events = [event for event in provider_events if event[1] is Provider.SRT]
     assert srt_events == [
@@ -330,6 +332,49 @@ async def test_due_pipeline_closes_created_adapter_when_provider_pipeline_fails(
         await process_due_pipeline([], dependencies=dependencies)
 
     assert closed == [(Provider.MOCK, adapter)]
+
+
+async def test_db_recovery_runs_before_provider_adapter_creation_failure() -> None:
+    events: list[str] = []
+    session = FakeSession([], events)
+
+    async def expire(_session, _now) -> int:
+        events.append("expire")
+        return 0
+
+    async def recover(_session, _now) -> int:
+        events.append("recover")
+        return 1
+
+    def fail_provider(provider: Provider) -> object:
+        events.append(f"get-{provider.value.lower()}")
+        raise RuntimeError("synthetic provider construction failure")
+
+    async def unexpected_group(*_args, **_kwargs) -> None:
+        raise AssertionError("provider groups must not run")
+
+    async def unexpected_reconciliation(*_args, **_kwargs) -> int:
+        raise AssertionError("reconciliation must not run")
+
+    dependencies = _dependencies(
+        process_watch_group=unexpected_group,
+        reconcile_reservation_attempt=unexpected_reconciliation,
+        session_factory=lambda: session,
+        get_execution_provider=fail_provider,
+        expire_elapsed_watches=expire,
+        recover_stale_reservation_attempts=recover,
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic provider construction failure"):
+        await process_due_pipeline([Provider.KORAIL], dependencies=dependencies)
+
+    assert events == [
+        "session-enter",
+        "expire",
+        "recover",
+        "session-exit",
+        "get-korail",
+    ]
 
 
 async def test_due_pipeline_queries_real_db_with_exact_predicates_and_order(

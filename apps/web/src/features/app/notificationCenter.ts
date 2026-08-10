@@ -46,9 +46,16 @@ export interface AppNotificationNotice extends AppToastNotice {
 export interface NotificationCenterState {
   notices: ReadonlyArray<AppNotificationNotice>;
   seenRevisionKeys: ReadonlyArray<string>;
+  subjectRevisionWatermarks: ReadonlyArray<NotificationSubjectRevisionWatermark>;
   announcement: string;
   announcementMode: NotificationAnnouncement;
   sequence: number;
+}
+
+interface NotificationSubjectRevisionWatermark {
+  subjectKey: string;
+  revisionAt: string;
+  lifecyclePhase: number;
 }
 
 export type NotificationCenterAction =
@@ -113,6 +120,7 @@ const MAX_SEEN_REVISIONS = 240;
 export const initialNotificationCenterState: NotificationCenterState = {
   notices: [],
   seenRevisionKeys: [],
+  subjectRevisionWatermarks: [],
   announcement: "",
   announcementMode: "polite",
   sequence: 0,
@@ -128,7 +136,7 @@ function validDuration(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function lifecyclePhasePriority(kind: NotificationKind): number {
+export function notificationLifecyclePhasePriority(kind: NotificationKind): number {
   if (kind === "reserving") return 1;
   if (
     kind === "payment_required"
@@ -176,6 +184,9 @@ export function pushNotifications(
   if (inputs.length === 0) return state;
   const seen = new Set(state.seenRevisionKeys);
   const bySubject = new Map(state.notices.map((notice) => [notice.subjectKey, notice]));
+  const watermarks = new Map(
+    state.subjectRevisionWatermarks.map((watermark) => [watermark.subjectKey, watermark]),
+  );
   const added: AppNotificationNotice[] = [];
   let sequence = state.sequence;
 
@@ -189,17 +200,21 @@ export function pushNotifications(
     if (seen.has(revisionKey)) continue;
     const existing = bySubject.get(subjectKey);
     const incomingRevisionAt = validSortInstant(input.revisionAt);
-    const existingRevisionAt = validSortInstant(existing?.revisionAt);
+    const watermark = watermarks.get(subjectKey);
+    const existingRevisionAt = validSortInstant(existing?.revisionAt)
+      ?? validSortInstant(watermark?.revisionAt);
+    const existingLifecyclePhase = existing === undefined
+      ? watermark?.lifecyclePhase ?? 0
+      : notificationLifecyclePhasePriority(existing.kind);
     const isOlderRevision = incomingRevisionAt !== null
       && existingRevisionAt !== null
       && incomingRevisionAt < existingRevisionAt;
     const losesEqualTimeLifecycleTie = incomingRevisionAt !== null
       && existingRevisionAt !== null
       && incomingRevisionAt === existingRevisionAt
-      && existing !== undefined
-      && lifecyclePhasePriority(kind) <= lifecyclePhasePriority(existing.kind);
+      && notificationLifecyclePhasePriority(kind) <= existingLifecyclePhase;
     if (
-      existing !== undefined
+      existingRevisionAt !== null
       && (isOlderRevision || losesEqualTimeLifecycleTie)
     ) {
       seen.add(revisionKey);
@@ -254,17 +269,26 @@ export function pushNotifications(
       sequence,
     };
     bySubject.set(subjectKey, notice);
+    if (incomingRevisionAt !== null && typeof input.revisionAt === "string") {
+      watermarks.set(subjectKey, {
+        subjectKey,
+        revisionAt: input.revisionAt,
+        lifecyclePhase: notificationLifecyclePhasePriority(kind),
+      });
+    }
     added.push(notice);
   }
 
-  if (added.length === 0) {
-    return { ...state, sequence };
-  }
   const seenRevisionKeys = [...seen].slice(-MAX_SEEN_REVISIONS);
+  const subjectRevisionWatermarks = [...watermarks.values()].slice(-MAX_SEEN_REVISIONS);
+  if (added.length === 0) {
+    return { ...state, seenRevisionKeys, subjectRevisionWatermarks, sequence };
+  }
   const notices = [...bySubject.values()].sort(compareNotifications);
   return {
     notices,
     seenRevisionKeys,
+    subjectRevisionWatermarks,
     announcement: announcementFor(added),
     announcementMode: added.some((notice) => notice.announcement === "assertive")
       ? "assertive"
@@ -290,6 +314,6 @@ export function notificationCenterReducer(
         notices: state.notices.filter((notice) => notice.persistence === "sticky"),
       };
     case "clear":
-      return { ...state, notices: [] };
+      return initialNotificationCenterState;
   }
 }

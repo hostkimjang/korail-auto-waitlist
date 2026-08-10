@@ -61,9 +61,7 @@ def test_runtime_starts_novnc_only_when_a_password_file_is_configured() -> None:
     assert "websockify " in viewer_guard
     assert "VNC/noVNC proxy did not become ready" in viewer_guard
     assert "GUI mode requires a readable KORAIL_NOVNC_PASSWORD_FILE" not in entrypoint
-    assert (
-        "KORAIL_NOVNC_ENABLED=true requires KORAIL_BROWSER_GUI_ENABLED=true" in entrypoint
-    )
+    assert "KORAIL_NOVNC_ENABLED=true requires KORAIL_BROWSER_GUI_ENABLED=true" in entrypoint
 
 
 def _run_entrypoint(*, gui_enabled: str, novnc_enabled: str) -> subprocess.CompletedProcess[str]:
@@ -95,10 +93,7 @@ def test_runtime_rejects_novnc_when_browser_gui_is_disabled() -> None:
     result = _run_entrypoint(gui_enabled="false", novnc_enabled="true")
 
     assert result.returncode == 64
-    assert (
-        result.stderr
-        == "KORAIL_NOVNC_ENABLED=true requires KORAIL_BROWSER_GUI_ENABLED=true\n"
-    )
+    assert result.stderr == "KORAIL_NOVNC_ENABLED=true requires KORAIL_BROWSER_GUI_ENABLED=true\n"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows bash does not inherit test env reliably")
@@ -107,7 +102,6 @@ def test_runtime_rejects_novnc_without_a_readable_secret() -> None:
 
     assert result.returncode == 64
     assert (
-        result.stderr
-        == "KORAIL_NOVNC_ENABLED=true requires a readable "
+        result.stderr == "KORAIL_NOVNC_ENABLED=true requires a readable "
         "KORAIL_NOVNC_PASSWORD_FILE\n"
     )

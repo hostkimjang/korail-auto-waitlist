@@ -85,7 +85,7 @@ function Get-RunningComposeServices {
 
 function Show-CeleryActiveTaskSummary {
     $runningServices = @(Get-RunningComposeServices)
-    $probeService = @('worker', 'experimental-rail', 'notification-worker') |
+    $probeService = @('worker', 'experimental-rail', 'notification-worker', 'maintenance-worker') |
         Where-Object { $runningServices -contains $_ } |
         Select-Object -First 1
     if ($null -eq $probeService) {
@@ -150,7 +150,7 @@ function Stop-ServicesForGracefulRecreate {
     $stopStages = @(
         @('proxy'),
         @('scheduler'),
-        @('worker', 'experimental-rail', 'notification-worker'),
+        @('worker', 'experimental-rail', 'notification-worker', 'maintenance-worker'),
         @('api')
     )
     foreach ($stage in $stopStages) {
@@ -184,6 +184,7 @@ function Invoke-GracefulRecreate {
             'worker',
             'experimental-rail',
             'notification-worker',
+            'maintenance-worker',
             'api'
         )
         $servicesToRestore = @(
@@ -238,7 +239,7 @@ switch ($Command) {
         if ([string]::IsNullOrWhiteSpace($BackupFile)) {
             throw '복원할 /backups/<파일>.dump.age 경로를 지정하세요.'
         }
-        $maintenanceServices = @('proxy', 'api', 'worker', 'notification-worker', 'scheduler', 'experimental-rail')
+        $maintenanceServices = @('proxy', 'api', 'worker', 'notification-worker', 'maintenance-worker', 'scheduler', 'experimental-rail')
         $runningServices = @(& docker @compose --profile experimental-rail ps --status running --services)
         if ($LASTEXITCODE -ne 0) {
             throw "docker compose ps failed with exit code $LASTEXITCODE"

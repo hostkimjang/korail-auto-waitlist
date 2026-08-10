@@ -307,7 +307,7 @@ docker compose -f compose.yml logs -f --tail=200
 특정 서비스만 볼 수도 있습니다.
 
 ```console
-docker compose -f compose.yml logs -f --tail=200 api worker notification-worker
+docker compose -f compose.yml logs -f --tail=200 api worker maintenance-worker notification-worker
 ```
 
 서비스별 파일 로그는 `logs/<service>/current.log`에 기록됩니다. 파일은 자동으로 회전하며 `logs/README.md`만 Git에 포함됩니다.
@@ -389,7 +389,8 @@ Windows 드라이브(`/mnt/c` 등)의 저장소에서 `failed to xattr ... .tmp-
 - 좌석 발견 직후 예매 진행 알림을 연속으로 시험하면 Android 15 알림 쿨다운의 영향을 받을 수 있습니다. 단일 테스트 알림을 2분 이상 간격으로 비교하고, 해당 알림 카테고리가 `긴급`인지 확인합니다.
 - 알림을 눌러도 PWA가 열리지 않으면 설치된 PWA와 브라우저를 완전히 종료한 경우와 이미 실행 중인 경우를 각각 시험하고, 서비스 워커가 최신 버전인지 확인합니다.
 - 앱을 보고 있는 동안 `실시간 알림`이 갱신되지 않으면 네트워크 연결과 `/events` SSE 또는 대기 목록 갱신이 정상인지 확인합니다. Push 내용 자체를 현재 좌석 상태로 사용하지 않습니다.
-- KORAIL 예매 카드가 `자동 예매 요청 시작`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed` outbox 생성 여부를 먼저 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다.
+- KORAIL 예매 카드가 `자동 예매 요청 시작`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed` outbox 생성 여부를 먼저 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다. Pydoll의 `Page load timeout ... LOAD_EVENT_FIRED` 뒤 `KORAIL direct navigation load signal timed out; validating current DOM`이 남으면 로드 완료 신호만 늦은 상태를 현재 DOM·정확 열차 검증으로 이어간 것입니다. 후속 진행 또는 결과 이벤트를 함께 확인하세요.
+- provider 호출, rail worker 또는 외부 알림 발송이 멈춰도 시작 후 5분이 지난 `PENDING`은 전용 `maintenance-worker`가 다음 30초 주기 안에 `UNKNOWN`과 수동 확인 상태로 닫습니다. 5분 30초가 지나도 진행 카드가 유지되면 scheduler의 `recover-stale-reservation-attempts`, `maintenance-worker`의 `maintenance` 큐 수신 상태, `watch.reservation_result_requires_manual_check` outbox를 확인합니다. 이 복구는 예약 POST를 다시 보내지 않으며, 새로고침 뒤에도 확인된 단계와 수동 확인 카드를 canonical REST에서 복원합니다. 출발시간 경과로 감시가 끝났다면 카드도 감시 재개를 주장하지 않고 종료 상태와 공식 결과 수동 확인을 표시합니다.
 - sidecar의 `/v1/reserve-once/stream` 연결이 terminal frame 전에 끊긴 경우 예약 POST를 재전송하지 않습니다. sidecar는 이미 시작한 예약 task를 종료까지 보존하고, main API는 불확실 결과를 `UNKNOWN`으로 기록해 자동 재예매를 차단합니다. 이때 공식 예약 목록과 reconciliation 결과를 확인한 뒤에만 후속 조치합니다.
 - iPhone·iPad에서 OS 알림 연결이 보이지 않으면 iOS·iPadOS 16.4 이상인지와 홈 화면에서 PWA로 실행했는지 확인합니다. Safari 일반 탭의 상태를 설치형 PWA 수신 성공으로 기록하지 않습니다.
 

@@ -115,6 +115,16 @@ async def complete_reservation_attempt(
     attempt.official_handoff_url = (
         str(result.official_handoff_url) if result.official_handoff_url is not None else None
     )
+    if result.progress_stages:
+        attempt.progress_stages = [
+            {
+                "stage": progress.stage,
+                "occurred_at": progress.occurred_at.isoformat(),
+            }
+            for progress in result.progress_stages
+        ]
+    persisted_progress = attempt.progress_stages or []
+
     successful_hold = result.outcome in {
         ReservationOutcome.PAYMENT_REQUIRED,
         ReservationOutcome.RESERVED,
@@ -275,19 +285,7 @@ async def complete_reservation_attempt(
             "retryable": result_policy.retryable,
             "manual_check_required": result_policy.manual_check_required,
             "retry_condition": result_policy.retry_condition,
-            **(
-                {
-                    "progress_stages": [
-                        {
-                            "stage": progress.stage,
-                            "occurred_at": progress.occurred_at.isoformat(),
-                        }
-                        for progress in result.progress_stages
-                    ]
-                }
-                if result.progress_stages
-                else {}
-            ),
+            **({"progress_stages": persisted_progress} if persisted_progress else {}),
         },
         dedupe_key=f"reservation-result:{attempt.id}",
     )

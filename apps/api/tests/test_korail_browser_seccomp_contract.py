@@ -8,9 +8,7 @@ from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_PATH = REPOSITORY_ROOT / "compose.yml"
-SECCOMP_PROFILE_PATH = (
-    REPOSITORY_ROOT / "infra" / "docker" / "playwright-seccomp-v1.55.0.json"
-)
+SECCOMP_PROFILE_PATH = REPOSITORY_ROOT / "infra" / "docker" / "playwright-seccomp-v1.55.0.json"
 SECCOMP_COMPOSE_OPTION = "seccomp:./infra/docker/playwright-seccomp-v1.55.0.json"
 NAMESPACE_SYSCALLS = {"clone", "setns", "unshare"}
 PLAYWRIGHT_V1_55_0_SECCOMP_SHA256 = (
@@ -51,10 +49,7 @@ def test_playwright_seccomp_profile_supports_arm_user_namespaces() -> None:
 
     assert hashlib.sha256(canonical_bytes).hexdigest() == PLAYWRIGHT_V1_55_0_SECCOMP_SHA256
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
-    assert any(
-        entry.get("architecture") == "SCMP_ARCH_AARCH64"
-        for entry in profile["archMap"]
-    )
+    assert any(entry.get("architecture") == "SCMP_ARCH_AARCH64" for entry in profile["archMap"])
     assert any(
         syscall.get("action") == "SCMP_ACT_ALLOW"
         and NAMESPACE_SYSCALLS <= set(syscall.get("names", []))

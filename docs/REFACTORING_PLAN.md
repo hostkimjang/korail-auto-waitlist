@@ -1834,8 +1834,10 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   `stale_reservation_attempt_requires_manual_check` 이유로 `WATCHING` 전이하고, 기존 `next_check_at`이 없을
   때만 `now`를 설정합니다. `EXPIRED`는 candidate를 `expired`, 그 밖에는
   `reservation_attempted` candidate만 `observed`로 되돌립니다. attempt마다 기존
-  `watch.reservation_attempt_recovery_required` event·payload와 attempt ID 기반 dedupe key를 그대로 씁니다.
-  `UNKNOWN`은 새 예약을 허용하는 실패가 아니라 durable ambiguous-result fence로 유지됩니다.
+  이 슬라이스 당시에는 `watch.reservation_attempt_recovery_required` event·payload와 attempt ID 기반 dedupe
+  key를 그대로 썼습니다. 현재 재접속 복구 계약은 같은 dedupe 경계를 유지하면서 웹이 소비하는
+  `watch.reservation_result_requires_manual_check`와 전용 `maintenance-worker`로 이어집니다. `UNKNOWN`은 새
+  예약을 허용하는 실패가 아니라 durable ambiguous-result fence로 유지됩니다.
 - compatibility·경계: wrapper는 호출 시점의 worker `apply_watch_transition`·`add_outbox_event`와 stale window를
   typed dependency로 조립하므로 기존 monkeypatch seam과 due pipeline 호출 계약을 보존합니다. 새 owner가
   worker·services·outbox 구현·watch management·provider runtime에 역의존하지 못하도록 import gate를

@@ -1,5 +1,10 @@
 import type { ReservationCandidateContext, WatchReadModel } from "../../api/watchProjection";
-import type { PaymentHoldEndReason } from "../../domain/reservationAttempt";
+import type {
+  PaymentHoldEndReason,
+  ReservationAttemptOutcome,
+  ReservationProgressStage,
+  ReservationRetryCondition,
+} from "../../domain/reservationAttempt";
 import { normalizeReservationPolicy, type ReservationPolicy } from "../../domain/reservationPolicy";
 import { isWatchStatus, type WatchStatus } from "../../domain/watch";
 
@@ -14,6 +19,7 @@ export interface LegacyWatchSnapshot {
   departure?: string;
   arrival?: string;
   latestReservationAttempt?: unknown;
+  latestReservationAttemptCandidateId?: unknown;
   payment_deadline?: string | null;
   reservationCandidateContexts?: unknown;
   reservationPolicy?: string;
@@ -22,8 +28,12 @@ export interface LegacyWatchSnapshot {
 }
 
 export interface WatchLifecycleAttempt {
+  outcome: ReservationAttemptOutcome;
   startedAt: string | null;
   finishedAt: string | null;
+  manualCheckRequired: boolean;
+  retryCondition: ReservationRetryCondition | null;
+  progressStages?: ReadonlyArray<ReservationProgressStage>;
   paymentHoldEndedAt: string | null;
   paymentHoldEndReason?: PaymentHoldEndReason | null;
 }
@@ -48,6 +58,7 @@ export interface WatchLifecycleSnapshot {
   departure: string;
   arrival: string;
   latestReservationAttempt: WatchLifecycleAttempt | null;
+  latestReservationAttemptCandidateId?: string | null;
   paymentDeadline: string | null;
   reservationCandidateContexts: Readonly<Record<string, WatchLifecycleCandidateContext>>;
   reservationPolicy: ReservationPolicy;
@@ -73,8 +84,33 @@ function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
   if (!isRecord(value)) return null;
   const reason = value.paymentHoldEndReason;
   return {
+    outcome: typeof value.outcome === "string"
+      && [
+        "pending",
+        "payment_required",
+        "reserved",
+        "not_available",
+        "auth_required",
+        "provider_blocked",
+        "failed",
+        "unknown",
+      ].includes(value.outcome)
+      ? value.outcome as ReservationAttemptOutcome
+      : "pending",
     startedAt: nonEmptyString(value.startedAt),
     finishedAt: nonEmptyString(value.finishedAt),
+    manualCheckRequired: value.manualCheckRequired === true,
+    retryCondition: value.retryCondition === "new_availability_episode"
+      || value.retryCondition === "provider_account_reverified"
+      ? value.retryCondition
+      : null,
+    progressStages: Array.isArray(value.progressStages)
+      ? value.progressStages.filter((item): item is ReservationProgressStage => (
+        isRecord(item)
+        && typeof item.stage === "string"
+        && typeof item.occurredAt === "string"
+      ))
+      : [],
     paymentHoldEndedAt: nonEmptyString(value.paymentHoldEndedAt),
     paymentHoldEndReason: reason === "confirmed_payment_deadline_elapsed"
       || reason === "confirmed_payment_hold_no_longer_present"
@@ -124,11 +160,16 @@ export function mapWatchLifecycleSnapshot(watch: WatchReadModel): WatchLifecycle
     latestReservationAttempt: attempt === null
       ? null
       : {
+        outcome: attempt.outcome,
         startedAt: attempt.startedAt,
         finishedAt: attempt.finishedAt,
+        manualCheckRequired: attempt.manualCheckRequired,
+        retryCondition: attempt.retryCondition,
+        progressStages: attempt.progressStages ?? [],
         paymentHoldEndedAt: attempt.paymentHoldEndedAt,
         paymentHoldEndReason: attempt.paymentHoldEndReason ?? null,
       },
+    latestReservationAttemptCandidateId: watch.latestReservationAttemptCandidateId ?? null,
     paymentDeadline: watch.paymentDeadline ?? null,
     reservationCandidateContexts: watch.reservationCandidateContexts ?? {},
     reservationPolicy: normalizeReservationPolicy(watch.reservationPolicy),
@@ -151,6 +192,9 @@ export function mapLegacyWatchLifecycleSnapshot(
     departure: watch.departure ?? "--:--",
     arrival: watch.arrival ?? "--:--",
     latestReservationAttempt: legacyAttempt(watch.latestReservationAttempt),
+    latestReservationAttemptCandidateId: nonEmptyString(
+      watch.latestReservationAttemptCandidateId,
+    ),
     paymentDeadline: typeof watch.payment_deadline === "string" ? watch.payment_deadline : null,
     reservationCandidateContexts: legacyCandidateContexts(watch.reservationCandidateContexts),
     reservationPolicy: normalizeReservationPolicy(watch.reservationPolicy),

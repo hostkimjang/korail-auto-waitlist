@@ -12,6 +12,17 @@ export type ReservationRetryCondition =
   | "new_availability_episode"
   | "provider_account_reverified";
 
+export type ReservationProgressStageName =
+  | "authenticated_session_ready"
+  | "target_rechecked"
+  | "seat_selected"
+  | "reservation_requested";
+
+export interface ReservationProgressStage {
+  stage: ReservationProgressStageName;
+  occurredAt: string;
+}
+
 type ReservationConfirmationOutcome =
   | "confirmed_payment_required"
   | "not_found"
@@ -32,6 +43,7 @@ export interface LatestReservationAttempt {
   retryCondition: ReservationRetryCondition | null;
   paymentHoldEndedAt: string | null;
   paymentHoldEndReason?: PaymentHoldEndReason | null;
+  progressStages?: ReadonlyArray<ReservationProgressStage>;
 }
 
 const outcomes: ReadonlySet<string> = new Set([
@@ -65,6 +77,54 @@ function awareTimestamp(value: unknown): string | null {
   return Number.isNaN(Date.parse(value)) ? null : value;
 }
 
+function reservationProgressStage(value: unknown): ReservationProgressStageName | null {
+  switch (value) {
+    case "authenticated_session_ready":
+    case "target_rechecked":
+    case "seat_selected":
+    case "reservation_requested":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function mapProgressStages(
+  value: unknown,
+  startedAt: string,
+  finishedAt: string | null,
+): ReadonlyArray<ReservationProgressStage> | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const order: Readonly<Record<ReservationProgressStageName, number>> = {
+    authenticated_session_ready: 0,
+    target_rechecked: 1,
+    seat_selected: 2,
+    reservation_requested: 3,
+  };
+  const upperBound = finishedAt === null ? null : Date.parse(finishedAt);
+  let previousTime = Date.parse(startedAt);
+  let previousOrder = -1;
+  const parsed: ReservationProgressStage[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) return null;
+    const stage = reservationProgressStage(item.stage);
+    const occurredAt = awareTimestamp(item.occurred_at);
+    if (stage === null || occurredAt === null) return null;
+    const currentTime = Date.parse(occurredAt);
+    const currentOrder = order[stage];
+    if (
+      currentOrder <= previousOrder
+      || currentTime < previousTime
+      || (upperBound !== null && currentTime > upperBound)
+    ) return null;
+    previousOrder = currentOrder;
+    previousTime = currentTime;
+    parsed.push({ stage, occurredAt });
+  }
+  return parsed;
+}
+
 export function mapLatestReservationAttempt(value: unknown): LatestReservationAttempt | null {
   if (!isRecord(value) || typeof value.outcome !== "string") return null;
   const outcome = value.outcome.toLowerCase();
@@ -82,6 +142,8 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
     return null;
   }
   if (finishedAt !== null && Date.parse(finishedAt) < Date.parse(startedAt)) return null;
+  const progressStages = mapProgressStages(value.progress_stages, startedAt, finishedAt);
+  if (progressStages === null) return null;
   const retryConditionValue = value.retry_condition;
   if (
     retryConditionValue !== null
@@ -149,6 +211,7 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
     manualCheckRequired: value.manual_check_required,
     retryCondition,
     paymentHoldEndedAt,
+    progressStages,
     ...(paymentHoldEndedAt === null ? {} : { paymentHoldEndReason }),
   };
 }

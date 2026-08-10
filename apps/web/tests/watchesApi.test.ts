@@ -558,6 +558,7 @@ describe("watch API boundary", () => {
           retryable: true,
           manual_check_required: false,
           retry_condition: "new_availability_episode",
+          progress_stages: [],
         },
       }],
     });
@@ -570,6 +571,7 @@ describe("watch API boundary", () => {
       manualCheckRequired: false,
       retryCondition: "new_availability_episode",
       paymentHoldEndedAt: null,
+      progressStages: [],
     });
     expect(mapWatch({
       ...apiWatch,
@@ -596,6 +598,46 @@ describe("watch API boundary", () => {
         },
       }],
     }).latestReservationAttempt).toBeNull();
+  });
+
+  it("keeps the newest attempt and its candidate context after monitoring resumes", () => {
+    const mapped = mapWatch({
+      ...apiWatch,
+      status: "watching",
+      candidates: [
+        {
+          ...apiWatch.candidates[0],
+          id: "priority-one",
+          priority: 1,
+          latest_reservation_attempt: null,
+        },
+        {
+          ...apiWatch.candidates[0],
+          id: "attempted-two",
+          train_number: "326",
+          priority: 2,
+          latest_reservation_attempt: {
+            outcome: "unknown",
+            started_at: "2026-08-02T13:04:43Z",
+            finished_at: "2026-08-02T13:05:07Z",
+            retryable: false,
+            manual_check_required: true,
+            retry_condition: null,
+            progress_stages: [{
+              stage: "authenticated_session_ready",
+              occurred_at: "2026-08-02T13:04:44Z",
+            }],
+          },
+        },
+      ],
+    });
+
+    expect(mapped.latestReservationAttemptCandidateId).toBe("attempted-two");
+    expect(mapped.latestReservationAttempt).toMatchObject({
+      outcome: "unknown",
+      manualCheckRequired: true,
+      progressStages: [{ stage: "authenticated_session_ready" }],
+    });
   });
 
   it("maps a finalized missing payment hold only with the complete retry contract", () => {

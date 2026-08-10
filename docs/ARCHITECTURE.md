@@ -239,9 +239,9 @@ fail-closed import-only 경계입니다. request·stage·result의 Pydantic 검�
 실행 adapter가 좌석 감시 capability를 제공하기 시작할 때 기존 공식 watch의 다음 확인 시각을 재무장하는
 UoW는 `watch_management/arming_application.py`가 소유합니다. KORAIL·SRT만 대상으로 동일 provider·official
 mode·허용 상태·`next_check_at IS NULL` 행을 `FOR UPDATE SKIP LOCKED`로 잠그고, 행이 있을 때만 전달받은
-시각으로 갱신해 commit합니다. worker는 task-scoped adapter 생성 뒤 이 application에 현재 session factory와
-provider resolver를 주입하며, expiry·stale recovery·due 조회보다 먼저 실행하고 adapter lifecycle은 기존
-due pipeline이 계속 소유합니다.
+시각으로 갱신해 commit합니다. due pipeline은 provider I/O와 무관한 expiry·stale recovery를 먼저 끝낸 뒤
+task-scoped adapter를 생성하고, 이 application에 현재 session factory와 provider resolver를 주입합니다.
+arming은 실제 due 조회보다 먼저 실행하며 adapter lifecycle은 기존 due pipeline이 계속 소유합니다.
 
 due sweep 전에 arming을 시작할 provider 순서는 순수 `observations/due_provider_policy.py`가 소유합니다.
 SRT를 항상 첫 대상으로 둔 새 list를 반환하고, KORAIL background 3중 opt-in 결과가 참일 때만 KORAIL을 두
@@ -302,9 +302,11 @@ Chrome Android의 origin별 사이트 알림 채널은 브라우저가 소유합
 
 접속 중인 앱에는 서비스 워커가 `watch_id`, 상태 같은 비밀값 없는 힌트만 전달합니다. React 앱은 이 값을 좌석 근거로 직접 표시하지 않고, 기존 REST/SSE 갱신 경계에서 최신 대기 상태를 다시 읽은 뒤 알림 센터의 subject·revision 중복 제거 계약으로 합칩니다. 최초 canonical REST snapshot은 좌석 발견을 새 사건으로 알리지 않지만 이미 진행·결제·인증 상태인 작업은 재접속 뒤 복원합니다. 현재 예매 진행 카드는 같은 watch의 결과 revision이나 사용자의 명시적 닫기 전까지 유지합니다. 모바일 상단 종 버튼도 이 canonical 알림센터를 제어하며 별도 알림 저장소를 만들지 않습니다. 건수 배지와 빈 상태를 제공하되 페이지를 막는 modal로 바꾸지 않습니다. SSE 진행 시각은 event payload만 사용하고 미래 REST 관측 또는 다른 attempt와 섞지 않으며, 역순·범위 밖 시각은 표시하지 않습니다. 좌석 발견부터 자동 예매 요청 시작까지의 시간은 같은 후보의 실제 `seat_detected_at`과 `attempt_started_at`이 모두 유효할 때만 표시하고, 감지 시각이 없으면 0초를 합성하지 않습니다.
 
-예약 attempt에는 확인된 누적 provider 단계와 원래 시각을 함께 저장합니다. 따라서 새로고침 뒤에도 현재 진행 카드의 세부 단계가 시작 단계 하나로 축소되지 않으며, `UNKNOWN` 수동 확인 상태도 같은 watch의 진행 카드를 교체해 복원됩니다. 다중 후보에서는 화면 표시 우선순위와 별개로 가장 최근 attempt의 실제 후보 context를 사용합니다.
+예약 attempt에는 확인된 누적 provider 단계와 원래 시각을 함께 저장합니다. 따라서 새로고침 뒤에도 현재 진행 카드의 세부 단계가 시작 단계 하나로 축소되지 않으며, `UNKNOWN` 수동 확인 상태도 같은 watch의 진행 카드를 교체해 복원됩니다. status 문자열이 그대로여도 REST의 새 진행 단계나 수동 확인 evidence가 생기면 같은 subject의 새 revision으로 반영합니다. 다중 후보에서는 화면 표시 우선순위와 별개로 가장 최근 attempt의 실제 후보 context를 사용합니다.
 
-KORAIL 예약은 기존 단일 JSON 명령과 호환되는 별도의 인증된 NDJSON 스트림을 사용합니다. sidecar가 실제 브라우저 단계에서 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested` 시각을 내보내면 main API는 진행 단계마다 짧은 트랜잭션으로 누적 `watch.reservation_progressed` outbox를 커밋하고, `/events` SSE가 같은 watch의 sticky 진행 카드를 갱신합니다. 이미 후보 context가 있는 화면은 전체 대기 목록을 다시 읽지 않고 진행 event를 반영합니다. 초기 또는 오래된 snapshot 때문에 event를 매핑할 수 없으면 event를 queue에 보존하고 canonical 목록을 한 번 갱신한 뒤 재투영합니다. 아직 발생하지 않은 단계나 완료시간은 추정하지 않으며, 최종 `watch.reservation_result`가 진행 snapshot의 authoritative superset으로 카드를 교체합니다. 두 event의 `created_at`이 같아도 terminal lifecycle이 reserving보다 우선하고, 이미 표시한 terminal을 늦은 progress가 되돌리지 못합니다. 공식 confirmation이 결과를 재투영해도 원래 stage timestamp를 보존하고 화면은 각 이전 단계 대비 시간과 전체 `finished-started` 시간을 함께 표시합니다. `target_rechecked` 구간은 direct URL 이동·결과 렌더링·정확 열차 확인을 포함합니다. 스트림 연결이 끊겨도 이미 시작한 예약 명령은 sidecar에서 취소하거나 재전송하지 않으며, terminal 결과를 확인하지 못한 main API는 `UNKNOWN`으로 닫아 자동 재예매를 차단하고 공식 reconciliation 대상으로 남깁니다. 활성 단계 spinner는 결과 또는 다음 상태가 올 때까지 회전하고 `prefers-reduced-motion` 환경에서는 정지합니다. 새 revision은 Android·Apple 공통으로 같은 `실시간 알림` surface의 8초 간략 미리보기에 표시되고, 이후 접힌 건수 header에 남습니다. 이 미리보기는 별도 live region을 만들지 않으며 문서 스크롤·입력·초점을 잠그지 않습니다.
+KORAIL 예약은 기존 단일 JSON 명령과 호환되는 별도의 인증된 NDJSON 스트림을 사용합니다. sidecar가 실제 브라우저 단계에서 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested` 시각을 내보내면 main API는 진행 단계마다 짧은 트랜잭션으로 누적 `watch.reservation_progressed` outbox를 커밋하고, `/events` SSE가 같은 watch의 sticky 진행 카드를 갱신합니다. 이미 후보 context가 있는 화면은 전체 대기 목록을 다시 읽지 않고 진행 event를 반영합니다. 초기 또는 오래된 snapshot 때문에 event를 매핑할 수 없으면 event를 queue에 보존하고 canonical 목록을 한 번 갱신한 뒤 재투영합니다. 아직 발생하지 않은 단계나 완료시간은 추정하지 않으며, 최종 `watch.reservation_result`가 진행 snapshot의 authoritative superset으로 카드를 교체합니다. 두 event의 `created_at`이 같아도 terminal lifecycle이 reserving보다 우선하고, 이미 표시한 terminal을 늦은 progress가 되돌리지 못합니다. 사용자가 terminal 카드를 닫아도 subject별 terminal watermark는 logout 전까지 남아 더 오래된 진행 revision이 카드를 다시 열지 못하게 합니다. 공식 confirmation이 결과를 재투영해도 원래 stage timestamp를 보존하고 화면은 각 이전 단계 대비 시간과 전체 `finished-started` 시간을 함께 표시합니다. `target_rechecked` 구간은 direct URL 이동·결과 렌더링·정확 열차 확인을 포함합니다. 스트림 연결이 끊겨도 이미 시작한 예약 명령은 sidecar에서 취소하거나 재전송하지 않으며, terminal 결과를 확인하지 못한 main API는 `UNKNOWN`으로 닫아 자동 재예매를 차단하고 공식 reconciliation 대상으로 남깁니다. 활성 단계 spinner는 결과 또는 다음 상태가 올 때까지 회전하고 `prefers-reduced-motion` 환경에서는 정지합니다. 새 revision은 Android·Apple 공통으로 같은 `실시간 알림` surface의 8초 간략 미리보기에 표시되고, 이후 접힌 건수 header에 남습니다. 이 미리보기는 별도 live region을 만들지 않으며 문서 스크롤·입력·초점을 잠그지 않습니다.
+
+Pydoll이 direct navigation에서 `LOAD_EVENT_FIRED`를 제한 시간 안에 받지 못했더라도 현재 DOM은 이미 결과 화면일 수 있습니다. 이 경우 sidecar는 페이지를 즉시 실패로 버리지 않고 기존 보호 화면 검사, 결과 존재 확인, 정확 열차·좌석 검증을 그대로 통과한 경우에만 예약 흐름을 이어갑니다.
 
 iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push를 지원합니다. 권한 요청은 사용자 행동 안에서 즉시 실행해야 하므로 공개키 조회나 service worker 대기보다 먼저 수행합니다. Apple의 banner·Focus·Time Sensitive 표시와 Android의 heads-up 채널 등급은 PWA가 선택할 수 없으며, 앱 사용 중 확실한 표시는 위 foreground 미리보기가 담당합니다.
 
@@ -1053,8 +1055,11 @@ class·Table·mapper 객체만 alias로 노출합니다. 전체 metadata bootstr
 `reservations/stale_attempt_recovery_application.py`가 소유합니다. 5분 cutoff에 도달한 attempt와 연결된
 candidate·watch만 `FOR UPDATE OF ... SKIP LOCKED`로 잠그며, joined-load되는 nullable registration evidence는
 잠금 대상에서 제외합니다. 선택된 attempt는 재시도 가능 실패가 아니라 결과 불명인 `UNKNOWN` fence로
-완결하고, watch 상태에 맞춰 candidate를 관측 또는 만료 상태로 복구한 뒤 수동 확인 outbox와 함께 한 번만
-commit합니다. 빈 sweep은 commit하지 않으며 예외를 별도로 rollback하거나 번역하지 않습니다. 현재 SQL·상태
+완결하고, watch 상태에 맞춰 candidate를 관측 또는 만료 상태로 복구한 뒤 웹이 소비하는 표준 수동 확인
+result outbox와 함께 한 번만 commit합니다. 이 DB-only sweep은 provider adapter 생성·arming보다 먼저 실행하며,
+단일 rail worker가 provider 호출에 묶이거나 외부 알림 발송이 지연된 경우에도 전용 `maintenance` 큐와
+`maintenance-worker`의 30초 주기 독립 task가 같은 복구를 수행합니다. 빈 sweep은 commit하지 않으며 예외를
+별도로 rollback하거나 번역하지 않습니다. 현재 SQL·상태
 회귀는 이 계약을 고정하지만 실제 PostgreSQL 두 세션의 `SKIP LOCKED` 경쟁까지 증명한 것은 아닙니다.
 
 자세한 운영 설정은 [설치·운영 가이드](OPERATIONS.md)를 참고하세요.

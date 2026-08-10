@@ -33,6 +33,7 @@ celery_app.conf.update(
         "rail_waitlist.worker.process_due_watches": {"queue": "rail"},
         "rail_waitlist.worker.process_watch_now": {"queue": "rail"},
         "rail_waitlist.worker.reconcile_reservation_attempt": {"queue": "rail"},
+        "rail_waitlist.worker.recover_stale_reservation_attempts": {"queue": "maintenance"},
         "rail_waitlist.worker.deliver_outbox": {"queue": "notifications"},
     },
     beat_schedule={
@@ -44,6 +45,11 @@ celery_app.conf.update(
         "deliver-outbox": {
             "task": "rail_waitlist.worker.deliver_outbox",
             "schedule": 5.0,
+        },
+        "recover-stale-reservation-attempts": {
+            "task": "rail_waitlist.worker.recover_stale_reservation_attempts",
+            "schedule": 30.0,
+            "options": {"expires": 30.0},
         },
     },
 )

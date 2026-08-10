@@ -159,6 +159,17 @@ describe("reservation recovery toast", () => {
     expect(toast.steps?.at(-1)).toEqual({ label: "감시·수동 확인", state: "active" });
   });
 
+  it("keeps an expired unknown result visible without claiming monitoring resumed", () => {
+    const toast = buildReservationRecoveryToast(
+      { ...transition, monitoringResumed: false },
+      result({ outcome: "unknown" }),
+    );
+
+    expect(toast.description).toContain("감시는 종료되었습니다");
+    expect(toast.description).not.toContain("감시는 계속됩니다");
+    expect(toast.steps?.at(-1)).toEqual({ label: "공식 결과 수동 확인", state: "active" });
+  });
+
   it("describes a conclusively failed retryable attempt without one-shot wording", () => {
     const toast = buildReservationRecoveryToast(transition, result({
       outcome: "failed",

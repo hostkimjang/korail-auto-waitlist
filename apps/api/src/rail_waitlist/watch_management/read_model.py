@@ -28,6 +28,7 @@ def reservation_attempt_projection(
         "confirmation_outcome": attempt.confirmation_outcome,
         "started_at": attempt.started_at,
         "finished_at": attempt.finished_at,
+        "progress_stages": attempt.progress_stages or [],
         "post_deadline_reconciled_at": attempt.post_deadline_reconciled_at,
         "payment_hold_end_reason": hold_end_reason,
         "retryable": automatic_hold_retry or (not payment_hold_ended and result_policy.retryable),

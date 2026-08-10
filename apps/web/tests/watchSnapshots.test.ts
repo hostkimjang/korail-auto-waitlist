@@ -23,6 +23,7 @@ function attempt(
     manualCheckRequired: false,
     retryCondition: null,
     paymentHoldEndedAt: null,
+    progressStages: [],
     ...values,
   };
 }
@@ -39,6 +40,7 @@ function watch(id: string, status: WatchStatus): WatchLifecycleSnapshot {
     departure: "14:35",
     arrival: "15:39",
     latestReservationAttempt: null,
+    latestReservationAttemptCandidateId: null,
     paymentDeadline: null,
     reservationCandidateContexts: {},
     reservationPolicy: "notify_only",
@@ -200,6 +202,96 @@ describe("watch snapshot reconciliation", () => {
     const next = [watch("resume", "watching")];
 
     expect(detectWatchActionTransitions(previous, next)).toEqual([]);
+  });
+
+  it("replaces and rehydrates reserving only with a durable unknown manual-check result", () => {
+    const previous = [watch("resume", "reserving")];
+    const recovered: WatchLifecycleSnapshot = {
+      ...watch("resume", "watching"),
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:10:15Z",
+        manualCheckRequired: true,
+        progressStages: [{
+          stage: "authenticated_session_ready",
+          occurredAt: "2026-08-03T12:09:46Z",
+        }],
+      }),
+      latestReservationAttemptCandidateId: "candidate-two",
+      reservationCandidateContexts: {
+        "candidate-two": {
+          train: "KTX 326",
+          seatClassLabel: "일반실",
+          date: "8월 12일 (수)",
+          departure: "12:15",
+          arrival: "13:08",
+        },
+      },
+    };
+
+    expect(detectWatchActionTransitions(previous, [recovered])).toMatchObject([{
+      status: "monitoring_resumed",
+      revisionAt: "2026-08-03T12:10:15Z",
+      train: "KTX 326",
+      reservationProgress: [{ stage: "authenticated_session_ready" }],
+    }]);
+    expect(hydrateCurrentWatchActionTransitions([recovered])).toMatchObject([{
+      status: "monitoring_resumed",
+      revision: "monitoring_resumed:2026-08-03T12:10:15Z",
+      monitoringResumed: true,
+    }]);
+
+    const expired = { ...recovered, status: "expired" as const };
+    expect(hydrateCurrentWatchActionTransitions([expired])).toMatchObject([{
+      status: "monitoring_resumed",
+      monitoringResumed: false,
+    }]);
+  });
+
+  it("reconciles durable progress and manual-check evidence without a status edge", () => {
+    const reserving = {
+      ...watch("same-status-progress", "reserving"),
+      latestReservationAttempt: attempt({
+        startedAt: "2026-08-03T12:09:45Z",
+      }),
+    };
+    const progressed = {
+      ...reserving,
+      latestReservationAttempt: attempt({
+        startedAt: "2026-08-03T12:09:45Z",
+        progressStages: [{
+          stage: "target_rechecked",
+          occurredAt: "2026-08-03T12:09:47Z",
+        }],
+      }),
+    };
+
+    expect(detectWatchActionTransitions([reserving], [progressed])).toMatchObject([{
+      status: "reserving",
+      revision: "reserving:2026-08-03T12:09:47Z",
+      reservationProgress: [{ stage: "target_rechecked" }],
+    }]);
+
+    const pendingExpired = {
+      ...watch("same-status-manual", "expired"),
+      latestReservationAttempt: attempt({
+        startedAt: "2026-08-03T12:09:45Z",
+      }),
+    };
+    const recoveredExpired = {
+      ...pendingExpired,
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:10:15Z",
+        manualCheckRequired: true,
+      }),
+    };
+    expect(detectWatchActionTransitions([pendingExpired], [recoveredExpired])).toMatchObject([{
+      status: "monitoring_resumed",
+      monitoringResumed: false,
+    }]);
   });
 
   it("reports authentication recovery when an auth-required watch resumes monitoring", () => {

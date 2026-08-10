@@ -18,6 +18,7 @@ TOP_LEVEL_DEFINITIONS: dict[str, type[ast.AST]] = {
     "_watch_expiry_dependencies": ast.FunctionDef,
     "_expire_elapsed_watches": ast.AsyncFunctionDef,
     "_recover_stale_reservation_attempts": ast.AsyncFunctionDef,
+    "_recover_stale_reservation_attempts_independently": ast.AsyncFunctionDef,
     "_provider_circuit_is_closed": ast.AsyncFunctionDef,
     "_arm_supported_provider_watches": ast.AsyncFunctionDef,
     "_arm_supported_srt_watches": ast.AsyncFunctionDef,
@@ -36,6 +37,7 @@ TOP_LEVEL_DEFINITIONS: dict[str, type[ast.AST]] = {
     "_reconciliation_dependencies": ast.FunctionDef,
     "_reconcile_reservation_attempt": ast.AsyncFunctionDef,
     "process_due_watches": ast.FunctionDef,
+    "recover_abandoned_reservations": ast.FunctionDef,
     "process_watch_now": ast.FunctionDef,
     "reconcile_reservation_attempt": ast.FunctionDef,
     "deliver_outbox": ast.FunctionDef,
@@ -50,6 +52,7 @@ NESTED_DEFINITIONS = {
 CELERY_TASKS = {
     "deliver_outbox": "rail_waitlist.worker.deliver_outbox",
     "process_due_watches": "rail_waitlist.worker.process_due_watches",
+    "recover_abandoned_reservations": "rail_waitlist.worker.recover_stale_reservation_attempts",
     "process_watch_now": "rail_waitlist.worker.process_watch_now",
     "reconcile_reservation_attempt": "rail_waitlist.worker.reconcile_reservation_attempt",
 }
@@ -172,6 +175,16 @@ COMPOSE_ENTRYPOINTS = {
         "--queues=notifications",
         "--concurrency=1",
         "--hostname=notifications@%h",
+    ],
+    "maintenance-worker": [
+        "celery",
+        "-A",
+        "rail_waitlist.worker.celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--queues=maintenance",
+        "--concurrency=1",
+        "--hostname=maintenance@%h",
     ],
     "scheduler": [
         "celery",

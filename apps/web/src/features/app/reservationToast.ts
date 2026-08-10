@@ -375,12 +375,15 @@ export function buildReservationRecoveryToast(
     ...journeyFields(transition),
   };
   if (result.manualCheckRequired || !result.retryable) {
+    const monitoringResumed = transition.monitoringResumed !== false;
     return {
       ...base,
       kind: "manual_check",
       autoCloseMs: null,
       title: "예매 결과를 확인해야 합니다",
-      description: `${base.description} · 결과가 불명확해 자동 재예매를 보류합니다. 공식 예약 내역을 확인해 주세요. 감시는 계속됩니다.`,
+      description: monitoringResumed
+        ? `${base.description} · 결과가 불명확해 자동 재예매를 보류합니다. 공식 예약 내역을 확인해 주세요. 감시는 계속됩니다.`
+        : `${base.description} · 결과가 불명확해 자동 재예매를 보류합니다. 감시는 종료되었습니다. 공식 예약 내역을 확인해 주세요.`,
       steps: [
         ...(detailedResultSteps(transition, "manual_check") ?? [
           completed("좌석 발견", times.detected),
@@ -388,7 +391,7 @@ export function buildReservationRecoveryToast(
           completed("예매 요청", times.attempted),
           failed("공식 결과 확인"),
         ]),
-        active("감시·수동 확인", times.current),
+        active(monitoringResumed ? "감시·수동 확인" : "공식 결과 수동 확인", times.current),
       ],
     };
   }

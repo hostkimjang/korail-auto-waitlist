@@ -179,6 +179,12 @@ async def process_due_pipeline(
     groups: dict[tuple[Provider, str], list[str]] = {}
     reconciliation_rows: list[tuple[str, Provider]] = []
     try:
+        # Expiry and abandoned-attempt recovery are DB-only maintenance. Run them
+        # before constructing provider adapters so a broken or blocked provider
+        # cannot strand a durable PENDING attempt in RESERVING indefinitely.
+        async with dependencies.session_factory() as session:
+            await dependencies.expire_elapsed_watches(session, now)
+            await dependencies.recover_stale_reservation_attempts(session, now)
         # External adapters are task-scoped. Reusing one adapter per provider keeps
         # Redis/HTTP resources on this task's event loop and shares a service-day cache.
         for provider in _unique_providers(providers_to_arm):
@@ -190,8 +196,6 @@ async def process_due_pipeline(
                 adapter=execution_adapter,
             )
         async with dependencies.session_factory() as session:
-            await dependencies.expire_elapsed_watches(session, now)
-            await dependencies.recover_stale_reservation_attempts(session, now)
             reconciliation_rows = list(
                 (
                     await session.execute(

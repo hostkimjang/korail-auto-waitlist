@@ -401,6 +401,11 @@ class ReservationAttempt(Base):
     post_deadline_reconciled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    progress_stages: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON,
+        default=list,
+        server_default="[]",
+    )
     candidate: Mapped[WatchCandidate] = relationship(back_populates="reservation_attempts")
 
 

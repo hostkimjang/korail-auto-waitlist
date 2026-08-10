@@ -20,7 +20,9 @@ def test_migration_0026_unifies_existing_observation_preferences_at_five_seconds
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == "0029_ui_refresh_interval"
+    assert ScriptDirectory.from_config(config).get_current_head() == (
+        "0030_attempt_progress"
+    )
     command.upgrade(config, "0025_admin_observation_intervals")
 
     with sqlite3.connect(database_path) as connection:

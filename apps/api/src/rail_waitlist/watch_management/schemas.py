@@ -18,6 +18,7 @@ from ..domain import (
     WatchStatus,
 )
 from ..observations.contracts import ObservationErrorCategory
+from ..reservations.contracts import ReservationProgressStage
 from ..schema_base import ApiModel
 from ..timetable_management.schemas import TimetableSeatEvidenceRead
 
@@ -169,6 +170,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
     ) = None
     started_at: datetime
     finished_at: datetime | None
+    progress_stages: list[ReservationProgressStage] = Field(default_factory=list)
     post_deadline_reconciled_at: datetime | None = None
     payment_hold_end_reason: (
         Literal[
@@ -201,6 +203,12 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
 
     @model_validator(mode="after")
     def validate_attempt_time_range(self) -> Self:
+        stage_order = {
+            "authenticated_session_ready": 0,
+            "target_rechecked": 1,
+            "seat_selected": 2,
+            "reservation_requested": 3,
+        }
         for name, value in (
             ("started_at", self.started_at),
             ("finished_at", self.finished_at),
@@ -210,6 +218,22 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
                 raise ValueError(f"{name} must include a timezone")
         if self.finished_at is not None and self.finished_at < self.started_at:
             raise ValueError("finished_at must not precede started_at")
+        previous = self.started_at
+        previous_stage_order = -1
+        seen: set[str] = set()
+        for progress in self.progress_stages:
+            current_stage_order = stage_order[progress.stage]
+            if (
+                progress.stage in seen
+                or current_stage_order <= previous_stage_order
+                or progress.occurred_at < previous
+            ):
+                raise ValueError("progress_stages must be unique and chronological")
+            if self.finished_at is not None and progress.occurred_at > self.finished_at:
+                raise ValueError("progress_stages cannot occur after finished_at")
+            seen.add(progress.stage)
+            previous = progress.occurred_at
+            previous_stage_order = current_stage_order
         return self
 
 

@@ -369,7 +369,11 @@ describe("live reservation notices", () => {
       event_type: "watch.reservation_result_requires_manual_check",
       aggregate_id: watch.id,
       created_at: "2026-08-03T12:10:01Z",
-      payload: { watch_id: watch.id, candidate_id: "candidate" },
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        monitoring_resumed: false,
+      },
     }, [watch]);
 
     expect(notice).toMatchObject({
@@ -377,6 +381,8 @@ describe("live reservation notices", () => {
       title: "예매 결과를 확인해야 합니다",
       autoCloseMs: null,
     });
+    expect(notice?.description).toContain("감시는 종료되었습니다");
+    expect(notice?.steps?.at(-1)?.label).toBe("공식 결과 수동 확인");
   });
 
   it("replaces payment progress with a terminal cancellation notice after confirmed hold expiry", () => {

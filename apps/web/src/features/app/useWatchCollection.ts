@@ -13,7 +13,10 @@ import { delayUntilRefreshRotationEnds } from "../../shared/lib/refreshIndicator
 import { createReservationPolicyMutationGuard } from "../../shared/lib/reservationPolicyMutationGuard";
 import { buildLiveReservationNotice } from "./liveReservationNotice";
 import { createLiveDataReloadCoordinator, type LiveDataReloadCoordinator } from "./liveDataReloadCoordinator";
-import type { AppNotificationInput } from "./notificationCenter";
+import {
+  notificationLifecyclePhasePriority,
+  type AppNotificationInput,
+} from "./notificationCenter";
 import { subscribeToPwaNotificationHints } from "./pwaNotificationBridge";
 import {
   buildAvailabilityLostToast,
@@ -171,23 +174,56 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
       ))) {
         onProviderAuthenticationTransition();
       }
-      const liveNoticeSubjects = new Set(
-        liveReservationNotices.map((notice) => notice.subjectKey),
+      const liveNoticesBySubject = new Map(
+        liveReservationNotices.map((notice) => [notice.subjectKey, notice]),
       );
+      const liveNoticeDominates = (notice: AppNotificationInput): boolean => {
+        const subjectKey = notice.subjectKey ?? notice.key;
+        if (subjectKey === undefined) return false;
+        const liveNotice = liveNoticesBySubject.get(subjectKey);
+        if (liveNotice === undefined) return false;
+        const canonicalPhase = notificationLifecyclePhasePriority(notice.kind ?? "generic");
+        const livePhase = notificationLifecyclePhasePriority(liveNotice.kind ?? "generic");
+        if (canonicalPhase !== livePhase) return livePhase > canonicalPhase;
+        if (canonicalPhase >= 2) return false;
+        const canonicalRevisionAt = Date.parse(notice.revisionAt ?? "");
+        const liveRevisionAt = Date.parse(liveNotice.revisionAt ?? "");
+        if (Number.isFinite(canonicalRevisionAt) && Number.isFinite(liveRevisionAt)) {
+          return liveRevisionAt >= canonicalRevisionAt;
+        }
+        return true;
+      };
       const hydratedNotices = isInitialCanonicalSnapshot
         ? hydrateCurrentWatchActionTransitions(nextSnapshots)
-            .filter((item) => !liveNoticeSubjects.has(`watch:${item.id}`))
             .map(buildWatchActionToast)
+            .filter((notice) => !liveNoticeDominates(notice))
         : [];
       const lifecycleNotices = actionTransitions
-        .filter((item) => !liveNoticeSubjects.has(`watch:${item.id}`))
-        .map(buildWatchActionToast);
+        .map(buildWatchActionToast)
+        .filter((notice) => !liveNoticeDominates(notice));
+      const canonicalNoticesBySubject = new Map(
+        [...hydratedNotices, ...lifecycleNotices].flatMap((notice) => {
+          const subjectKey = notice.subjectKey ?? notice.key;
+          return subjectKey === undefined ? [] : [[subjectKey, notice] as const];
+        }),
+      );
+      const selectedLiveReservationNotices = liveReservationNotices.filter((liveNotice) => {
+        const subjectKey = liveNotice.subjectKey ?? liveNotice.key;
+        if (subjectKey === undefined) return true;
+        const canonicalNotice = canonicalNoticesBySubject.get(subjectKey);
+        if (canonicalNotice === undefined) return true;
+        const canonicalPhase = notificationLifecyclePhasePriority(
+          canonicalNotice.kind ?? "generic",
+        );
+        const livePhase = notificationLifecyclePhasePriority(liveNotice.kind ?? "generic");
+        return canonicalPhase < livePhase;
+      });
       pushNotifications([
         ...hydratedNotices,
         ...transitions.map(buildSeatFoundToast),
         ...lifecycleNotices,
         ...availabilityLosses.map(buildAvailabilityLostToast),
-        ...liveReservationNotices,
+        ...selectedLiveReservationNotices,
       ]);
     } catch (error: unknown) {
       if (

@@ -97,6 +97,31 @@ describe("notification center lifecycle", () => {
     },
   );
 
+  it("keeps a dismissed terminal watermark from reopening older reservation progress", () => {
+    const terminal = pushNotifications(initialNotificationCenterState, [notice({
+      title: "공식 결과 확인 필요",
+      revisionKey: "watch:one:manual:terminal",
+      revisionAt: "2026-08-03T12:10:00Z",
+      kind: "manual_check",
+    })]);
+    const terminalNotice = terminal.notices[0];
+    expect(terminalNotice).toBeDefined();
+    if (terminalNotice === undefined) throw new Error("terminal notice was not created");
+    const dismissed = notificationCenterReducer(terminal, {
+      type: "dismiss",
+      id: terminalNotice.id,
+    });
+    const lateProgress = pushNotifications(dismissed, [notice({
+      title: "늦게 도착한 진행 이벤트",
+      revisionKey: "watch:one:progress:unseen-old",
+      revisionAt: "2026-08-03T12:09:00Z",
+      kind: "reserving",
+    })]);
+
+    expect(lateProgress.notices).toEqual([]);
+    expect(lateProgress.seenRevisionKeys).toContain("watch:one:progress:unseen-old");
+  });
+
   it.each(["payment_required", "manual_check", "auth_required", "recovery"] as const)(
     "does not let equal-time late progress replace %s terminal state",
     (terminalKind) => {

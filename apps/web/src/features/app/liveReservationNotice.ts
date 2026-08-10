@@ -136,6 +136,7 @@ function transitionFromEvent(
     finishedAt,
     revisionAt,
   );
+  const monitoringResumed = event.payload.monitoring_resumed;
   return {
     id: watchId,
     provider: watch.provider,
@@ -155,6 +156,7 @@ function transitionFromEvent(
     ...(startedAt === null ? {} : { startedAt }),
     ...(finishedAt === null ? {} : { finishedAt }),
     ...(progress.length === 0 ? {} : { reservationProgress: progress }),
+    ...(typeof monitoringResumed === "boolean" ? { monitoringResumed } : {}),
   };
 }
 

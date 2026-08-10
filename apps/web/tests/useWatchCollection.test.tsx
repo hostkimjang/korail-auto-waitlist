@@ -23,12 +23,20 @@ import { useWatchCollection } from "../src/features/app/useWatchCollection";
 
 interface TestWatch {
   id: string;
-  status: "watching" | "seat_found" | "reserving" | "payment_required" | "auth_required";
+  status:
+    | "watching"
+    | "seat_found"
+    | "reserving"
+    | "payment_required"
+    | "auth_required"
+    | "expired";
   reservationPolicy: "notify_only" | "reserve_once_before_payment";
+  recoveredUnknown?: boolean;
 }
 
 function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
-  const hasAttempt = ["reserving", "payment_required", "auth_required"].includes(value.status);
+  const hasAttempt = value.recoveredUnknown === true
+    || ["reserving", "payment_required", "auth_required"].includes(value.status);
   return {
     id: value.id,
     status: value.status,
@@ -41,11 +49,21 @@ function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
     arrival: "16:52",
     latestReservationAttempt: hasAttempt
       ? {
+          outcome: value.recoveredUnknown ? "unknown" as const : "pending" as const,
           startedAt: "2026-08-03T12:09:45Z",
           finishedAt: value.status === "reserving" ? null : "2026-08-03T12:09:48Z",
+          manualCheckRequired: value.recoveredUnknown === true,
+          retryCondition: null,
+          progressStages: value.recoveredUnknown
+            ? [{
+              stage: "authenticated_session_ready" as const,
+              occurredAt: "2026-08-03T12:09:46Z",
+            }]
+            : [],
           paymentHoldEndedAt: null,
         }
       : null,
+    latestReservationAttemptCandidateId: hasAttempt ? "candidate" : null,
     paymentDeadline: null,
     reservationCandidateContexts: {
       candidate: {
@@ -153,6 +171,16 @@ describe("useWatchCollection", () => {
       { ...watch("reserve_once_before_payment", "reserving"), id: "reserving" },
       { ...watch("reserve_once_before_payment", "payment_required"), id: "payment" },
       { ...watch("reserve_once_before_payment", "auth_required"), id: "auth" },
+      {
+        ...watch("reserve_once_before_payment", "watching"),
+        id: "manual",
+        recoveredUnknown: true,
+      },
+      {
+        ...watch("reserve_once_before_payment", "expired"),
+        id: "manual-expired",
+        recoveredUnknown: true,
+      },
       { ...watch("notify_only", "seat_found"), id: "seat" },
     ];
     const mountCollection = () => {
@@ -180,13 +208,15 @@ describe("useWatchCollection", () => {
       expect.objectContaining({ subjectKey: "watch:reserving", kind: "reserving" }),
       expect.objectContaining({ subjectKey: "watch:payment", kind: "payment_required" }),
       expect.objectContaining({ subjectKey: "watch:auth", kind: "auth_required" }),
+      expect.objectContaining({ subjectKey: "watch:manual", kind: "manual_check" }),
+      expect.objectContaining({ subjectKey: "watch:manual-expired", kind: "manual_check" }),
     ]));
-    expect(first.pushNotifications.mock.calls.at(-1)?.[0]).toHaveLength(3);
+    expect(first.pushNotifications.mock.calls.at(-1)?.[0]).toHaveLength(5);
     first.unmount();
 
     const remounted = mountCollection();
     await waitFor(() => expect(remounted.pushNotifications).toHaveBeenCalled());
-    expect(remounted.pushNotifications.mock.calls.at(-1)?.[0]).toHaveLength(3);
+    expect(remounted.pushNotifications.mock.calls.at(-1)?.[0]).toHaveLength(5);
     remounted.unmount();
   });
 
@@ -230,6 +260,53 @@ describe("useWatchCollection", () => {
         kind: "reserving",
       }),
     ]));
+    unmount();
+  });
+
+  it("keeps canonical manual-check terminal ahead of queued initial progress", async () => {
+    const canonical = {
+      ...watch("reserve_once_before_payment", "watching"),
+      recoveredUnknown: true,
+    };
+    const initialLoad = deferred<ReadonlyArray<TestWatch>>();
+    const loadWatches = vi.fn().mockReturnValue(initialLoad.promise);
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    let notificationState: NotificationCenterState = initialNotificationCenterState;
+    const pushNotifications = vi.fn((inputs: ReadonlyArray<AppNotificationInput>) => {
+      notificationState = reduceNotifications(notificationState, inputs);
+    });
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [] as TestWatch[],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+
+    act(() => onEvent?.(reservationProgressedEvent(canonical.id, "queued-progress")));
+    await act(async () => {
+      initialLoad.resolve([canonical]);
+      await initialLoad.promise;
+    });
+    await waitFor(() => expect(notificationState.notices).toHaveLength(1));
+    expect(notificationState.notices[0]).toMatchObject({
+      subjectKey: `watch:${canonical.id}`,
+      kind: "manual_check",
+    });
+    expect(pushNotifications.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ kind: "manual_check" }),
+    ]);
     unmount();
   });
 

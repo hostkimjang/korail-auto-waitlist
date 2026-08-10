@@ -802,7 +802,21 @@ class _PydollSession:
             raise BrowserSourceUnavailable("direct_navigation") from error
         self._submitted = True
         self._network_responses.clear()
-        await self._tab.go_to(url, timeout=max(1, self.timeout_ms // 1000))
+        try:
+            await self._tab.go_to(url, timeout=max(1, self.timeout_ms // 1000))
+        except Exception as error:  # noqa: BLE001 -- Pydoll is an optional sidecar extra.
+            if (
+                type(error).__module__ != "pydoll.exceptions"
+                or type(error).__name__ != "PageLoadTimeout"
+            ):
+                raise
+            # Chromium can reach the result DOM while a non-essential resource keeps
+            # Pydoll's LOAD_EVENT_FIRED wait open. The caller still runs the ordinary
+            # protection, result and exact-train checks, so preserve that verified
+            # path instead of discarding an otherwise usable reservation attempt.
+            logging.getLogger(__name__).warning(
+                "KORAIL direct navigation load signal timed out; validating current DOM"
+            )
         return await self._snapshot()
 
     async def navigate_fresh(self, url: str) -> PydollPageSnapshot:

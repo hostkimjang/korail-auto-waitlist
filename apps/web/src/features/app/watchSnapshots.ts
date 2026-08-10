@@ -3,8 +3,15 @@ import {
   type LegacyWatchSnapshot,
   type WatchLifecycleSnapshot,
 } from "./watchLifecycleSnapshot";
+import type {
+  ReservationProgressStage,
+} from "../../domain/reservationAttempt";
 
 export type { LegacyWatchSnapshot as WatchSnapshot } from "./watchLifecycleSnapshot";
+export type {
+  ReservationProgressStage,
+  ReservationProgressStageName,
+} from "../../domain/reservationAttempt";
 
 export interface SeatFoundTransition {
   id: string;
@@ -25,17 +32,6 @@ export interface SeatFoundTransition {
   reservationProgress?: ReadonlyArray<ReservationProgressStage>;
 }
 
-export type ReservationProgressStageName =
-  | "authenticated_session_ready"
-  | "target_rechecked"
-  | "seat_selected"
-  | "reservation_requested";
-
-export interface ReservationProgressStage {
-  stage: ReservationProgressStageName;
-  occurredAt: string;
-}
-
 export type SeatAvailabilityLostTransition = SeatFoundTransition;
 
 export interface WatchActionTransition extends SeatFoundTransition {
@@ -48,6 +44,7 @@ export interface WatchActionTransition extends SeatFoundTransition {
     | "failed"
     | "monitoring_resumed";
   automaticReservationRetry?: boolean;
+  monitoringResumed?: boolean;
   paymentHoldEndReason?:
     | "confirmed_payment_deadline_elapsed"
     | "confirmed_payment_hold_no_longer_present";
@@ -78,7 +75,8 @@ function transitionRevisionAt(
     return watch.seatFoundObservation?.observedAt ?? undefined;
   }
   if (stage === "reserving") {
-    return attemptTimestamp(watch, "startedAt")
+    return watch.latestReservationAttempt?.progressStages?.at(-1)?.occurredAt
+      ?? attemptTimestamp(watch, "startedAt")
       ?? watch.updatedAt
       ?? undefined;
   }
@@ -87,7 +85,7 @@ function transitionRevisionAt(
       ?? watch.updatedAt
       ?? undefined;
   }
-  if (["payment_required", "auth_required", "failed"].includes(stage)) {
+  if (["payment_required", "auth_required", "failed", "monitoring_resumed"].includes(stage)) {
     return attemptTimestamp(watch, "finishedAt")
       ?? attemptTimestamp(watch, "startedAt")
       ?? watch.updatedAt
@@ -104,20 +102,26 @@ function transitionContext(
   const detectedAt = watch.seatFoundObservation?.observedAt ?? undefined;
   const startedAt = attemptTimestamp(watch, "startedAt");
   const finishedAt = attemptTimestamp(watch, "finishedAt");
+  const attemptCandidateId = watch.latestReservationAttemptCandidateId ?? null;
+  const attemptCandidate = attemptCandidateId === null
+    ? undefined
+    : watch.reservationCandidateContexts[attemptCandidateId];
+  const reservationProgress = watch.latestReservationAttempt?.progressStages ?? [];
   return {
     id: watch.id,
     provider: watch.provider,
     route: watch.route,
-    train: watch.train,
-    seatClassLabel: watch.seatClassLabel,
-    date: watch.date,
-    departure: watch.departure,
-    arrival: watch.arrival,
+    train: attemptCandidate?.train ?? watch.train,
+    seatClassLabel: attemptCandidate?.seatClassLabel ?? watch.seatClassLabel,
+    date: attemptCandidate?.date ?? watch.date,
+    departure: attemptCandidate?.departure ?? watch.departure,
+    arrival: attemptCandidate?.arrival ?? watch.arrival,
     revision: `${stage}:${revisionAt ?? "current"}`,
     ...(revisionAt === undefined ? {} : { revisionAt }),
     ...(detectedAt === undefined ? {} : { detectedAt }),
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(finishedAt === undefined ? {} : { finishedAt }),
+    ...(reservationProgress.length === 0 ? {} : { reservationProgress }),
     reservationPolicy: watch.reservationPolicy,
     paymentDeadline: watch.paymentDeadline,
   };
@@ -218,10 +222,29 @@ const hydratableActionStatuses: ReadonlySet<WatchActionTransition["status"]> = n
   "auth_required",
 ]);
 
+function hasCanonicalManualCheckResult(watch: WatchLifecycleSnapshot): boolean {
+  const attempt = watch.latestReservationAttempt;
+  return (watch.status === "watching" || watch.status === "expired")
+    && attempt?.outcome === "unknown"
+    && attempt.manualCheckRequired
+    && attempt.finishedAt !== null;
+}
+
+function manualCheckTransition(watch: WatchLifecycleSnapshot): WatchActionTransition {
+  return {
+    ...transitionContext(watch, "monitoring_resumed"),
+    status: "monitoring_resumed",
+    monitoringResumed: watch.status === "watching",
+  };
+}
+
 function hydrateCurrentWatchActionLifecycleTransitions(
   watches: ReadonlyArray<WatchLifecycleSnapshot>,
 ): WatchActionTransition[] {
   return watches.flatMap((watch) => {
+    if (hasCanonicalManualCheckResult(watch)) {
+      return [manualCheckTransition(watch)];
+    }
     const status = watch.status as WatchActionTransition["status"];
     if (!hydratableActionStatuses.has(status)) return [];
     return [{
@@ -257,7 +280,32 @@ function detectWatchActionLifecycleTransitions(
   const previousById = new Map(previous.map((watch) => [watch.id, watch]));
   return next.flatMap((watch) => {
     const previousWatch = previousById.get(watch.id);
-    if (previousWatch === undefined || previousWatch.status === watch.status) return [];
+    if (previousWatch === undefined) return [];
+    const currentManualCheck = hasCanonicalManualCheckResult(watch);
+    const previousManualCheck = hasCanonicalManualCheckResult(previousWatch);
+    if (
+      currentManualCheck
+      && (
+        !previousManualCheck
+        || transitionRevisionAt(previousWatch, "monitoring_resumed")
+          !== transitionRevisionAt(watch, "monitoring_resumed")
+      )
+    ) {
+      return [manualCheckTransition(watch)];
+    }
+    if (previousWatch.status === watch.status) {
+      if (
+        watch.status === "reserving"
+        && transitionRevisionAt(previousWatch, "reserving")
+          !== transitionRevisionAt(watch, "reserving")
+      ) {
+        return [{
+          ...transitionContext(watch, "reserving"),
+          status: "reserving" as const,
+        }];
+      }
+      return [];
+    }
     const holdEndedAt = attemptTimestamp(watch, "paymentHoldEndedAt");
     const holdEndReason = attemptPaymentHoldEndReason(watch);
     if (

@@ -85,7 +85,7 @@ services:
       - /bin/sh
       - -ec
       - |
-        for service in api worker notification-worker scheduler experimental-rail srt-provider-adapter; do
+        for service in api worker notification-worker maintenance-worker scheduler experimental-rail srt-provider-adapter; do
           mkdir -p "/logs/$${service}"
           chown 100:101 "/logs/$${service}"
           chmod 0750 "/logs/$${service}"
@@ -282,6 +282,28 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "celery -A rail_waitlist.worker.celery_app inspect ping --destination notifications@$${HOSTNAME} --timeout 5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  maintenance-worker:
+    <<: *app-common
+    stop_grace_period: 1m
+    command: ["celery", "-A", "rail_waitlist.worker.celery_app", "worker", "--loglevel=INFO", "--queues=maintenance", "--concurrency=1", "--hostname=maintenance@%h"]
+    environment:
+      <<: *api-environment
+      APP_LOG_FILE: /logs/maintenance-worker/current.log
+      APP_LOG_SERVICE: maintenance-worker
+    depends_on:
+      log-init:
+        condition: service_completed_successfully
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A rail_waitlist.worker.celery_app inspect ping --destination maintenance@$${HOSTNAME} --timeout 5 | grep -q pong"]
       interval: 30s
       timeout: 10s
       retries: 3

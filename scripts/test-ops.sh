@@ -24,7 +24,11 @@ docker() {
     printf '%s\n' "$rendered" >> "$OPS_SMOKE_TRACE"
 
     if [[ "$rendered" == *'ps --status running --services'* ]]; then
-        printf '%s\n' proxy scheduler worker notification-worker api
+        if [[ "$OPS_SMOKE_CASE" == maintenance-only ]]; then
+            printf '%s\n' maintenance-worker
+            return 0
+        fi
+        printf '%s\n' proxy scheduler worker notification-worker maintenance-worker api
         if [[ "$OPS_SMOKE_CASE" == experimental* || "$OPS_SMOKE_CASE" == restore-* ]]; then
             printf '%s\n' experimental-rail korail-browser-adapter srt-provider-adapter
         fi
@@ -52,6 +56,7 @@ docker() {
             'scheduler                   running    healthy' \
             'worker                      running    healthy' \
             'notification-worker         running    healthy' \
+            'maintenance-worker          running    healthy' \
             'postgres                    running    healthy' \
             'redis                       running    healthy' \
             'experimental-rail           running    healthy' \
@@ -134,20 +139,24 @@ assert_trace_order \
     'compose -f compose.yml build' \
     'stop --timeout 300 proxy' \
     'stop --timeout 300 scheduler' \
-    'stop --timeout 300 worker notification-worker' \
+    'stop --timeout 300 worker notification-worker maintenance-worker' \
     'stop --timeout 300 api' \
     'up --detach --force-recreate'
 assert_trace_excludes '--wait'
 
+OPS_SMOKE_CASE='maintenance-only'
+run_ops 0 drain-status
+assert_trace_contains 'exec -T maintenance-worker python -c'
+
 OPS_SMOKE_CASE='stop-failure'
 run_ops 17 up
 assert_trace_excludes 'up --detach --force-recreate'
-assert_trace_contains 'start proxy scheduler worker notification-worker api'
+assert_trace_contains 'start proxy scheduler worker notification-worker maintenance-worker api'
 
 OPS_SMOKE_CASE='recreate-failure'
 run_ops 23 up
 assert_trace_contains 'up --detach --force-recreate'
-assert_trace_contains 'start proxy scheduler worker notification-worker api'
+assert_trace_contains 'start proxy scheduler worker notification-worker maintenance-worker api'
 
 OPS_SMOKE_CASE='experimental'
 run_ops 0 experimental
@@ -157,7 +166,7 @@ assert_trace_order \
     '--profile experimental-rail build' \
     '--profile experimental-rail stop --timeout 300 proxy' \
     '--profile experimental-rail stop --timeout 300 scheduler' \
-    '--profile experimental-rail stop --timeout 300 worker experimental-rail notification-worker' \
+    '--profile experimental-rail stop --timeout 300 worker experimental-rail notification-worker maintenance-worker' \
     '--profile experimental-rail stop --timeout 300 api' \
     '--profile experimental-rail up --detach --force-recreate --wait --wait-timeout 180'
 
@@ -166,8 +175,8 @@ run_ops 41 experimental
 assert_trace_order \
     '--profile experimental-rail up --detach --force-recreate --wait --wait-timeout 180' \
     '--profile experimental-rail ps --all --format' \
-    '--profile experimental-rail start proxy scheduler worker experimental-rail notification-worker api'
-assert_trace_contains 'proxy web api scheduler worker notification-worker postgres redis experimental-rail korail-browser-adapter srt-provider-adapter'
+    '--profile experimental-rail start proxy scheduler worker experimental-rail notification-worker maintenance-worker api'
+assert_trace_contains 'proxy web api scheduler worker notification-worker maintenance-worker postgres redis experimental-rail korail-browser-adapter srt-provider-adapter'
 grep -Fq '실험 프로필 서비스가 제한 시간 안에 준비되지 않았습니다. 현재 상태:' "$stderr_file" || \
     fail '실험 프로필 준비 실패 설명이 stderr에 없습니다.'
 grep -Fq 'korail-browser-adapter      running    unhealthy' "$stderr_file" || \
@@ -179,21 +188,21 @@ assert_trace_order \
     '--profile restore run --rm --no-deps -e BACKUP_FILE=/backups/test.dump.age --entrypoint /bin/sh restore' \
     '--profile experimental-rail stop --timeout 300 proxy' \
     '--profile experimental-rail stop --timeout 300 scheduler' \
-    '--profile experimental-rail stop --timeout 300 worker experimental-rail notification-worker' \
+    '--profile experimental-rail stop --timeout 300 worker experimental-rail notification-worker maintenance-worker' \
     '--profile experimental-rail stop --timeout 300 api' \
     '--profile restore run --rm -e RESTORE_CONFIRM=RESTORE -e BACKUP_FILE=/backups/test.dump.age restore' \
     'run --rm migration' \
-    '--profile experimental-rail start proxy api worker notification-worker scheduler experimental-rail'
+    '--profile experimental-rail start proxy api worker notification-worker maintenance-worker scheduler experimental-rail'
 
 OPS_SMOKE_CASE='restore-migration-failure'
 run_ops 1 restore /backups/test.dump.age
 assert_trace_contains 'run --rm migration'
-assert_trace_excludes '--profile experimental-rail start proxy api worker notification-worker scheduler experimental-rail'
+assert_trace_excludes '--profile experimental-rail start proxy api worker notification-worker maintenance-worker scheduler experimental-rail'
 
 OPS_SMOKE_CASE='restore-stop-failure'
 run_ops 17 restore /backups/test.dump.age
 assert_trace_excludes '-e RESTORE_CONFIRM=RESTORE'
-assert_trace_contains '--profile experimental-rail start proxy scheduler worker experimental-rail notification-worker api'
+assert_trace_contains '--profile experimental-rail start proxy scheduler worker experimental-rail notification-worker maintenance-worker api'
 
 OPS_SMOKE_CASE='restore-maintenance'
 run_ops 1 restore /backups/test.dump.age

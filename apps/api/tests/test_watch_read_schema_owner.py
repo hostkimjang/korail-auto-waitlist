@@ -69,6 +69,7 @@ def _attempt_payload(**overrides: object) -> dict[str, object]:
         "confirmation_outcome": "not_found",
         "started_at": "2026-08-07T00:00:00Z",
         "finished_at": "2026-08-07T00:01:00Z",
+        "progress_stages": [],
         "post_deadline_reconciled_at": "2026-08-07T00:02:00Z",
         "payment_hold_end_reason": "confirmed_payment_hold_no_longer_present",
         "retryable": True,
@@ -149,6 +150,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "confirmation_outcome",
         "started_at",
         "finished_at",
+        "progress_stages",
         "post_deadline_reconciled_at",
         "payment_hold_end_reason",
         "retryable",
@@ -234,11 +236,11 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     [
         (
             canonical.WatchCandidateLatestReservationAttemptRead,
-            "f3fc3bef358e56d63d164525402fe0711f7eb55456ca01320200859f6069c256",
+            "aed87993ebd4c2d81fa1d69344ac4537bd440c5f6644ae06998761a027907a9d",
         ),
         (
             canonical.WatchCandidateRead,
-            "7bf5c984986dc51395893cd93b7c47bd40f4956d4d1b318504fa6c2c278f8bbd",
+            "7258042b2dc12381b6cae5ab66ebc013b29134f763c32fcb833715f92f45f9f9",
         ),
         (
             canonical.WatchCandidateLatestObservationRead,
@@ -246,7 +248,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         ),
         (
             canonical.WatchRead,
-            "ded44924eb9637f8b09c3b55783fcef4db5f89b109ea88adbeb85505bd45bd33",
+            "8468e44f688ececb3d371aeb43530647f2039917fe7a65dce26c522010d61a13",
         ),
     ],
 )
@@ -285,6 +287,12 @@ def test_watch_read_timezone_and_fail_closed_validation_are_preserved() -> None:
         {"finished_at": "2026-08-06T23:59:00Z"},
         {"post_deadline_reconciled_at": "2026-08-07T00:02:00"},
         {"retry_condition": "retry_immediately"},
+        {
+            "progress_stages": [
+                {"stage": "seat_selected", "occurred_at": "2026-08-07T00:00:10Z"},
+                {"stage": "target_rechecked", "occurred_at": "2026-08-07T00:00:20Z"},
+            ]
+        },
     )
     for updates in invalid_attempts:
         with pytest.raises(ValidationError):

@@ -100,6 +100,7 @@ interface WatchReadModelBase {
   officialBookingUrl: string | null;
   operational: OperationalCandidateMeta | null;
   latestReservationAttempt: LatestReservationAttempt | null;
+  latestReservationAttemptCandidateId?: string | null;
   seatFoundObservation: SeatFoundObservation | null;
   reservationCandidateContexts: Record<string, ReservationCandidateContext>;
   reservationPolicy: ReservationPolicy;
@@ -311,6 +312,17 @@ export function mapWatch(value: unknown): ProjectedWatch {
       : null)
     ?? prioritizedCandidates[0]
     ?? null;
+  const latestAttemptOwner = prioritizedCandidates.reduce<{
+    candidateId: string;
+    attempt: LatestReservationAttempt;
+  } | null>((latest, { raw, mapped }) => {
+    const attempt = mapLatestReservationAttempt(raw.latest_reservation_attempt);
+    if (attempt === null) return latest;
+    if (latest === null || Date.parse(attempt.startedAt) > Date.parse(latest.attempt.startedAt)) {
+      return { candidateId: mapped.id, attempt };
+    }
+    return latest;
+  }, null);
   const candidate = selectedCandidate?.raw ?? null;
   const mappedCandidate = selectedCandidate?.mapped ?? null;
   const seatClass = mappedCandidate?.seatClass
@@ -393,7 +405,7 @@ export function mapWatch(value: unknown): ProjectedWatch {
     normalizedProvider,
   );
   const operational = mapOperationalCandidate(candidate);
-  const latestReservationAttempt = mapLatestReservationAttempt(candidate?.latest_reservation_attempt);
+  const latestReservationAttempt = latestAttemptOwner?.attempt ?? null;
   if (currentObservation) seatEvidenceLabel = currentObservation.label;
   const seatFoundObservation: SeatFoundObservation | null = watch.status === "seat_found"
     && currentObservation?.actionable
@@ -457,6 +469,7 @@ export function mapWatch(value: unknown): ProjectedWatch {
     lastCheckedLabel,
     operational,
     latestReservationAttempt,
+    latestReservationAttemptCandidateId: latestAttemptOwner?.candidateId ?? null,
     origin: watch.origin,
     destination: watch.destination,
     travelDate: watch.travel_date,

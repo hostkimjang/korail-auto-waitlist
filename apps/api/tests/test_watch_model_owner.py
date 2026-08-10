@@ -114,6 +114,7 @@ COLUMN_ORDERS = {
         "reconciliation_attempt_count",
         "next_reconcile_at",
         "post_deadline_reconciled_at",
+        "progress_stages",
     ),
     "WatchTransitionHistory": (
         "id",
@@ -396,6 +397,7 @@ NON_ENUM_TYPE_SIGNATURES = {
         "reconciliation_attempt_count": ("Integer", None, None),
         "next_reconcile_at": ("DateTime", None, True),
         "post_deadline_reconciled_at": ("DateTime", None, True),
+        "progress_stages": ("JSON", None, None),
     },
     "WatchTransitionHistory": {
         "id": ("String", 36, None),
@@ -476,6 +478,7 @@ CLIENT_DEFAULT_COLUMNS = {
         "started_at",
         "outcome",
         "reconciliation_attempt_count",
+        "progress_stages",
     },
     "WatchTransitionHistory": {"id", "created_at"},
 }
@@ -496,6 +499,7 @@ SERVER_DEFAULTS = {
         "attempt_sequence": "1",
         "episode_key": "legacy",
         "reconciliation_attempt_count": "0",
+        "progress_stages": "[]",
     },
     "WatchTransitionHistory": {},
 }
@@ -746,6 +750,12 @@ def test_watch_graph_callable_defaults_keep_behavior() -> None:
     second_channels = watch_table.c.notification_channel_ids.default.arg(None)
     assert first_channels == second_channels == []
     assert first_channels is not second_channels
+
+    attempt_table = canonical.ReservationAttempt.__table__
+    first_progress = attempt_table.c.progress_stages.default.arg(None)
+    second_progress = attempt_table.c.progress_stages.default.arg(None)
+    assert first_progress == second_progress == []
+    assert first_progress is not second_progress
 
     departure = datetime(2026, 8, 7, 12, tzinfo=UTC)
 

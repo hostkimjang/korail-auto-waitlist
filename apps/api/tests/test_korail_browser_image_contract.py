@@ -25,8 +25,7 @@ def test_browser_image_selects_official_chrome_package_for_supported_architectur
     assert "ARG TARGETARCH" in dockerfile
     assert url_match is not None
     assert Template(url_match.group()).substitute(TARGETARCH=architecture) == (
-        "https://dl.google.com/linux/direct/"
-        f"google-chrome-stable_current_{architecture}.deb"
+        f"https://dl.google.com/linux/direct/google-chrome-stable_current_{architecture}.deb"
     )
     assert "KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome" in dockerfile
 

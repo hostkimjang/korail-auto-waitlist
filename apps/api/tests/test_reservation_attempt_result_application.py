@@ -165,6 +165,12 @@ async def test_success_result_suppresses_lower_candidates_and_emits_stable_event
     assert attempt.finished_at == COMPLETED_AT
     assert attempt.payment_deadline == deadline
     assert attempt.official_handoff_url == str(result.official_handoff_url)
+    assert attempt.progress_stages == [
+        {
+            "stage": "authenticated_session_ready",
+            "occurred_at": (OBSERVED_AT - timedelta(seconds=1)).isoformat(),
+        }
+    ]
     assert candidate.state == "payment_required"
     assert watch.status is WatchStatus.PAYMENT_REQUIRED
     assert watch.payment_deadline == deadline
@@ -188,6 +194,38 @@ async def test_success_result_suppresses_lower_candidates_and_emits_stable_event
         }
     ]
     assert events[1]["dedupe_key"] == "reservation-result:attempt-1"
+
+
+async def test_terminal_result_reuses_progress_already_persisted_during_provider_io() -> None:
+    transitions: list[tuple[WatchStatus, str | None]] = []
+    events: list[dict[str, object]] = []
+    watch = make_watch()
+    candidate = make_candidate()
+    attempt = make_attempt()
+    attempt.progress_stages = [
+        {
+            "stage": "authenticated_session_ready",
+            "occurred_at": (OBSERVED_AT - timedelta(seconds=1)).isoformat(),
+        }
+    ]
+    result = ReservationResult(
+        outcome=ReservationOutcome.NOT_AVAILABLE,
+        source="srt.owner-test",
+        observed_at=OBSERVED_AT,
+    )
+
+    await complete_reservation_attempt_application(
+        cast(AsyncSession, ResultSession()),
+        watch,
+        candidate,
+        attempt,
+        result,
+        dependencies=make_dependencies(transitions, events),
+    )
+
+    result_event = next(event for event in events if event["event_type"] == "watch.reservation_result")
+    result_payload = cast(dict[str, object], result_event["payload"])
+    assert result_payload["progress_stages"] == attempt.progress_stages
 
 
 async def test_expired_success_deadline_becomes_unknown_manual_check_fence() -> None:

@@ -27,6 +27,7 @@ from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
+from rail_waitlist.reservations.attempt_policy import payment_hold_retry_episode_key
 from rail_waitlist.schemas import (
     ProviderCapabilities,
     ReservationProgressStage,
@@ -1034,31 +1035,28 @@ async def test_final_not_found_for_confirmed_hold_resumes_monitoring_without_ret
         assert event is not None
         assert event.payload["automatic_reservation_retry"] is True
 
-        session.add_all(
-            [
-                SeatObservation(
-                    candidate_id=candidate.id,
-                    status=SeatObservationStatus.SOLD_OUT,
-                    source="authorized-provider",
-                    observed_at=observed_at + timedelta(seconds=32),
-                    fresh_until=observed_at + timedelta(seconds=62),
-                ),
-                SeatObservation(
-                    candidate_id=candidate.id,
-                    status=SeatObservationStatus.AVAILABLE,
-                    source="authorized-provider",
-                    observed_at=observed_at + timedelta(seconds=33),
-                    fresh_until=observed_at + timedelta(seconds=63),
-                ),
-            ]
+        unavailable = SeatObservation(
+            candidate_id=candidate.id,
+            status=SeatObservationStatus.SOLD_OUT,
+            source="authorized-provider",
+            observed_at=observed_at + timedelta(seconds=32),
+            fresh_until=observed_at + timedelta(seconds=62),
         )
+        rediscovered = SeatObservation(
+            candidate_id=candidate.id,
+            status=SeatObservationStatus.AVAILABLE,
+            source="authorized-provider",
+            observed_at=observed_at + timedelta(seconds=33),
+            fresh_until=observed_at + timedelta(seconds=63),
+        )
+        session.add_all([unavailable, rediscovered])
         await session.flush()
         retried, retry_created = await begin_reservation_attempt(
             session,
             watch,
             candidate,
             "reserve:new-availability-edge",
-            episode_key="availability:after-expired-hold",
+            episode_key=payment_hold_retry_episode_key(attempt.id, unavailable.id),
             retry_authorized=True,
         )
         assert retry_created is True

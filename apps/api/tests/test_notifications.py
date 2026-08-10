@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import socket
 
 import httpx
@@ -102,6 +103,19 @@ async def test_web_push_delivery_normalizes_in_memory_pem_before_sender(monkeypa
     settings.webpush_vapid_private_key = pem
     monkeypatch.setattr("rail_waitlist.notifications.webpush", fake_webpush)
     try:
+        message = {
+            "message": (
+                "KORAIL · KTX 101 · 2026년 8월 5일 (수) · 서울 12:00 → 부산 14:30 · "
+                "일반실 · 1명\n예매를 진행하고 있습니다."
+            ),
+            "provider": "korail",
+            "train_number": "KTX 101",
+            "travel_date": "2026-08-05",
+            "departure_at": "2026-08-05T03:00:00+00:00",
+            "arrival_at": "2026-08-05T05:30:00+00:00",
+            "seat_class": "standard",
+            "passenger_count": 1,
+        }
         await deliver_notification(
             NotificationKind.WEB_PUSH,
             {
@@ -115,7 +129,7 @@ async def test_web_push_delivery_normalizes_in_memory_pem_before_sender(monkeypa
                     },
                 }
             },
-            {"message": "test"},
+            message,
         )
     finally:
         settings.webpush_vapid_private_key = previous
@@ -130,6 +144,36 @@ async def test_web_push_delivery_normalizes_in_memory_pem_before_sender(monkeypa
             "auth": base64.urlsafe_b64encode(b"A" * 16).rstrip(b"=").decode(),
         },
     }
+    assert json.loads(str(captured["data"])) == message
+
+
+@pytest.mark.parametrize(
+    ("kind", "config", "expected_field"),
+    [
+        (
+            NotificationKind.TELEGRAM,
+            {"bot_token": "fixture-token", "chat_id": "fixture-chat"},
+            "text",
+        ),
+        (NotificationKind.DISCORD_WEBHOOK, {"url": "https://8.8.8.8/hook"}, "content"),
+    ],
+)
+async def test_chat_channels_preserve_the_detailed_korean_message(kind, config, expected_field):
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204)
+
+    message = (
+        "SRT · SRT-305 · 2026년 8월 5일 (수) · 수서 12:30 → 부산 14:55 · 일반실 · 2명\n"
+        "예매 시점에 좌석을 확보하지 못해 감시를 계속합니다."
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await deliver_notification(kind, config, {"message": message}, client)
+
+    assert len(requests) == 1
+    assert json.loads(requests[0].content)[expected_field] == message
 
 
 async def test_web_push_uses_high_urgency_only_for_time_sensitive_payloads(monkeypatch):

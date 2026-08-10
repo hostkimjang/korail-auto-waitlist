@@ -321,6 +321,39 @@ class KorailBrowserSeatSource:
             observed_at=datetime.now(UTC),
         )
 
+    async def reserve_once_with_progress(
+        self,
+        request: ReservationRequest,
+        credentials: ProviderCredentials,
+        on_progress: _client_owner.ReservationProgressCallback,
+    ) -> ReservationResult:
+        """Stream verified sidecar progress while issuing exactly one reservation command."""
+
+        observed_at = datetime.now(UTC)
+        internal_request = self._build_reservation_request(
+            request,
+            credentials,
+            enabled=self.enabled,
+            normalize_train_number=_normalize_train_number,
+        )
+        if internal_request is None:
+            return self._project_reservation_failure(observed_at)
+        try:
+            result = await self._transport.reserve_with_progress(internal_request, on_progress)
+        except _AdapterFailure as error:
+            if error.reservation_command_uncertain:
+                return ReservationResult(
+                    outcome=ReservationOutcome.UNKNOWN,
+                    source="korail-pydoll-reservation",
+                    observed_at=datetime.now(UTC),
+                    progress_stages=error.progress_stages,
+                )
+            return self._project_reservation_failure(
+                observed_at,
+                provider_blocked=error.protection or error.rate_limited,
+            )
+        return self._project_reservation_result(result, observed_at=datetime.now(UTC))
+
     @staticmethod
     def _observation_error(
         request: SeatObservationRequest,

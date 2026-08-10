@@ -93,6 +93,7 @@ class AddWatchNotifications(Protocol):
         transition_token: str,
         *,
         reason: str | None = None,
+        observation: SeatObservation | None = None,
     ) -> None: ...
 
 
@@ -194,5 +195,6 @@ async def apply_watch_transition(
         decision.target_status,
         identity.transition_token,
         reason=identity.reason,
+        observation=observation,
     )
     return watch

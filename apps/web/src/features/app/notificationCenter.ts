@@ -128,6 +128,17 @@ function validDuration(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function lifecyclePhasePriority(kind: NotificationKind): number {
+  if (kind === "reserving") return 1;
+  if (
+    kind === "payment_required"
+    || kind === "manual_check"
+    || kind === "auth_required"
+    || kind === "recovery"
+  ) return 2;
+  return 0;
+}
+
 export function compareNotifications(
   left: AppNotificationNotice,
   right: AppNotificationNotice,
@@ -179,11 +190,17 @@ export function pushNotifications(
     const existing = bySubject.get(subjectKey);
     const incomingRevisionAt = validSortInstant(input.revisionAt);
     const existingRevisionAt = validSortInstant(existing?.revisionAt);
+    const isOlderRevision = incomingRevisionAt !== null
+      && existingRevisionAt !== null
+      && incomingRevisionAt < existingRevisionAt;
+    const losesEqualTimeLifecycleTie = incomingRevisionAt !== null
+      && existingRevisionAt !== null
+      && incomingRevisionAt === existingRevisionAt
+      && existing !== undefined
+      && lifecyclePhasePriority(kind) <= lifecyclePhasePriority(existing.kind);
     if (
       existing !== undefined
-      && incomingRevisionAt !== null
-      && existingRevisionAt !== null
-      && incomingRevisionAt <= existingRevisionAt
+      && (isOlderRevision || losesEqualTimeLifecycleTie)
     ) {
       seen.add(revisionKey);
       continue;
@@ -202,7 +219,9 @@ export function pushNotifications(
       && occurredAt !== null
       ? Math.max(0, Date.parse(occurredAt) - Date.parse(startedAt))
       : null;
-    const durationMs = validDuration(input.durationMs) ?? calculatedDuration;
+    const durationMs = Object.prototype.hasOwnProperty.call(input, "durationMs")
+      ? validDuration(input.durationMs)
+      : calculatedDuration;
     const existingSteps = new Map(existing?.steps?.map((step) => [step.label, step]) ?? []);
     const steps = input.steps?.map((step) => {
       const previousStep = existingSteps.get(step.label);

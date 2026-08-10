@@ -53,8 +53,14 @@ class _EnabledAccountRuntime:
 class ProviderRuntimePrewarmRegistry:
     """Process-local startup results with no credential or provider payload material."""
 
+    SESSION_REFRESH_WINDOW_SECONDS = 120.0
+    PREWARM_INITIAL_BACKOFF_SECONDS = 60.0
+    PREWARM_MAX_BACKOFF_SECONDS = 900.0
+
     outcomes: dict[Provider, RailProviderAuthStatus] = field(default_factory=dict)
     attempted_auth_revisions: set[tuple[Provider, int, int]] = field(default_factory=set)
+    prewarm_in_flight: set[Provider] = field(default_factory=set)
+    prewarm_retry_state: dict[Provider, tuple[int, int, float]] = field(default_factory=dict)
     completed: bool = False
 
     def outcome_for(self, provider: Provider) -> RailProviderAuthStatus | None:
@@ -69,6 +75,66 @@ class ProviderRuntimePrewarmRegistry:
             attempted for attempted in self.attempted_auth_revisions if attempted[0] != provider
         }
         self.attempted_auth_revisions.add(revision)
+
+    def begin_prewarm(
+        self,
+        provider: Provider,
+        credential_version: int,
+        *,
+        now: float,
+        bypass_backoff: bool = False,
+    ) -> bool:
+        """Fence one provider login attempt without retaining credential material."""
+
+        if provider in self.prewarm_in_flight:
+            return False
+        retry = self.prewarm_retry_state.get(provider)
+        if (
+            not bypass_backoff
+            and retry is not None
+            and retry[0] == credential_version
+            and now < retry[2]
+        ):
+            return False
+        self.prewarm_in_flight.add(provider)
+        return True
+
+    def finish_prewarm(
+        self,
+        provider: Provider,
+        credential_version: int,
+        *,
+        outcome: RailProviderAuthStatus | None,
+        now: float,
+    ) -> None:
+        self.prewarm_in_flight.discard(provider)
+        if outcome == "authenticated":
+            self.prewarm_retry_state.pop(provider, None)
+            return
+        if outcome is not None:
+            previous = self.prewarm_retry_state.get(provider)
+            failure_count = (
+                previous[1] + 1
+                if previous is not None and previous[0] == credential_version
+                else 1
+            )
+            backoff_seconds = min(
+                self.PREWARM_INITIAL_BACKOFF_SECONDS
+                * (2 ** (failure_count - 1)),
+                self.PREWARM_MAX_BACKOFF_SECONDS,
+            )
+            if outcome == "provider_blocked":
+                # Protection responses use the safest interval from the first failure.
+                backoff_seconds = self.PREWARM_MAX_BACKOFF_SECONDS
+            self.prewarm_retry_state[provider] = (
+                credential_version,
+                failure_count,
+                now + backoff_seconds,
+            )
+
+    def forget_provider(self, provider: Provider) -> None:
+        self.prewarm_in_flight.discard(provider)
+        self.prewarm_retry_state.pop(provider, None)
 
 
 async def _load_enabled_account_runtime(
@@ -263,27 +329,10 @@ async def prewarm_provider_sessions(
     verifier: ProviderLoginVerifier,
     registry: ProviderRuntimePrewarmRegistry,
 ) -> None:
-    """Warm every enabled account and persist only a generation-current success."""
+    """Reconcile every enabled account and persist only generation-current success."""
 
     try:
-        for provider in SUPPORTED_ACCOUNT_PROVIDERS:
-            async with session_factory() as session:
-                account_runtime = await _load_enabled_account_runtime(session, provider)
-                # Do not retain a database transaction during external provider I/O.
-                await session.rollback()
-            if account_runtime is None:
-                registry.outcomes[provider] = "not_checked"
-                continue
-            if account_runtime.auth_status in RECOVERABLE_PROVIDER_AUTH_STATUSES:
-                # One external login attempt is allowed for each persisted auth failure
-                # revision. A failed recovery is not looped until a new revision exists.
-                registry.mark_auth_revision_attempted(account_runtime.recovery_revision)
-            await _prewarm_account(
-                session_factory,
-                verifier,
-                registry,
-                account_runtime,
-            )
+        await recover_provider_sessions_once(session_factory, verifier, registry)
     finally:
         registry.completed = True
 
@@ -293,32 +342,133 @@ async def recover_provider_sessions_once(
     verifier: ProviderLoginVerifier,
     registry: ProviderRuntimePrewarmRegistry,
 ) -> int:
-    """Reconcile or reverify each new recoverable auth revision once per process."""
+    """Reconcile every enabled account, refreshing only cold or expiring sessions."""
 
     attempted = 0
     for provider in SUPPORTED_ACCOUNT_PROVIDERS:
         async with session_factory() as session:
             account_runtime = await _load_enabled_account_runtime(session, provider)
             await session.rollback()
-        if (
-            account_runtime is None
-            or account_runtime.auth_status not in RECOVERABLE_PROVIDER_AUTH_STATUSES
+        if account_runtime is None:
+            registry.outcomes[provider] = "not_checked"
+            registry.forget_provider(provider)
+            continue
+
+        recoverable = account_runtime.auth_status in RECOVERABLE_PROVIDER_AUTH_STATUSES
+        revision = account_runtime.recovery_revision
+        new_recovery_revision = recoverable and not registry.has_attempted_auth_revision(revision)
+        if recoverable and not new_recovery_revision:
+            # Still observe the sanitized process state every tick, but preserve the
+            # one-provider-attempt-per-persisted-auth-revision contract.
+            try:
+                await verifier.session_snapshot(provider)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- telemetry details remain redacted.
+                LOGGER.warning("Provider runtime session snapshot failed provider=%s", provider.value)
+            continue
+
+        if new_recovery_revision:
+            restored = await _restore_locally_reusable_session(
+                session_factory,
+                verifier,
+                registry,
+                account_runtime,
+            )
+            if restored is not None:
+                registry.mark_auth_revision_attempted(revision)
+                attempted += 1
+                continue
+        else:
+            try:
+                snapshot = await verifier.session_snapshot(provider)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- telemetry details remain redacted.
+                snapshot = None
+                LOGGER.warning("Provider runtime session snapshot failed provider=%s", provider.value)
+            credential_version = account_runtime.credentials.credential_version
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            if (
+                snapshot is not None
+                and snapshot.state is ProviderSessionRuntimeState.AUTHENTICATING
+            ):
+                # A reservation or explicit verification already owns the sidecar auth lock.
+                # Re-read on the next tick instead of queueing a keepalive behind it.
+                continue
+            if snapshot is not None and snapshot.state is ProviderSessionRuntimeState.BLOCKED:
+                retry = registry.prewarm_retry_state.get(provider)
+                if retry is None or retry[0] != credential_version:
+                    # A protection state created outside this manager (for example by a
+                    # reservation) must not trigger an immediate login attempt.
+                    registry.finish_prewarm(
+                        provider,
+                        credential_version,
+                        outcome="provider_blocked",
+                        now=now,
+                    )
+                    continue
+                if now < retry[2]:
+                    continue
+            if (
+                snapshot is not None
+                and snapshot.state is ProviderSessionRuntimeState.READY
+                and snapshot.locally_reusable
+                and snapshot.credential_generation
+                == str(account_runtime.credentials.credential_version)
+                and snapshot.local_reuse_remaining_seconds is not None
+                and snapshot.local_reuse_remaining_seconds
+                > registry.SESSION_REFRESH_WINDOW_SECONDS
+            ):
+                registry.outcomes[provider] = "authenticated"
+                continue
+
+        credential_version = account_runtime.credentials.credential_version
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if new_recovery_revision and account_runtime.auth_status == "provider_blocked":
+            retry = registry.prewarm_retry_state.get(provider)
+            if retry is None or retry[0] != credential_version:
+                # A protection revision may be persisted by a reservation outside this
+                # manager. Observe the full protection cooldown before the revision's
+                # single recovery attempt instead of immediately logging in again.
+                registry.finish_prewarm(
+                    provider,
+                    credential_version,
+                    outcome="provider_blocked",
+                    now=now,
+                )
+                continue
+        if not registry.begin_prewarm(
+            provider,
+            credential_version,
+            now=now,
+            bypass_backoff=(
+                new_recovery_revision and account_runtime.auth_status != "provider_blocked"
+            ),
         ):
             continue
-        revision = account_runtime.recovery_revision
-        if registry.has_attempted_auth_revision(revision):
-            continue
-        # Fence before provider I/O so overlapping maintenance ticks cannot duplicate login.
-        registry.mark_auth_revision_attempted(revision)
-        attempted += 1
-        restored = await _restore_locally_reusable_session(
-            session_factory,
-            verifier,
-            registry,
-            account_runtime,
-        )
-        if restored is None:
-            await _prewarm_account(session_factory, verifier, registry, account_runtime)
+        if new_recovery_revision:
+            # Fence only after this tick owns the provider attempt. A blocked revision
+            # remains eligible for its one recovery attempt after the cooldown expires.
+            registry.mark_auth_revision_attempted(revision)
+        outcome: RailProviderAuthStatus | None = None
+        try:
+            outcome = await _prewarm_account(
+                session_factory,
+                verifier,
+                registry,
+                account_runtime,
+            )
+            attempted += 1
+        finally:
+            registry.finish_prewarm(
+                provider,
+                credential_version,
+                outcome=outcome,
+                now=loop.time(),
+            )
     return attempted
 
 
@@ -334,7 +484,7 @@ async def maintain_provider_sessions(
     *,
     interval_seconds: float = PROVIDER_AUTH_RECOVERY_INTERVAL_SECONDS,
 ) -> None:
-    """Recover later auth failures without periodically repeating provider logins."""
+    """Reconcile enabled provider sessions with bounded refresh and failure backoff."""
 
     while True:
         await asyncio.sleep(interval_seconds)
@@ -357,7 +507,7 @@ async def run_provider_session_manager(
     *,
     interval_seconds: float = PROVIDER_AUTH_RECOVERY_INTERVAL_SECONDS,
 ) -> None:
-    """Verify stored accounts at startup, then recover each later auth failure once."""
+    """Warm stored accounts at startup, then keep each enabled session reusable."""
 
     await prewarm_provider_sessions(session_factory, verifier, registry)
     await maintain_provider_sessions(

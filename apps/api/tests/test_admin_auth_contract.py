@@ -167,7 +167,7 @@ def test_admin_models_keep_the_existing_mapper_and_metadata_contract() -> None:
         ("ck_admin_account_username_nonempty", "length(trim(username)) >= 3"),
         (
             "ck_admin_account_timetable_refresh_interval_seconds",
-            "timetable_refresh_interval_seconds BETWEEN 5 AND 300",
+            "timetable_refresh_interval_seconds BETWEEN 1 AND 300",
         ),
         (
             "ck_admin_account_observation_interval_seconds",

@@ -85,6 +85,12 @@ class FakeTransport:
             raise self.error
         return self.reservation_result
 
+    async def reserve_with_progress(self, request, on_progress):
+        self.reservation_requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.reservation_result
+
     async def close(self) -> None:
         self.closed = True
 
@@ -338,6 +344,46 @@ async def test_reservation_preserves_verified_phone_login_method() -> None:
     assert len(transport.reservation_requests) == 1
     assert transport.reservation_requests[0].credential.login_method == "phone"
     assert transport.calls == 0
+
+
+async def test_uncertain_progress_stream_failure_is_a_no_replay_unknown_fence() -> None:
+    transport = FakeTransport(
+        error=_AdapterFailure(
+            "source_unavailable",
+            reservation_command_uncertain=True,
+        )
+    )
+    departure_at = datetime(2026, 8, 3, 15, 45, tzinfo=KOREA)
+
+    async def on_progress(stage):
+        return None
+
+    result = await source(transport).reserve_once_with_progress(
+        ReservationRequest(
+            provider="korail",
+            origin_node_id="NAT010000",
+            destination_node_id="NAT014445",
+            origin="서울",
+            destination="부산",
+            train_number="43",
+            departure_at=departure_at,
+            arrival_at=datetime(2026, 8, 3, 18, 30, tzinfo=KOREA),
+            seat_class="standard",
+            passenger_count=1,
+            candidate_id="candidate-stream-uncertain",
+            idempotency_key="reserve:candidate-stream-uncertain",
+        ),
+        ProviderCredentials(
+            login_method="phone",
+            login_id="01000000000",
+            password="not-a-real-password",
+            credential_version=7,
+        ),
+        on_progress,
+    )
+
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert len(transport.reservation_requests) == 1
 
 
 @pytest.mark.parametrize("sidecar_outcome", ["consent_required", "action_required"])

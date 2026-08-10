@@ -28,7 +28,7 @@ def test_migration_0016_adds_persisted_ui_preferences(tmp_path, monkeypatch):
             "'2026-08-01 00:00:00')"
         )
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0016_admin_ui_preferences")
     with sqlite3.connect(database_path) as connection:
         interval, updated_at = connection.execute(
             "SELECT timetable_refresh_interval_seconds, preferences_updated_at "

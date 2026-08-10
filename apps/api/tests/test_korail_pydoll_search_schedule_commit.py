@@ -248,7 +248,7 @@ async def test_browser_preserves_hooks_pickles_surface_and_late_dependencies(
         assert wrapper.__qualname__ == f"_PydollSession.{legacy_name}"
         assert pickle.loads(base64.b64decode(LEGACY_PICKLES[legacy_name])) is wrapper
 
-    assert len({name for name in vars(browser) if not name.startswith("_")}) == 82
+    assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")
     }

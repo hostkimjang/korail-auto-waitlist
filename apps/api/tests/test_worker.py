@@ -64,9 +64,11 @@ from rail_waitlist.security import secret_box
 from rail_waitlist.services import (
     add_outbox_event,
     apply_watch_transition,
+    begin_reservation_attempt,
     finish_observation_cycle,
     get_or_create_provider_circuit,
     is_confirmed_absent_retry_source,
+    is_payment_hold_ended,
     latest_observation_fingerprint,
     record_seat_observation,
     resume_watches_after_verified_provider_login,
@@ -95,6 +97,7 @@ async def _retryable_reservation_episode_key(
         observation,
         provider,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_payment_hold_ended=is_payment_hold_ended,
     )
 
 
@@ -114,6 +117,7 @@ def _observation_dependencies(session_factory) -> ObservationGroupDependencies:
         record_seat_observation=record_seat_observation,
         finish_observation_cycle=finish_observation_cycle,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_payment_hold_ended=is_payment_hold_ended,
         reserve_winner=reserve_winner,
         lease_is_current=lease_is_current,
         lease_is_current_in_session=lock_execution_lease_current,
@@ -1973,6 +1977,229 @@ async def test_legacy_confirmed_absent_payment_hold_emits_one_retry_episode(
 
 
 @pytest.mark.parametrize(
+    "confirmation_outcome",
+    [
+        ReservationConfirmationOutcome.NOT_FOUND,
+        ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+    ],
+)
+async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
+    db_engine,
+    confirmation_outcome: ReservationConfirmationOutcome,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    hold_ended_at = now - timedelta(minutes=2)
+    async with factory() as session:
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="대전",
+            origin_node_id="N-DAEJEON",
+            destination="수서",
+            destination_node_id="N-SUSEO",
+            travel_date=now.date(),
+            time_from=time(12),
+            time_to=time(18),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key=f"ended-hold-retry-{confirmation_outcome.value}",
+        )
+        candidate = WatchCandidate(
+            train_number="374",
+            departure_at=now + timedelta(days=1),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="seat_found",
+        )
+        watch.candidates.append(candidate)
+        session.add(watch)
+        await session.flush()
+        payment_deadline = (
+            hold_ended_at - timedelta(seconds=1)
+            if confirmation_outcome
+            is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+            else None
+        )
+        first_attempt = ReservationAttempt(
+            candidate_id=candidate.id,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key=f"reserve:ended-hold:{confirmation_outcome.value}",
+            started_at=hold_ended_at - timedelta(minutes=2),
+            finished_at=hold_ended_at - timedelta(minutes=1),
+            outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            payment_deadline=payment_deadline,
+            confirmation_outcome=confirmation_outcome,
+            confirmation_source="official-reservation-list",
+            confirmation_observed_at=hold_ended_at,
+            post_deadline_reconciled_at=hold_ended_at,
+        )
+        continued_availability = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.AVAILABLE,
+            source="authorized-provider",
+            observed_at=hold_ended_at + timedelta(seconds=10),
+            fresh_until=hold_ended_at + timedelta(minutes=1),
+        )
+        session.add_all([first_attempt, continued_availability])
+        await session.flush()
+
+        assert (
+            await _retryable_reservation_episode_key(
+                session,
+                candidate,
+                continued_availability,
+                Provider.SRT,
+            )
+            is None
+        )
+
+        unavailable = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.SOLD_OUT,
+            source="authorized-provider",
+            observed_at=hold_ended_at + timedelta(seconds=20),
+            fresh_until=hold_ended_at + timedelta(minutes=1),
+        )
+        rediscovered = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.LIMITED,
+            source="authorized-provider",
+            observed_at=hold_ended_at + timedelta(seconds=30),
+            fresh_until=hold_ended_at + timedelta(minutes=1),
+        )
+        session.add_all([unavailable, rediscovered])
+        await session.flush()
+
+        episode_key = await _retryable_reservation_episode_key(
+            session,
+            candidate,
+            rediscovered,
+            Provider.SRT,
+        )
+        assert episode_key == (
+            f"availability-after-hold:{first_attempt.id}:{unavailable.id}"
+        )
+
+        second_attempt, created = await begin_reservation_attempt(
+            session,
+            watch,
+            candidate,
+            f"reserve:second:{confirmation_outcome.value}",
+            episode_key=episode_key,
+            retry_authorized=True,
+        )
+        assert created is True
+        assert second_attempt.attempt_sequence == 2
+
+
+async def test_watch_payment_hold_fences_reactivated_lower_candidate_without_local_attempt(
+    db_engine,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    hold_ended_at = now - timedelta(minutes=2)
+    async with factory() as session:
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="대전",
+            origin_node_id="N-DAEJEON",
+            destination="수서",
+            destination_node_id="N-SUSEO",
+            travel_date=now.date(),
+            time_from=time(12),
+            time_to=time(18),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.WATCHING,
+            dedupe_key="watch-scoped-ended-hold-retry",
+        )
+        primary = WatchCandidate(
+            train_number="374",
+            departure_at=now + timedelta(days=1),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="observed",
+        )
+        lower = WatchCandidate(
+            train_number="376",
+            departure_at=now + timedelta(days=1, minutes=10),
+            seat_class=SeatClass.STANDARD,
+            priority=2,
+            state="suppressed_by_priority",
+        )
+        watch.candidates.extend([primary, lower])
+        session.add(watch)
+        await session.flush()
+        lower.suppressed_by_candidate_id = primary.id
+        hold = ReservationAttempt(
+            candidate_id=primary.id,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key="reserve:watch-scoped-ended-hold",
+            started_at=hold_ended_at - timedelta(minutes=2),
+            finished_at=hold_ended_at - timedelta(minutes=1),
+            outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            confirmation_outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            confirmation_source="official-reservation-list",
+            confirmation_observed_at=hold_ended_at,
+            post_deadline_reconciled_at=hold_ended_at,
+        )
+        session.add(hold)
+        await session.flush()
+
+        # The reconciliation path reactivates a previously suppressed lower candidate.
+        lower.state = "observed"
+        lower.suppressed_by_candidate_id = None
+        continued_availability = SeatObservation(
+            candidate=lower,
+            status=SeatObservationStatus.AVAILABLE,
+            source="authorized-provider",
+            observed_at=hold_ended_at + timedelta(seconds=10),
+            fresh_until=hold_ended_at + timedelta(minutes=1),
+        )
+        session.add(continued_availability)
+        await session.flush()
+
+        assert (
+            await _retryable_reservation_episode_key(
+                session,
+                lower,
+                continued_availability,
+                Provider.SRT,
+            )
+            is None
+        )
+
+        unavailable = SeatObservation(
+            candidate=lower,
+            status=SeatObservationStatus.SOLD_OUT,
+            source="authorized-provider",
+            observed_at=hold_ended_at + timedelta(seconds=20),
+            fresh_until=hold_ended_at + timedelta(minutes=1),
+        )
+        rediscovered = SeatObservation(
+            candidate=lower,
+            status=SeatObservationStatus.LIMITED,
+            source="authorized-provider",
+            observed_at=hold_ended_at + timedelta(seconds=30),
+            fresh_until=hold_ended_at + timedelta(minutes=1),
+        )
+        session.add_all([unavailable, rediscovered])
+        await session.flush()
+
+        assert await _retryable_reservation_episode_key(
+            session,
+            lower,
+            rediscovered,
+            Provider.SRT,
+        ) == f"availability-after-hold:{hold.id}:{unavailable.id}"
+
+
+@pytest.mark.parametrize(
     ("initial_outcome", "transition_reason"),
     [
         (ReservationOutcome.AUTH_REQUIRED, "reservation_auth_required"),
@@ -2664,7 +2891,9 @@ async def test_stale_pending_attempt_recovers_without_second_provider_call(
         attempt = await session.scalar(select(ReservationAttempt))
         assert fresh_watch.status is WatchStatus.RESERVING
         assert attempt.outcome is ReservationOutcome.PENDING
-        attempt.started_at = datetime.now(timezone.utc) - timedelta(minutes=6)
+        now = datetime.now(timezone.utc)
+        attempt.started_at = now - timedelta(minutes=6)
+        fresh_watch.next_check_at = now - timedelta(seconds=1)
         await session.commit()
 
     assert await _process_due_watches() == 1

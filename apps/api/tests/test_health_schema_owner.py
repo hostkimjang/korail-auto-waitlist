@@ -193,7 +193,7 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     ] == {"$ref": "#/components/schemas/HealthResponse"}
     assert len(encoded) == 83000
     assert hashlib.sha256(encoded).hexdigest() == (
-        "5940f44b6baa50bcd00f7de035b9c1c5f176fd3f1fe4d7719485a2b2f6fca25e"
+        "45abe6354812e213d57ad3e703b9a023bd94598efc3c5504226da51bbbf03b22"
     )
 
 

@@ -17,6 +17,12 @@ KorailReservationOutcomeValue = Literal[
     "unavailable",
     "failed",
 ]
+KorailReservationProgressStageValue = Literal[
+    "authenticated_session_ready",
+    "target_rechecked",
+    "seat_selected",
+    "reservation_requested",
+]
 KorailLoginVerificationOutcomeValue = Literal[
     "authenticated",
     "auth_required",
@@ -199,3 +205,21 @@ class KorailReserveOnceResult(_InternalModel):
         if times != sorted(times):
             raise ValueError("reservation progress times must be chronological")
         return self
+
+
+class KorailReserveProgressFrame(_InternalModel):
+    type: Literal["progress"] = "progress"
+    stage: KorailReservationProgressStageValue
+    occurred_at: datetime
+
+    @field_validator("occurred_at")
+    @classmethod
+    def require_aware_progress_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("reservation progress times must include a timezone")
+        return value
+
+
+class KorailReserveResultFrame(_InternalModel):
+    type: Literal["result"] = "result"
+    result: KorailReserveOnceResult

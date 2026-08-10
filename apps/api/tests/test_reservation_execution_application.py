@@ -39,7 +39,12 @@ from rail_waitlist.reservations.execution_application import (
     execute_reservation,
     provider_auth_status_for_reservation_outcome,
 )
-from rail_waitlist.schemas import RailProviderAuthStatus, ReservationResult
+from rail_waitlist.reservations.progress_application import record_reservation_progress
+from rail_waitlist.schemas import (
+    RailProviderAuthStatus,
+    ReservationProgressStage,
+    ReservationResult,
+)
 from rail_waitlist.security import secret_box
 from rail_waitlist.services import (
     add_outbox_event,
@@ -217,6 +222,57 @@ async def test_not_found_or_inconclusive_remains_an_ambiguous_fence() -> None:
     assert unresolved.outcome is ReservationOutcome.UNKNOWN
     assert unresolved.official_handoff_url is None
     assert unresolved.payment_deadline is None
+
+
+async def test_korail_confirmation_preserves_all_reservation_progress_stages() -> None:
+    progress_times = tuple(
+        datetime(2026, 8, 10, 10, 0, second, tzinfo=UTC) for second in range(4)
+    )
+    progress_stages = tuple(
+        ReservationProgressStage(stage=stage, occurred_at=occurred_at)
+        for stage, occurred_at in zip(
+            (
+                "authenticated_session_ready",
+                "target_rechecked",
+                "seat_selected",
+                "reservation_requested",
+            ),
+            progress_times,
+            strict=True,
+        )
+    )
+    confirmation_time = datetime(2026, 8, 10, 10, 0, 5, tzinfo=UTC)
+    adapter = StubConfirmationAdapter(
+        ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            source="korail-same-session-detail",
+            observed_at=confirmation_time,
+            official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
+        )
+    )
+    result = ReservationResult(
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        source="korail-pydoll-reservation",
+        observed_at=datetime(2026, 8, 10, 10, 0, 4, tzinfo=UTC),
+        credential_version=3,
+        official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
+        progress_stages=progress_stages,
+    )
+
+    confirmed = await confirm_provider_reservation_result(
+        adapter,
+        execution_target(Provider.KORAIL),
+        "attempt-210",
+        result,
+        dependencies=dependencies(),
+    )
+
+    assert adapter.calls == 1
+    assert confirmed.outcome is ReservationOutcome.PAYMENT_REQUIRED
+    assert confirmed.result.progress_stages == progress_stages
+    assert tuple(stage.occurred_at for stage in confirmed.result.progress_stages) == progress_times
+    assert all(stage.occurred_at.tzinfo is UTC for stage in confirmed.result.progress_stages)
 
 
 @pytest.mark.parametrize(
@@ -624,3 +680,216 @@ async def test_external_provider_error_retains_claim_generation_and_completes(ap
         assert attempt.finished_at is not None
         assert watch is not None and watch.status is WatchStatus.WATCHING
         assert candidate is not None and candidate.state == "observed"
+
+
+async def _persist_actionable_korail_target(session_factory) -> ReservationExecutionTarget:
+    departure_at = datetime.now(UTC) + timedelta(days=1)
+    async with session_factory() as session:
+        account = RailProviderAccount(
+            provider=Provider.KORAIL,
+            credentials_ciphertext=secret_box.encrypt_dict(
+                {
+                    "login_method": "membership_number",
+                    "login_id": "progress-fixture-account",
+                    "password": "progress-fixture-password",
+                }
+            ),
+            enabled=True,
+            credential_version=4,
+            last_auth_status="authenticated",
+            last_authenticated_at=datetime.now(UTC),
+        )
+        watch = Watch(
+            provider=Provider.KORAIL,
+            origin="대전",
+            origin_node_id="NAT011668",
+            destination="서울",
+            destination_node_id="NAT010000",
+            travel_date=departure_at.date(),
+            time_from=time(8),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key=f"execution-progress-{departure_at.timestamp()}",
+        )
+        candidate = WatchCandidate(
+            train_number="00055",
+            departure_at=departure_at,
+            arrival_at=departure_at + timedelta(hours=1),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="seat_found",
+        )
+        watch.candidates.append(candidate)
+        session.add_all([account, watch])
+        await session.commit()
+        return ReservationExecutionTarget(
+            watch_id=watch.id,
+            candidate_id=candidate.id,
+            provider=watch.provider,
+            origin=watch.origin,
+            destination=watch.destination,
+            origin_node_id=watch.origin_node_id or "",
+            destination_node_id=watch.destination_node_id or "",
+            train_number=candidate.train_number,
+            departure_at=candidate.departure_at,
+            arrival_at=candidate.arrival_at,
+            seat_class=candidate.seat_class,
+            passenger_count=watch.passenger_count,
+            reservation_episode_key="availability:progress-observation",
+        )
+
+
+class ProgressReportingKorailAdapter:
+    def __init__(self) -> None:
+        self.progress_calls = 0
+        self.legacy_calls = 0
+        self.reported: tuple[ReservationProgressStage, ...] = ()
+
+    async def reserve_once(self, request) -> ReservationResult:
+        self.legacy_calls += 1
+        raise AssertionError("KORAIL progress adapter must use reserve_once_with_progress")
+
+    async def reserve_once_with_progress(self, request, on_progress) -> ReservationResult:
+        self.progress_calls += 1
+        started = datetime.now(UTC)
+        stages = tuple(
+            ReservationProgressStage(
+                stage=stage,
+                occurred_at=started + timedelta(milliseconds=index),
+            )
+            for index, stage in enumerate(
+                (
+                    "authenticated_session_ready",
+                    "target_rechecked",
+                    "seat_selected",
+                    "reservation_requested",
+                )
+            )
+        )
+        for stage in stages:
+            await on_progress(stage)
+        await on_progress(stages[1])
+        await on_progress(
+            ReservationProgressStage(
+                stage="target_rechecked",
+                occurred_at=started + timedelta(seconds=1),
+            )
+        )
+        self.reported = stages
+        return ReservationResult(
+            outcome=ReservationOutcome.FAILED,
+            source="korail-progress-fixture",
+            observed_at=started + timedelta(seconds=2),
+            credential_version=request.expected_credential_version,
+            progress_stages=stages,
+        )
+
+    async def confirm_reservation(self, target):
+        raise AssertionError("FAILED must not trigger a confirmation read")
+
+
+async def test_korail_progress_callback_persists_cumulative_idempotent_snapshots(app) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+    adapter = ProgressReportingKorailAdapter()
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.progress_calls == 1
+    assert adapter.legacy_calls == 0
+    async with app.state.test_session_factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        assert attempt is not None and attempt.outcome is ReservationOutcome.FAILED
+        assert attempt.progress_stages == [
+            {
+                "stage": stage.stage,
+                "occurred_at": stage.occurred_at.isoformat(),
+            }
+            for stage in adapter.reported
+        ]
+        events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent)
+                    .where(OutboxEvent.event_type == "watch.reservation_progressed")
+                    .order_by(OutboxEvent.created_at, OutboxEvent.id)
+                )
+            ).all()
+        )
+        assert len(events) == 4
+        for index, event in enumerate(events):
+            expected = adapter.reported[index]
+            assert event.dedupe_key == (
+                f"reservation-progress:{attempt.id}:{expected.stage}"
+            )
+            assert event.payload["watch_id"] == target.watch_id
+            assert event.payload["candidate_id"] == target.candidate_id
+            assert event.payload["attempt_id"] == attempt.id
+            assert event.payload["attempt_sequence"] == 1
+            assert event.payload["seat_detected_at"] is None
+            assert event.payload["attempt_started_at"] == attempt.started_at.isoformat()
+            assert event.payload["stage"] == expected.stage
+            assert event.payload["occurred_at"] == expected.occurred_at.isoformat()
+            assert event.payload["progress_stages"] == [
+                {
+                    "stage": stage.stage,
+                    "occurred_at": stage.occurred_at.isoformat(),
+                }
+                for stage in adapter.reported[: index + 1]
+            ]
+
+        late_progress = (*adapter.reported,)
+        persisted = await record_reservation_progress(
+            session_factory=app.state.test_session_factory,
+            add_outbox_event=add_outbox_event,
+            watch_id=target.watch_id,
+            candidate_id=target.candidate_id,
+            attempt_id=attempt.id,
+            expected_credential_version=4,
+            cumulative_progress=late_progress,
+        )
+        assert persisted is False
+
+
+async def test_progress_persistence_failure_does_not_cancel_korail_reservation(app) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+    adapter = ProgressReportingKorailAdapter()
+
+    async def fail_progress_only(session, **kwargs):
+        if kwargs["event_type"] == "watch.reservation_progressed":
+            raise RuntimeError("progress persistence fixture failure")
+        return await add_outbox_event(session, **kwargs)
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(
+            app.state.test_session_factory,
+            add_outbox_event=fail_progress_only,
+        ),
+    )
+
+    assert adapter.progress_calls == 1
+    async with app.state.test_session_factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        assert attempt is not None and attempt.outcome is ReservationOutcome.FAILED
+        progress_events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "watch.reservation_progressed"
+                    )
+                )
+            ).all()
+        )
+        result_event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == "watch.reservation_result")
+        )
+        assert progress_events == []
+        assert result_event is not None

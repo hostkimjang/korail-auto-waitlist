@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Protocol
+from datetime import UTC, datetime
+from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +25,8 @@ from ..provider_account_management.schemas import RailProviderAuthStatus
 from ..provider_circuit.models import ProviderCircuit
 from ..provider_contracts import ReservationExecutionProvider
 from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
-from .contracts import ReservationRequest, ReservationResult
+from .contracts import ReservationProgressStage, ReservationRequest, ReservationResult
+from .progress_application import cumulative_progress_with, record_reservation_progress
 from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -31,10 +34,23 @@ from .provider_confirmation.contracts import (
 )
 
 EXTERNAL_RESERVATION_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
+logger = logging.getLogger(__name__)
 
 
 class AsyncSessionFactory(Protocol):
     def __call__(self) -> AsyncSession: ...
+
+
+ReservationProgressCallback = Callable[[ReservationProgressStage], Awaitable[None]]
+
+
+@runtime_checkable
+class ReservationProgressProvider(Protocol):
+    async def reserve_once_with_progress(
+        self,
+        request: ReservationRequest,
+        on_progress: ReservationProgressCallback,
+    ) -> ReservationResult: ...
 
 
 @dataclass(frozen=True)
@@ -160,7 +176,7 @@ class UtcNow(Protocol):
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -284,6 +300,7 @@ async def confirm_provider_reservation_result(
                 outcome=ReservationOutcome.UNKNOWN,
                 source=result.source,
                 observed_at=result.observed_at,
+                progress_stages=result.progress_stages,
             ),
             None,
         )
@@ -325,6 +342,7 @@ async def confirm_provider_reservation_result(
                 source=result.source,
                 observed_at=dependencies.now(),
                 credential_version=result.credential_version,
+                progress_stages=result.progress_stages,
             ),
             None,
         )
@@ -337,6 +355,7 @@ async def confirm_provider_reservation_result(
                 credential_version=result.credential_version,
                 payment_deadline=confirmation.payment_deadline,
                 official_handoff_url=confirmation.official_handoff_url,
+                progress_stages=result.progress_stages,
             ),
             confirmation,
         )
@@ -350,6 +369,7 @@ async def confirm_provider_reservation_result(
             source=confirmation.source,
             observed_at=confirmation.observed_at,
             credential_version=result.credential_version,
+            progress_stages=result.progress_stages,
         ),
         confirmation,
     )
@@ -442,13 +462,44 @@ async def execute_reservation(
     if not created:
         return
 
+    reservation_request = target.reservation_request(
+        idempotency_key,
+        expected_credential_version=provider_credential_version,
+    )
     try:
-        result = await adapter.reserve_once(
-            target.reservation_request(
-                idempotency_key,
-                expected_credential_version=provider_credential_version,
-            )
-        )
+        if target.provider is Provider.KORAIL and isinstance(
+            adapter, ReservationProgressProvider
+        ):
+            cumulative_progress: tuple[ReservationProgressStage, ...] = ()
+
+            async def on_progress(progress: ReservationProgressStage) -> None:
+                nonlocal cumulative_progress
+                next_progress = cumulative_progress_with(cumulative_progress, progress)
+                if next_progress is None:
+                    return
+                cumulative_progress = next_progress
+                try:
+                    await record_reservation_progress(
+                        session_factory=dependencies.session_factory,
+                        add_outbox_event=dependencies.add_outbox_event,
+                        watch_id=target.watch_id,
+                        candidate_id=target.candidate_id,
+                        attempt_id=attempt_id,
+                        expected_credential_version=provider_credential_version,
+                        cumulative_progress=cumulative_progress,
+                    )
+                except Exception:  # noqa: BLE001 -- progress must not abort the provider command.
+                    logger.warning(
+                        "Reservation progress persistence failed "
+                        "watch_id=%s attempt_id=%s stage=%s",
+                        target.watch_id,
+                        attempt_id,
+                        progress.stage,
+                    )
+
+            result = await adapter.reserve_once_with_progress(reservation_request, on_progress)
+        else:
+            result = await adapter.reserve_once(reservation_request)
     except dependencies.provider_call_errors:
         result = ReservationResult(
             outcome=ReservationOutcome.FAILED,

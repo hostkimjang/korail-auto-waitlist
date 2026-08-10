@@ -15,6 +15,16 @@ import {
   type ProviderRuntimeStatusesLoader,
 } from "../src/features/settings/useProviderAccountSettings";
 
+const originalVisibilityDescriptor = Object.getOwnPropertyDescriptor(document, "visibilityState");
+
+function setVisibility(value: "hidden" | "visible"): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 interface HookProps {
   authenticated: boolean;
   demo: boolean;
@@ -113,6 +123,9 @@ function renderController(
 describe("useProviderAccountSettings", () => {
   afterEach(() => {
     vi.useRealTimers();
+    if (originalVisibilityDescriptor) {
+      Object.defineProperty(document, "visibilityState", originalVisibilityDescriptor);
+    }
   });
 
   it("does not perform provider I/O before authentication", () => {
@@ -269,6 +282,31 @@ describe("useProviderAccountSettings", () => {
 
     unmount();
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledTimes(2);
+  });
+
+  it("pauses runtime polling while hidden and refreshes immediately on return", async () => {
+    const dependencies = testDependencies();
+    dependencies.loadAccounts.mockResolvedValue([account("KORAIL")]);
+    dependencies.loadRuntimeStatuses.mockResolvedValue([runtimeStatus("KORAIL")]);
+    setVisibility("visible");
+    const { rerender } = renderController(dependencies);
+    await waitFor(() => expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledOnce());
+    dependencies.loadRuntimeStatuses.mockClear();
+    vi.useFakeTimers();
+
+    rerender({ ...defaultHookProps, runtimePollingEnabled: true });
+    await act(async () => undefined);
+    expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledOnce();
+
+    act(() => setVisibility("hidden"));
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      setVisibility("visible");
+      await Promise.resolve();
+    });
     expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledTimes(2);
   });
 

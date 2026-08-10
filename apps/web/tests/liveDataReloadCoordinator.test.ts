@@ -56,4 +56,33 @@ describe("live data reload coordinator", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(reload).toHaveBeenCalledTimes(3);
   });
+
+  it("collapses hidden invalidations into one reload when the tab becomes visible", async () => {
+    vi.useFakeTimers();
+    const visibility = new FakeVisibilityTarget();
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const coordinator = createLiveDataReloadCoordinator(reload, 50, {
+      pollIntervalMs: 5_000,
+      visibilityTarget: visibility,
+    });
+
+    coordinator.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reload).toHaveBeenCalledOnce();
+
+    visibility.setVisibility("hidden");
+    coordinator.request();
+    coordinator.request();
+    coordinator.request();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(reload).toHaveBeenCalledOnce();
+
+    visibility.setVisibility("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reload).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(reload).toHaveBeenCalledTimes(2);
+
+    coordinator.dispose();
+  });
 });

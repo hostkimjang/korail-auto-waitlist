@@ -27,6 +27,8 @@ from .page_contracts import (
 )
 from .reservation_contracts import (
     KorailReservationOutcome,
+    KorailReservationProgress,
+    KorailReservationProgressCallback,
     KorailReservationRequest,
     KorailReservationResult,
 )
@@ -210,6 +212,8 @@ class PydollReservationDomDriver:
     async def reserve_once(
         self,
         request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
         target_rechecked_at: datetime | None = None
         seat_selected_at: datetime | None = None
@@ -236,6 +240,8 @@ class PydollReservationDomDriver:
         matches = [row for row in rows if await self._port._row_matches_reservation(row, request)]
         if len(matches) != 1:
             target_rechecked_at = self._utc_now()
+            if on_progress is not None:
+                on_progress(KorailReservationProgress("target_rechecked", target_rechecked_at))
             return result(KorailReservationOutcome.UNAVAILABLE, "target_not_unique")
 
         row = matches[0]
@@ -244,6 +250,8 @@ class PydollReservationDomDriver:
             request.seat_class.label,
         )
         target_rechecked_at = self._utc_now()
+        if on_progress is not None:
+            on_progress(KorailReservationProgress("target_rechecked", target_rechecked_at))
         if len(seat_controls) > 1:
             return result(KorailReservationOutcome.UNAVAILABLE, "seat_control_not_unique")
         if not seat_controls:
@@ -252,6 +260,8 @@ class PydollReservationDomDriver:
         seat = seat_controls[0]
         await seat.click()
         seat_selected_at = self._utc_now()
+        if on_progress is not None:
+            on_progress(KorailReservationProgress("seat_selected", seat_selected_at))
         attempt = ReservationAttemptState()
         deadline = self._monotonic() + self._timeout_seconds
         while self._monotonic() < deadline:
@@ -319,6 +329,13 @@ class PydollReservationDomDriver:
                         )
                     attempt.reservation_clicked = True
                     reservation_requested_at = self._utc_now()
+                    if on_progress is not None:
+                        on_progress(
+                            KorailReservationProgress(
+                                "reservation_requested",
+                                reservation_requested_at,
+                            )
+                        )
                     try:
                         await candidates[0].click()
                     except asyncio.CancelledError:

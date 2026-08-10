@@ -3479,7 +3479,7 @@ def test_observation_group_imports_only_canonical_reservation_contracts() -> Non
 
     assert reservation_imports == {
         "reservations.attempt_policy",
-        "reservations.provider_confirmation.contracts",
+        "reservations.payment_hold_retry_application",
     }
 
 
@@ -5719,6 +5719,8 @@ def test_korail_reservation_contract_facade_exactly_aliases_sidecar_contracts() 
                 ("KorailReservationOutcomeValue", None),
                 ("KorailReserveOnceRequest", None),
                 ("KorailReserveOnceResult", None),
+                ("KorailReserveProgressFrame", None),
+                ("KorailReserveResultFrame", None),
                 ("KorailSessionActorStateValue", None),
                 ("KorailSessionStateResult", None),
             },
@@ -5944,7 +5946,7 @@ def test_central_models_exactly_aliases_the_watch_persistence_graph() -> None:
             "rail_waitlist/notification_management/watch_transition_application.py",
             "watch_management.models",
             2,
-            {"Watch"},
+            {"ReservationAttempt", "SeatObservation", "Watch", "WatchCandidate"},
         ),
         (
             "rail_waitlist/observations/cycle_application.py",
@@ -6339,11 +6341,6 @@ def test_top_level_confirmation_exactly_aliases_the_canonical_contracts() -> Non
         ),
         (
             "rail_waitlist/korail_sidecar/http.py",
-            "reservations.provider_confirmation.contracts",
-            2,
-        ),
-        (
-            "rail_waitlist/observations/group_application.py",
             "reservations.provider_confirmation.contracts",
             2,
         ),
@@ -7495,7 +7492,7 @@ def test_central_schema_hub_only_aliases_reservation_contracts() -> None:
             "rail_waitlist/provider_adapters/korail_execution.py",
             "reservations.contracts",
             2,
-            {"ReservationRequest", "ReservationResult"},
+            {"ReservationProgressStage", "ReservationRequest", "ReservationResult"},
         ),
         (
             "rail_waitlist/provider_adapters/mock.py",
@@ -7525,7 +7522,7 @@ def test_central_schema_hub_only_aliases_reservation_contracts() -> None:
             "rail_waitlist/reservations/execution_application.py",
             "contracts",
             1,
-            {"ReservationRequest", "ReservationResult"},
+            {"ReservationProgressStage", "ReservationRequest", "ReservationResult"},
         ),
         (
             "rail_waitlist/services.py",

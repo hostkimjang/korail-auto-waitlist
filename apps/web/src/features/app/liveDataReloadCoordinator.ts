@@ -37,6 +37,11 @@ export function createLiveDataReloadCoordinator(
     pollTimer = null;
   };
 
+  const clearRequestTimer = (): void => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+  };
+
   const schedulePoll = (): void => {
     clearPollTimer();
     if (!active || !pollingEnabled || !isVisible()) return;
@@ -52,6 +57,11 @@ export function createLiveDataReloadCoordinator(
       pending = true;
       return;
     }
+    if (!isVisible()) {
+      pending = true;
+      return;
+    }
+    pending = false;
     clearPollTimer();
     inFlight = true;
     try {
@@ -61,13 +71,13 @@ export function createLiveDataReloadCoordinator(
       // transient refresh failure keeps the last successful snapshot visible.
     } finally {
       inFlight = false;
-      if (active && pending) {
+      if (active && pending && isVisible()) {
         pending = false;
         timer = window.setTimeout(() => {
           timer = null;
           void runReload();
         }, burstDelayMs);
-      } else {
+      } else if (isVisible()) {
         schedulePoll();
       }
     }
@@ -75,10 +85,9 @@ export function createLiveDataReloadCoordinator(
 
   const request = (): void => {
     pending = true;
-    if (inFlight || timer !== null) return;
+    if (!isVisible() || inFlight || timer !== null) return;
     timer = window.setTimeout(() => {
       timer = null;
-      pending = false;
       void runReload();
     }, burstDelayMs);
   };
@@ -87,6 +96,7 @@ export function createLiveDataReloadCoordinator(
     if (!active || !pollingEnabled) return;
     if (!isVisible()) {
       clearPollTimer();
+      clearRequestTimer();
       return;
     }
     clearPollTimer();
@@ -98,12 +108,17 @@ export function createLiveDataReloadCoordinator(
   }
 
   return {
-    start: () => { void runReload(); },
+    start: () => {
+      if (!isVisible()) {
+        pending = true;
+        return;
+      }
+      void runReload();
+    },
     request,
     dispose: () => {
       active = false;
-      if (timer !== null) window.clearTimeout(timer);
-      timer = null;
+      clearRequestTimer();
       clearPollTimer();
       pending = false;
       visibilityTarget?.removeEventListener("visibilitychange", handleVisibilityChange);

@@ -5,6 +5,8 @@ from __future__ import annotations
 from .korail_sidecar.pydoll import reservation_contracts as _owner
 
 annotations = _owner.annotations
+Callable = _owner.Callable
+Literal = _owner.Literal
 dataclass = _owner.dataclass
 field = _owner.field
 date = _owner.date
@@ -14,5 +16,8 @@ StrEnum = _owner.StrEnum
 KorailCredentialInput = _owner.KorailCredentialInput
 KorailReservationSeatClass = _owner.KorailReservationSeatClass
 KorailReservationOutcome = _owner.KorailReservationOutcome
+KorailReservationProgressStage = _owner.KorailReservationProgressStage
+KorailReservationProgress = _owner.KorailReservationProgress
+KorailReservationProgressCallback = _owner.KorailReservationProgressCallback
 KorailReservationRequest = _owner.KorailReservationRequest
 KorailReservationResult = _owner.KorailReservationResult

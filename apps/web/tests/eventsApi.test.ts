@@ -110,9 +110,13 @@ describe("live event transport boundary", () => {
       id: "reservation",
       created_at: "2026-07-31T00:00:02Z",
     });
+    source.emit("watch.reservation_progressed", {
+      id: "reservation-progress",
+      created_at: "2026-07-31T00:00:03Z",
+    });
 
     expect(onEvent.mock.calls.map(([event]) => eventId(event)))
-      .toEqual(["current", "future", "reservation"]);
+      .toEqual(["current", "future", "reservation", "reservation-progress"]);
     expect(onError).not.toHaveBeenCalled();
     unsubscribe();
     expect(source.closed).toBe(true);

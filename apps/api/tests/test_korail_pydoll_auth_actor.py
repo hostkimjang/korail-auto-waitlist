@@ -9,7 +9,10 @@ import pytest
 
 import rail_waitlist.korail_pydoll_auth_actor as auth_actor_module
 import rail_waitlist.korail_pydoll_browser as browser_module
-from rail_waitlist.korail_pydoll_auth_actor import KorailSessionActorState
+from rail_waitlist.korail_pydoll_auth_actor import (
+    BrowserProtectionDetected,
+    KorailSessionActorState,
+)
 from rail_waitlist.korail_pydoll_browser import (
     KorailCredentialInput,
     PydollKorailBrowserClient,
@@ -22,6 +25,8 @@ class _AuthSession:
     def __init__(self) -> None:
         self.open_count = 0
         self.authentication_count = 0
+        self.probe_count = 0
+        self.probe_result = True
         self.closed = 0
 
     async def open(self) -> PydollPageSnapshot:
@@ -32,6 +37,10 @@ class _AuthSession:
         assert credential.login_id == "fixture-account"
         self.authentication_count += 1
         return True
+
+    async def probe_authenticated_session(self) -> bool:
+        self.probe_count += 1
+        return self.probe_result
 
 
 class _AuthContext:
@@ -124,6 +133,143 @@ async def test_auth_actor_replaces_the_persistent_session_at_the_max_use_boundar
 
     await actor.close_locked()
     assert [context.session.closed for context in contexts] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_prewarm_probes_the_official_session_before_extending_local_reuse() -> None:
+    now = [10.0]
+    session = _AuthSession()
+    actor = PydollAuthenticationSessionActor[_AuthSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_args: _AuthContext(session),
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: now[0],
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+    )
+
+    assert await actor.verify_credentials(_credential()) is True
+    now[0] = 30.0
+
+    assert await actor.prewarm_credentials(_credential()) is True
+
+    snapshot = actor.snapshot()
+    assert session.probe_count == 1
+    assert session.authentication_count == 1
+    assert snapshot.last_verified_at_monotonic == 30.0
+    assert snapshot.last_used_at_monotonic == 30.0
+    assert snapshot.local_reuse_until_monotonic == 90.0
+    await actor.close_locked()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_reauthenticates_once_when_the_official_session_is_gone() -> None:
+    sessions = [_AuthSession(), _AuthSession()]
+    contexts: list[_AuthContext] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        context = _AuthContext(sessions[len(contexts)])
+        contexts.append(context)
+        return context
+
+    actor = PydollAuthenticationSessionActor[_AuthSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=factory,
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+    )
+
+    assert await actor.verify_credentials(_credential()) is True
+    sessions[0].probe_result = False
+
+    assert await actor.prewarm_credentials(_credential()) is True
+
+    assert sessions[0].probe_count == 1
+    assert sessions[0].closed == 1
+    assert sessions[1].authentication_count == 1
+    assert actor.active_session is not None
+    assert actor.active_session.session is sessions[1]
+    assert actor.state is KorailSessionActorState.READY
+    await actor.close_locked()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_cancellation_retires_the_uncertain_session() -> None:
+    started = asyncio.Event()
+
+    class BlockingProbeSession(_AuthSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            started.set()
+            await asyncio.Event().wait()
+            return True
+
+    session = BlockingProbeSession()
+    actor = PydollAuthenticationSessionActor[BlockingProbeSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_args: _AuthContext(session),  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+    )
+    assert await actor.verify_credentials(_credential()) is True
+
+    prewarm = asyncio.create_task(actor.prewarm_credentials(_credential()))
+    await started.wait()
+    assert actor.lock.locked() is True
+    prewarm.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await prewarm
+
+    assert actor.active_session is None
+    assert actor.state is KorailSessionActorState.STALE
+    assert session.authentication_count == 1
+    assert session.probe_count == 1
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_protection_retires_the_session_and_marks_it_blocked() -> None:
+    class ProtectedProbeSession(_AuthSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            raise BrowserProtectionDetected(stage="session_keepalive")
+
+    session = ProtectedProbeSession()
+    actor = PydollAuthenticationSessionActor[ProtectedProbeSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_args: _AuthContext(session),  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+    )
+    assert await actor.verify_credentials(_credential()) is True
+
+    with pytest.raises(BrowserProtectionDetected):
+        await actor.prewarm_credentials(_credential())
+
+    assert actor.active_session is None
+    assert actor.state is KorailSessionActorState.BLOCKED
+    assert session.authentication_count == 1
+    assert session.probe_count == 1
+    assert session.closed == 1
 
 
 @pytest.mark.asyncio

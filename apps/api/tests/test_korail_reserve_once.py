@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
-from datetime import date, time
+from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -37,6 +38,7 @@ from rail_waitlist.korail_pydoll_browser import (
     _ReservationAttemptState,
 )
 from rail_waitlist.korail_search_bootstrap import KorailStationIdentity
+from rail_waitlist.korail_sidecar.contracts import KorailReserveOnceRequest
 
 
 class FakeElement:
@@ -456,7 +458,11 @@ async def test_session_ignores_transient_login_route_with_official_session(
         official_session_probe,
     )
 
-    result = await session.reserve_once(reservation_request())
+    progress = []
+    result = await session.reserve_once(
+        reservation_request(),
+        on_progress=progress.append,
+    )
 
     assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
     assert result.seat_clicked is True
@@ -465,6 +471,16 @@ async def test_session_ignores_transient_login_route_with_official_session(
     assert result.seat_selected_at is not None
     assert result.reservation_requested_at is not None
     assert result.target_rechecked_at <= result.seat_selected_at <= result.reservation_requested_at
+    assert [item.stage for item in progress] == [
+        "target_rechecked",
+        "seat_selected",
+        "reservation_requested",
+    ]
+    assert [item.occurred_at for item in progress] == [
+        result.target_rechecked_at,
+        result.seat_selected_at,
+        result.reservation_requested_at,
+    ]
     assert seat.clicks == reserve.clicks == 1
     official_session_probe.assert_awaited_once_with()
 
@@ -1106,15 +1122,17 @@ async def test_session_accepts_official_session_before_login_header_hydrates(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("value", "expected"),
-    [(True, True), (False, False), ("true", False), (None, False)],
+    ("outcome", "expected"),
+    [("authenticated", True), ("logged_out", False)],
 )
-async def test_official_session_probe_returns_only_strict_boolean(
-    value: object,
+async def test_official_session_probe_returns_only_explicit_authentication_outcome(
+    outcome: str,
     expected: bool,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
-    execute_script = AsyncMock(return_value={"result": {"result": {"value": value}}})
+    execute_script = AsyncMock(
+        return_value={"result": {"result": {"value": {"outcome": outcome}}}}
+    )
     session._tab = SimpleNamespace(execute_script=execute_script)
 
     authenticated = await session._probe_official_authenticated_session()
@@ -1125,6 +1143,34 @@ async def test_official_session_probe_returns_only_strict_boolean(
         "await_promise": True,
         "timeout": 1_000,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "expected_exception"),
+    [
+        ({"outcome": "rate_limited"}, BrowserRateLimited),
+        ({"outcome": "protected"}, BrowserProtectionDetected),
+        ({"outcome": "source_unavailable"}, BrowserSourceUnavailable),
+        ({"outcome": "unexpected"}, BrowserSourceUnavailable),
+        (False, BrowserSourceUnavailable),
+    ],
+)
+async def test_official_session_probe_preserves_protection_and_uncertainty(
+    value: object,
+    expected_exception: type[Exception],
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    execute_script = AsyncMock(return_value={"result": {"result": {"value": value}}})
+    session._tab = SimpleNamespace(execute_script=execute_script)
+
+    with pytest.raises(expected_exception):
+        await session._probe_official_authenticated_session()
+
+    script = execute_script.await_args.args[0]
+    assert "response.status === 429" in script
+    assert "response.status === 403" in script
+    assert "application/json" in script
 
 
 @pytest.mark.asyncio
@@ -1561,6 +1607,7 @@ class ReservationFixtureSession:
         self.closed = 0
         self.open_calls = 0
         self.auth_calls = 0
+        self.auth_probe_calls = 0
         self.choose_station_calls = 0
         self.choose_schedule_calls = 0
         self.submit_calls = 0
@@ -1606,6 +1653,10 @@ class ReservationFixtureSession:
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         self.auth_calls += 1
         self.authenticated_login_methods.append(credential.login_method)
+        return self.authenticated
+
+    async def probe_authenticated_session(self) -> bool:
+        self.auth_probe_calls += 1
         return self.authenticated
 
     async def submit_once(self) -> None:
@@ -1745,6 +1796,47 @@ async def test_warm_authenticated_direct_bootstrap_skips_public_page() -> None:
     assert session.choose_schedule_calls == 0
     assert session.submit_calls == 0
     assert session.reserve_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_keepalive_holds_the_same_lock_as_reservation() -> None:
+    session = ReservationFixtureSession()
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+
+    async def blocking_probe() -> bool:
+        session.auth_probe_calls += 1
+        probe_started.set()
+        await release_probe.wait()
+        return True
+
+    session.probe_authenticated_session = blocking_probe  # type: ignore[method-assign]
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: ReservationFixtureContext(session),
+        session_reuse_ttl_seconds=300,
+        session_reuse_max_searches=20,
+        station_identity_resolver=StaticReservationStationResolver(),  # type: ignore[arg-type]
+    )
+    credential = reservation_request().credential
+    assert await client.verify_credentials(credential) is True
+
+    keepalive = asyncio.create_task(client.prewarm_credentials(credential))
+    await probe_started.wait()
+    reservation = asyncio.create_task(client.reserve_once(reservation_request()))
+    await asyncio.sleep(0)
+
+    assert reservation.done() is False
+    assert session.reserve_calls == 0
+
+    release_probe.set()
+    assert await keepalive is True
+    result = await reservation
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert session.auth_probe_calls == 1
+    assert session.auth_calls == 1
+    assert session.reserve_calls == 1
+    await client.close()
 
 
 @pytest.mark.asyncio
@@ -2074,8 +2166,9 @@ async def test_korail_session_actor_snapshot_separates_local_reuse_from_verifica
     now[0] = 20.0
     assert await client.prewarm_credentials(reservation_request("credential-v4").credential)
     reused = client.session_snapshot()
-    assert reused.last_verified_at_monotonic == 10.0
+    assert reused.last_verified_at_monotonic == 20.0
     assert reused.last_used_at_monotonic == 20.0
+    assert factory.sessions[0].auth_probe_calls == 1
     assert len(factory.sessions) == 1
 
     now[0] = 81.0
@@ -2429,6 +2522,66 @@ class FakeReservationClient:
         return True
 
 
+class StreamingFakeReservationClient(FakeReservationClient):
+    async def reserve_once(
+        self,
+        request: KorailReservationRequest,
+        *,
+        on_progress=None,
+    ) -> KorailReservationResult:
+        self.request = request
+        times = [datetime(2026, 8, 2, 1, 0, index, tzinfo=UTC) for index in range(4)]
+        stages = (
+            "authenticated_session_ready",
+            "target_rechecked",
+            "seat_selected",
+            "reservation_requested",
+        )
+        assert on_progress is not None
+        for stage, occurred_at in zip(stages, times, strict=True):
+            on_progress(SimpleNamespace(stage=stage, occurred_at=occurred_at))
+        return replace(
+            self.result,
+            session_ready_at=times[0],
+            target_rechecked_at=times[1],
+            seat_selected_at=times[2],
+            reservation_requested_at=times[3],
+        )
+
+
+class GatedStreamingReservationClient(FakeReservationClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+        self.release = asyncio.Event()
+        self.completed = asyncio.Event()
+        self.cancelled = False
+
+    async def reserve_once(
+        self,
+        request: KorailReservationRequest,
+        *,
+        on_progress=None,
+    ) -> KorailReservationResult:
+        self.calls += 1
+        self.request = request
+        session_ready_at = datetime(2026, 8, 2, 1, 0, tzinfo=UTC)
+        assert on_progress is not None
+        on_progress(
+            SimpleNamespace(
+                stage="authenticated_session_ready",
+                occurred_at=session_ready_at,
+            )
+        )
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        self.completed.set()
+        return replace(self.result, session_ready_at=session_ready_at)
+
+
 class UnavailableLoginReservationClient(FakeReservationClient):
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
         self.verified_credential = credential
@@ -2509,6 +2662,82 @@ def test_internal_reserve_endpoint_is_bearer_protected_and_returns_no_credential
     assert reservation_client.request is not None
     assert reservation_client.request.credential.login_method is KorailLoginMethod.MEMBERSHIP_NUMBER
     assert reservation_client.request.credential.version == "credential-v1"
+
+
+def test_internal_reserve_stream_emits_ordered_progress_then_one_terminal_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KORAIL_BROWSER_ENGINE", "pydoll")
+    app = create_adapter_app(
+        automation=FakeAutomation(),
+        reservation_client=StreamingFakeReservationClient(),
+        token="t" * 32,
+        readiness_probe=AsyncMock(return_value=None),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/reserve-once/stream",
+            json=internal_payload(),
+            headers={"Authorization": f"Bearer {'t' * 32}"},
+        )
+
+    frames = [json.loads(line) for line in response.text.splitlines()]
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert [frame["stage"] for frame in frames[:-1]] == [
+        "authenticated_session_ready",
+        "target_rechecked",
+        "seat_selected",
+        "reservation_requested",
+    ]
+    assert frames[-1]["type"] == "result"
+    assert frames[-1]["result"]["outcome"] == "payment_required"
+    assert app.state.pending_reservation_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_reserve_stream_disconnect_keeps_one_command_alive_until_task_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KORAIL_BROWSER_ENGINE", "pydoll")
+    reservation_client = GatedStreamingReservationClient()
+    app = create_adapter_app(
+        automation=FakeAutomation(),
+        reservation_client=reservation_client,
+        token="t" * 32,
+        readiness_probe=AsyncMock(return_value=None),
+    )
+    app.state.token = "t" * 32
+    app.state.readiness = SimpleNamespace(ready=True)
+    app.state.reservation_client = reservation_client
+    app.state.pending_reservation_tasks = set()
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", None) == "/v1/reserve-once/stream"
+    )
+
+    response = await endpoint(
+        KorailReserveOnceRequest.model_validate(internal_payload()),
+        authorization=f"Bearer {'t' * 32}",
+    )
+    iterator = response.body_iterator
+    first_frame = json.loads((await anext(iterator)).decode())
+    await iterator.aclose()
+
+    assert first_frame["stage"] == "authenticated_session_ready"
+    assert reservation_client.calls == 1
+    assert len(app.state.pending_reservation_tasks) == 1
+    assert reservation_client.cancelled is False
+
+    reservation_client.release.set()
+    await asyncio.wait_for(reservation_client.completed.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert reservation_client.calls == 1
+    assert reservation_client.cancelled is False
+    assert app.state.pending_reservation_tasks == set()
 
 
 def test_internal_session_state_is_bearer_protected_and_contains_no_secret_material(

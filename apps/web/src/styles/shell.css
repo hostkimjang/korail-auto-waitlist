@@ -216,3 +216,26 @@
   color: var(--danger);
   background: #fff0f0;
 }
+
+.mobile-notification-button {
+  position: relative;
+}
+
+.mobile-notification-badge {
+  min-width: 18px;
+  height: 18px;
+  position: absolute;
+  top: 1px;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  color: #fff;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: var(--danger);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}

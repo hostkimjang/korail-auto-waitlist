@@ -7,6 +7,5 @@
   { "file": "src/features/new-wait/StepThreeRefreshControl.tsx", "rule": "react-hooks/refs", "line": 120, "column": 3, "lineHash": "ed990bc805e53b280665c51c5a43adf52d6f66726b34a6ec8cadeb25ceb83de8" },
   { "file": "src/features/settings/TimetableRefreshSettings.tsx", "rule": "react-hooks/set-state-in-effect", "line": 78, "column": 19, "lineHash": "6b829527f70c1048bea48e9ac2478d0c19aa83c0f67e7870c8319301c4879f55" },
   { "file": "src/features/settings/useOperationsSummary.ts", "rule": "react-hooks/set-state-in-effect", "line": 56, "column": 5, "lineHash": "2d5e2c8a77c8686249737a087c75dcf3062b48946181e3a9f00e5779d634db83" },
-  { "file": "src/features/settings/useSeatStatusSources.ts", "rule": "react-hooks/set-state-in-effect", "line": 64, "column": 5, "lineHash": "2d5e2c8a77c8686249737a087c75dcf3062b48946181e3a9f00e5779d634db83" },
-  { "file": "src/hooks/usePaymentDeadlineClock.ts", "rule": "react-hooks/set-state-in-effect", "line": 16, "column": 5, "lineHash": "2e84bb2457f48d2823434af76f57e8a0c00dc4e712c01c67d56a61fb2fd10502" }
+  { "file": "src/features/settings/useSeatStatusSources.ts", "rule": "react-hooks/set-state-in-effect", "line": 64, "column": 5, "lineHash": "2d5e2c8a77c8686249737a087c75dcf3062b48946181e3a9f00e5779d634db83" }
 ]

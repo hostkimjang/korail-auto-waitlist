@@ -28,6 +28,7 @@ from rail_waitlist.services import (
     finish_observation_cycle,
     get_or_create_provider_circuit,
     is_confirmed_absent_retry_source,
+    is_payment_hold_ended,
     latest_observation_fingerprint,
     record_seat_observation,
 )
@@ -108,6 +109,7 @@ def dependencies(session_factory, reserved: list[ObservationTarget], *, locked=T
         record_seat_observation=record_seat_observation,
         finish_observation_cycle=finish_observation_cycle,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_payment_hold_ended=is_payment_hold_ended,
         reserve_winner=reserve_winner,
         lease_is_current=lease_is_current,
         lease_is_current_in_session=lease_is_current_in_session,
@@ -184,6 +186,58 @@ async def test_group_deduplicates_provider_request_and_persists_each_watch(app) 
         observation_count = await session.scalar(select(func.count()).select_from(SeatObservation))
         assert {watch.status for watch in watches} == {WatchStatus.WATCHING}
         assert observation_count == 2
+
+
+async def test_group_passes_the_exact_actionable_observation_to_the_status_transition(app) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="group-notification-observation",
+        now=now,
+    )
+    adapter = RecordingObservationAdapter(SeatObservationStatus.AVAILABLE)
+    reserved: list[ObservationTarget] = []
+    transition_observations: list[SeatObservation | None] = []
+    base_dependencies = dependencies(session_factory, reserved)
+
+    async def record_transition(
+        session,
+        watch,
+        target,
+        *,
+        reason=None,
+        observation=None,
+    ):
+        if target is WatchStatus.SEAT_FOUND:
+            transition_observations.append(observation)
+        return await apply_watch_transition(
+            session,
+            watch,
+            target,
+            reason=reason,
+            observation=observation,
+        )
+
+    await process_watch_group_observation(
+        [watch_id],
+        now,
+        provider=Provider.MOCK,
+        adapter=adapter,
+        lease_grant=None,
+        dependencies=replace(
+            base_dependencies,
+            apply_watch_transition=record_transition,
+        ),
+    )
+
+    assert len(transition_observations) == 1
+    assert transition_observations[0] is not None
+    async with session_factory() as session:
+        candidate_id = await session.scalar(
+            select(WatchCandidate.id).where(WatchCandidate.watch_id == watch_id)
+        )
+    assert transition_observations[0].candidate_id == candidate_id
 
 
 async def test_missing_matching_seat_class_is_persisted_as_fail_closed_error(app) -> None:

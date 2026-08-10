@@ -30,6 +30,7 @@ from rail_waitlist.services import complete_reservation_attempt, record_reservat
 
 OBSERVED_AT = datetime(2026, 8, 5, 3, tzinfo=UTC)
 COMPLETED_AT = OBSERVED_AT + timedelta(seconds=5)
+SEAT_DETECTED_AT = OBSERVED_AT - timedelta(seconds=11)
 
 
 def make_watch(*, provider: Provider = Provider.SRT) -> Watch:
@@ -90,6 +91,9 @@ class ResultSession:
 
     async def scalars(self, _statement: object) -> ScalarRows:
         return ScalarRows(self.lower_candidates)
+
+    async def scalar(self, _statement: object) -> datetime:
+        return SEAT_DETECTED_AT
 
 
 def make_dependencies(
@@ -174,6 +178,7 @@ async def test_success_result_suppresses_lower_candidates_and_emits_stable_event
     ]
     assert events[0]["dedupe_key"] == "candidate-suppressed:candidate-2:candidate-1"
     result_payload = cast(dict[str, object], events[1]["payload"])
+    assert result_payload["seat_detected_at"] == SEAT_DETECTED_AT.isoformat()
     assert result_payload["retryable"] is False
     assert result_payload["manual_check_required"] is False
     assert result_payload["progress_stages"] == [

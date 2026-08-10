@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildWatchActionToast,
   buildReservationRecoveryToast,
   type ReservationRecoveryResult,
 } from "../src/features/app/reservationToast";
@@ -29,6 +30,78 @@ function result(overrides: Partial<ReservationRecoveryResult>): ReservationRecov
 }
 
 describe("reservation recovery toast", () => {
+  it("uses actual result timestamps for clear deltas and the completed total", () => {
+    const toast = buildWatchActionToast({
+      ...transition,
+      status: "payment_required",
+      detectedAt: "2026-08-03T12:09:44.500Z",
+      startedAt: "2026-08-03T12:09:45.000Z",
+      finishedAt: "2026-08-03T12:09:48.250Z",
+      revisionAt: "2026-08-03T12:09:48.367Z",
+      reservationProgress: [
+        { stage: "authenticated_session_ready", occurredAt: "2026-08-03T12:09:46.100Z" },
+        { stage: "target_rechecked", occurredAt: "2026-08-03T12:09:47.900Z" },
+      ],
+    });
+
+    expect(toast.durationMs).toBe(3_250);
+    expect(toast.steps?.slice(0, 5)).toEqual([
+      {
+        label: "좌석 발견",
+        state: "completed",
+        occurredAt: "2026-08-03T12:09:44.500Z",
+      },
+      {
+        label: "자동 예매 요청 시작",
+        state: "completed",
+        occurredAt: "2026-08-03T12:09:45.000Z",
+        durationMs: 500,
+        durationPrefix: "감지 후",
+      },
+      {
+        label: "로그인 세션 확인",
+        state: "completed",
+        occurredAt: "2026-08-03T12:09:46.100Z",
+        durationMs: 1_100,
+        durationPrefix: "이전 단계 후",
+      },
+      {
+        label: "검색 결과·열차 재확인",
+        state: "completed",
+        occurredAt: "2026-08-03T12:09:47.900Z",
+        durationMs: 1_800,
+        durationPrefix: "이전 단계 후",
+      },
+      {
+        label: "공식 결과 확인",
+        state: "completed",
+        occurredAt: "2026-08-03T12:09:48.250Z",
+        durationMs: 350,
+        durationPrefix: "이전 단계 후",
+      },
+    ]);
+  });
+
+  it("does not invent a completed total without a valid finish time", () => {
+    const reserving = buildWatchActionToast({
+      ...transition,
+      status: "reserving",
+      startedAt: "2026-08-03T12:09:45Z",
+      finishedAt: "2026-08-03T12:09:46Z",
+      revisionAt: "2026-08-03T12:09:46Z",
+    });
+    const invalidTerminal = buildWatchActionToast({
+      ...transition,
+      status: "failed",
+      startedAt: "2026-08-03T12:09:48Z",
+      finishedAt: "2026-08-03T12:09:45Z",
+      revisionAt: "2026-08-03T12:09:49Z",
+    });
+
+    expect(reserving.durationMs).toBeNull();
+    expect(invalidTerminal.durationMs).toBeNull();
+  });
+
   it("announces a future retry only for a conclusively retryable no-seat result", () => {
     const toast = buildReservationRecoveryToast({
       ...transition,
@@ -52,17 +125,17 @@ describe("reservation recovery toast", () => {
         occurredAt: "2026-08-03T12:09:44Z",
       },
       {
-        label: "예매 시작",
+        label: "자동 예매 요청 시작",
         state: "completed",
         occurredAt: "2026-08-03T12:09:45Z",
         durationMs: 1_000,
-        durationPrefix: "대기",
+        durationPrefix: "감지 후",
       },
       {
         label: "좌석 재확인",
         state: "failed",
         occurredAt: "2026-08-03T12:09:48Z",
-        durationPrefix: "처리",
+        durationPrefix: "이전 단계 후",
         showNoticeDuration: true,
       },
       {

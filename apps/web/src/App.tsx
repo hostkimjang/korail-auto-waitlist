@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 
 import { AppAuthenticationBoundary } from "./app/AppAuthenticationBoundary";
 import {
@@ -71,6 +71,7 @@ export { OfficialHandoff, hasObservedSeatEvidence };
 export { SettingsPage as Settings };
 
 export function App(): ReactElement {
+  const [notificationCenterExpanded, setNotificationCenterExpanded] = useState(false);
   const {
     activeView,
     settingsInitialSection,
@@ -260,6 +261,9 @@ export function App(): ReactElement {
       <AppShell
         activeView={activeView}
         onNavigate={navigate}
+        notificationCount={notificationState.notices.length}
+        notificationsExpanded={notificationCenterExpanded}
+        onToggleNotifications={() => setNotificationCenterExpanded((expanded) => !expanded)}
         overlay={<>
           <WebPushEnrollmentPrompt
             browserPushState={browserPushState}
@@ -271,6 +275,8 @@ export function App(): ReactElement {
           />
           <AppNotificationCenter
             state={notificationState}
+            expanded={notificationCenterExpanded}
+            onExpandedChange={setNotificationCenterExpanded}
             onDismiss={dismissNotification}
             onDismissGroup={dismissNotificationGroup}
             onDismissTimed={dismissTimedNotifications}

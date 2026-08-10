@@ -21,7 +21,7 @@ function requiredElement(element: Element | null, description: string): Element 
 describe("AppShell", () => {
   it("keeps the shell, main content, navigation, and overlay in their accessibility order", () => {
     const { container } = render(
-      <AppShell activeView="home" onNavigate={vi.fn()} overlay={(
+      <AppShell activeView="home" onNavigate={vi.fn()} notificationCount={0} notificationsExpanded={false} onToggleNotifications={vi.fn()} overlay={(
         <section className="shell-overlay" data-testid="shell-overlay">알림 오버레이</section>
       )}>
         <section className="page-content" data-testid="page-content">화면 콘텐츠</section>
@@ -63,7 +63,7 @@ describe("AppShell", () => {
 
   it("renders the same four ordered destinations in both named navigation regions", () => {
     render(
-      <AppShell activeView="reservations" onNavigate={vi.fn()}>
+      <AppShell activeView="reservations" onNavigate={vi.fn()} notificationCount={0} notificationsExpanded={false} onToggleNotifications={vi.fn()}>
         <div>화면 콘텐츠</div>
       </AppShell>,
     );
@@ -92,10 +92,17 @@ describe("AppShell", () => {
     expect(mobileButtons.every((button) => button.getAttribute("type") === "button")).toBe(true);
   });
 
-  it("forwards every desktop and mobile destination while the notification button stays inert", () => {
+  it("forwards navigation and exposes the mobile notification center trigger", () => {
     const onNavigate = vi.fn<(view: AppView) => void>();
+    const onToggleNotifications = vi.fn();
     render(
-      <AppShell activeView="home" onNavigate={onNavigate}>
+      <AppShell
+        activeView="home"
+        onNavigate={onNavigate}
+        notificationCount={12}
+        notificationsExpanded={false}
+        onToggleNotifications={onToggleNotifications}
+      >
         <div data-testid="current-page">현재 화면</div>
       </AppShell>,
     );
@@ -121,12 +128,16 @@ describe("AppShell", () => {
       "settings",
     ]);
 
-    const notificationButton = screen.getByRole("button", { name: "알림" });
-    expect(notificationButton.className).toBe("icon-button");
+    const notificationButton = screen.getByRole("button", { name: "실시간 알림 12건 열기" });
+    expect(notificationButton.className).toContain("mobile-notification-button");
     expect(notificationButton.getAttribute("type")).toBe("button");
+    expect(notificationButton.getAttribute("aria-controls")).toBe("notification-center-body");
+    expect(notificationButton.getAttribute("aria-expanded")).toBe("false");
+    expect(notificationButton.textContent).toContain("12");
     fireEvent.click(notificationButton);
 
     expect(onNavigate).toHaveBeenCalledTimes(8);
+    expect(onToggleNotifications).toHaveBeenCalledOnce();
     expect(screen.getByTestId("current-page").textContent).toBe("현재 화면");
   });
 });

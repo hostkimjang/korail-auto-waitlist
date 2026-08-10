@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from datetime import time as clock_time
 from enum import StrEnum
+from typing import Literal
 
 from .auth_contracts import KorailCredentialInput
 
@@ -27,6 +29,23 @@ class KorailReservationOutcome(StrEnum):
     PROVIDER_BLOCKED = "provider_blocked"
     UNAVAILABLE = "unavailable"
     FAILED = "failed"
+
+
+type KorailReservationProgressStage = Literal[
+    "authenticated_session_ready",
+    "target_rechecked",
+    "seat_selected",
+    "reservation_requested",
+]
+
+
+@dataclass(frozen=True)
+class KorailReservationProgress:
+    stage: KorailReservationProgressStage
+    occurred_at: datetime
+
+
+type KorailReservationProgressCallback = Callable[[KorailReservationProgress], None]
 
 
 @dataclass(frozen=True)

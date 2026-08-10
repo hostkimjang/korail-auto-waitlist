@@ -1169,10 +1169,17 @@ async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_w
             "retry_condition": "new_availability_episode",
         }
         assert notification is not None
-        assert notification.payload["message"] == (
-            "수서 → 부산 임시 예약이 결제기한 안에 결제되지 않아 "
-            "취소되었습니다. 좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 "
-            "바로 다시 예매하지 않습니다."
+        message_lines = notification.payload["message"].splitlines()
+        assert len(message_lines) == 2
+        assert message_lines[0].startswith(
+            "SRT · 370 · 2026년 8월 1일 (토) · 수서 "
+        )
+        assert message_lines[0].endswith(
+            "→ 부산 도착시각 미확인 · 일반실 · 1명"
+        )
+        assert message_lines[1] == (
+            "임시 예약이 결제기한 안에 결제되지 않아 취소되었습니다. "
+            "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 예매하지 않습니다."
         )
 
 

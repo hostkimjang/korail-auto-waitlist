@@ -39,7 +39,7 @@ vi.mock("../src/api/events", async (importOriginal) => {
 vi.mock("../src/api/uiPreferences", () => ({
   DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS: 5,
   DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS: 5,
-  MIN_TIMETABLE_REFRESH_INTERVAL_SECONDS: 5,
+  MIN_TIMETABLE_REFRESH_INTERVAL_SECONDS: 1,
   MAX_TIMETABLE_REFRESH_INTERVAL_SECONDS: 300,
   MIN_SEAT_OBSERVATION_INTERVAL_SECONDS: 1,
   MAX_SEAT_OBSERVATION_INTERVAL_SECONDS: 600,
@@ -69,6 +69,23 @@ describe("App live data synchronization", () => {
     });
     liveApi.fetchNotificationChannels.mockResolvedValue([]);
     providerAccountsApi.fetchProviderAccounts.mockResolvedValue([]);
+  });
+
+  it("opens the existing notification center from the mobile bell even when empty", async () => {
+    liveApi.fetchWatches.mockResolvedValue([]);
+    liveApi.subscribeToEvents.mockReturnValue(() => undefined);
+    render(<App />);
+
+    const bell = await screen.findByRole("button", { name: "실시간 알림 0건 열기" });
+    expect(bell.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(bell);
+
+    expect(bell.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("region", { name: "실시간 알림" })).toBeTruthy();
+    expect(screen.getByText("새 실시간 알림이 없습니다.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "실시간 알림 0건 닫기" }));
+    expect(screen.queryByRole("region", { name: "실시간 알림" })).toBeNull();
   });
 
   it("coalesces an SSE burst into one canonical data reload", async () => {
@@ -177,11 +194,11 @@ describe("App live data synchronization", () => {
     fireEvent.click(within(center).getByRole("button", { name: "추가 1건 보기" }));
     expect(center.textContent).toContain("KTX 005");
     fireEvent.click(within(center).getByRole("button", { name: "좌석 발견 2건 모두 닫기" }));
-    expect(screen.queryByRole("region", { name: "실시간 알림" })).toBeNull();
+    expect(within(center).getByText("새 실시간 알림이 없습니다.")).toBeTruthy();
 
     act(() => { onEvent?.(); });
     await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(3));
-    expect(screen.queryByRole("region", { name: "실시간 알림" })).toBeNull();
+    expect(within(center).getByText("새 실시간 알림이 없습니다.")).toBeTruthy();
   });
 
   it("removes a stale booking action and announces the availability loss once", async () => {
@@ -304,10 +321,12 @@ describe("App live data synchronization", () => {
     fireEvent.click(within(center).getByRole("button", { name: "실시간 알림 펼치기" }));
     expect(within(center).getByText("예매를 진행하고 있습니다")).toBeTruthy();
     expect(within(center).getByText("KORAIL · KTX 038 · 일반실")).toBeTruthy();
-    expect(within(center).getByText("8월 3일 (월) · 대전 → 서울 · 14:35 → 15:39"))
+    expect(within(center).getByText(
+      "8월 3일 (월) · 대전 → 서울 · 14:35 → 15:39 · 세부 단계는 철도사 결과 수신 후 표시됩니다.",
+    ))
       .toBeTruthy();
-    expect(within(center).getByText("예매 시작")).toBeTruthy();
-    expect(within(center).getByText("공식 결과 확인")).toBeTruthy();
+    expect(within(center).getByText("자동 예매 요청 시작")).toBeTruthy();
+    expect(within(center).getByText("철도사 응답·공식 결과 대기")).toBeTruthy();
 
     act(() => { onEvent?.({ event_type: "watch.status_changed" }); });
     await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(3));
@@ -378,41 +397,99 @@ describe("App live data synchronization", () => {
         event_type: "watch.reservation_attempted",
         aggregate_id: watching.id,
         created_at: "2026-08-03T12:09:45Z",
-        payload: { watch_id: watching.id, candidate_id: "candidate", outcome: "pending" },
+        payload: {
+          watch_id: watching.id,
+          candidate_id: "candidate",
+          outcome: "pending",
+          seat_detected_at: "2026-08-03T12:09:44.500Z",
+          attempt_started_at: "2026-08-03T12:09:45Z",
+        },
       });
     });
     expect(await screen.findByText("예매를 진행하고 있습니다")).toBeTruthy();
-    expect(screen.getByText("예매 시작").closest("li")?.textContent)
-      .toContain("21:09:45");
+    expect(screen.getByText("자동 예매 요청 시작").closest("li")?.textContent)
+      .toContain("21:09:45감지 후 0.5초");
     expect(screen.queryByLabelText("예매 작업 시간")).toBeNull();
 
     act(() => {
       onEvent?.({
-        id: "result-fast",
-        event_type: "watch.reservation_result",
+        id: "progress-fast",
+        event_type: "watch.reservation_progressed",
         aggregate_id: watching.id,
-        created_at: "2026-08-03T12:09:48Z",
+        created_at: "2026-08-03T12:09:46.200Z",
         payload: {
           watch_id: watching.id,
           candidate_id: "candidate",
-          outcome: "not_available",
-          retryable: true,
-          manual_check_required: false,
-          retry_condition: "new_availability_episode",
+          attempt_id: "attempt-fast-id",
+          attempt_sequence: 1,
+          seat_detected_at: "2026-08-03T12:09:44.500Z",
+          attempt_started_at: "2026-08-03T12:09:45Z",
+          stage: "authenticated_session_ready",
+          occurred_at: "2026-08-03T12:09:46.100Z",
+          progress_stages: [
+            {
+              stage: "authenticated_session_ready",
+              occurred_at: "2026-08-03T12:09:46.100Z",
+            },
+          ],
         },
       });
     });
-    expect(await screen.findByText("좌석이 사라져 다시 감시 중입니다")).toBeTruthy();
-    expect(screen.queryByText("예매를 진행하고 있습니다")).toBeNull();
-    expect(screen.getByText("좌석 발견").closest("li")?.textContent)
-      .toContain("21:09:45");
-    expect(screen.getByText("예매 시작").closest("li")?.textContent)
-      .toContain("21:09:45대기 0.0초");
-    expect(screen.getByText("좌석 재확인").closest("li")?.textContent)
-      .toContain("21:09:48처리 3.0초");
-    expect(screen.getByText("감시·재예매 대기").closest("li")?.textContent)
-      .toContain("21:09:48");
+    expect(await screen.findByText("로그인 세션 확인")).toBeTruthy();
+    expect(screen.getByText("로그인 세션 확인").closest("li")?.textContent)
+      .toContain("21:09:46이전 단계 후 1.1초");
+    expect(screen.getByText("철도사 응답·공식 결과 대기").closest("li")?.className)
+      .toContain("toast-step-active");
+    expect(screen.queryByText("좌석 선택")).toBeNull();
     expect(screen.queryByLabelText("예매 작업 시간")).toBeNull();
+
+    act(() => {
+      onEvent?.({
+        id: "result-observed-246",
+        event_type: "watch.reservation_result",
+        aggregate_id: watching.id,
+        created_at: "2026-08-10T13:01:21.646Z",
+        payload: {
+          watch_id: watching.id,
+          candidate_id: "candidate",
+          attempt_id: "attempt-246",
+          attempt_sequence: 246,
+          seat_detected_at: null,
+          attempt_started_at: "2026-08-10T13:01:13.901Z",
+          attempt_finished_at: "2026-08-10T13:01:21.618Z",
+          outcome: "payment_required",
+          progress_stages: [
+            {
+              stage: "authenticated_session_ready",
+              occurred_at: "2026-08-10T13:01:18.506Z",
+            },
+            { stage: "target_rechecked", occurred_at: "2026-08-10T13:01:19.651Z" },
+            { stage: "seat_selected", occurred_at: "2026-08-10T13:01:19.775Z" },
+            { stage: "reservation_requested", occurred_at: "2026-08-10T13:01:19.799Z" },
+          ],
+        },
+      });
+    });
+    expect(await screen.findByText("결제 직전까지 예매되었습니다")).toBeTruthy();
+    expect(screen.queryByText("예매를 진행하고 있습니다")).toBeNull();
+    expect(screen.getByText("자동 예매 요청 시작").closest("li")?.textContent)
+      .toContain("22:01:13");
+    expect(screen.getByText("로그인 세션 확인").closest("li")?.textContent)
+      .toContain("22:01:18이전 단계 후 4.6초");
+    expect(screen.getByText("검색 결과·열차 재확인").closest("li")?.textContent)
+      .toContain("22:01:19이전 단계 후 1.1초");
+    expect(screen.getByText("좌석 선택").closest("li")?.textContent)
+      .toContain("22:01:19이전 단계 후 0.1초");
+    expect(screen.getByText("예약 요청").closest("li")?.textContent)
+      .toContain("22:01:19이전 단계 후 0.0초");
+    expect(screen.getByText("공식 결과 확인").closest("li")?.textContent)
+      .toContain("22:01:21이전 단계 후 1.8초");
+    expect(screen.getByLabelText("예매 작업 시간").textContent)
+      .toContain("시작 22:01:13전체 7.7초");
+    expect(screen.getByText("공식 결제 필요").closest("li")?.textContent)
+      .toContain("22:01:21");
+    await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("예약 요청")).toBeTruthy();
   });
 
   it("replaces a persistent auth-required notice after login recovery resumes monitoring", async () => {

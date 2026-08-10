@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, Protocol, cast, overload
+from typing import Any, Literal, Protocol, cast, overload
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..domain import Provider, SeatClass
 from ..korail_sidecar.browser_contracts import (
@@ -44,6 +45,8 @@ from .contracts import (
     KorailReservationOutcomeValue,
     KorailReserveOnceRequest,
     KorailReserveOnceResult,
+    KorailReserveProgressFrame,
+    KorailReserveResultFrame,
     KorailSessionActorStateValue,
     KorailSessionStateResult,
 )
@@ -54,7 +57,12 @@ NO_STORE_HEADERS = {"Cache-Control": "no-store"}
 
 
 class _ReservationClient(Protocol):
-    async def reserve_once(self, request: object) -> object: ...
+    async def reserve_once(
+        self,
+        request: object,
+        *,
+        on_progress: Callable[[object], None] | None = None,
+    ) -> object: ...
 
     async def prewarm_credentials(self, credential: object) -> bool: ...
 
@@ -168,6 +176,11 @@ class _ReserveOnceResult(Protocol):
     reservation_requested_at: datetime | None
 
 
+class _ReservationProgress(Protocol):
+    stage: str
+    occurred_at: datetime
+
+
 def create_adapter_app(
     automation: KorailBrowserAutomation | None = None,
     token: str | None = None,
@@ -178,10 +191,55 @@ def create_adapter_app(
     readiness_probe_timeout_seconds: float = 30,
     dependencies: AdapterHttpDependencies,
 ) -> FastAPI:
+    def internal_reservation_request(request: KorailReserveOnceRequest) -> object:
+        from .pydoll.auth_contracts import KorailCredentialInput, KorailLoginMethod
+        from .pydoll.reservation_contracts import (
+            KorailReservationRequest,
+            KorailReservationSeatClass,
+        )
+
+        return KorailReservationRequest(
+            origin=request.origin,
+            destination=request.destination,
+            travel_date=request.travel_date,
+            train_number=request.train_number,
+            train_type=request.train_type,
+            departure_time=request.departure_time,
+            arrival_time=request.arrival_time,
+            seat_class=KorailReservationSeatClass(request.seat_class),
+            credential=KorailCredentialInput(
+                login_id=request.credential.login_id.get_secret_value(),
+                password=request.credential.password.get_secret_value(),
+                version=request.credential.version,
+                login_method=KorailLoginMethod(request.credential.login_method),
+            ),
+        )
+
+    def public_reservation_result(result: _ReserveOnceResult) -> KorailReserveOnceResult:
+        return KorailReserveOnceResult(
+            outcome=result.outcome.value,
+            reason=result.reason,
+            seat_clicked=result.seat_clicked,
+            reservation_clicked=result.reservation_clicked,
+            session_ready_at=result.session_ready_at,
+            target_rechecked_at=result.target_rechecked_at,
+            seat_selected_at=result.seat_selected_at,
+            reservation_requested_at=result.reservation_requested_at,
+        )
+
+    def failed_reservation_result() -> KorailReserveOnceResult:
+        return KorailReserveOnceResult(
+            outcome="failed",
+            reason="reservation_backend_error",
+            seat_clicked=False,
+            reservation_clicked=False,
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = dependencies.browser_engine_setting()
         app.state.browser_engine = engine.value
+        app.state.pending_reservation_tasks = set()
         if automation is None:
             page_url = dependencies.getenv("KORAIL_BROWSER_PAGE_URL", OFFICIAL_KORAIL_SEARCH_URL)
             allow_fullstack_fixture = (
@@ -221,6 +279,9 @@ def create_adapter_app(
             yield
         finally:
             app.state.readiness.ready = False
+            pending = tuple(app.state.pending_reservation_tasks)
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             await app.state.automation.close()
 
     app = FastAPI(
@@ -240,6 +301,7 @@ def create_adapter_app(
             "/v1/verify-login",
             "/v1/prewarm-login",
             "/v1/reserve-once",
+            "/v1/reserve-once/stream",
             "/v1/confirm-reservation",
         }:
             return JSONResponse(
@@ -354,38 +416,12 @@ def create_adapter_app(
         if client is None:
             raise HTTPException(503, "reservation_not_ready", headers=NO_STORE_HEADERS)
 
-        from .pydoll.auth_contracts import KorailCredentialInput, KorailLoginMethod
-        from .pydoll.reservation_contracts import (
-            KorailReservationRequest,
-            KorailReservationSeatClass,
-        )
-
-        internal_request = KorailReservationRequest(
-            origin=request.origin,
-            destination=request.destination,
-            travel_date=request.travel_date,
-            train_number=request.train_number,
-            train_type=request.train_type,
-            departure_time=request.departure_time,
-            arrival_time=request.arrival_time,
-            seat_class=KorailReservationSeatClass(request.seat_class),
-            credential=KorailCredentialInput(
-                login_id=request.credential.login_id.get_secret_value(),
-                password=request.credential.password.get_secret_value(),
-                version=request.credential.version,
-                login_method=KorailLoginMethod(request.credential.login_method),
-            ),
-        )
+        internal_request = internal_reservation_request(request)
         try:
             result = cast(_ReserveOnceResult, await client.reserve_once(internal_request))
         except Exception:  # noqa: BLE001 -- never serialize backend exceptions containing secrets.
             dependencies.logger.error("KORAIL reserve-once failed with a redacted backend error")
-            return KorailReserveOnceResult(
-                outcome="failed",
-                reason="reservation_backend_error",
-                seat_clicked=False,
-                reservation_clicked=False,
-            )
+            return failed_reservation_result()
         dependencies.logger.info(
             "KORAIL reserve-once completed outcome=%s reason=%s "
             "seat_clicked=%s reservation_clicked=%s",
@@ -394,15 +430,71 @@ def create_adapter_app(
             str(result.seat_clicked).lower(),
             str(result.reservation_clicked).lower(),
         )
-        return KorailReserveOnceResult(
-            outcome=result.outcome.value,
-            reason=result.reason,
-            seat_clicked=result.seat_clicked,
-            reservation_clicked=result.reservation_clicked,
-            session_ready_at=result.session_ready_at,
-            target_rechecked_at=result.target_rechecked_at,
-            seat_selected_at=result.seat_selected_at,
-            reservation_requested_at=result.reservation_requested_at,
+        return public_reservation_result(result)
+
+    @app.post("/v1/reserve-once/stream", response_class=StreamingResponse)
+    async def reserve_once_stream(
+        request: KorailReserveOnceRequest,
+        authorization: str | None = Header(default=None),
+    ) -> StreamingResponse:
+        expected = f"Bearer {app.state.token}"
+        if authorization is None or not hmac.compare_digest(authorization, expected):
+            raise HTTPException(401, "unauthorized", headers=NO_STORE_HEADERS)
+        if not app.state.readiness.ready:
+            raise HTTPException(503, "not_ready", headers=NO_STORE_HEADERS)
+        client = app.state.reservation_client
+        if client is None:
+            raise HTTPException(503, "reservation_not_ready", headers=NO_STORE_HEADERS)
+
+        internal_request = internal_reservation_request(request)
+        frames: asyncio.Queue[KorailReserveProgressFrame | KorailReserveResultFrame] = (
+            asyncio.Queue()
+        )
+
+        def emit_progress(progress: object) -> None:
+            typed = cast(_ReservationProgress, progress)
+            frames.put_nowait(
+                KorailReserveProgressFrame(
+                    stage=cast(Any, typed.stage),
+                    occurred_at=typed.occurred_at,
+                )
+            )
+
+        async def run_once() -> None:
+            try:
+                result = cast(
+                    _ReserveOnceResult,
+                    await client.reserve_once(internal_request, on_progress=emit_progress),
+                )
+                terminal = public_reservation_result(result)
+            except Exception:  # noqa: BLE001 -- redact browser and credential details.
+                dependencies.logger.error(
+                    "KORAIL reserve-once stream failed with a redacted backend error"
+                )
+                terminal = failed_reservation_result()
+            frames.put_nowait(KorailReserveResultFrame(result=terminal))
+
+        task = asyncio.create_task(run_once())
+        app.state.pending_reservation_tasks.add(task)
+
+        def release_task(done: asyncio.Task[None]) -> None:
+            app.state.pending_reservation_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(release_task)
+
+        async def stream_frames() -> AsyncIterator[bytes]:
+            while True:
+                frame = await frames.get()
+                yield (frame.model_dump_json(exclude_none=True) + "\n").encode()
+                if isinstance(frame, KorailReserveResultFrame):
+                    return
+
+        return StreamingResponse(
+            stream_frames(),
+            media_type="application/x-ndjson",
+            headers=NO_STORE_HEADERS,
         )
 
     @app.post(

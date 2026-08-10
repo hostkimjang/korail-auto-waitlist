@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -13,7 +14,7 @@ from ..observations.contracts import SeatObservationRequest, SeatObservationResu
 from ..provider_account_management.contracts import ProviderCredentials
 from ..provider_contracts import ProviderUnavailable
 from ..provider_registry.contracts import ProviderCapabilities
-from ..reservations.contracts import ReservationRequest, ReservationResult
+from ..reservations.contracts import ReservationProgressStage, ReservationRequest, ReservationResult
 from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
@@ -41,6 +42,13 @@ class KorailSeatObserver(Protocol):
         self,
         request: ReservationRequest,
         credentials: ProviderCredentials,
+    ) -> ReservationResult: ...
+
+    async def reserve_once_with_progress(
+        self,
+        request: ReservationRequest,
+        credentials: ProviderCredentials,
+        on_progress: Callable[[ReservationProgressStage], Awaitable[None]],
     ) -> ReservationResult: ...
 
     async def confirm_reservation(
@@ -81,6 +89,14 @@ class ManagedKorailSeatObserver:
         credentials: ProviderCredentials,
     ) -> ReservationResult:
         return await self.source.reserve_once(request, credentials)
+
+    async def reserve_once_with_progress(
+        self,
+        request: ReservationRequest,
+        credentials: ProviderCredentials,
+        on_progress: Callable[[ReservationProgressStage], Awaitable[None]],
+    ) -> ReservationResult:
+        return await self.source.reserve_once_with_progress(request, credentials, on_progress)
 
     async def confirm_reservation(
         self,
@@ -221,6 +237,35 @@ class KorailBrowserExecutionAdapter(RailProviderAdapter):
         return await self._source_instance().observation_deferred_until()
 
     async def _reserve_once(self, request: ReservationRequest) -> ReservationResult:
+        credentials = await self._reservation_credentials(request)
+        if isinstance(credentials, ReservationResult):
+            return credentials
+        result = await self._source_instance().reserve_once(request, credentials)
+        return result.model_copy(update={"credential_version": credentials.credential_version})
+
+    async def reserve_once_with_progress(
+        self,
+        request: ReservationRequest,
+        on_progress: Callable[[ReservationProgressStage], Awaitable[None]],
+    ) -> ReservationResult:
+        if not self.capabilities().reservation_once:
+            raise ProviderUnavailable("korail provider does not support one-time reservation")
+        if request.provider != self.provider:
+            raise ProviderUnavailable("reservation request provider does not match adapter")
+        credentials = await self._reservation_credentials(request)
+        if isinstance(credentials, ReservationResult):
+            return credentials
+        result = await self._source_instance().reserve_once_with_progress(
+            request,
+            credentials,
+            on_progress,
+        )
+        return result.model_copy(update={"credential_version": credentials.credential_version})
+
+    async def _reservation_credentials(
+        self,
+        request: ReservationRequest,
+    ) -> ProviderCredentials | ReservationResult:
         try:
             credentials = await self._credential_loader(self.provider)
         except RuntimeError:
@@ -241,8 +286,7 @@ class KorailBrowserExecutionAdapter(RailProviderAdapter):
                 observed_at=datetime.now(timezone.utc),
                 credential_version=request.expected_credential_version,
             )
-        result = await self._source_instance().reserve_once(request, credentials)
-        return result.model_copy(update={"credential_version": credentials.credential_version})
+        return credentials
 
     async def _confirm_reservation(
         self,

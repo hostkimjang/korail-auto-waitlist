@@ -123,6 +123,7 @@ def test_sidecar_routes_are_owned_by_the_canonical_http_module() -> None:
         ("/v1/session-state", frozenset({"GET"})),
         ("/v1/seat-snapshot", frozenset({"POST"})),
         ("/v1/reserve-once", frozenset({"POST"})),
+        ("/v1/reserve-once/stream", frozenset({"POST"})),
         ("/v1/confirm-reservation", frozenset({"POST"})),
         ("/v1/verify-login", frozenset({"POST"})),
         ("/v1/prewarm-login", frozenset({"POST"})),

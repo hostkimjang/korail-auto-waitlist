@@ -100,6 +100,8 @@ class PydollAuthenticationSession(Protocol):
 
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool: ...
 
+    async def probe_authenticated_session(self) -> bool: ...
+
 
 class PydollAuthenticationSessionContext[AuthSession_co: PydollAuthenticationSession](Protocol):
     async def __aenter__(self) -> AuthSession_co: ...
@@ -368,40 +370,45 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
 
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
         async with self._lock:
-            if self._active_session is not None:
-                self._state = KorailSessionActorState.STALE
-            await self.discard_active_session()
+            return await self._verify_credentials_locked(credential)
 
-            lease: PydollAuthenticationSessionLease[AuthSession] | None = None
-            stage = "browser_launch"
-            try:
-                lease = await self.acquire_session(credential_version=credential.version)
-                session = lease.session
-                stage = "load_page"
-                self._response_safety_guard(await session.open(), stage)
-                stage = "authenticate"
-                return await self.ensure_authenticated_session(session, credential)
-            except asyncio.CancelledError:
-                await self.discard_active_session()
-                self._state = KorailSessionActorState.STALE
-                raise
-            except (BrowserProtectionDetected, BrowserRateLimited):
-                await self.discard_active_session()
-                self._state = KorailSessionActorState.BLOCKED
-                raise
-            except BrowserSourceUnavailable as error:
-                await self.discard_active_session()
-                self._state = KorailSessionActorState.STALE
-                if error.stage == "unspecified":
-                    raise BrowserSourceUnavailable(stage) from error
-                raise
-            except Exception as error:
-                await self.discard_active_session()
-                self._state = KorailSessionActorState.STALE
+    async def _verify_credentials_locked(self, credential: KorailCredentialInput) -> bool:
+        """Replace and authenticate one generation while the actor lock is held."""
+
+        if self._active_session is not None:
+            self._state = KorailSessionActorState.STALE
+        await self.discard_active_session()
+
+        lease: PydollAuthenticationSessionLease[AuthSession] | None = None
+        stage = "browser_launch"
+        try:
+            lease = await self.acquire_session(credential_version=credential.version)
+            session = lease.session
+            stage = "load_page"
+            self._response_safety_guard(await session.open(), stage)
+            stage = "authenticate"
+            return await self.ensure_authenticated_session(session, credential)
+        except asyncio.CancelledError:
+            await self.discard_active_session()
+            self._state = KorailSessionActorState.STALE
+            raise
+        except (BrowserProtectionDetected, BrowserRateLimited):
+            await self.discard_active_session()
+            self._state = KorailSessionActorState.BLOCKED
+            raise
+        except BrowserSourceUnavailable as error:
+            await self.discard_active_session()
+            self._state = KorailSessionActorState.STALE
+            if error.stage == "unspecified":
                 raise BrowserSourceUnavailable(stage) from error
-            finally:
-                if lease is not None and not lease.persistent:
-                    await lease.context.__aexit__(*sys.exc_info())
+            raise
+        except Exception as error:
+            await self.discard_active_session()
+            self._state = KorailSessionActorState.STALE
+            raise BrowserSourceUnavailable(stage) from error
+        finally:
+            if lease is not None and not lease.persistent:
+                await lease.context.__aexit__(*sys.exc_info())
 
     async def prewarm_credentials(self, credential: KorailCredentialInput) -> bool:
         async with self._lock:
@@ -416,11 +423,36 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
                 and active.searches_started < self._session_reuse_max_searches
                 and self._state is KorailSessionActorState.READY
             ):
-                active.last_used_at = now
-                self._last_used_at = now
-                return True
+                try:
+                    authenticated = await active.session.probe_authenticated_session()
+                except asyncio.CancelledError:
+                    await self.discard_active_session()
+                    self._state = KorailSessionActorState.STALE
+                    raise
+                except (BrowserProtectionDetected, BrowserRateLimited):
+                    await self.discard_active_session()
+                    self._state = KorailSessionActorState.BLOCKED
+                    raise
+                except BrowserSourceUnavailable:
+                    await self.discard_active_session()
+                    self._state = KorailSessionActorState.STALE
+                    raise
+                except Exception as error:
+                    await self.discard_active_session()
+                    self._state = KorailSessionActorState.STALE
+                    raise BrowserSourceUnavailable("session_keepalive") from error
 
-        return await self.verify_credentials(credential)
+                if authenticated:
+                    verified_at = self._monotonic()
+                    active.last_used_at = verified_at
+                    self._last_verified_at = verified_at
+                    self._last_used_at = verified_at
+                    return True
+
+                self._state = KorailSessionActorState.STALE
+                await self.discard_active_session()
+
+            return await self._verify_credentials_locked(credential)
 
     def snapshot(self) -> KorailSessionActorSnapshot:
         now = self._monotonic()

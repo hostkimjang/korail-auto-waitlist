@@ -17,6 +17,8 @@ export const FOREGROUND_NOTIFICATION_PEEK_MS = 8_000;
 
 interface AppNotificationCenterProps {
   state: NotificationCenterState;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
   onDismiss: (id: string) => void;
   onDismissGroup: (kind: NotificationKind) => void;
   onDismissTimed: () => void;
@@ -44,11 +46,12 @@ function groupNotices(notices: ReadonlyArray<AppNotificationNotice>) {
 
 export function AppNotificationCenter({
   state,
+  expanded,
+  onExpandedChange,
   onDismiss,
   onDismissGroup,
   onDismissTimed,
 }: AppNotificationCenterProps): ReactElement | null {
-  const [expanded, setExpanded] = useState(false);
   const [peekNoticeId, setPeekNoticeId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<NotificationKind>>(
     () => new Set(),
@@ -79,7 +82,6 @@ export function AppNotificationCenter({
       return undefined;
     }
     const showTimer = window.setTimeout(() => {
-      if (returnedAfterEmpty) setExpanded(false);
       setPeekNoticeId(nextNotice.id);
     }, 0);
     const hideTimer = window.setTimeout(() => {
@@ -91,7 +93,7 @@ export function AppNotificationCenter({
     };
   }, [expanded, state.notices, state.sequence]);
 
-  if (state.notices.length === 0) return null;
+  if (state.notices.length === 0 && !expanded) return null;
 
   const timedCount = state.notices.filter((notice) => notice.persistence === "timed").length;
   const toggleGroup = (kind: NotificationKind) => {
@@ -127,7 +129,7 @@ export function AppNotificationCenter({
             aria-expanded={expanded}
             aria-controls="notification-center-body"
             onClick={() => {
-              setExpanded((value) => !value);
+              onExpandedChange(!expanded);
               setPeekNoticeId(null);
             }}
           >
@@ -145,7 +147,7 @@ export function AppNotificationCenter({
               type="button"
               className="notification-center-peek-detail"
               onClick={() => {
-                setExpanded(true);
+                onExpandedChange(true);
                 setPeekNoticeId(null);
               }}
             >
@@ -162,6 +164,11 @@ export function AppNotificationCenter({
           </div>
         )}
         <div id="notification-center-body" className="notification-center-body" hidden={!expanded}>
+          {state.notices.length === 0 ? (
+            <p className="notification-center-empty" role="status">
+              새 실시간 알림이 없습니다.
+            </p>
+          ) : null}
             {groups.map(([kind, notices]) => {
               const expanded = expandedGroups.has(kind);
               return (

@@ -394,6 +394,15 @@
   overscroll-behavior: contain;
 }
 
+.notification-center-empty {
+  margin: 0;
+  padding: 22px 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .notification-group + .notification-group {
   border-top: 1px solid var(--line);
 }
@@ -617,6 +626,12 @@
   width: 68px;
   height: 68px;
   border-radius: 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-step-spinner {
+    animation: none;
+  }
 }
 
 @keyframes toast-in {

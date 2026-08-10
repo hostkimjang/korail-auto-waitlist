@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from typing import cast
 
 import pytest
@@ -96,6 +96,26 @@ async def test_claim_application_preserves_attempt_state_transition_and_event_co
         watch.candidates.append(candidate)
         session.add(watch)
         await session.flush()
+        seat_detected_at = datetime.now(UTC) - timedelta(seconds=5)
+        session.add_all(
+            [
+                SeatObservation(
+                    candidate=candidate,
+                    status=SeatObservationStatus.AVAILABLE,
+                    source="authorized-provider",
+                    observed_at=seat_detected_at,
+                    fresh_until=seat_detected_at + timedelta(minutes=1),
+                ),
+                SeatObservation(
+                    candidate=candidate,
+                    status=SeatObservationStatus.AVAILABLE,
+                    source="authorized-provider",
+                    observed_at=seat_detected_at + timedelta(days=1),
+                    fresh_until=seat_detected_at + timedelta(days=1, minutes=1),
+                ),
+            ]
+        )
+        await session.flush()
 
         attempt, created = await begin_reservation_attempt_application(
             session,
@@ -131,6 +151,7 @@ async def test_claim_application_preserves_attempt_state_transition_and_event_co
                     "watch_id": watch.id,
                     "candidate_id": candidate.id,
                     "attempt_sequence": 1,
+                    "seat_detected_at": seat_detected_at.isoformat(),
                     "attempt_started_at": attempt.started_at.isoformat(),
                     "episode_key": "manual:reserve:owner-test",
                     "outcome": ReservationOutcome.PENDING.value,
@@ -139,6 +160,95 @@ async def test_claim_application_preserves_attempt_state_transition_and_event_co
             }
         ]
         assert session.in_transaction() is True
+
+
+async def test_claim_revalidates_watch_scoped_hold_for_candidate_without_attempt(
+    db_engine,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    ended_at = datetime.now(UTC) - timedelta(minutes=2)
+    async with factory() as session:
+        watch = make_watch()
+        primary = make_candidate()
+        lower = make_candidate()
+        lower.train_number = "SRT-303"
+        lower.departure_at += timedelta(minutes=10)
+        lower.scheduled_departure_at = lower.departure_at
+        lower.priority = 2
+        stale_lower = make_candidate()
+        stale_lower.train_number = "SRT-305"
+        stale_lower.departure_at += timedelta(minutes=20)
+        stale_lower.scheduled_departure_at = stale_lower.departure_at
+        stale_lower.priority = 3
+        watch.candidates.extend([primary, lower, stale_lower])
+        session.add(watch)
+        await session.flush()
+        hold = ReservationAttempt(
+            candidate_id=primary.id,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key="watch-hold-primary",
+            started_at=ended_at - timedelta(minutes=2),
+            finished_at=ended_at - timedelta(minutes=1),
+            outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            confirmation_outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            confirmation_source="official-reservation-list",
+            confirmation_observed_at=ended_at,
+            post_deadline_reconciled_at=ended_at,
+        )
+        unavailable = SeatObservation(
+            candidate=lower,
+            status=SeatObservationStatus.SOLD_OUT,
+            source="authorized-provider",
+            observed_at=ended_at + timedelta(seconds=10),
+            fresh_until=ended_at + timedelta(minutes=1),
+        )
+        session.add_all([hold, unavailable])
+        await session.flush()
+        episode_key = f"availability-after-hold:{hold.id}:{unavailable.id}"
+
+        blocked, created = await begin_reservation_attempt(
+            session,
+            watch,
+            lower,
+            "watch-hold-lower-before-actionable",
+            episode_key=episode_key,
+            retry_authorized=True,
+        )
+        assert blocked is hold
+        assert created is False
+
+        actionable = SeatObservation(
+            candidate=lower,
+            status=SeatObservationStatus.AVAILABLE,
+            source="authorized-provider",
+            observed_at=ended_at + timedelta(seconds=20),
+            fresh_until=ended_at + timedelta(minutes=1),
+        )
+        session.add(actionable)
+        await session.flush()
+        retry, created = await begin_reservation_attempt(
+            session,
+            watch,
+            lower,
+            "watch-hold-lower-after-actionable",
+            episode_key=episode_key,
+            retry_authorized=True,
+        )
+        assert created is True
+        assert retry.candidate_id == lower.id
+        assert retry.attempt_sequence == 1
+
+        stale_replay, created = await begin_reservation_attempt(
+            session,
+            watch,
+            stale_lower,
+            "watch-hold-stale-lower",
+            episode_key=episode_key,
+            retry_authorized=True,
+        )
+        assert stale_replay is hold
+        assert created is False
 
 
 @pytest.mark.parametrize(

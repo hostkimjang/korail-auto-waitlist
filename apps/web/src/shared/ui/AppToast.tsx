@@ -12,7 +12,7 @@ export interface ToastProgressStep {
   state: ToastProgressState;
   occurredAt?: string | null;
   durationMs?: number | null;
-  durationPrefix?: "대기" | "처리" | "소요";
+  durationPrefix?: "대기" | "처리" | "소요" | "감지 후" | "이전 단계 후";
   showNoticeDuration?: boolean;
 }
 
@@ -143,12 +143,12 @@ export function AppToast({ notice, onClose, embedded = false }: AppToastProps) {
                 );
               })}
             </ol>
-            {!hasStepTiming && startedAtLabel && notice.startedAt ? (
+            {startedAtLabel && notice.startedAt && (!hasStepTiming || elapsedLabel) ? (
               <div className="toast-timing" aria-label="예매 작업 시간">
                 <span>
                   시작 <time dateTime={notice.startedAt}>{startedAtLabel}</time>
                 </span>
-                <span>{elapsedLabel ? `소요 ${elapsedLabel}` : "처리 중"}</span>
+                <span>{elapsedLabel ? `전체 ${elapsedLabel}` : "처리 중"}</span>
               </div>
             ) : null}
           </>

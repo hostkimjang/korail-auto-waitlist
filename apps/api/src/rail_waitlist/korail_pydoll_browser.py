@@ -113,6 +113,9 @@ from .korail_sidecar.pydoll.reservation_contracts import (
     KorailReservationOutcome as ActorKorailReservationOutcome,
 )
 from .korail_sidecar.pydoll.reservation_contracts import (
+    KorailReservationProgressCallback as ActorKorailReservationProgressCallback,
+)
+from .korail_sidecar.pydoll.reservation_contracts import (
     KorailReservationRequest as ActorKorailReservationRequest,
 )
 from .korail_sidecar.pydoll.reservation_contracts import (
@@ -177,6 +180,7 @@ KorailLoginMethod = AuthKorailLoginMethod
 KorailSessionActorSnapshot = AuthKorailSessionActorSnapshot
 KorailSessionActorState = AuthKorailSessionActorState
 KorailReservationOutcome = ActorKorailReservationOutcome
+KorailReservationProgressCallback = ActorKorailReservationProgressCallback
 KorailReservationRequest = ActorKorailReservationRequest
 KorailReservationResult = ActorKorailReservationResult
 KorailReservationSeatClass = ActorKorailReservationSeatClass
@@ -205,6 +209,8 @@ class PydollBrowserSession(Protocol):
 
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool: ...
 
+    async def probe_authenticated_session(self) -> bool: ...
+
     async def begin_http_replay_capture(self) -> None: ...
 
     async def export_http_replay_plan(
@@ -228,6 +234,8 @@ class PydollBrowserSession(Protocol):
     async def reserve_once(
         self,
         request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult: ...
 
     async def read_reservation_list(self) -> PydollPageSnapshot: ...
@@ -427,9 +435,13 @@ class PydollKorailBrowserClient:
     async def reserve_once(
         self,
         request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
         """Run one exact booking attempt and stop before every payment action."""
-        return await self._reservation_actor.reserve_once(request)
+        if on_progress is None:
+            return await self._reservation_actor.reserve_once(request)
+        return await self._reservation_actor.reserve_once(request, on_progress=on_progress)
 
     async def _direct_search_url(
         self,
@@ -870,6 +882,10 @@ class _PydollSession:
         """Use one explicit official login method and verify an authenticated header."""
         return await self._login_driver.ensure_authenticated(credential)
 
+    async def probe_authenticated_session(self) -> bool:
+        """Validate and refresh the current official session without exposing its payload."""
+        return await self._login_driver.probe_official_authenticated_session()
+
     async def _authenticate_in_place(
         self,
         credential: KorailCredentialInput,
@@ -976,8 +992,12 @@ class _PydollSession:
     async def reserve_once(
         self,
         request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
-        return await self._reservation_driver.reserve_once(request)
+        if on_progress is None:
+            return await self._reservation_driver.reserve_once(request)
+        return await self._reservation_driver.reserve_once(request, on_progress=on_progress)
 
     async def _has_exact_preserved_booking_state(
         self,

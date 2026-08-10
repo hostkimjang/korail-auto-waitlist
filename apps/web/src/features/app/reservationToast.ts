@@ -35,7 +35,7 @@ const failed = (label: string, timing: StepTiming = {}): ToastProgressStep => (
 );
 
 function stageTimes(transition: WatchActionTransition | SeatAvailabilityLostTransition) {
-  const detectedAt = transition.detectedAt ?? transition.startedAt;
+  const detectedAt = transition.detectedAt;
   const startedAt = transition.startedAt;
   const attemptedAt = transition.finishedAt ?? transition.revisionAt;
   const detectedInstant = detectedAt === undefined ? Number.NaN : Date.parse(detectedAt);
@@ -50,14 +50,14 @@ function stageTimes(transition: WatchActionTransition | SeatAvailabilityLostTran
       : {
           occurredAt: startedAt,
           ...(queueDurationMs === undefined ? {} : { durationMs: queueDurationMs }),
-          durationPrefix: "대기" as const,
+          durationPrefix: "감지 후" as const,
         },
     attempted: attemptedAt === undefined
       ? {}
       : {
           occurredAt: attemptedAt,
           showNoticeDuration: true,
-          durationPrefix: "처리" as const,
+          durationPrefix: "이전 단계 후" as const,
         },
     current: transition.revisionAt === undefined ? {} : { occurredAt: transition.revisionAt },
   } satisfies Record<string, StepTiming>;
@@ -70,12 +70,62 @@ function journeyFields(transition: WatchActionTransition | SeatAvailabilityLostT
   };
 }
 
+function completedAttemptDurationMs(
+  transition: WatchActionTransition | SeatAvailabilityLostTransition,
+): number | null {
+  if ("status" in transition && transition.status === "reserving") return null;
+  if (transition.startedAt === undefined || transition.finishedAt === undefined) return null;
+  const startedAt = Date.parse(transition.startedAt);
+  const finishedAt = Date.parse(transition.finishedAt);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt) || finishedAt < startedAt) {
+    return null;
+  }
+  return finishedAt - startedAt;
+}
+
 type ReservationTerminalStage =
   | "payment_required"
   | "auth_required"
   | "not_available"
   | "manual_check"
   | "failed";
+
+const progressStageLabels: Record<ReservationProgressStageName, string> = {
+  authenticated_session_ready: "로그인 세션 확인",
+  target_rechecked: "검색 결과·열차 재확인",
+  seat_selected: "좌석 선택",
+  reservation_requested: "예약 요청",
+};
+
+function knownReservingProgressSteps(
+  transition: WatchActionTransition,
+): ToastProgressStep[] | null {
+  if (!transition.reservationProgress?.length) return null;
+  const times = stageTimes(transition);
+  let previousAt = transition.startedAt;
+  const steps: ToastProgressStep[] = [
+    ...(transition.detectedAt === undefined ? [] : [completed("좌석 발견", times.detected)]),
+    completed("자동 예매 요청 시작", times.started),
+  ];
+  for (const progress of transition.reservationProgress) {
+    const currentInstant = Date.parse(progress.occurredAt);
+    const previousInstant = previousAt === undefined ? Number.NaN : Date.parse(previousAt);
+    steps.push(completed(progressStageLabels[progress.stage], {
+      occurredAt: progress.occurredAt,
+      ...(Number.isFinite(currentInstant)
+        && Number.isFinite(previousInstant)
+        && currentInstant >= previousInstant
+        ? {
+            durationMs: currentInstant - previousInstant,
+            durationPrefix: "이전 단계 후" as const,
+          }
+        : {}),
+    }));
+    previousAt = progress.occurredAt;
+  }
+  steps.push(active("철도사 응답·공식 결과 대기"));
+  return steps;
+}
 
 function detailedResultSteps(
   transition: WatchActionTransition,
@@ -90,7 +140,7 @@ function detailedResultSteps(
   let previousAt = transition.startedAt;
   const steps: ToastProgressStep[] = [
     completed("좌석 발견", times.detected),
-    completed("예매 시작", times.started),
+    completed("자동 예매 요청 시작", times.started),
   ];
   const appendProgress = (
     stage: ReservationProgressStageName,
@@ -106,7 +156,10 @@ function detailedResultSteps(
       ...(Number.isFinite(currentInstant)
         && Number.isFinite(previousInstant)
         && currentInstant >= previousInstant
-        ? { durationMs: currentInstant - previousInstant, durationPrefix: "처리" as const }
+        ? {
+            durationMs: currentInstant - previousInstant,
+            durationPrefix: "이전 단계 후" as const,
+          }
         : {}),
     };
     steps.push(state === "failed" ? failed(label, timing) : completed(label, timing));
@@ -115,7 +168,7 @@ function detailedResultSteps(
   appendProgress("authenticated_session_ready", "로그인 세션 확인");
   appendProgress(
     "target_rechecked",
-    "열차·좌석 재확인",
+    "검색 결과·열차 재확인",
     terminal === "not_available" && !hasSeatSelection ? "failed" : "completed",
   );
   appendProgress("seat_selected", "좌석 선택");
@@ -131,7 +184,10 @@ function detailedResultSteps(
         ...(Number.isFinite(resultInstant)
           && Number.isFinite(previousInstant)
           && resultInstant >= previousInstant
-          ? { durationMs: resultInstant - previousInstant, durationPrefix: "처리" as const }
+          ? {
+              durationMs: resultInstant - previousInstant,
+              durationPrefix: "이전 단계 후" as const,
+            }
           : {}),
       };
   if (terminal === "auth_required" && !progressByStage.has("authenticated_session_ready")) {
@@ -148,7 +204,12 @@ function lifecycleFields(
   transition: WatchActionTransition | SeatAvailabilityLostTransition,
 ): Pick<
   AppNotificationInput,
-  "subjectKey" | "revisionKey" | "revisionAt" | "occurredAt" | "startedAt"
+  | "subjectKey"
+  | "revisionKey"
+  | "revisionAt"
+  | "occurredAt"
+  | "startedAt"
+  | "durationMs"
 > {
   return {
     subjectKey: `watch:${transition.id}`,
@@ -162,6 +223,7 @@ function lifecycleFields(
         ? transition.revisionAt ?? null
         : null
     ),
+    durationMs: completedAttemptDurationMs(transition),
   };
 }
 
@@ -187,22 +249,25 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
     ...journeyFields(transition),
   };
   switch (transition.status) {
-    case "reserving":
+    case "reserving": {
+      const knownProgress = knownReservingProgressSteps(transition);
       return {
         ...base,
         kind: "reserving" as const,
         tone: "info",
         title: "예매를 진행하고 있습니다",
-        steps: [
-          completed("좌석 발견", times.detected),
-          active("예매 시작", times.started),
-          pending("로그인 세션 확인"),
-          pending("열차·좌석 재확인"),
-          pending("좌석 선택"),
-          pending("예약 요청"),
-          pending("공식 결과 확인"),
+        description: knownProgress === null
+          ? `${base.description} · 세부 단계는 철도사 결과 수신 후 표시됩니다.`
+          : `${base.description} · 확인된 세부 단계를 실시간 반영하고 있습니다.`,
+        steps: knownProgress ?? [
+          ...(transition.detectedAt === undefined
+            ? []
+            : [completed("좌석 발견", times.detected)]),
+          active("자동 예매 요청 시작", times.started),
+          pending("철도사 응답·공식 결과 대기"),
         ],
       };
+    }
     case "payment_required":
       return {
         ...base,
@@ -215,7 +280,7 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         steps: [
           ...(detailedResultSteps(transition, "payment_required") ?? [
             completed("좌석 발견", times.detected),
-            completed("예매 시작", times.started),
+            completed("자동 예매 요청 시작", times.started),
             completed("예매 요청 완료", times.attempted),
           ]),
           active("공식 결제 필요", times.current),
@@ -236,7 +301,7 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
           : `${base.description} · 공식 확인에서 임시 예약 종료를 확인했습니다. 이 1회 알림 작업은 종료되었습니다.`,
         steps: [
           completed("좌석 발견", times.detected),
-          completed("예매 시작", times.started),
+          completed("자동 예매 요청 시작", times.started),
           completed("좌석 임시 확보", times.attempted),
           deadlineElapsed
             ? failed("결제기한 내 결제 미완료", times.current)
@@ -260,7 +325,7 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         steps: [
           ...(detailedResultSteps(transition, "auth_required") ?? [
             completed("좌석 발견", times.detected),
-            completed("예매 시작", times.started),
+            completed("자동 예매 요청 시작", times.started),
             failed("계정 확인", times.attempted),
           ]),
           pending("감시 재개", times.current),
@@ -283,13 +348,13 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         description: `${base.description} · 상태를 확인한 뒤 감시를 다시 시작해 주세요.`,
         steps: detailedResultSteps(transition, "failed") ?? [
           completed("좌석 발견", times.detected),
-          completed("예매 시작", times.started),
+          completed("자동 예매 요청 시작", times.started),
           failed("예매 요청", times.attempted),
         ],
       };
     case "monitoring_resumed":
       return buildReservationRecoveryToast(transition, {
-        outcome: "failed",
+        outcome: "unknown",
         retryable: false,
         manualCheckRequired: true,
         retryCondition: null,
@@ -319,7 +384,7 @@ export function buildReservationRecoveryToast(
       steps: [
         ...(detailedResultSteps(transition, "manual_check") ?? [
           completed("좌석 발견", times.detected),
-          completed("예매 시작", times.started),
+          completed("자동 예매 요청 시작", times.started),
           completed("예매 요청", times.attempted),
           failed("공식 결과 확인"),
         ]),
@@ -336,7 +401,7 @@ export function buildReservationRecoveryToast(
       steps: [
         ...(detailedResultSteps(transition, "not_available") ?? [
           completed("좌석 발견", times.detected),
-          completed("예매 시작", times.started),
+          completed("자동 예매 요청 시작", times.started),
           failed("좌석 재확인", times.attempted),
         ]),
         active("감시·재예매 대기", times.current),
@@ -351,7 +416,7 @@ export function buildReservationRecoveryToast(
     steps: [
       ...(detailedResultSteps(transition, "failed") ?? [
         completed("좌석 발견", times.detected),
-        completed("예매 시작", times.started),
+        completed("자동 예매 요청 시작", times.started),
         failed("예매 요청", times.attempted),
       ]),
       active("감시·재예매 대기", times.current),

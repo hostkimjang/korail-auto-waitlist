@@ -44,6 +44,13 @@ const reservationProgressStageNames: ReadonlySet<ReservationProgressStageName> =
   "reservation_requested",
 ]);
 
+const reservationProgressStageOrder: ReadonlyMap<ReservationProgressStageName, number> = new Map([
+  ["authenticated_session_ready", 0],
+  ["target_rechecked", 1],
+  ["seat_selected", 2],
+  ["reservation_requested", 3],
+]);
+
 function reservationProgress(value: unknown): ReadonlyArray<ReservationProgressStage> {
   if (!Array.isArray(value)) return [];
   const seen = new Set<ReservationProgressStageName>();
@@ -112,7 +119,11 @@ function transitionFromEvent(
   const candidateId = text(event.payload.candidate_id);
   const revisionAt = eventInstant(event.created_at);
   const revision = text(event.id) ?? revisionAt ?? `${status}:${watchId}`;
-  const startedAt = eventTimeNoLaterThan(event.payload.attempt_started_at, revisionAt);
+  const reportedStartedAt = eventTimeNoLaterThan(event.payload.attempt_started_at, revisionAt);
+  const startedAt = reportedStartedAt ?? (status === "reserving" ? revisionAt : null);
+  const detectedAt = startedAt === null
+    ? null
+    : eventTimeNoLaterThan(event.payload.seat_detected_at, startedAt);
   const candidateFinishedAt = eventTimeNoLaterThan(event.payload.attempt_finished_at, revisionAt);
   const finishedAt = startedAt !== null
     && candidateFinishedAt !== null
@@ -140,9 +151,97 @@ function transitionFromEvent(
     status,
     revision,
     ...(revisionAt === null ? {} : { revisionAt }),
+    ...(detectedAt === null ? {} : { detectedAt }),
     ...(startedAt === null ? {} : { startedAt }),
     ...(finishedAt === null ? {} : { finishedAt }),
     ...(progress.length === 0 ? {} : { reservationProgress: progress }),
+  };
+}
+
+function progressedTransitionFromEvent(
+  event: LiveEventRecord,
+  watches: ReadonlyArray<WatchLifecycleSnapshot>,
+): WatchActionTransition | null {
+  if (!isRecord(event.payload)) return null;
+  const eventId = text(event.id);
+  const revisionAt = eventInstant(event.created_at);
+  const watchId = text(event.payload.watch_id);
+  const aggregateId = text(event.aggregate_id);
+  const candidateId = text(event.payload.candidate_id);
+  const attemptId = text(event.payload.attempt_id);
+  const attemptSequence = event.payload.attempt_sequence;
+  const startedAt = eventInstant(event.payload.attempt_started_at);
+  const hasDetectedAt = Object.prototype.hasOwnProperty.call(event.payload, "seat_detected_at");
+  const detectedAt = event.payload.seat_detected_at === null
+    ? null
+    : eventInstant(event.payload.seat_detected_at);
+  const currentStage = text(event.payload.stage);
+  const occurredAt = eventInstant(event.payload.occurred_at);
+  if (
+    eventId === null
+    || revisionAt === null
+    || watchId === null
+    || aggregateId !== watchId
+    || candidateId === null
+    || attemptId === null
+    || !Number.isInteger(attemptSequence)
+    || Number(attemptSequence) < 1
+    || startedAt === null
+    || !hasDetectedAt
+    || (event.payload.seat_detected_at !== null && detectedAt === null)
+    || currentStage === null
+    || !reservationProgressStageNames.has(currentStage as ReservationProgressStageName)
+    || occurredAt === null
+  ) return null;
+  const watch = watches.find((item) => item.id === watchId);
+  const candidate = watch?.reservationCandidateContexts[candidateId];
+  if (watch === undefined || candidate === undefined) return null;
+  const rawProgress = event.payload.progress_stages;
+  if (!Array.isArray(rawProgress) || rawProgress.length === 0) return null;
+  const progress = reservationProgress(rawProgress);
+  if (progress.length !== rawProgress.length) return null;
+  const startedInstant = Date.parse(startedAt);
+  const detectedInstant = detectedAt === null ? null : Date.parse(detectedAt);
+  const occurredInstant = Date.parse(occurredAt);
+  const revisionInstant = Date.parse(revisionAt);
+  let previousInstant = startedInstant;
+  let previousOrder = -1;
+  for (const item of progress) {
+    const currentInstant = Date.parse(item.occurredAt);
+    const currentOrder = reservationProgressStageOrder.get(item.stage);
+    if (
+      currentOrder === undefined
+      || currentOrder <= previousOrder
+      || currentInstant < previousInstant
+      || currentInstant > occurredInstant
+    ) return null;
+    previousOrder = currentOrder;
+    previousInstant = currentInstant;
+  }
+  const latest = progress.at(-1);
+  if (
+    (detectedInstant !== null && detectedInstant > startedInstant)
+    || occurredInstant > revisionInstant
+    || latest?.stage !== currentStage
+    || latest.occurredAt !== occurredAt
+  ) return null;
+  return {
+    id: watchId,
+    provider: watch.provider,
+    route: watch.route,
+    train: candidate.train ?? watch.train,
+    seatClassLabel: candidate.seatClassLabel ?? watch.seatClassLabel,
+    date: candidate.date ?? watch.date,
+    departure: candidate.departure ?? watch.departure,
+    arrival: candidate.arrival ?? watch.arrival,
+    reservationPolicy: watch.reservationPolicy,
+    paymentDeadline: null,
+    status: "reserving",
+    revision: eventId,
+    revisionAt,
+    ...(detectedAt === null ? {} : { detectedAt }),
+    startedAt,
+    reservationProgress: progress,
   };
 }
 
@@ -174,10 +273,11 @@ function buildLiveReservationNoticeFromLifecycle(
   if (eventType === "watch.reservation_attempted") {
     const transition = transitionFromEvent(event, watches, "reserving");
     if (transition === null) return null;
-    return buildWatchActionToast({
-      ...transition,
-      ...(transition.revisionAt === undefined ? {} : { startedAt: transition.revisionAt }),
-    });
+    return buildWatchActionToast(transition);
+  }
+  if (eventType === "watch.reservation_progressed") {
+    const transition = progressedTransitionFromEvent(event, watches);
+    return transition === null ? null : buildWatchActionToast(transition);
   }
   if (!isRecord(event.payload)) return null;
   if (

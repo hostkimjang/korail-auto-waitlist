@@ -63,7 +63,7 @@ describe("live reservation notices", () => {
 
     expect(notice).toMatchObject({
       meta: "KORAIL · KTX 240 · 일반실",
-      description: "8월 4일 (화) · 대전 → 서울 · 15:11 → 15:39",
+      description: "8월 4일 (화) · 대전 → 서울 · 15:11 → 15:39 · 세부 단계는 철도사 결과 수신 후 표시됩니다.",
     });
   });
 
@@ -73,7 +73,13 @@ describe("live reservation notices", () => {
       event_type: "watch.reservation_attempted",
       aggregate_id: watch.id,
       created_at: "2026-08-03T12:09:45.851Z",
-      payload: { watch_id: watch.id, candidate_id: "candidate", outcome: "pending" },
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        outcome: "pending",
+        seat_detected_at: "2026-08-03T12:09:44.500Z",
+        attempt_started_at: "2026-08-03T12:09:45.000Z",
+      },
     }, [watch]);
 
     expect(notice).toMatchObject({
@@ -86,13 +92,10 @@ describe("live reservation notices", () => {
     });
     expect(notice?.steps?.map((step) => [step.label, step.state])).toEqual([
       ["좌석 발견", "completed"],
-      ["예매 시작", "active"],
-      ["로그인 세션 확인", "pending"],
-      ["열차·좌석 재확인", "pending"],
-      ["좌석 선택", "pending"],
-      ["예약 요청", "pending"],
-      ["공식 결과 확인", "pending"],
+      ["자동 예매 요청 시작", "active"],
+      ["철도사 응답·공식 결과 대기", "pending"],
     ]);
+    expect(notice?.description).toContain("세부 단계는 철도사 결과 수신 후 표시");
   });
 
   it("does not mix a future REST observation or another attempt into an attempted SSE", () => {
@@ -117,20 +120,112 @@ describe("live reservation notices", () => {
       startedAt: "2026-08-03T12:09:45Z",
       revisionAt: "2026-08-03T12:09:45Z",
     });
-    expect(notice?.steps?.slice(0, 2)).toEqual([
+    expect(notice?.steps).toEqual([
       {
-        label: "좌석 발견",
-        state: "completed",
-        occurredAt: "2026-08-03T12:09:45Z",
-      },
-      {
-        label: "예매 시작",
+        label: "자동 예매 요청 시작",
         state: "active",
         occurredAt: "2026-08-03T12:09:45Z",
-        durationMs: 0,
-        durationPrefix: "대기",
+        durationPrefix: "감지 후",
       },
+      { label: "철도사 응답·공식 결과 대기", state: "pending" },
     ]);
+  });
+
+  it("projects cumulative reservation progress without inventing future stages", () => {
+    const notice = buildLiveReservationNotice({
+      id: "progress-target-rechecked",
+      event_type: "watch.reservation_progressed",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:09:47.950Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        attempt_id: "attempt-one",
+        attempt_sequence: 1,
+        seat_detected_at: "2026-08-03T12:09:44.500Z",
+        attempt_started_at: "2026-08-03T12:09:45.000Z",
+        stage: "target_rechecked",
+        occurred_at: "2026-08-03T12:09:47.900Z",
+        progress_stages: [
+          { stage: "authenticated_session_ready", occurred_at: "2026-08-03T12:09:46.100Z" },
+          { stage: "target_rechecked", occurred_at: "2026-08-03T12:09:47.900Z" },
+        ],
+      },
+    }, [watch]);
+
+    expect(notice).toMatchObject({
+      subjectKey: `watch:${watch.id}`,
+      revisionKey: `watch:${watch.id}:progress-target-rechecked`,
+      kind: "reserving",
+      durationMs: null,
+    });
+    expect(notice?.steps?.map((step) => [step.label, step.state])).toEqual([
+      ["좌석 발견", "completed"],
+      ["자동 예매 요청 시작", "completed"],
+      ["로그인 세션 확인", "completed"],
+      ["검색 결과·열차 재확인", "completed"],
+      ["철도사 응답·공식 결과 대기", "active"],
+    ]);
+    expect(notice?.steps?.some((step) => step.label === "좌석 선택")).toBe(false);
+  });
+
+  it("accepts null seat detection without inventing its step or queue duration", () => {
+    const notice = buildLiveReservationNotice({
+      id: "progress-without-detection",
+      event_type: "watch.reservation_progressed",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:09:46.200Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        attempt_id: "attempt-one",
+        attempt_sequence: 1,
+        seat_detected_at: null,
+        attempt_started_at: "2026-08-03T12:09:45.000Z",
+        stage: "authenticated_session_ready",
+        occurred_at: "2026-08-03T12:09:46.100Z",
+        progress_stages: [
+          { stage: "authenticated_session_ready", occurred_at: "2026-08-03T12:09:46.100Z" },
+        ],
+      },
+    }, [watch]);
+
+    expect(notice?.steps?.map((step) => step.label)).toEqual([
+      "자동 예매 요청 시작",
+      "로그인 세션 확인",
+      "철도사 응답·공식 결과 대기",
+    ]);
+    expect(notice?.steps?.[0]).not.toHaveProperty("durationMs");
+  });
+
+  it.each([
+    ["missing attempt identity", { attempt_id: null }],
+    ["invalid attempt sequence", { attempt_sequence: 0 }],
+    ["mismatched current stage", { stage: "seat_selected" }],
+    ["future current time", { occurred_at: "2026-08-03T12:09:48.500Z" }],
+  ])("rejects malformed cumulative progress: %s", (_label, overrides) => {
+    const payload = {
+      watch_id: watch.id,
+      candidate_id: "candidate",
+      attempt_id: "attempt-one",
+      attempt_sequence: 1,
+      seat_detected_at: null,
+      attempt_started_at: "2026-08-03T12:09:45.000Z",
+      stage: "target_rechecked",
+      occurred_at: "2026-08-03T12:09:47.900Z",
+      progress_stages: [
+        { stage: "authenticated_session_ready", occurred_at: "2026-08-03T12:09:46.100Z" },
+        { stage: "target_rechecked", occurred_at: "2026-08-03T12:09:47.900Z" },
+      ],
+      ...overrides,
+    };
+    expect(buildLiveReservationNotice({
+      id: "invalid-progress",
+      event_type: "watch.reservation_progressed",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:09:47.950Z",
+      payload,
+    }, [watch])).toBeNull();
   });
 
   it("replaces progress with a timestamped not-available recovery result", () => {
@@ -142,6 +237,7 @@ describe("live reservation notices", () => {
       payload: {
         watch_id: watch.id,
         candidate_id: "candidate",
+        seat_detected_at: "2026-08-03T12:09:44.500Z",
         attempt_started_at: "2026-08-03T12:09:45.851Z",
         attempt_finished_at: "2026-08-03T12:09:48.250Z",
         outcome: "not_available",
@@ -169,41 +265,78 @@ describe("live reservation notices", () => {
       {
         label: "좌석 발견",
         state: "completed",
-        occurredAt: "2026-08-03T12:09:45.851Z",
+        occurredAt: "2026-08-03T12:09:44.500Z",
       },
       {
-        label: "예매 시작",
+        label: "자동 예매 요청 시작",
         state: "completed",
         occurredAt: "2026-08-03T12:09:45.851Z",
-        durationMs: 0,
-        durationPrefix: "대기",
+        durationMs: 1_351,
+        durationPrefix: "감지 후",
       },
       {
         label: "로그인 세션 확인",
         state: "completed",
         occurredAt: "2026-08-03T12:09:46.100Z",
         durationMs: 249,
-        durationPrefix: "처리",
+        durationPrefix: "이전 단계 후",
       },
       {
-        label: "열차·좌석 재확인",
+        label: "검색 결과·열차 재확인",
         state: "failed",
         occurredAt: "2026-08-03T12:09:47.900Z",
         durationMs: 1_800,
-        durationPrefix: "처리",
+        durationPrefix: "이전 단계 후",
       },
       {
         label: "공식 결과 확인",
         state: "completed",
         occurredAt: "2026-08-03T12:09:48.250Z",
         durationMs: 350,
-        durationPrefix: "처리",
+        durationPrefix: "이전 단계 후",
       },
       {
         label: "감시·재예매 대기",
         state: "active",
         occurredAt: "2026-08-03T12:09:48.367Z",
       },
+    ]);
+  });
+
+  it("preserves every measured stage from the observed 7.717 second result payload", () => {
+    const notice = buildLiveReservationNotice({
+      id: "result-observed-246",
+      event_type: "watch.reservation_result",
+      aggregate_id: watch.id,
+      created_at: "2026-08-10T13:01:21.646Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        attempt_id: "attempt-246",
+        attempt_sequence: 246,
+        seat_detected_at: null,
+        attempt_started_at: "2026-08-10T13:01:13.901Z",
+        attempt_finished_at: "2026-08-10T13:01:21.618Z",
+        outcome: "payment_required",
+        progress_stages: [
+          { stage: "authenticated_session_ready", occurred_at: "2026-08-10T13:01:18.506Z" },
+          { stage: "target_rechecked", occurred_at: "2026-08-10T13:01:19.651Z" },
+          { stage: "seat_selected", occurred_at: "2026-08-10T13:01:19.775Z" },
+          { stage: "reservation_requested", occurred_at: "2026-08-10T13:01:19.799Z" },
+        ],
+      },
+    }, [watch]);
+
+    expect(notice?.durationMs).toBe(7_717);
+    expect(notice?.steps?.map((step) => [step.label, step.durationMs])).toEqual([
+      ["좌석 발견", undefined],
+      ["자동 예매 요청 시작", undefined],
+      ["로그인 세션 확인", 4_605],
+      ["검색 결과·열차 재확인", 1_145],
+      ["좌석 선택", 124],
+      ["예약 요청", 24],
+      ["공식 결과 확인", 1_819],
+      ["공식 결제 필요", undefined],
     ]);
   });
 
@@ -287,7 +420,7 @@ describe("live reservation notices", () => {
     expect(notice?.description).toContain("감시는 다시 시작되며");
     expect(notice?.steps?.map((step) => [step.label, step.state])).toEqual([
       ["좌석 발견", "completed"],
-      ["예매 시작", "completed"],
+      ["자동 예매 요청 시작", "completed"],
       ["좌석 임시 확보", "completed"],
       ["결제기한 내 결제 미완료", "failed"],
       ["결제 가능 시간 종료 확인", "completed"],
@@ -296,6 +429,25 @@ describe("live reservation notices", () => {
     expect(notice?.steps?.some((step) => (
       step.state === "active" || step.state === "pending"
     ))).toBe(false);
+  });
+
+  it("rejects a seat detection time after the automatic request started", () => {
+    const notice = buildLiveReservationNotice({
+      id: "attempt-with-future-detection",
+      event_type: "watch.reservation_attempted",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:09:45Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        attempt_started_at: "2026-08-03T12:09:45Z",
+        seat_detected_at: "2026-08-03T12:09:46Z",
+      },
+    }, [watch]);
+
+    expect(notice?.steps?.some((step) => step.label === "좌석 발견")).toBe(false);
+    expect(notice?.steps?.find((step) => step.label === "자동 예매 요청 시작"))
+      .not.toHaveProperty("durationMs");
   });
 
   it("ends a one-off task and rejects a malformed hold-ended event", () => {

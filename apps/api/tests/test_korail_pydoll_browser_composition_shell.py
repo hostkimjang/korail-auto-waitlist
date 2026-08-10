@@ -38,6 +38,7 @@ MODULE_ASSIGNMENTS = {
     "KorailSessionActorSnapshot",
     "KorailSessionActorState",
     "KorailReservationOutcome",
+    "KorailReservationProgressCallback",
     "KorailReservationRequest",
     "KorailReservationResult",
     "KorailReservationSeatClass",
@@ -58,6 +59,7 @@ METHOD_INVENTORIES = {
         "current_schedule",
         "current_passenger",
         "ensure_authenticated",
+        "probe_authenticated_session",
         "begin_http_replay_capture",
         "export_http_replay_plan",
         "submit_once",
@@ -135,6 +137,7 @@ METHOD_INVENTORIES = {
         "current_schedule",
         "current_passenger",
         "ensure_authenticated",
+        "probe_authenticated_session",
         "_authenticate_in_place",
         "_submit_login_form",
         "_wait_for_login_authentication",
@@ -380,8 +383,8 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    assert len(source.splitlines()) <= 1_350
-    assert len({name for name in vars(browser) if not name.startswith("_")}) == 82
+    assert len(source.splitlines()) <= 1_375
+    assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")
     }

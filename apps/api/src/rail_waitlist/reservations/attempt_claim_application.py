@@ -12,6 +12,13 @@ from ..watch_management.models import ReservationAttempt, SeatObservation, Watch
 from .attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
     RESERVATION_RETRY_EDGE_OBSERVATIONS,
+    parse_payment_hold_retry_episode_key,
+)
+from .attempt_timing_application import latest_candidate_seat_detected_at
+from .payment_hold_retry_application import (
+    active_watch_payment_hold_fence,
+    conclusive_unavailable_after_hold,
+    watch_attempt_by_id,
 )
 
 
@@ -82,6 +89,54 @@ async def begin_reservation_attempt(
         .order_by(ReservationAttempt.attempt_sequence.desc())
         .limit(1)
     )
+    payment_hold_episode = parse_payment_hold_retry_episode_key(normalized_episode_key)
+    payment_hold_fence = (
+        await active_watch_payment_hold_fence(
+            session,
+            watch.id,
+            is_payment_hold_ended=dependencies.is_payment_hold_ended,
+        )
+        if retry_authorized
+        else None
+    )
+    payment_hold_retry_authorized = False
+    referenced_payment_hold: ReservationAttempt | None = None
+    if payment_hold_episode is not None:
+        hold_attempt_id, unavailable_observation_id = payment_hold_episode
+        referenced_payment_hold = await watch_attempt_by_id(session, watch.id, hold_attempt_id)
+        if (
+            retry_authorized
+            and payment_hold_fence is not None
+            and payment_hold_fence.attempt.id == hold_attempt_id
+        ):
+            retry_edge = await conclusive_unavailable_after_hold(
+                session,
+                payment_hold_fence,
+                candidate.id,
+                observation_id=unavailable_observation_id,
+            )
+            if retry_edge is not None:
+                actionable_after_edge = await session.scalar(
+                    select(SeatObservation.id)
+                    .where(
+                        SeatObservation.candidate_id == candidate.id,
+                        SeatObservation.observed_at > retry_edge.observed_at,
+                        SeatObservation.status.in_(dependencies.actionable_seat_statuses),
+                    )
+                    .order_by(SeatObservation.observed_at, SeatObservation.id)
+                    .limit(1)
+                )
+                payment_hold_retry_authorized = actionable_after_edge is not None
+    if payment_hold_fence is not None and not payment_hold_retry_authorized:
+        # A watch-scoped hold may belong to another candidate. Returning that durable
+        # blocker with created=False keeps the execution caller side-effect free even
+        # when this candidate has no local attempt to replay.
+        return latest_attempt or payment_hold_fence.attempt, False
+    if payment_hold_episode is not None and not payment_hold_retry_authorized:
+        blocking_attempt = latest_attempt or referenced_payment_hold
+        if blocking_attempt is not None:
+            return blocking_attempt, False
+        raise ValueError("payment-hold retry episode does not reference this watch")
     not_available_retry_authorized = False
     if (
         latest_attempt is not None
@@ -123,22 +178,6 @@ async def begin_reservation_attempt(
                 .limit(1)
             )
         confirmed_absent_retry_authorized = actionable_after_confirmation is not None
-    payment_hold_ended = latest_attempt is not None and dependencies.is_payment_hold_ended(
-        latest_attempt
-    )
-    payment_hold_retry_edge_observed = False
-    if payment_hold_ended and latest_attempt is not None:
-        retry_edge = await session.scalar(
-            select(SeatObservation.id)
-            .where(
-                SeatObservation.candidate_id == candidate.id,
-                SeatObservation.observed_at > latest_attempt.post_deadline_reconciled_at,
-                SeatObservation.status.in_(RESERVATION_RETRY_EDGE_OBSERVATIONS),
-            )
-            .order_by(SeatObservation.observed_at, SeatObservation.id)
-            .limit(1)
-        )
-        payment_hold_retry_edge_observed = retry_edge is not None
     if latest_attempt is not None:
         provider_auth_retry_authorized = latest_attempt.outcome in {
             ReservationOutcome.AUTH_REQUIRED,
@@ -148,7 +187,7 @@ async def begin_reservation_attempt(
             (
                 not_available_retry_authorized,
                 provider_auth_retry_authorized,
-                payment_hold_retry_edge_observed,
+                payment_hold_retry_authorized,
                 confirmed_absent_retry_authorized,
             )
         )
@@ -179,6 +218,11 @@ async def begin_reservation_attempt(
             raise
         return existing, False
 
+    seat_detected_at = await latest_candidate_seat_detected_at(
+        session,
+        candidate.id,
+        attempt_started_at=attempt.started_at,
+    )
     candidate.state = "reservation_attempted"
     watch.reservation_attempted = True
     if watch.status == WatchStatus.SEAT_FOUND:
@@ -197,6 +241,9 @@ async def begin_reservation_attempt(
             "watch_id": watch.id,
             "candidate_id": candidate.id,
             "attempt_sequence": attempt.attempt_sequence,
+            "seat_detected_at": (
+                seat_detected_at.isoformat() if seat_detected_at is not None else None
+            ),
             "attempt_started_at": attempt.started_at.isoformat(),
             "episode_key": attempt.episode_key,
             "outcome": ReservationOutcome.PENDING.value,

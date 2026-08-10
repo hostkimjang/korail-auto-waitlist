@@ -74,6 +74,66 @@ describe("notification center lifecycle", () => {
     expect(staleRecovery.sequence).toBe(found.sequence);
   });
 
+  it.each(["payment_required", "manual_check", "auth_required", "recovery"] as const)(
+    "lets equal-time %s terminal state replace reservation progress",
+    (terminalKind) => {
+      const progress = pushNotifications(initialNotificationCenterState, [notice({
+        title: "예매를 진행하고 있습니다",
+        revisionKey: "watch:one:progress:equal",
+        revisionAt: "2026-08-03T12:09:48Z",
+        kind: "reserving",
+      })]);
+      const terminal = pushNotifications(progress, [notice({
+        title: "최종 결과",
+        revisionKey: `watch:one:${terminalKind}:equal`,
+        revisionAt: "2026-08-03T12:09:48Z",
+        kind: terminalKind,
+      })]);
+
+      expect(terminal.notices[0]).toMatchObject({
+        title: "최종 결과",
+        kind: terminalKind,
+      });
+    },
+  );
+
+  it.each(["payment_required", "manual_check", "auth_required", "recovery"] as const)(
+    "does not let equal-time late progress replace %s terminal state",
+    (terminalKind) => {
+      const terminal = pushNotifications(initialNotificationCenterState, [notice({
+        title: "최종 결과",
+        revisionKey: `watch:one:${terminalKind}:equal`,
+        revisionAt: "2026-08-03T12:09:48Z",
+        kind: terminalKind,
+      })]);
+      const lateProgress = pushNotifications(terminal, [notice({
+        title: "늦게 도착한 진행 이벤트",
+        revisionKey: "watch:one:progress:equal",
+        revisionAt: "2026-08-03T12:09:48Z",
+        kind: "reserving",
+      })]);
+
+      expect(lateProgress.notices[0]).toMatchObject({
+        title: "최종 결과",
+        kind: terminalKind,
+      });
+      expect(lateProgress.sequence).toBe(terminal.sequence);
+    },
+  );
+
+  it("preserves an explicit missing total instead of inferring one from SSE delivery time", () => {
+    const state = pushNotifications(initialNotificationCenterState, [notice({
+      kind: "recovery",
+      revisionKey: "watch:one:result:no-finish",
+      revisionAt: "2026-08-03T12:09:48Z",
+      occurredAt: "2026-08-03T12:09:48Z",
+      startedAt: "2026-08-03T12:09:45Z",
+      durationMs: null,
+    })]);
+
+    expect(state.notices[0]?.durationMs).toBeNull();
+  });
+
   it("orders action-required notices before progress and sorts payments by deadline", () => {
     const state = pushNotifications(initialNotificationCenterState, [
       notice({ subjectKey: "watch:progress", revisionKey: "progress", kind: "reserving" }),

@@ -35,6 +35,7 @@ import {
 
 const queuedReservationEventTypes: ReadonlySet<string> = new Set([
   "watch.reservation_attempted",
+  "watch.reservation_progressed",
   "watch.reservation_result",
   "watch.reservation_result_requires_manual_check",
   "watch.payment_hold_ended_monitoring_resumed",
@@ -248,14 +249,15 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
     const unsubscribe = subscribeToEvents(
       (event) => {
         if (activeLifecycleEpochRef.current !== lifecycleEpoch) return;
+        const type = eventType(event);
         const liveNotice = buildLiveReservationNotice(
           event,
           watchesRef.current.map((watch) => snapshotOfRef.current(watch)),
         );
         if (liveNotice !== null) {
           pushNotifications([liveNotice]);
+          if (type === "watch.reservation_progressed") return;
         } else {
-          const type = eventType(event);
           if (type !== null && queuedReservationEventTypes.has(type)) {
             pendingLiveReservationEventsRef.current.push(event);
           }

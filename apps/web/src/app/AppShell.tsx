@@ -27,6 +27,9 @@ const navItems: ReadonlyArray<AppNavItem> = [
 export interface AppShellProps {
   activeView: AppView;
   onNavigate: (view: AppView) => void;
+  notificationCount: number;
+  notificationsExpanded: boolean;
+  onToggleNotifications: () => void;
   children: ReactNode;
   overlay?: ReactNode;
 }
@@ -78,6 +81,9 @@ function BottomNav({ activeView, onNavigate }: AppNavigationProps) {
 export function AppShell({
   activeView,
   onNavigate,
+  notificationCount,
+  notificationsExpanded,
+  onToggleNotifications,
   children,
   overlay,
 }: AppShellProps): ReactElement {
@@ -87,8 +93,20 @@ export function AppShell({
       <main className="main-content">
         <div className="mobile-header">
           <Brand />
-          <button type="button" className="icon-button" aria-label="알림">
+          <button
+            type="button"
+            className="icon-button mobile-notification-button"
+            aria-label={`실시간 알림 ${notificationCount}건 ${notificationsExpanded ? "닫기" : "열기"}`}
+            aria-controls="notification-center-body"
+            aria-expanded={notificationsExpanded}
+            onClick={onToggleNotifications}
+          >
             <Bell size={23} />
+            {notificationCount > 0 ? (
+              <span className="mobile-notification-badge" aria-hidden="true">
+                {notificationCount > 99 ? "99+" : notificationCount}
+              </span>
+            ) : null}
           </button>
         </div>
         {children}

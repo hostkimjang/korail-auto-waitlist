@@ -372,14 +372,14 @@ async def test_ui_preferences_are_authenticated_and_persisted(app, client, publi
 
     updated = await client.patch(
         "/api/v1/preferences/ui",
-        json={"timetable_refresh_interval_seconds": 15},
+        json={"timetable_refresh_interval_seconds": 1},
     )
     assert updated.status_code == 200
-    assert updated.json()["timetable_refresh_interval_seconds"] == 15
+    assert updated.json()["timetable_refresh_interval_seconds"] == 1
     assert updated.json()["observation_interval_seconds"] == 5
 
     reloaded = await client.get("/api/v1/preferences/ui")
-    assert reloaded.json()["timetable_refresh_interval_seconds"] == 15
+    assert reloaded.json()["timetable_refresh_interval_seconds"] == 1
 
 
 async def test_ui_preferences_reject_an_unsafe_refresh_interval(app, client):
@@ -387,7 +387,7 @@ async def test_ui_preferences_reject_an_unsafe_refresh_interval(app, client):
         session.add(AdminAccount(username="admin", password_hash="not-a-real-password-hash"))
         await session.commit()
 
-    for interval in (4, 301):
+    for interval in (0, 301):
         response = await client.patch(
             "/api/v1/preferences/ui",
             json={"timetable_refresh_interval_seconds": interval},

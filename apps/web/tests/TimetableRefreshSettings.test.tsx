@@ -29,11 +29,11 @@ describe("TimetableRefreshSettings", () => {
     expect(screen.getByText(/provider lease, 캐시, 백오프, 쿨다운/)).toBeTruthy();
   });
 
-  it("accepts one second and saves both display and observation intervals", async () => {
+  it("accepts one second for both display and observation intervals", async () => {
     const user = userEvent.setup();
     const saved: UiPreferences = {
       ...preferences,
-      timetableRefreshIntervalSeconds: 45,
+      timetableRefreshIntervalSeconds: 1,
       seatObservationIntervalSeconds: 1,
     };
     const onSave = vi.fn(async () => saved);
@@ -50,13 +50,21 @@ describe("TimetableRefreshSettings", () => {
     expect(onSave).not.toHaveBeenCalled();
 
     await user.clear(displayInput);
-    await user.type(displayInput, "45");
+    await user.type(displayInput, "0");
+    await user.clear(observationInput);
+    await user.type(observationInput, "1");
+    await user.click(screen.getByRole("button", { name: "간격 저장" }));
+    expect(screen.getByRole("alert").textContent).toContain("화면 표시 갱신은 1~300초 사이의 정수");
+    expect(onSave).not.toHaveBeenCalled();
+
+    await user.clear(displayInput);
+    await user.type(displayInput, "1");
     await user.clear(observationInput);
     await user.type(observationInput, "1");
     await user.click(screen.getByRole("button", { name: "간격 저장" }));
 
     expect(onSave).toHaveBeenCalledWith({
-      timetableRefreshIntervalSeconds: 45,
+      timetableRefreshIntervalSeconds: 1,
       seatObservationIntervalSeconds: 1,
     });
     expect(screen.getByRole("status").textContent).toContain("활성 작업의 다음 관측부터");

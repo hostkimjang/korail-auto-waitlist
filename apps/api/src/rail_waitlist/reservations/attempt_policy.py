@@ -7,6 +7,7 @@ from ..domain import ReservationOutcome, SeatObservationStatus
 from .provider_confirmation.contracts import ReservationConfirmationOutcome
 
 CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
+PAYMENT_HOLD_RETRY_EPISODE_PREFIX = "availability-after-hold:"
 
 RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
     {
@@ -18,6 +19,26 @@ RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
         SeatObservationStatus.OUT_OF_SERVICE,
     }
 )
+
+
+def payment_hold_retry_episode_key(
+    hold_attempt_id: str,
+    unavailable_observation_id: str,
+) -> str:
+    return (
+        f"{PAYMENT_HOLD_RETRY_EPISODE_PREFIX}"
+        f"{hold_attempt_id}:{unavailable_observation_id}"
+    )
+
+
+def parse_payment_hold_retry_episode_key(episode_key: str) -> tuple[str, str] | None:
+    if not episode_key.startswith(PAYMENT_HOLD_RETRY_EPISODE_PREFIX):
+        return None
+    encoded_ids = episode_key.removeprefix(PAYMENT_HOLD_RETRY_EPISODE_PREFIX)
+    hold_attempt_id, separator, unavailable_observation_id = encoded_ids.partition(":")
+    if not separator or not hold_attempt_id or not unavailable_observation_id:
+        return None
+    return hold_attempt_id, unavailable_observation_id
 
 
 class ConfirmedAbsentRetrySource(Protocol):

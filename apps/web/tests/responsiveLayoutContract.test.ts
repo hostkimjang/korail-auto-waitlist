@@ -157,6 +157,13 @@ describe("global CSS structure", () => {
     expect(appSurfaceStyles).toContain(".auth-page");
     const toastStepSpin = extractCssBlock(appSurfaceStyles, "@keyframes toast-step-spin");
     expect(toastStepSpin.body).toContain("transform: rotate(360deg)");
+    expect(appSurfaceStyles).toContain("animation: toast-step-spin 900ms linear infinite");
+    const toastReducedMotion = extractCssBlock(
+      appSurfaceStyles,
+      "@media (prefers-reduced-motion: reduce)",
+    );
+    expect(toastReducedMotion.body).toContain(".toast-step-spinner");
+    expect(toastReducedMotion.body).toContain("animation: none");
     const toastIn = extractCssBlock(appSurfaceStyles, "@keyframes toast-in");
     expect(toastIn.body).toContain("from { opacity: 0; transform: translateY(10px); }");
     expect(appSurfaceStyles.slice(toastIn.end).trim()).toBe("");

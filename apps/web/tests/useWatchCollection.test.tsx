@@ -47,7 +47,15 @@ function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
         }
       : null,
     paymentDeadline: null,
-    reservationCandidateContexts: {},
+    reservationCandidateContexts: {
+      candidate: {
+        train: "KTX 085",
+        seatClassLabel: "일반실",
+        date: "8월 1일 (토)",
+        departure: "14:11",
+        arrival: "16:52",
+      },
+    },
     reservationPolicy: value.reservationPolicy,
     seatFoundObservation: value.status === "seat_found"
       ? { observedAt: "2026-08-01T03:45:00Z" }
@@ -82,6 +90,31 @@ function watch(
     id: "watch-one",
     status,
     reservationPolicy,
+  };
+}
+
+function reservationProgressedEvent(watchId: string, id: string): unknown {
+  return {
+    id,
+    event_type: "watch.reservation_progressed",
+    aggregate_id: watchId,
+    created_at: "2026-08-03T12:09:46.200Z",
+    payload: {
+      watch_id: watchId,
+      candidate_id: "candidate",
+      attempt_id: "attempt-one",
+      attempt_sequence: 1,
+      seat_detected_at: null,
+      attempt_started_at: "2026-08-03T12:09:45Z",
+      stage: "authenticated_session_ready",
+      occurred_at: "2026-08-03T12:09:46.100Z",
+      progress_stages: [
+        {
+          stage: "authenticated_session_ready",
+          occurred_at: "2026-08-03T12:09:46.100Z",
+        },
+      ],
+    },
   };
 }
 
@@ -157,6 +190,91 @@ describe("useWatchCollection", () => {
     remounted.unmount();
   });
 
+  it("replays progress received while the initial canonical snapshot is loading", async () => {
+    const canonical = watch("reserve_once_before_payment", "watching");
+    const initialLoad = deferred<ReadonlyArray<TestWatch>>();
+    const loadWatches = vi.fn()
+      .mockReturnValueOnce(initialLoad.promise)
+      .mockResolvedValue([canonical]);
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    const pushNotifications = vi.fn();
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [] as TestWatch[],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+
+    act(() => onEvent?.(reservationProgressedEvent(canonical.id, "progress-during-load")));
+    expect(pushNotifications).not.toHaveBeenCalled();
+
+    await act(async () => {
+      initialLoad.resolve([canonical]);
+      await initialLoad.promise;
+    });
+    await waitFor(() => expect(pushNotifications).toHaveBeenCalledWith([
+      expect.objectContaining({
+        revisionKey: `watch:${canonical.id}:progress-during-load`,
+        kind: "reserving",
+      }),
+    ]));
+    unmount();
+  });
+
+  it("reloads a stale snapshot and replays progress after its candidate context arrives", async () => {
+    const stale = watch("reserve_once_before_payment", "watching");
+    const fresh = { ...stale };
+    const loadWatches = vi.fn()
+      .mockResolvedValueOnce([stale])
+      .mockResolvedValue([fresh]);
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    const snapshotWithStaleCandidateContext = (value: TestWatch): WatchLifecycleSnapshot => {
+      const snapshot = snapshotOf(value);
+      return value === stale ? { ...snapshot, reservationCandidateContexts: {} } : snapshot;
+    };
+    const pushNotifications = vi.fn();
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [stale],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf: snapshotWithStaleCandidateContext,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+
+    act(() => onEvent?.(reservationProgressedEvent(stale.id, "progress-after-stale")));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(pushNotifications).toHaveBeenCalledWith([
+      expect.objectContaining({
+        revisionKey: `watch:${stale.id}:progress-after-stale`,
+        kind: "reserving",
+      }),
+    ]));
+    unmount();
+  });
+
   it("keeps one same-watch notice through SSE, canonical reserving, and terminal result", async () => {
     const initial = watch("reserve_once_before_payment", "watching");
     const reserving = watch("reserve_once_before_payment", "reserving");
@@ -208,6 +326,42 @@ describe("useWatchCollection", () => {
 
     act(() => {
       onEvent?.({
+        id: "progress-one",
+        event_type: "watch.reservation_progressed",
+        aggregate_id: initial.id,
+        created_at: "2026-08-03T12:09:46.200Z",
+        payload: {
+          watch_id: initial.id,
+          candidate_id: "candidate",
+          attempt_id: "attempt-one",
+          attempt_sequence: 1,
+          seat_detected_at: null,
+          attempt_started_at: "2026-08-03T12:09:45Z",
+          stage: "authenticated_session_ready",
+          occurred_at: "2026-08-03T12:09:46.100Z",
+          progress_stages: [
+            {
+              stage: "authenticated_session_ready",
+              occurred_at: "2026-08-03T12:09:46.100Z",
+            },
+          ],
+        },
+      });
+    });
+    expect(loadWatches).toHaveBeenCalledTimes(2);
+    expect(notificationState.notices).toHaveLength(1);
+    expect(notificationState.notices[0]).toMatchObject({
+      revisionKey: `watch:${initial.id}:progress-one`,
+      kind: "reserving",
+    });
+    expect(notificationState.notices[0]?.steps?.map((step) => step.label)).toEqual([
+      "자동 예매 요청 시작",
+      "로그인 세션 확인",
+      "철도사 응답·공식 결과 대기",
+    ]);
+
+    act(() => {
+      onEvent?.({
         id: "result-one",
         event_type: "watch.reservation_result",
         aggregate_id: initial.id,
@@ -226,6 +380,88 @@ describe("useWatchCollection", () => {
       subjectKey: `watch:${initial.id}`,
       kind: "payment_required",
     });
+    unmount();
+  });
+
+  it("keeps the measured terminal result authoritative across surrounding REST reloads", async () => {
+    const initial = watch("reserve_once_before_payment", "watching");
+    const payment = watch("reserve_once_before_payment", "payment_required");
+    const loadWatches = vi.fn()
+      .mockResolvedValueOnce([initial])
+      .mockResolvedValue([payment]);
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    let notificationState: NotificationCenterState = initialNotificationCenterState;
+    const pushNotifications = vi.fn((inputs: ReadonlyArray<AppNotificationInput>) => {
+      notificationState = reduceNotifications(notificationState, inputs);
+    });
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+
+    act(() => onEvent?.({ event_type: "watch.status_changed" }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+    expect(notificationState.notices[0]?.steps?.some((step) => (
+      step.label === "로그인 세션 확인"
+    ))).toBe(false);
+
+    act(() => onEvent?.({
+      id: "result-observed-246",
+      event_type: "watch.reservation_result",
+      aggregate_id: initial.id,
+      created_at: "2026-08-10T13:01:21.646Z",
+      payload: {
+        watch_id: initial.id,
+        candidate_id: "candidate",
+        attempt_id: "attempt-246",
+        attempt_sequence: 246,
+        seat_detected_at: null,
+        attempt_started_at: "2026-08-10T13:01:13.901Z",
+        attempt_finished_at: "2026-08-10T13:01:21.618Z",
+        outcome: "payment_required",
+        progress_stages: [
+          { stage: "authenticated_session_ready", occurred_at: "2026-08-10T13:01:18.506Z" },
+          { stage: "target_rechecked", occurred_at: "2026-08-10T13:01:19.651Z" },
+          { stage: "seat_selected", occurred_at: "2026-08-10T13:01:19.775Z" },
+          { stage: "reservation_requested", occurred_at: "2026-08-10T13:01:19.799Z" },
+        ],
+      },
+    }));
+    expect(notificationState.notices[0]).toMatchObject({
+      revisionKey: `watch:${initial.id}:result-observed-246`,
+      kind: "payment_required",
+      durationMs: 7_717,
+    });
+    expect(notificationState.notices[0]?.steps?.map((step) => step.label)).toEqual([
+      "좌석 발견",
+      "자동 예매 요청 시작",
+      "로그인 세션 확인",
+      "검색 결과·열차 재확인",
+      "좌석 선택",
+      "예약 요청",
+      "공식 결과 확인",
+      "공식 결제 필요",
+    ]);
+
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(3));
+    expect(notificationState.notices[0]?.revisionKey)
+      .toBe(`watch:${initial.id}:result-observed-246`);
+    expect(notificationState.notices[0]?.steps?.some((step) => step.label === "예약 요청"))
+      .toBe(true);
     unmount();
   });
 

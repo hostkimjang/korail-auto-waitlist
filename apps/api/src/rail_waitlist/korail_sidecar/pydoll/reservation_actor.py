@@ -29,13 +29,18 @@ from .page_contracts import (
 )
 from .reservation_contracts import (
     KorailReservationOutcome,
+    KorailReservationProgressCallback,
     KorailReservationRequest,
     KorailReservationResult,
     KorailReservationSeatClass,
 )
+from .reservation_contracts import (
+    KorailReservationProgress as _KorailReservationProgress,
+)
 
 __all__ = (
     "KorailReservationOutcome",
+    "KorailReservationProgressCallback",
     "KorailReservationRequest",
     "KorailReservationResult",
     "KorailReservationSeatClass",
@@ -78,6 +83,8 @@ class PydollReservationSession(Protocol):
     async def reserve_once(
         self,
         request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult: ...
 
 
@@ -213,6 +220,8 @@ class PydollReservationActor[Session: PydollReservationSession]:
     async def reserve_once(
         self,
         request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
         direct_url = await self._direct_search_url(
             request.origin,
@@ -246,6 +255,13 @@ class PydollReservationActor[Session: PydollReservationSession]:
                         reason="authentication_required",
                     )
                 session_ready_at = self._utc_now()
+                if on_progress is not None:
+                    on_progress(
+                        _KorailReservationProgress(
+                            stage="authenticated_session_ready",
+                            occurred_at=session_ready_at,
+                        )
+                    )
                 if direct_url is not None and lease.authenticated:
                     stage = "direct_navigation"
                     self._response_safety_guard(
@@ -277,7 +293,10 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     )
                     self._response_safety_guard(snapshot, stage)
                 stage = "reserve_once"
-                result = await session.reserve_once(request)
+                if on_progress is None:
+                    result = await session.reserve_once(request)
+                else:
+                    result = await session.reserve_once(request, on_progress=on_progress)
                 seat_clicked = result.seat_clicked
                 reservation_clicked = result.reservation_clicked
                 if result.outcome in {

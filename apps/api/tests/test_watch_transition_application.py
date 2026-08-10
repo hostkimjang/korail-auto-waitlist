@@ -296,6 +296,7 @@ async def test_transition_artifact_order_identity_and_observation_remain_stable(
     assert outbox_kwargs["dedupe_key"] == f"watch:{watch.id}:transition:{token}"
     assert notification_args[3] == token
     assert notification_kwargs["reason"] == "seat_found_reason"
+    assert notification_kwargs["observation"] is observation
     assert watch.next_check_at == preserved_next_check
     assert watch.cooldown_until == preserved_cooldown
 

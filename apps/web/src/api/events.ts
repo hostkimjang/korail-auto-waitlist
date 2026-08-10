@@ -13,6 +13,7 @@ export const LIVE_EVENT_TYPES = [
   "watch.status_changed",
   "watch.seat_observed",
   "watch.reservation_attempted",
+  "watch.reservation_progressed",
   "watch.reservation_result",
   "watch.reservation_result_requires_manual_check",
   "notification.dispatch_requested",

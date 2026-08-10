@@ -51,7 +51,7 @@ Docker Compose는 위 서비스를 하나의 배포 단위로 실행합니다. �
 
 화면은 API 응답을 그대로 표시하지 않습니다. 외부 응답을 검증한 뒤 화면에 필요한 형태로 바꾸며, 출처가 불명확한 좌석은 `확인 필요`로 표시합니다.
 
-화면 갱신·좌석 관측 간격 API는 `observation_interval_seconds`를 전역 관측 주기의 단일 DTO 필드로 사용합니다. 웹 API 경계는 이 필드를 검증해 화면 모델로 명시적으로 변환하고, 저장 요청에도 같은 필드명을 사용합니다.
+화면 갱신·좌석 관측 간격 API는 `timetable_refresh_interval_seconds`와 `observation_interval_seconds`를 각각 1~300초, 1~600초 범위로 관리합니다. 전역 관측 주기는 `observation_interval_seconds` 단일 DTO 필드를 사용하며, 웹 API 경계는 두 필드를 검증해 화면 모델로 명시적으로 변환하고 저장 요청에도 같은 필드명을 사용합니다. 브라우저 문서가 숨겨지면 정기 목록 조회뿐 아니라 SSE·Push 힌트가 만든 반복 무효화도 한 건으로 접고, 다시 보일 때 한 번만 최신 목록을 읽습니다. 결제기한 시계와 철도 계정 런타임 조회도 같은 가시성 경계를 지킵니다.
 
 공식 채널 인계는 provider payload의 임의 URI를 실행하지 않고 코드에 고정한 HTTPS 주소로 정규화합니다. 예매 단계는 운영사 예매 페이지, `payment_required`·완료 확인 단계는 예약·승차권 조회 페이지를 선택하며 HTTPS는 항상 새 브라우저 창으로 엽니다. 순수 PWA에는 Android `PackageManager` 권한이 없어 package 실행이나 설치 조회를 하지 않습니다. 코레일+는 예매에 `korailtalk://navigation?view=booking`, 예약 확인에 `korailtalk://navigation?view=bookedTicket`을 사용합니다. 후자는 하단 `나의 티켓`이 아니라 `전체메뉴 → 예약 승차권 조회 · 취소`와 같은 화면으로 이동합니다. SRT는 BROWSABLE `srapp://main`을 예매 홈에 사용하고, 같은 진입점에 앱이 명시적으로 읽는 고정 문자열 extra `btnNo=2`를 전달해 승차권 확인으로 이동합니다. 검증된 intent도 사용자 클릭 안에서 `target="_blank"` anchor로 실행해 설치 앱은 그대로 열고 미설치 HTTPS fallback은 외부 Custom Tab에 격리합니다. 코레일 booking·ticket과 SRT main·ticket은 서로 독립된 검증 버전·기능 플래그를 가지며, 사용자·여정·인증 데이터는 intent에 넣지 않습니다. 기본 빌드는 모든 앱 경로를 끕니다. 세부 QA 계약은 [Android 공식 앱 인계 검증](ANDROID_APP_HANDOFF_QA.md)에 있습니다.
 
@@ -288,6 +288,8 @@ dependency bundle로 조립하는 호환 wrapper만 남고, 잠금·관측 저�
 
 상태 변화는 먼저 발송 대기함에 기록한 뒤 별도 작업자가 전달합니다. 같은 사건이 반복 처리되어도 같은 알림이 계속 만들어지지 않도록 중복 방지 키를 사용합니다.
 
+외부 채널 발송 payload는 상태 문자열만 전달하지 않습니다. 전이를 만든 좌석 관측을 우선하고, 예약 전이는 같은 작업의 최신 예약 시도에 연결된 후보를 사용해 운영사·열차번호·날짜·구간·실제 출도착 시각·좌석 등급·인원과 시도 순서·시작/종료 시각·다음 재시도 조건을 비밀값 없이 구성합니다. 정확한 후보 근거가 없으면 임의 우선순위 후보를 고르지 않고 노선 중심 메시지로 강등합니다. 결제보류 종료 전이가 watch의 현재 결제기한을 지운 뒤 발생하더라도 해당 예약 시도에 보존된 공식 기한을 발송 payload에 유지합니다.
+
 Web Push는 단일 전역 구독을 마지막 브라우저의 값으로 덮어쓰지 않습니다. 브라우저와 설치된 PWA가 만든 push endpoint에서 외부에 노출하지 않는 기기 식별자를 만들고, 기기별 채널 행을 upsert합니다. 상태가 바뀌면 현재 활성 상태인 모든 알림 채널을 조회해 각 Web Push 기기에도 독립된 outbox event를 만들므로 Chrome·Edge·모바일을 함께 연결할 수 있습니다. 현재 기기가 미연결이면 설정 화면과 무관하게 전역 비차단 CTA를 표시하고, 해당 버튼의 직접 사용자 행동 안에서 권한 요청부터 구독과 서버 저장을 시작합니다. 브라우저가 직접 사용자 행동을 요구하므로 mount나 load에서 권한창을 강제하지 않으며, 브라우저 차단 상태는 사이트 권한 변경을 안내합니다. 사용자가 현재 기기 채널을 끄면 origin-local 억제 상태를 함께 저장해 전역 CTA가 즉시 다시 나타나지 않게 합니다. 설정 화면의 연결·해제와 시험 전송은 현재 브라우저 구독에 대응하는 행만 대상으로 합니다. Push service가 한 구독의 만료를 영구 응답으로 알리면 그 기기 채널만 비활성화하고 다른 활성 기기의 전달은 계속합니다.
 
 Web Push payload의 기본 클릭 목적지는 동일 출처의 PWA입니다. 서비스 워커는 같은 대기의 OS 알림을 안정적인 tag로 갱신하고, 알림을 누르면 PWA 범위의 기존 window client를 찾아 최소한의 이동 힌트를 전달한 뒤 focus합니다. 일부 Android 빌드는 백그라운드 PWA의 focus가 성공 응답 뒤에도 전면 전환을 만들지 못하므로, focus 결과가 제한 시간 안에 visible client로 확인되지 않으면 같은 client를 PWA 범위 내부 URL로 navigate해 전면 전환을 복구합니다. focus·navigate가 모두 실패하거나 실행 중인 창이 없으면 PWA 범위의 내부 URL을 `openWindow`로 엽니다. 새 window는 `openWindow` 자체의 표시 동작을 사용하며 불필요한 두 번째 focus를 기다리지 않습니다. manifest `launch_handler.client_mode`는 같은 회귀를 피하기 위해 `navigate-existing`을 사용합니다. 외부 철도사 URL은 알림의 기본 클릭 목적지로 사용하지 않습니다.
@@ -298,7 +300,11 @@ Web Push 전달 경계는 `official_waitlist`, `seat_found`, `reserving`, `payme
 
 Chrome Android의 origin별 사이트 알림 채널은 브라우저가 소유합니다. Web Push `Urgency`는 push service 전달 우선순위이고 Android 채널 중요도에는 전달되지 않으므로, PWA 경계 안에서는 heads-up에 필요한 높은 중요도를 선택하거나 화면 위 팝업을 보장할 수 없습니다. 레일웨잇의 모바일 알림 범위는 별도 네이티브 앱 없이 Web Push와 접속 중 `실시간 알림`으로 한정하며, 최종 표시는 사용자 알림 설정·방해 금지·Focus와 운영체제 정책을 따릅니다.
 
-접속 중인 앱에는 서비스 워커가 `watch_id`, 상태 같은 비밀값 없는 힌트만 전달합니다. React 앱은 이 값을 좌석 근거로 직접 표시하지 않고, 기존 REST/SSE 갱신 경계에서 최신 대기 상태를 다시 읽은 뒤 알림 센터의 subject·revision 중복 제거 계약으로 합칩니다. 최초 canonical REST snapshot은 좌석 발견을 새 사건으로 알리지 않지만 이미 진행·결제·인증 상태인 작업은 재접속 뒤 복원합니다. 현재 예매 진행 카드는 같은 watch의 결과 revision이나 사용자의 명시적 닫기 전까지 유지합니다. SSE 진행 시각은 event payload만 사용하고 미래 REST 관측 또는 다른 attempt와 섞지 않으며, 역순·범위 밖 시각은 표시하지 않습니다. 새 revision은 Android·Apple 공통으로 같은 `실시간 알림` surface의 8초 간략 미리보기에 표시되고, 이후 접힌 건수 header에 남습니다. 이 미리보기는 별도 알림 저장소나 live region을 만들지 않으며 문서 스크롤·입력·초점을 잠그지 않습니다.
+접속 중인 앱에는 서비스 워커가 `watch_id`, 상태 같은 비밀값 없는 힌트만 전달합니다. React 앱은 이 값을 좌석 근거로 직접 표시하지 않고, 기존 REST/SSE 갱신 경계에서 최신 대기 상태를 다시 읽은 뒤 알림 센터의 subject·revision 중복 제거 계약으로 합칩니다. 최초 canonical REST snapshot은 좌석 발견을 새 사건으로 알리지 않지만 이미 진행·결제·인증 상태인 작업은 재접속 뒤 복원합니다. 현재 예매 진행 카드는 같은 watch의 결과 revision이나 사용자의 명시적 닫기 전까지 유지합니다. 모바일 상단 종 버튼도 이 canonical 알림센터를 제어하며 별도 알림 저장소를 만들지 않습니다. 건수 배지와 빈 상태를 제공하되 페이지를 막는 modal로 바꾸지 않습니다. SSE 진행 시각은 event payload만 사용하고 미래 REST 관측 또는 다른 attempt와 섞지 않으며, 역순·범위 밖 시각은 표시하지 않습니다. 좌석 발견부터 자동 예매 요청 시작까지의 시간은 같은 후보의 실제 `seat_detected_at`과 `attempt_started_at`이 모두 유효할 때만 표시하고, 감지 시각이 없으면 0초를 합성하지 않습니다.
+
+예약 attempt에는 확인된 누적 provider 단계와 원래 시각을 함께 저장합니다. 따라서 새로고침 뒤에도 현재 진행 카드의 세부 단계가 시작 단계 하나로 축소되지 않으며, `UNKNOWN` 수동 확인 상태도 같은 watch의 진행 카드를 교체해 복원됩니다. 다중 후보에서는 화면 표시 우선순위와 별개로 가장 최근 attempt의 실제 후보 context를 사용합니다.
+
+KORAIL 예약은 기존 단일 JSON 명령과 호환되는 별도의 인증된 NDJSON 스트림을 사용합니다. sidecar가 실제 브라우저 단계에서 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested` 시각을 내보내면 main API는 진행 단계마다 짧은 트랜잭션으로 누적 `watch.reservation_progressed` outbox를 커밋하고, `/events` SSE가 같은 watch의 sticky 진행 카드를 갱신합니다. 이미 후보 context가 있는 화면은 전체 대기 목록을 다시 읽지 않고 진행 event를 반영합니다. 초기 또는 오래된 snapshot 때문에 event를 매핑할 수 없으면 event를 queue에 보존하고 canonical 목록을 한 번 갱신한 뒤 재투영합니다. 아직 발생하지 않은 단계나 완료시간은 추정하지 않으며, 최종 `watch.reservation_result`가 진행 snapshot의 authoritative superset으로 카드를 교체합니다. 두 event의 `created_at`이 같아도 terminal lifecycle이 reserving보다 우선하고, 이미 표시한 terminal을 늦은 progress가 되돌리지 못합니다. 공식 confirmation이 결과를 재투영해도 원래 stage timestamp를 보존하고 화면은 각 이전 단계 대비 시간과 전체 `finished-started` 시간을 함께 표시합니다. `target_rechecked` 구간은 direct URL 이동·결과 렌더링·정확 열차 확인을 포함합니다. 스트림 연결이 끊겨도 이미 시작한 예약 명령은 sidecar에서 취소하거나 재전송하지 않으며, terminal 결과를 확인하지 못한 main API는 `UNKNOWN`으로 닫아 자동 재예매를 차단하고 공식 reconciliation 대상으로 남깁니다. 활성 단계 spinner는 결과 또는 다음 상태가 올 때까지 회전하고 `prefers-reduced-motion` 환경에서는 정지합니다. 새 revision은 Android·Apple 공통으로 같은 `실시간 알림` surface의 8초 간략 미리보기에 표시되고, 이후 접힌 건수 header에 남습니다. 이 미리보기는 별도 live region을 만들지 않으며 문서 스크롤·입력·초점을 잠그지 않습니다.
 
 iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push를 지원합니다. 권한 요청은 사용자 행동 안에서 즉시 실행해야 하므로 공개키 조회나 service worker 대기보다 먼저 수행합니다. Apple의 banner·Focus·Time Sensitive 표시와 Android의 heads-up 채널 등급은 PWA가 선택할 수 없으며, 앱 사용 중 확실한 표시는 위 foreground 미리보기가 담당합니다.
 
@@ -310,6 +316,7 @@ iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push
 - 결과가 불확실하면 같은 요청을 자동으로 반복하지 않습니다.
 - `NOT_AVAILABLE` 뒤에는 확정적인 판매 불가 관측과 그 이후의 새 행동 가능 관측이 모두 있어야 다음 가용성 에피소드를 엽니다. 연속 행동 가능 관측만으로 즉시 재시도하지 않습니다.
 - `UNKNOWN`·일반 실패·보호 응답은 새 자동 시도로 재무장하지 않고 공식 예약 내역 확인 또는 계정·운영 상태 확인을 안내합니다.
+- 공식 확인에서 결제보류 종료가 확정되면 감시로 복귀하되, 예약 목록 부재와 목록에 남은 결제기한 경과를 같은 보류 종료 정책으로 다룹니다. 두 경우 모두 보류 종료 뒤 확정 비가용 관측과 그 이후의 새 행동 가능 관측이 있어야 다음 에피소드를 엽니다.
 - 예약 결과는 공식 예약 내역에서 다시 확인할 수 있도록 안내합니다.
 - 결제 단계 전에 멈춥니다.
 
@@ -506,6 +513,15 @@ actor만 이 owner를 직접 사용하고 역으로 조립 모듈을 참조하�
 `korail_pydoll_auth_actor.py`는 기존 공개 30개·private 0개, legacy `__all__` 부재와 구형 pickle global 9개 및
 runtime Callable alias 3개를 같은 객체로 복원하는 definition-free compatibility facade입니다. canonical·legacy·
 browser·reservation actor import 순서와 optional Pydoll backend의 지연 import 계약도 유지합니다.
+
+API의 provider session manager는 시작할 때 활성 계정을 예열하고 이후 30초마다 비밀값 없는 session telemetry를
+확인합니다. 같은 credential generation의 `READY` session이 재사용 가능하고 만료까지 120초보다 많이 남았으면
+외부 요청을 생략합니다. `COLD`·`STALE`, generation 불일치, sidecar 재시작으로 session이 사라진 경우 또는 남은
+재사용 시간이 120초 이하인 경우에만 bounded prewarm을 시작합니다. KORAIL prewarm은 같은 auth lock 안에서 기존
+session을 공식 same-origin 확인 요청으로 한 번 검증하고, 성공하면 `last_verified`·`last_used`를 갱신합니다. 검증에
+실패한 session은 먼저 폐기한 뒤 새 로그인을 최대 한 번만 수행합니다. 일반 실패는 60초부터 최대 900초까지 지수
+backoff하고 보호 응답은 처음부터 900초를 적용합니다. 저장된 `auth_required`·`provider_blocked` 상태는 같은 DB
+revision에서 한 번만 복구를 시도하며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
 
 Pydoll의 인증된 단일 예약 시도 orchestration은 `korail_sidecar/pydoll/reservation_actor.py`가 canonical
 owner입니다. public direct URL 계산은 auth lock 밖에서 끝내고, credential 변경 폐기부터 lease·인증·검색·예약·

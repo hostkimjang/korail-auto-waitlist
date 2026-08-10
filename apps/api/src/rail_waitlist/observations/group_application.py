@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy import select
@@ -19,8 +19,14 @@ from ..operational import decide_operational_expiry
 from ..provider_account_management.models import RailProviderAccount
 from ..provider_circuit.models import ProviderCircuit
 from ..provider_contracts import ObservationProvider
-from ..reservations.attempt_policy import CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX
-from ..reservations.provider_confirmation.contracts import ReservationConfirmationOutcome
+from ..reservations.attempt_policy import (
+    CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
+    payment_hold_retry_episode_key,
+)
+from ..reservations.payment_hold_retry_application import (
+    active_watch_payment_hold_fence,
+    conclusive_unavailable_after_hold,
+)
 from ..watch_management.models import (
     ReservationAttempt,
     SeatObservation,
@@ -108,6 +114,7 @@ class ApplyWatchTransition(Protocol):
         target: WatchStatus,
         *,
         reason: str | None = None,
+        observation: SeatObservation | None = None,
     ) -> Watch: ...
 
 
@@ -168,6 +175,10 @@ class ConfirmedAbsentRetryPredicate(Protocol):
     def __call__(self, attempt: ReservationAttempt) -> bool: ...
 
 
+class PaymentHoldEndedPredicate(Protocol):
+    def __call__(self, attempt: ReservationAttempt) -> bool: ...
+
+
 class UtcNow(Protocol):
     def __call__(self) -> datetime: ...
 
@@ -187,7 +198,7 @@ class LockedLeaseCurrent(Protocol):
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -200,6 +211,7 @@ class ObservationGroupDependencies:
     record_seat_observation: RecordSeatObservation
     finish_observation_cycle: FinishObservationCycle
     is_confirmed_absent_retry_source: ConfirmedAbsentRetryPredicate
+    is_payment_hold_ended: PaymentHoldEndedPredicate
     reserve_winner: ReservationDelegate
     # Runtime composition owns the concrete grant; the application only passes its
     # opaque fencing token to the two lease-current ports.
@@ -211,8 +223,8 @@ class ObservationGroupDependencies:
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 async def retryable_reservation_episode_key(
@@ -222,8 +234,27 @@ async def retryable_reservation_episode_key(
     provider: Provider,
     *,
     is_confirmed_absent_retry_source: ConfirmedAbsentRetryPredicate,
+    is_payment_hold_ended: PaymentHoldEndedPredicate,
 ) -> str | None:
     """Return one stable provider-call fence for the current availability episode."""
+    payment_hold_fence = await active_watch_payment_hold_fence(
+        session,
+        candidate.watch_id,
+        is_payment_hold_ended=is_payment_hold_ended,
+    )
+    if payment_hold_fence is not None:
+        unavailable_observation = await conclusive_unavailable_after_hold(
+            session,
+            payment_hold_fence,
+            candidate.id,
+            before=current_observation.observed_at,
+        )
+        if unavailable_observation is None:
+            return None
+        return payment_hold_retry_episode_key(
+            payment_hold_fence.attempt.id,
+            unavailable_observation.id,
+        )
     latest_attempt = await session.scalar(
         select(ReservationAttempt)
         .where(ReservationAttempt.candidate_id == candidate.id)
@@ -272,26 +303,6 @@ async def retryable_reservation_episode_key(
         and current_observation.observed_at > latest_attempt.confirmation_observed_at
     ):
         return f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
-    if (
-        latest_attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and latest_attempt.confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
-        and latest_attempt.post_deadline_reconciled_at is not None
-    ):
-        hold_ended_at = _as_utc(latest_attempt.post_deadline_reconciled_at)
-        unavailable_observation = await session.scalar(
-            select(SeatObservation)
-            .where(
-                SeatObservation.candidate_id == candidate.id,
-                SeatObservation.observed_at > hold_ended_at,
-                SeatObservation.observed_at < current_observation.observed_at,
-                SeatObservation.status.in_(CONCLUSIVE_UNAVAILABLE_SEAT_STATUSES),
-            )
-            .order_by(SeatObservation.observed_at, SeatObservation.id)
-            .limit(1)
-        )
-        if unavailable_observation is None:
-            return None
-        return f"availability-after-hold:{unavailable_observation.id}"
     return None
 
 
@@ -609,7 +620,9 @@ async def persist_observation_cycle(
             previous_fingerprint = await dependencies.latest_observation_fingerprint(session, watch)
             winner: ObservationTarget | None = None
             observed_results: list[SeatObservationResult] = []
-            observed_candidates: list[tuple[WatchCandidate, SeatObservationResult]] = []
+            observed_candidates: list[
+                tuple[WatchCandidate, SeatObservationResult, SeatObservation]
+            ] = []
             for target in sorted(targets, key=lambda item: item.priority):
                 candidate = await session.get(WatchCandidate, target.candidate_id)
                 result = results.get(target.cache_key)
@@ -623,7 +636,7 @@ async def persist_observation_cycle(
                     apply_status_transition=False,
                 )
                 observed_results.append(result)
-                observed_candidates.append((candidate, result))
+                observed_candidates.append((candidate, result, observation))
                 if winner is None and result.status in ACTIONABLE_SEAT_STATUSES:
                     episode_key = await retryable_reservation_episode_key(
                         session,
@@ -633,6 +646,7 @@ async def persist_observation_cycle(
                         is_confirmed_absent_retry_source=(
                             dependencies.is_confirmed_absent_retry_source
                         ),
+                        is_payment_hold_ended=dependencies.is_payment_hold_ended,
                     )
                     if episode_key is not None:
                         winner = replace(target, reservation_episode_key=episode_key)
@@ -647,7 +661,7 @@ async def persist_observation_cycle(
                 and winner is None
             )
             if automatic_retry_fenced:
-                for candidate, result in observed_candidates:
+                for candidate, result, _observation in observed_candidates:
                     if result.status in ACTIONABLE_SEAT_STATUSES:
                         candidate.state = "observed"
             if actionable_observed and not automatic_retry_fenced:
@@ -664,11 +678,28 @@ async def persist_observation_cycle(
                     if automatic_retry_fenced
                     else f"authorized_seat_observation_summary_{summarized_status.value}"
                 )
+                transition_observation = next(
+                    (
+                        observation
+                        for _candidate, result, observation in observed_candidates
+                        if (
+                            summarized_status is WatchStatus.SEAT_FOUND
+                            and result.status in SEAT_FOUND_STATUSES
+                        )
+                        or (
+                            summarized_status is WatchStatus.OFFICIAL_WAITLIST
+                            and result.status is SeatObservationStatus.WAITLIST_AVAILABLE
+                        )
+                        or summarized_status is WatchStatus.WATCHING
+                    ),
+                    None,
+                )
                 await dependencies.apply_watch_transition(
                     session,
                     watch,
                     summarized_status,
                     reason=transition_reason,
+                    observation=transition_observation,
                 )
             await dependencies.finish_observation_cycle(session, watch, previous_fingerprint, now)
             await session.commit()

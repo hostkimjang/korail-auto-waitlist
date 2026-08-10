@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import ReservationOutcome, WatchStatus
 from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from .attempt_timing_application import latest_candidate_seat_detected_at
 from .contracts import ReservationResult
 from .domain import ReservationAttemptResultPolicy
 from .provider_confirmation.contracts import ReservationConfirmationResult
@@ -114,7 +115,6 @@ async def complete_reservation_attempt(
     attempt.official_handoff_url = (
         str(result.official_handoff_url) if result.official_handoff_url is not None else None
     )
-
     successful_hold = result.outcome in {
         ReservationOutcome.PAYMENT_REQUIRED,
         ReservationOutcome.RESERVED,
@@ -241,6 +241,11 @@ async def complete_reservation_attempt(
             )
 
     result_policy = dependencies.result_policy(result.outcome)
+    seat_detected_at = await latest_candidate_seat_detected_at(
+        session,
+        candidate.id,
+        attempt_started_at=attempt.started_at,
+    )
     await dependencies.add_outbox_event(
         session,
         aggregate_type="watch",
@@ -250,6 +255,9 @@ async def complete_reservation_attempt(
             "watch_id": watch.id,
             "candidate_id": candidate.id,
             "attempt_sequence": attempt.attempt_sequence,
+            "seat_detected_at": (
+                seat_detected_at.isoformat() if seat_detected_at is not None else None
+            ),
             "attempt_started_at": attempt.started_at.isoformat(),
             "attempt_finished_at": (
                 attempt.finished_at.isoformat() if attempt.finished_at is not None else None

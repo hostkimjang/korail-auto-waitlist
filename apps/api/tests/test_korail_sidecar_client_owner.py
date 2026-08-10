@@ -6,7 +6,7 @@ import json
 import pickle
 import subprocess
 import sys
-from datetime import date, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 import httpx
@@ -77,6 +77,32 @@ class FakeHttpClient:
         return
 
 
+class FakeStreamResponse:
+    def __init__(self, lines: list[str], status_code: int = 200) -> None:
+        self.lines = lines
+        self.status_code = status_code
+
+    async def __aenter__(self) -> "FakeStreamResponse":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def aiter_lines(self):
+        for line in self.lines:
+            yield line
+
+
+class FakeStreamHttpClient:
+    def __init__(self, lines: list[str]) -> None:
+        self.response = FakeStreamResponse(lines)
+        self.requests: list[tuple[str, str, object]] = []
+
+    def stream(self, method: str, path: str, *, json: object) -> FakeStreamResponse:
+        self.requests.append((method, path, json))
+        return self.response
+
+
 def search_request() -> BrowserSeatSearchRequest:
     return BrowserSeatSearchRequest(
         origin="서울",
@@ -85,6 +111,25 @@ def search_request() -> BrowserSeatSearchRequest:
         departure_from=time(14),
         departure_to=time(18),
         passenger_count=1,
+    )
+
+
+def reserve_request() -> KorailReserveOnceRequest:
+    return KorailReserveOnceRequest(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 7),
+        train_number="43",
+        train_type="KTX",
+        departure_time=time(12),
+        arrival_time=time(14),
+        seat_class="general",
+        credential=KorailCredentialRequest(
+            login_method="membership_number",
+            login_id="membership-secret",
+            password="password-secret",
+            version="credential:7",
+        ),
     )
 
 
@@ -149,10 +194,12 @@ def test_transport_leaf_has_exact_legacy_aliases_and_import_boundary() -> None:
     assert owner_definitions == MOVED_SYMBOLS
     assert imports_from == {
         ("__future__", 0),
+        ("collections.abc", 0),
         ("typing", 0),
         ("urllib.parse", 0),
         ("pydantic", 0),
         ("browser_contracts", 1),
+        ("reservations.contracts", 2),
         ("timetable_management.schemas", 2),
         ("contracts", 1),
     }
@@ -357,6 +404,85 @@ async def test_reserve_transport_serializes_secret_values_only_at_wire_boundary(
         "password": "password-secret",
         "version": "credential:7",
     }
+
+
+async def test_reserve_progress_stream_is_ordered_and_sent_once() -> None:
+    stage_names = (
+        "authenticated_session_ready",
+        "target_rechecked",
+        "seat_selected",
+        "reservation_requested",
+    )
+    times = [datetime(2026, 8, 7, 3, 0, index, tzinfo=UTC) for index in range(4)]
+    lines = [
+        json.dumps(
+            {"type": "progress", "stage": stage, "occurred_at": occurred_at.isoformat()}
+        )
+        for stage, occurred_at in zip(stage_names, times, strict=True)
+    ]
+    lines.append(
+        json.dumps(
+            {
+                "type": "result",
+                "result": {
+                    "outcome": "payment_required",
+                    "reason": "payment_required",
+                    "seat_clicked": True,
+                    "reservation_clicked": True,
+                    "session_ready_at": times[0].isoformat(),
+                    "target_rechecked_at": times[1].isoformat(),
+                    "seat_selected_at": times[2].isoformat(),
+                    "reservation_requested_at": times[3].isoformat(),
+                },
+            }
+        )
+    )
+    client = FakeStreamHttpClient(lines)
+    transport = transport_with(client)  # type: ignore[arg-type]
+    observed = []
+
+    async def on_progress(stage):
+        observed.append(stage)
+
+    result = await transport.reserve_with_progress(reserve_request(), on_progress)
+
+    assert result.outcome == "payment_required"
+    assert [item.stage for item in observed] == list(stage_names)
+    assert len(client.requests) == 1
+    assert client.requests[0][1] == "/v1/reserve-once/stream"
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [],
+        [
+            '{"type":"progress","stage":"target_rechecked",'
+            '"occurred_at":"2026-08-07T03:00:00Z"}'
+        ],
+        [
+            '{"type":"result","result":{"outcome":"failed","reason":"failed",'
+            '"seat_clicked":false,"reservation_clicked":false}}',
+            '{"type":"result","result":{"outcome":"failed","reason":"failed",'
+            '"seat_clicked":false,"reservation_clicked":false}}',
+        ],
+    ],
+)
+async def test_reserve_progress_stream_fails_closed_without_one_valid_sequence(
+    lines: list[str],
+) -> None:
+    client = FakeStreamHttpClient(lines)
+    transport = transport_with(client)  # type: ignore[arg-type]
+
+    async def on_progress(stage):
+        return None
+
+    with pytest.raises(owner._AdapterFailure) as captured:
+        await transport.reserve_with_progress(reserve_request(), on_progress)
+
+    assert captured.value.reason == "source_unavailable"
+    assert captured.value.reservation_command_uncertain is True
+    assert len(client.requests) == 1
 
 
 async def test_login_transports_serialize_secret_values_only_at_wire_boundary() -> None:

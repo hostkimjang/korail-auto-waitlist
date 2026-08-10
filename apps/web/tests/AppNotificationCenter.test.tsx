@@ -30,7 +30,13 @@ function centerState() {
       occurredAt: "2026-08-03T12:09:45Z",
       startedAt: "2026-08-03T12:09:45Z",
       durationMs: 3_250,
-      steps: [{ label: "예매 요청 완료", state: "completed" }],
+      steps: [{
+        label: "예매 요청 완료",
+        state: "completed",
+        occurredAt: "2026-08-03T12:09:48Z",
+        durationMs: 3_000,
+        durationPrefix: "이전 단계 후",
+      }],
     },
     {
       title: "일반 안내",
@@ -48,10 +54,14 @@ describe("AppNotificationCenter", () => {
     const anchor = document.createElement("button");
     document.body.append(anchor);
     anchor.focus();
+    const state = centerState();
+    const onExpandedChange = vi.fn();
 
-    render(
+    const { rerender } = render(
       <AppNotificationCenter
-        state={centerState()}
+        state={state}
+        expanded={false}
+        onExpandedChange={onExpandedChange}
         onDismiss={vi.fn()}
         onDismissGroup={onDismissGroup}
         onDismissTimed={vi.fn()}
@@ -65,12 +75,25 @@ describe("AppNotificationCenter", () => {
       selector: ".notification-center-peek strong",
     })).toBeTruthy();
     fireEvent.click(within(center).getByRole("button", { name: "자세히" }));
+    expect(onExpandedChange).toHaveBeenCalledWith(true);
+    rerender(
+      <AppNotificationCenter
+        state={state}
+        expanded
+        onExpandedChange={onExpandedChange}
+        onDismiss={vi.fn()}
+        onDismissGroup={onDismissGroup}
+        onDismissTimed={vi.fn()}
+      />,
+    );
     const timestamp = within(center).getByText("21:16:34");
     expect(timestamp.tagName).toBe("TIME");
     expect(timestamp.getAttribute("datetime")).toBe("2026-08-03T12:16:34Z");
     expect(timestamp.getAttribute("aria-label")).toBe("알림 발생 시각 21:16:34");
     expect(within(center).getByLabelText("예매 작업 시간").textContent)
-      .toContain("시작 21:09:45소요 3.3초");
+      .toContain("시작 21:09:45전체 3.3초");
+    expect(within(center).getByText("예매 요청 완료").closest("li")?.textContent)
+      .toContain("21:09:48이전 단계 후 3.0초");
     expect(within(center).getByText("좌석 발견").nextElementSibling?.textContent).toBe("2건");
     fireEvent.click(within(center).getByRole("button", { name: "추가 1건 보기" }));
     expect(within(center).getByText("두 번째 좌석")).toBeTruthy();
@@ -82,9 +105,12 @@ describe("AppNotificationCenter", () => {
   it("shows a brief foreground peek, keeps the notice, and preserves timed dismissal", () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();
+    const onExpandedChange = vi.fn();
     render(
       <AppNotificationCenter
         state={centerState()}
+        expanded={false}
+        onExpandedChange={onExpandedChange}
         onDismiss={onDismiss}
         onDismissGroup={vi.fn()}
         onDismissTimed={vi.fn()}
@@ -103,10 +129,7 @@ describe("AppNotificationCenter", () => {
     expect(document.querySelector(".notification-center-peek")).toBeNull();
     expect(screen.getByText("실시간 알림").nextElementSibling?.textContent).toBe("4건");
     fireEvent.click(screen.getByRole("button", { name: "실시간 알림 펼치기" }));
-    fireEvent.click(screen.getByRole("button", { name: "실시간 알림 접기" }));
-    expect(
-      screen.getByText("첫 번째 좌석").closest(".notification-center-body")?.hasAttribute("hidden"),
-    ).toBe(true);
+    expect(onExpandedChange).toHaveBeenCalledWith(true);
     expect(document.documentElement.style.overflow).toBe("");
     expect(document.body.style.position).toBe("");
     act(() => vi.advanceTimersByTime(22_000));
@@ -119,6 +142,8 @@ describe("AppNotificationCenter", () => {
     render(
       <AppNotificationCenter
         state={centerState()}
+        expanded={false}
+        onExpandedChange={vi.fn()}
         onDismiss={onDismiss}
         onDismissGroup={vi.fn()}
         onDismissTimed={vi.fn()}
@@ -139,6 +164,8 @@ describe("AppNotificationCenter", () => {
       <>
         <AppNotificationCenter
           state={centerState()}
+          expanded
+          onExpandedChange={vi.fn()}
           onDismiss={vi.fn()}
           onDismissGroup={vi.fn()}
           onDismissTimed={vi.fn()}
@@ -147,11 +174,9 @@ describe("AppNotificationCenter", () => {
       </>,
     );
 
-    expect(screen.getByRole("button", { name: "실시간 알림 펼치기" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "실시간 알림 접기" })).toBeTruthy();
     expect(document.documentElement.style.overflow).toBe("");
     expect(document.body.style.position).toBe("");
-
-    fireEvent.click(screen.getByRole("button", { name: "실시간 알림 펼치기" }));
 
     fireEvent.click(screen.getByRole("button", { name: /가는 날:/ }));
     expect(screen.getByRole("dialog", { name: "가는 날 선택" })).toBeTruthy();
@@ -163,5 +188,23 @@ describe("AppNotificationCenter", () => {
     expect(document.documentElement.style.overflow).toBe("");
     expect(document.body.style.position).toBe("");
     expect(screen.getByRole("button", { name: "실시간 알림 접기" })).toBeTruthy();
+  });
+
+  it("opens as a non-blocking empty center when controlled by the mobile bell", () => {
+    render(
+      <AppNotificationCenter
+        state={initialNotificationCenterState}
+        expanded
+        onExpandedChange={vi.fn()}
+        onDismiss={vi.fn()}
+        onDismissGroup={vi.fn()}
+        onDismissTimed={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "실시간 알림" })).toBeTruthy();
+    expect(screen.getByText("새 실시간 알림이 없습니다.")).toBeTruthy();
+    expect(document.documentElement.style.overflow).toBe("");
+    expect(document.body.style.position).toBe("");
   });
 });

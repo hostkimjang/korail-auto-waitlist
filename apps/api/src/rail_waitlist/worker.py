@@ -89,7 +89,7 @@ from .reservations.execution_runtime import (
 from .reservations.execution_runtime import (
     reserve_observation_winner as reserve_observation_winner_application,
 )
-from .reservations.payment_hold_application import _utc_instant
+from .reservations.payment_hold_application import _utc_instant, is_payment_hold_ended
 from .reservations.provider_confirmation.contracts import ReservationConfirmationResult
 from .reservations.reconciliation_application import (
     ReconciliationDependencies,
@@ -171,6 +171,11 @@ async def _recover_stale_reservation_attempts(session: AsyncSession, now: dateti
             add_outbox_event=add_outbox_event,
         ),
     )
+
+
+async def _recover_stale_reservation_attempts_independently() -> int:
+    async with SessionFactory() as session:
+        return await _recover_stale_reservation_attempts(session, datetime.now(timezone.utc))
 
 
 async def _provider_circuit_is_closed(provider: Provider) -> bool:
@@ -306,6 +311,7 @@ def _observation_group_dependencies(
         record_seat_observation=record_seat_observation,
         finish_observation_cycle=finish_observation_cycle,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_payment_hold_ended=is_payment_hold_ended,
         reserve_winner=reserve_winner,
         lease_is_current=lease_is_current,
         lease_is_current_in_session=cast(
@@ -438,6 +444,20 @@ def process_due_watches() -> int:
         WORKER_RUNS.labels("process_due_watches", "failed").inc()
         raise
     WORKER_RUNS.labels("process_due_watches", "succeeded").inc()
+    return result
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="rail_waitlist.worker.recover_stale_reservation_attempts"
+)
+def recover_abandoned_reservations() -> int:
+    """Recover orphaned claims even while the single rail worker is occupied."""
+    try:
+        result = asyncio.run(_run_isolated(_recover_stale_reservation_attempts_independently()))
+    except Exception:
+        WORKER_RUNS.labels("recover_stale_reservation_attempts", "failed").inc()
+        raise
+    WORKER_RUNS.labels("recover_stale_reservation_attempts", "succeeded").inc()
     return result
 
 

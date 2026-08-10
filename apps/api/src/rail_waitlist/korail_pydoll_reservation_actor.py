@@ -59,6 +59,9 @@ from .korail_sidecar.pydoll.reservation_actor import (
     EnsureAuthenticatedSession as EnsureAuthenticatedSession,
 )
 from .korail_sidecar.pydoll.reservation_actor import (
+    KorailReservationProgressCallback as KorailReservationProgressCallback,
+)
+from .korail_sidecar.pydoll.reservation_actor import (
     PydollReservationActor as PydollReservationActor,
 )
 from .korail_sidecar.pydoll.reservation_actor import (

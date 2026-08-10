@@ -8,6 +8,7 @@
 - [x] 가상 키보드 가용 높이를 반영하는 모바일·터치 태블릿 전용 역 선택 화면
 - [x] 실제 modal의 중첩 안전한 문서 스크롤 잠금과 원래 위치 복원
 - [x] 접속 중 알림센터가 페이지 스크롤과 현재 작업을 막지 않는 비차단 동작
+- [x] 모바일 상단 종 버튼의 canonical 실시간 알림센터 열기·닫기, 건수 배지·빈 상태·접근성 상태 계약
 - [x] 단일 관리자 등록·로그인·세션 관리
 - [x] KTX·SRT 여정 검색과 좌석 등급 표시
 - [x] SRT 역 query-code roster의 정규화 충돌 거절과 시간표 fallback·예약 미호출 fail-closed 처리
@@ -17,18 +18,23 @@
 - [x] 일반실·특실별 대기 등록과 취소
 - [x] 홈의 감시·좌석 발견·결제 필요·인증 필요 상태
 - [x] 같은 가용성 구간의 자동 예매 1회 DB fence와 판매 불가→재가용 관측 뒤에만 여는 다음 에피소드
+- [x] 예약 목록 부재·공식 결제기한 경과 두 결제보류 종료 경로의 감시 복귀와 비가용→재가용 뒤 재예매 계약
 - [x] 불확실·좌석 미확보 결과의 자동 반복 차단과 공식 확인·감시 복귀 외부 알림
-- [x] 화면 갱신·전역 좌석 관측 간격의 일관된 API 응답·저장 계약
+- [x] 화면 갱신 1~300초·전역 좌석 관측 1~600초의 일관된 API 응답·DB 제약·저장 계약
+- [x] hidden 탭의 SSE·수동 갱신 요청 단일 pending 접기와 결제기한·철도계정 polling 중단·복귀 즉시 갱신
 - [x] 브라우저 푸시·Telegram·Discord·Webhook 설정 화면
 - [x] 브라우저·설치 PWA별 Web Push 구독 저장과 모든 활성 기기 동시 발송, 현재 기기 연결·해제 계약
 - [x] 설정 화면 밖 전역 OS 알림 연결 CTA와 직접 사용자 행동 권한 요청, 명시적 기기 해제 뒤 재안내 억제
 - [x] 만료된 Web Push 구독만 비활성화하고 다른 활성 기기의 발송을 유지하는 실패 격리
 - [x] Web Push의 접속 중 상태 갱신 힌트와 알림 클릭 시 PWA 포커스·navigate 복구·열기 계약
-- [x] PWA 온라인 navigation의 현재 문서 우선·오프라인 shell fallback, 이전 해시 asset 404와 navigation preload 계약
 - [x] 중요 상태·시험 Web Push의 높은 전달 우선순위와 진동 힌트, `reserving` 긴급 갱신 계약
+- [x] 상태 전이 알림의 실제 후보 열차·운행일·출도착시각·좌석등급·인원과 예약 단계 구조화, 근거 없는 후보 추정 금지
 - [x] Android·Apple 공통 foreground 8초 상단 간략 알림과 비차단 접힘·펼침 동작
 - [x] 재접속 시 canonical 예매 진행·결제·인증 상태 복원과 진행 카드의 결과 revision 전 유지
 - [x] SSE 진행 시각과 미래 REST 관측·다른 attempt 혼합 방지, 역순 단계 fail-closed 처리
+- [x] 실제 좌석 감지→예매 시작 시각만 사용하는 대기시간과 감지시각 누락 시 합성 0초 금지, 공식 확인 재투영 뒤에도 provider 단계 시각 보존·이전 단계 대비·전체 처리시간 회고 표시
+- [x] KORAIL 실제 브라우저 단계의 인증된 NDJSON 진행 스트림, 단계별 durable outbox·누적 SSE 갱신, 최종 결과 우선과 stream 불확실 종료의 무재전송·`UNKNOWN` 처리
+- [x] 예매 진행 카드의 확인된 단계만 실시간 표시, progressed 이벤트의 전체 대기 재조회 생략, 활성 spinner 반복과 reduced-motion 정지
 - [x] iOS·iPadOS 홈 화면 PWA의 사용자 행동 안에서 시작하는 Web Push 권한 요청 계약
 - [x] 일반·마스커블·Apple Touch·브라우저 탭 16·32px favicon·알림 배지 아이콘 자산 분리
 - [x] 예매 단계와 결제·예약 확인 단계를 구분한 KORAIL·SRT 고정 HTTPS 새 창 인계
@@ -66,6 +72,7 @@
 - [x] KORAIL Pydoll 검색 form·결과 DOM driver canonical owner 이동과 browser direct consumer·legacy exact facade 보존
 - [x] KORAIL Pydoll read-only 검색 actor canonical owner 이동과 replay-first·direct/UI·취소 안전 cleanup·legacy exact facade 보존
 - [x] KORAIL Pydoll credential-bound 인증 session actor canonical owner 이동과 secret-free fingerprint·TTL/횟수·취소 안전 cleanup·legacy exact facade 보존
+- [x] 활성 철도 계정의 시작 예열과 30초 sanitized telemetry 점검, 동일 generation `READY` 생략·120초 전 bounded 재예열, KORAIL 공식 session probe·단일 재로그인, 60~900초 backoff와 auth revision fence 계약
 - [x] KORAIL Pydoll 단일 예약 actor canonical owner 이동과 exact identity·bounded expansion·1회 예약·취소/보호 cleanup·legacy exact facade 보존
 - [x] KORAIL Pydoll 로그인 DOM driver canonical owner 이동과 유일 method tab·active panel·공식 session 확인·secret-free stage·legacy exact facade 보존
 - [x] KORAIL Pydoll 예약 DOM driver canonical owner 이동과 동일 열차·좌석·1회 예매·결제 전 중단 안전 계약 보존
@@ -148,6 +155,7 @@
 - [ ] 별도 인스턴스에서 암호화 백업 복원 확인
 - [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
+- [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
 - [x] Playwright v1.55.0 Chromium seccomp 프로필과 최소 `SYS_CHROOT` capability를 KORAIL adapter에만 적용하고 `pwuser`·읽기 전용 루트·`cap_drop: ALL`·`no-new-privileges`를 보존한 재배포 확인
 - [x] OCI ARM64 네이티브 환경에서 KORAIL sidecar `/readyz`와 보호 응답 뒤 HTTP 423 cooldown·fail-closed 동작 확인
 - [x] OCI ARM64 네이티브 환경의 Pydoll GUI/non-headless 1회 읽기 조회에서 서울→부산 열차 13개와 좌석 상태 판독, page·desktop 캡처 확인

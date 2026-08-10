@@ -150,11 +150,27 @@ export function useProviderAccountSettings({
         // A polling failure must not erase a previously confirmed status or interrupt settings.
       });
     };
-    poll();
-    const timer = window.setInterval(() => {
+    let timer: number | null = null;
+    const stopPolling = (): void => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+    };
+    const startPolling = (): void => {
+      stopPolling();
+      if (document.visibilityState === "hidden") return;
       poll();
-    }, RUNTIME_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+      timer = window.setInterval(poll, RUNTIME_POLL_INTERVAL_MS);
+    };
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === "hidden") stopPolling();
+      else startPolling();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    startPolling();
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [authenticated, demo, loadRuntimeStatuses, runtimePollingEnabled]);
 
   const saveAccount = useCallback(async (

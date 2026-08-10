@@ -19,7 +19,7 @@ class AdminAccount(Base):
         CheckConstraint("singleton_slot = 1", name="ck_admin_account_singleton_slot"),
         CheckConstraint("length(trim(username)) >= 3", name="ck_admin_account_username_nonempty"),
         CheckConstraint(
-            "timetable_refresh_interval_seconds BETWEEN 5 AND 300",
+            "timetable_refresh_interval_seconds BETWEEN 1 AND 300",
             name="ck_admin_account_timetable_refresh_interval_seconds",
         ),
         CheckConstraint(

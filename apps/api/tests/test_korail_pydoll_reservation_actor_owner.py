@@ -34,6 +34,7 @@ PUBLIC_SYMBOLS = {
     "KORAIL_ROUTE_HEADING",
     "KorailCredentialInput",
     "KorailReservationOutcome",
+    "KorailReservationProgressCallback",
     "KorailReservationRequest",
     "KorailReservationResult",
     "KorailReservationSeatClass",
@@ -61,6 +62,7 @@ PUBLIC_SYMBOLS = {
 }
 WILDCARD_SYMBOLS = (
     "KorailReservationOutcome",
+    "KorailReservationProgressCallback",
     "KorailReservationRequest",
     "KorailReservationResult",
     "KorailReservationSeatClass",
@@ -85,6 +87,7 @@ OWNER_TYPE_ALIASES = {
     "ResponseSafetyGuard",
     "UniqueReservationTarget",
 }
+OWNER_CONTRACT_REEXPORTS = {"KorailReservationProgressCallback"}
 LEGACY_PICKLES = {
     "PydollReservationSession": (
         "gASVTgAAAAAAAACMLXJhaWxfd2FpdGxpc3Qua29yYWlsX3B5ZG9sbF9yZXNlcnZhdGlvbl9hY3RvcpSM"
@@ -253,7 +256,9 @@ def test_legacy_reservation_actor_is_a_definition_free_exact_facade() -> None:
     assert definitions == set()
     assert type_aliases == set()
     assert imported_names == (PUBLIC_SYMBOLS - {"annotations"}) | {"__all__"}
-    assert owner_imports == OWNER_DEFINITIONS | OWNER_TYPE_ALIASES | {"__all__"}
+    assert owner_imports == (
+        OWNER_DEFINITIONS | OWNER_TYPE_ALIASES | OWNER_CONTRACT_REEXPORTS | {"__all__"}
+    )
     assert assignments == {}
     assert {name for name in vars(legacy) if not name.startswith("_")} == PUBLIC_SYMBOLS
     assert {

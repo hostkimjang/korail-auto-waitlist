@@ -131,7 +131,7 @@ def test_browser_keeps_exact_alias_surface_and_legacy_pickles() -> None:
         assert getattr(browser._PydollSession, browser_name) is getattr(policy, owner_name)
     assert browser._has_disabled_class is policy.has_disabled_class
 
-    assert len({name for name in vars(browser) if not name.startswith("_")}) == 82
+    assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")
     }

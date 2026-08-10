@@ -25,19 +25,19 @@ describe("UI preferences API boundary", () => {
   it("maps a bounded unified observation interval and rejects malformed values", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({
-        timetable_refresh_interval_seconds: 30,
+        timetable_refresh_interval_seconds: 1,
         observation_interval_seconds: 1,
         preferences_updated_at: "2026-07-31T06:00:00Z",
       }))
       .mockResolvedValueOnce(response({
-        timetable_refresh_interval_seconds: 4,
+        timetable_refresh_interval_seconds: 0,
         observation_interval_seconds: 0,
         preferences_updated_at: "not-a-timestamp",
       }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchUiPreferences()).resolves.toEqual({
-      timetableRefreshIntervalSeconds: 30,
+      timetableRefreshIntervalSeconds: 1,
       seatObservationIntervalSeconds: 1,
       updatedAt: "2026-07-31T06:00:00Z",
     });

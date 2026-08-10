@@ -33,9 +33,16 @@ class StubRuntimeVerifier:
 
     async def prewarm(self, provider, credentials):
         self.prewarm_calls.append((provider, credentials.credential_version))
-        return ProviderLoginVerification(
-            self.outcomes.get(provider, ProviderLoginVerificationOutcome.AUTHENTICATED)
+        outcome = self.outcomes.get(
+            provider,
+            ProviderLoginVerificationOutcome.AUTHENTICATED,
         )
+        if outcome is ProviderLoginVerificationOutcome.AUTHENTICATED:
+            self.snapshots[provider] = runtime_snapshot(
+                provider,
+                credential_generation=str(credentials.credential_version),
+            )
+        return ProviderLoginVerification(outcome)
 
     async def session_snapshot(self, provider):
         return self.snapshots.get(provider) or ProviderSessionRuntimeSnapshot(
@@ -48,6 +55,26 @@ class StubRuntimeVerifier:
             local_reuse_remaining_seconds=240.0,
             locally_reusable=True,
         )
+
+
+def runtime_snapshot(
+    provider: Provider,
+    *,
+    state: ProviderSessionRuntimeState = ProviderSessionRuntimeState.READY,
+    credential_generation: str | None = "4",
+    remaining_seconds: float | None = 240.0,
+    locally_reusable: bool = True,
+) -> ProviderSessionRuntimeSnapshot:
+    return ProviderSessionRuntimeSnapshot(
+        provider=provider,
+        state=state,
+        credential_generation=credential_generation,
+        created_age_seconds=12.0,
+        last_verified_age_seconds=3.0,
+        last_used_age_seconds=1.0,
+        local_reuse_remaining_seconds=remaining_seconds,
+        locally_reusable=locally_reusable,
+    )
 
 
 async def test_startup_prewarm_recovers_enabled_auth_required_account_and_watch(app) -> None:
@@ -111,7 +138,24 @@ async def test_startup_prewarm_recovers_enabled_auth_required_account_and_watch(
         await session.commit()
         watch_id = watch.id
 
-    verifier = StubRuntimeVerifier()
+    verifier = StubRuntimeVerifier(
+        snapshots={
+            Provider.KORAIL: runtime_snapshot(
+                Provider.KORAIL,
+                state=ProviderSessionRuntimeState.COLD,
+                credential_generation=None,
+                remaining_seconds=None,
+                locally_reusable=False,
+            ),
+            Provider.SRT: runtime_snapshot(
+                Provider.SRT,
+                state=ProviderSessionRuntimeState.COLD,
+                credential_generation=None,
+                remaining_seconds=None,
+                locally_reusable=False,
+            ),
+        }
+    )
     registry = ProviderRuntimePrewarmRegistry()
     await prewarm_provider_sessions(
         app.state.test_session_factory,
@@ -170,7 +214,18 @@ async def test_startup_prewarm_failure_does_not_demote_authenticated_account(
         )
         await session.commit()
 
-    verifier = StubRuntimeVerifier(outcomes={Provider.KORAIL: outcome})
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: outcome},
+        snapshots={
+            Provider.KORAIL: runtime_snapshot(
+                Provider.KORAIL,
+                state=ProviderSessionRuntimeState.COLD,
+                credential_generation=None,
+                remaining_seconds=None,
+                locally_reusable=False,
+            )
+        },
+    )
     registry = ProviderRuntimePrewarmRegistry()
     await prewarm_provider_sessions(app.state.test_session_factory, verifier, registry)
 
@@ -224,7 +279,16 @@ async def test_startup_prewarm_success_does_not_persist_stale_credential_generat
         await session.commit()
 
     verifier = ConcurrentCredentialReplacementVerifier(
-        session_factory=app.state.test_session_factory
+        session_factory=app.state.test_session_factory,
+        snapshots={
+            Provider.KORAIL: runtime_snapshot(
+                Provider.KORAIL,
+                state=ProviderSessionRuntimeState.COLD,
+                credential_generation=None,
+                remaining_seconds=None,
+                locally_reusable=False,
+            )
+        },
     )
     registry = ProviderRuntimePrewarmRegistry()
     await prewarm_provider_sessions(app.state.test_session_factory, verifier, registry)
@@ -458,6 +522,27 @@ async def test_blocked_srt_session_reverification_is_bounded_per_revision(app) -
             verifier,
             registry,
         )
+        == 0
+    )
+    retry = registry.prewarm_retry_state[Provider.SRT]
+    assert retry[0] == 1
+    assert retry[1] == 1
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 0
+    )
+    assert registry.prewarm_retry_state[Provider.SRT] == retry
+    registry.prewarm_retry_state[Provider.SRT] = (retry[0], retry[1], float("-inf"))
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
         == 1
     )
     assert (
@@ -550,6 +635,248 @@ async def test_failed_later_auth_recovery_is_not_repeated_until_new_revision(app
         (Provider.KORAIL, 9),
     ]
     assert len(registry.attempted_auth_revisions) == 1
+
+
+async def test_authenticated_account_recovers_cold_sidecar_session(app) -> None:
+    now = datetime.now(UTC)
+    async with app.state.test_session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.KORAIL,
+                credentials_ciphertext=secret_box.encrypt_dict(
+                    {
+                        "login_method": "membership_number",
+                        "login_id": "1234567890",
+                        "password": "test-password",
+                    }
+                ),
+                enabled=True,
+                credential_version=4,
+                last_auth_status="authenticated",
+                last_authenticated_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    verifier = StubRuntimeVerifier(
+        snapshots={
+            Provider.KORAIL: runtime_snapshot(
+                Provider.KORAIL,
+                state=ProviderSessionRuntimeState.COLD,
+                credential_generation=None,
+                remaining_seconds=None,
+                locally_reusable=False,
+            )
+        }
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            registry,
+        )
+        == 1
+    )
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 4)]
+    assert registry.outcome_for(Provider.KORAIL) == "authenticated"
+
+
+@pytest.mark.parametrize(
+    ("remaining_seconds", "expected_attempts"),
+    [(90.0, 1), (240.0, 0)],
+)
+async def test_authenticated_ready_session_refreshes_only_inside_window(
+    app,
+    remaining_seconds: float,
+    expected_attempts: int,
+) -> None:
+    now = datetime.now(UTC)
+    async with app.state.test_session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.KORAIL,
+                credentials_ciphertext=secret_box.encrypt_dict(
+                    {
+                        "login_method": "membership_number",
+                        "login_id": "1234567890",
+                        "password": "test-password",
+                    }
+                ),
+                enabled=True,
+                credential_version=4,
+                last_auth_status="authenticated",
+                last_authenticated_at=now,
+                updated_at=now,
+            )
+        )
+        await session.commit()
+
+    verifier = StubRuntimeVerifier(
+        snapshots={
+            Provider.KORAIL: runtime_snapshot(
+                Provider.KORAIL,
+                remaining_seconds=remaining_seconds,
+            )
+        }
+    )
+
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            ProviderRuntimePrewarmRegistry(completed=True),
+        )
+        == expected_attempts
+    )
+    assert verifier.prewarm_calls == (
+        [(Provider.KORAIL, 4)] if expected_attempts else []
+    )
+
+
+async def test_failed_keepalive_waits_for_cooldown_before_retry(
+    app,
+) -> None:
+    now = datetime.now(UTC)
+    async with app.state.test_session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.KORAIL,
+                credentials_ciphertext=secret_box.encrypt_dict(
+                    {
+                        "login_method": "membership_number",
+                        "login_id": "1234567890",
+                        "password": "test-password",
+                    }
+                ),
+                enabled=True,
+                credential_version=4,
+                last_auth_status="authenticated",
+                last_authenticated_at=now,
+                updated_at=now,
+            )
+        )
+        await session.commit()
+
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.FAILED},
+        snapshots={
+            Provider.KORAIL: runtime_snapshot(
+                Provider.KORAIL,
+                state=ProviderSessionRuntimeState.COLD,
+                credential_generation=None,
+                remaining_seconds=None,
+                locally_reusable=False,
+            )
+        },
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert await recover_provider_sessions_once(
+        app.state.test_session_factory, verifier, registry
+    ) == 1
+    assert await recover_provider_sessions_once(
+        app.state.test_session_factory, verifier, registry
+    ) == 0
+    generation, failure_count, _retry_not_before = registry.prewarm_retry_state[Provider.KORAIL]
+    assert (generation, failure_count) == (4, 1)
+    registry.prewarm_retry_state[Provider.KORAIL] = (generation, failure_count, 0.0)
+    assert await recover_provider_sessions_once(
+        app.state.test_session_factory, verifier, registry
+    ) == 1
+    assert verifier.prewarm_calls == [
+        (Provider.KORAIL, 4),
+        (Provider.KORAIL, 4),
+    ]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [ProviderSessionRuntimeState.AUTHENTICATING, ProviderSessionRuntimeState.BLOCKED],
+)
+async def test_authenticated_account_does_not_compete_with_active_or_blocked_session(
+    app,
+    state: ProviderSessionRuntimeState,
+) -> None:
+    now = datetime.now(UTC)
+    async with app.state.test_session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.KORAIL,
+                credentials_ciphertext=secret_box.encrypt_dict(
+                    {
+                        "login_method": "membership_number",
+                        "login_id": "1234567890",
+                        "password": "test-password",
+                    }
+                ),
+                enabled=True,
+                credential_version=4,
+                last_auth_status="authenticated",
+                last_authenticated_at=now,
+                updated_at=now,
+            )
+        )
+        await session.commit()
+
+    verifier = StubRuntimeVerifier(
+        snapshots={
+            Provider.KORAIL: runtime_snapshot(
+                Provider.KORAIL,
+                state=state,
+                remaining_seconds=None,
+                locally_reusable=False,
+            )
+        }
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert await recover_provider_sessions_once(
+        app.state.test_session_factory, verifier, registry
+    ) == 0
+    assert verifier.prewarm_calls == []
+    if state is ProviderSessionRuntimeState.BLOCKED:
+        generation, failure_count, retry_not_before = registry.prewarm_retry_state[
+            Provider.KORAIL
+        ]
+        assert (generation, failure_count) == (4, 1)
+        assert retry_not_before > asyncio.get_running_loop().time()
+    else:
+        assert registry.prewarm_retry_state == {}
+
+
+def test_keepalive_backoff_is_generation_scoped_exponential_and_capped() -> None:
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    now = 1_000.0
+
+    for failure_count, expected_delay in enumerate(
+        (60.0, 120.0, 240.0, 480.0, 900.0, 900.0),
+        start=1,
+    ):
+        assert registry.begin_prewarm(Provider.KORAIL, 4, now=now)
+        registry.finish_prewarm(
+            Provider.KORAIL,
+            4,
+            outcome="failed",
+            now=now,
+        )
+        assert registry.prewarm_retry_state[Provider.KORAIL] == (
+            4,
+            failure_count,
+            now + expected_delay,
+        )
+        now += expected_delay
+
+    assert registry.begin_prewarm(Provider.KORAIL, 5, now=now - 1.0)
+    registry.finish_prewarm(
+        Provider.KORAIL,
+        5,
+        outcome="provider_blocked",
+        now=now,
+    )
+    assert registry.prewarm_retry_state[Provider.KORAIL] == (5, 1, now + 900.0)
 
 
 async def test_maintenance_tick_failure_is_redacted_and_does_not_stop_manager(

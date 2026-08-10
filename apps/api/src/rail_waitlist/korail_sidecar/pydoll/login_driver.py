@@ -314,11 +314,26 @@ class PydollLoginDomDriver:
                     headers: { Accept: 'application/json' },
                   },
                 );
-                if (!response.ok) return false;
-                const payload = await response.json();
-                return payload?.strResult === 'SUCC' && !payload?.h_msg_cd;
+                if (response.status === 429) return { outcome: 'rate_limited' };
+                if (response.status === 403) return { outcome: 'protected' };
+                if (!response.ok) return { outcome: 'source_unavailable' };
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.toLowerCase().includes('application/json')) {
+                  return { outcome: 'protected' };
+                }
+                try {
+                  const payload = await response.json();
+                  return {
+                    outcome:
+                      payload?.strResult === 'SUCC' && !payload?.h_msg_cd
+                        ? 'authenticated'
+                        : 'logged_out',
+                  };
+                } catch (_) {
+                  return { outcome: 'protected' };
+                }
               } catch (_) {
-                return false;
+                return { outcome: 'source_unavailable' };
               }
             })()
         """
@@ -329,12 +344,26 @@ class PydollLoginDomDriver:
             timeout=self._timeout_ms,
         )
         if not isinstance(response, Mapping):
-            return False
+            raise BrowserSourceUnavailable("session_keepalive")
         command_result = response.get("result")
         if not isinstance(command_result, Mapping):
-            return False
+            raise BrowserSourceUnavailable("session_keepalive")
         script_result = command_result.get("result")
-        return isinstance(script_result, Mapping) and script_result.get("value") is True
+        if not isinstance(script_result, Mapping):
+            raise BrowserSourceUnavailable("session_keepalive")
+        value = script_result.get("value")
+        if not isinstance(value, Mapping):
+            raise BrowserSourceUnavailable("session_keepalive")
+        outcome = value.get("outcome")
+        if outcome == "authenticated":
+            return True
+        if outcome == "logged_out":
+            return False
+        if outcome == "rate_limited":
+            raise BrowserRateLimited()
+        if outcome == "protected":
+            raise BrowserProtectionDetected(stage="session_keepalive")
+        raise BrowserSourceUnavailable("session_keepalive")
 
     async def has_authenticated_header(self) -> bool:
         return await self._has_exact_visible(

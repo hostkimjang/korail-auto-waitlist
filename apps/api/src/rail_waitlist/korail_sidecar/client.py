@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ValidationError
 
+from ..reservations.contracts import ReservationProgressStage
 from ..timetable_management.schemas import SeatAvailabilityNotObservedReason
 from .browser_contracts import BrowserSeatSearchRequest, BrowserSeatSearchResult
 from .contracts import (
@@ -15,14 +18,24 @@ from .contracts import (
     KorailReservationConfirmationResult,
     KorailReserveOnceRequest,
     KorailReserveOnceResult,
+    KorailReserveProgressFrame,
+    KorailReserveResultFrame,
     KorailSessionStateResult,
 )
+
+ReservationProgressCallback = Callable[[ReservationProgressStage], Awaitable[None]]
 
 
 class BrowserAdapterTransport(Protocol):
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult: ...
 
     async def reserve(self, request: KorailReserveOnceRequest) -> KorailReserveOnceResult: ...
+
+    async def reserve_with_progress(
+        self,
+        request: KorailReserveOnceRequest,
+        on_progress: ReservationProgressCallback,
+    ) -> KorailReserveOnceResult: ...
 
     async def verify_login(self, request: KorailLoginVerifyRequest) -> KorailLoginVerifyResult: ...
 
@@ -45,10 +58,14 @@ class _AdapterFailure(RuntimeError):
         *,
         rate_limited: bool = False,
         protection: bool = False,
+        reservation_command_uncertain: bool = False,
+        progress_stages: tuple[ReservationProgressStage, ...] = (),
     ) -> None:
         self.reason = reason
         self.rate_limited = rate_limited
         self.protection = protection
+        self.reservation_command_uncertain = reservation_command_uncertain
+        self.progress_stages = progress_stages
         super().__init__(reason)
 
 
@@ -137,6 +154,104 @@ class HttpBrowserAdapterTransport:
             return KorailReserveOnceResult.model_validate(response.json())
         except (ValueError, ValidationError) as error:
             raise _AdapterFailure("source_unavailable") from error
+
+    async def reserve_with_progress(
+        self,
+        request: KorailReserveOnceRequest,
+        on_progress: ReservationProgressCallback,
+    ) -> KorailReserveOnceResult:
+        payload = request.model_dump(mode="json", exclude={"credential"})
+        payload["credential"] = {
+            "login_method": request.credential.login_method,
+            "login_id": request.credential.login_id.get_secret_value(),
+            "password": request.credential.password.get_secret_value(),
+            "version": request.credential.version,
+        }
+        expected_stages = (
+            "authenticated_session_ready",
+            "target_rechecked",
+            "seat_selected",
+            "reservation_requested",
+        )
+        progress: list[ReservationProgressStage] = []
+        terminal: KorailReserveOnceResult | None = None
+        try:
+            async with self._client.stream(
+                "POST",
+                "/v1/reserve-once/stream",
+                json=payload,
+            ) as response:
+                if response.status_code == 429:
+                    raise _AdapterFailure("provider_access_restricted", rate_limited=True)
+                if response.status_code in {403, 423}:
+                    raise _AdapterFailure("provider_access_restricted", protection=True)
+                if response.status_code != 200:
+                    raise _AdapterFailure("source_unavailable")
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    if terminal is not None:
+                        raise ValueError("frame received after terminal result")
+                    raw = json.loads(line)
+                    if not isinstance(raw, dict):
+                        raise ValueError("stream frame must be an object")
+                    if raw.get("type") == "progress":
+                        frame = KorailReserveProgressFrame.model_validate(raw)
+                        if len(progress) >= len(expected_stages):
+                            raise ValueError("too many reservation progress frames")
+                        if frame.stage != expected_stages[len(progress)]:
+                            raise ValueError("reservation progress frames are out of order")
+                        stage = ReservationProgressStage(
+                            stage=frame.stage,
+                            occurred_at=frame.occurred_at,
+                        )
+                        if progress and stage.occurred_at < progress[-1].occurred_at:
+                            raise ValueError("reservation progress times are out of order")
+                        progress.append(stage)
+                        await on_progress(stage)
+                    elif raw.get("type") == "result":
+                        terminal = KorailReserveResultFrame.model_validate(raw).result
+                    else:
+                        raise ValueError("unknown reservation stream frame")
+        except _AdapterFailure:
+            raise
+        except (httpx.TimeoutException, httpx.TransportError) as error:
+            raise _AdapterFailure(
+                "source_unavailable",
+                reservation_command_uncertain=True,
+                progress_stages=tuple(progress),
+            ) from error
+        except (json.JSONDecodeError, TypeError, ValueError, ValidationError) as error:
+            raise _AdapterFailure(
+                "source_unavailable",
+                reservation_command_uncertain=True,
+                progress_stages=tuple(progress),
+            ) from error
+        if terminal is None:
+            raise _AdapterFailure(
+                "source_unavailable",
+                reservation_command_uncertain=True,
+                progress_stages=tuple(progress),
+            )
+        evidence = (
+            terminal.session_ready_at,
+            terminal.target_rechecked_at,
+            terminal.seat_selected_at,
+            terminal.reservation_requested_at,
+        )
+        expected_progress = [
+            (stage, occurred_at)
+            for stage, occurred_at in zip(expected_stages, evidence, strict=True)
+            if occurred_at is not None
+        ]
+        actual_progress = [(item.stage, item.occurred_at) for item in progress]
+        if actual_progress != expected_progress:
+            raise _AdapterFailure(
+                "source_unavailable",
+                reservation_command_uncertain=True,
+                progress_stages=tuple(progress),
+            )
+        return terminal
 
     async def verify_login(self, request: KorailLoginVerifyRequest) -> KorailLoginVerifyResult:
         return await self._login_request("/v1/verify-login", request)

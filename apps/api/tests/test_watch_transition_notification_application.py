@@ -9,11 +9,20 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import rail_waitlist.notification_management.watch_transition_application as application_module
 import rail_waitlist.services as services_module
-from rail_waitlist.domain import NotificationKind, Provider, WatchStatus
+from rail_waitlist.domain import (
+    NotificationKind,
+    Provider,
+    ReservationOutcome,
+    SeatObservationStatus,
+    WatchStatus,
+)
 from rail_waitlist.models import (
     NotificationChannel,
     OutboxEvent,
+    ReservationAttempt,
+    SeatObservation,
     Watch,
+    WatchCandidate,
     WatchTransitionHistory,
 )
 from rail_waitlist.notification_management.watch_transition_application import (
@@ -175,6 +184,192 @@ async def test_watch_transition_notification_message_matrix(
         assert event.payload["payment_deadline"] == (
             payment_deadline.isoformat() if payment_deadline is not None else None
         )
+        assert event.payload["provider"] == "srt"
+        assert event.payload["travel_date"] == "2026-08-05"
+        assert event.payload["origin"] == "수서"
+        assert event.payload["destination"] == "부산"
+        assert event.payload["seat_class"] == "standard"
+        assert event.payload["passenger_count"] == 1
+        assert event.payload["candidate_id"] is None
+        assert event.payload["train_number"] is None
+        assert event.payload["departure_at"] is None
+        assert event.payload["arrival_at"] is None
+        assert event.payload["attempt_sequence"] is None
+        assert event.payload["attempt_started_at"] is None
+        assert event.payload["attempt_finished_at"] is None
+        assert event.payload["workflow_stage"] is None
+        assert event.payload["retry_condition"] is None
+
+
+async def test_observation_candidate_wins_without_leaking_an_unrelated_attempt(db_engine) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        channel = make_channel("observation-channel")
+        watch = make_watch()
+        watch.passenger_count = 2
+        unrelated = WatchCandidate(
+            train_number="SRT-301",
+            departure_at=datetime(2026, 8, 5, 3, 10, tzinfo=UTC),
+            arrival_at=datetime(2026, 8, 5, 5, 30, tzinfo=UTC),
+            seat_class="standard",
+            priority=1,
+        )
+        observed = WatchCandidate(
+            train_number="SRT-305",
+            departure_at=datetime(2026, 8, 5, 3, 30, tzinfo=UTC),
+            arrival_at=datetime(2026, 8, 5, 5, 55, tzinfo=UTC),
+            seat_class="standard",
+            priority=2,
+        )
+        watch.candidates.extend([unrelated, observed])
+        session.add_all([channel, watch])
+        await session.flush()
+        session.add(
+            ReservationAttempt(
+                candidate_id=unrelated.id,
+                attempt_sequence=1,
+                episode_key="availability:unrelated",
+                idempotency_key="notification-unrelated-attempt",
+                outcome=ReservationOutcome.NOT_AVAILABLE,
+                started_at=datetime(2026, 8, 5, 2, 59, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 5, 3, tzinfo=UTC),
+            )
+        )
+        observation = SeatObservation(
+            candidate_id=observed.id,
+            status=SeatObservationStatus.AVAILABLE,
+            source="srt-owner-test",
+            observed_at=datetime(2026, 8, 5, 3, 1, tzinfo=UTC),
+            fresh_until=datetime(2026, 8, 5, 3, 2, tzinfo=UTC),
+        )
+        session.add(observation)
+        await session.flush()
+
+        await add_watch_notifications(
+            session,
+            watch,
+            WatchStatus.SEAT_FOUND,
+            "watching:seat_found:observation",
+            observation=observation,
+        )
+        event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == "notification.dispatch_requested")
+        )
+
+        assert event is not None
+        assert event.payload["candidate_id"] == observed.id
+        assert event.payload["train_number"] == "SRT-305"
+        assert event.payload["departure_at"] == "2026-08-05T03:30:00+00:00"
+        assert event.payload["arrival_at"] == "2026-08-05T05:55:00+00:00"
+        assert event.payload["attempt_sequence"] is None
+        assert event.payload["retry_condition"] is None
+        assert event.payload["message"] == (
+            "SRT · SRT-305 · 2026년 8월 5일 (수) · 수서 12:30 → 부산 14:55 · 일반실 · 2명\n"
+            "예매 가능한 좌석을 확인했습니다. 공식 플랫폼에서 최종 상태를 확인해 주세요."
+        )
+
+
+async def test_latest_attempt_selects_its_candidate_and_preserves_cleared_deadline(
+    db_engine,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    deadline = datetime(2026, 8, 5, 4, tzinfo=UTC)
+    async with factory() as session:
+        channel = make_channel("attempt-channel")
+        watch = make_watch()
+        candidate = WatchCandidate(
+            train_number="SRT-309",
+            departure_at=datetime(2026, 8, 5, 3, 45, tzinfo=UTC),
+            arrival_at=datetime(2026, 8, 5, 6, 5, tzinfo=UTC),
+            seat_class="standard",
+            priority=1,
+            state="payment_required",
+        )
+        watch.candidates.append(candidate)
+        session.add_all([channel, watch])
+        await session.flush()
+        attempt = ReservationAttempt(
+            candidate_id=candidate.id,
+            attempt_sequence=2,
+            episode_key="availability:payment",
+            idempotency_key="notification-payment-attempt",
+            outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            started_at=datetime(2026, 8, 5, 3, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 5, 3, 1, 2, tzinfo=UTC),
+            payment_deadline=deadline,
+        )
+        session.add(attempt)
+        await session.flush()
+        assert watch.payment_deadline is None
+
+        await add_watch_notifications(
+            session,
+            watch,
+            WatchStatus.PAYMENT_REQUIRED,
+            "reserving:payment_required:attempt",
+        )
+        event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == "notification.dispatch_requested")
+        )
+
+        assert event is not None
+        assert event.payload["candidate_id"] == candidate.id
+        assert event.payload["attempt_sequence"] == 2
+        assert event.payload["attempt_started_at"] == "2026-08-05T03:01:00+00:00"
+        assert event.payload["attempt_finished_at"] == "2026-08-05T03:01:02+00:00"
+        assert event.payload["workflow_stage"] == "payment_required"
+        assert event.payload["retry_condition"] is None
+        assert event.payload["payment_deadline"] == deadline.isoformat()
+        assert "08월 05일 13:00까지 공식 플랫폼에서 결제해 주세요." in event.payload[
+            "message"
+        ]
+
+
+async def test_latest_not_available_attempt_structures_monitoring_retry(db_engine) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        channel = make_channel("retry-channel")
+        watch = make_watch()
+        candidate = WatchCandidate(
+            train_number="SRT-311",
+            departure_at=datetime(2026, 8, 5, 4, tzinfo=UTC),
+            arrival_at=None,
+            seat_class="standard",
+            priority=1,
+            state="observed",
+        )
+        watch.candidates.append(candidate)
+        session.add_all([channel, watch])
+        await session.flush()
+        session.add(
+            ReservationAttempt(
+                candidate_id=candidate.id,
+                attempt_sequence=1,
+                episode_key="availability:not-available",
+                idempotency_key="notification-not-available-attempt",
+                outcome=ReservationOutcome.NOT_AVAILABLE,
+                started_at=datetime(2026, 8, 5, 3, 2, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 5, 3, 2, 1, tzinfo=UTC),
+            )
+        )
+        await session.flush()
+
+        await add_watch_notifications(
+            session,
+            watch,
+            WatchStatus.WATCHING,
+            "reserving:watching:not-available",
+            reason="reservation_not_available",
+        )
+        event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == "notification.dispatch_requested")
+        )
+
+        assert event is not None
+        assert event.payload["workflow_stage"] == "monitoring_resumed"
+        assert event.payload["retry_condition"] == "new_availability_episode"
+        assert event.payload["arrival_at"] is None
+        assert "도착시각 미확인" in event.payload["message"]
 
 
 async def test_non_notifiable_transition_does_not_query_or_enqueue(db_engine) -> None:

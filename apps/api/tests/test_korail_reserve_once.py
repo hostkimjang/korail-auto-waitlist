@@ -1171,6 +1171,136 @@ async def test_official_session_probe_preserves_protection_and_uncertainty(
     assert "response.status === 429" in script
     assert "response.status === 403" in script
     assert "application/json" in script
+    assert "return { outcome: 'source_unavailable' };" in script
+
+
+@pytest.mark.asyncio
+async def test_login_wait_continues_dom_confirmation_after_uncertain_official_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 400, True)
+    header_ready = False
+
+    async def has_authenticated_header() -> bool:
+        return header_ready
+
+    async def unavailable_probe() -> bool:
+        nonlocal header_ready
+        header_ready = True
+        raise BrowserSourceUnavailable("session_keepalive")
+
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인 처리",
+                (),
+                url="https://www.korail.com/ticket/login",
+            )
+        ),
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", has_authenticated_header)
+    official_session_probe = AsyncMock(side_effect=unavailable_probe)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        official_session_probe,
+    )
+
+    assert await session._wait_for_login_authentication() is True
+
+    official_session_probe.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        BrowserProtectionDetected(stage="session_keepalive"),
+        BrowserRateLimited(),
+    ],
+    ids=("protected", "rate_limited"),
+)
+async def test_login_wait_propagates_explicit_official_probe_protection(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 400, True)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인 처리",
+                (),
+                url="https://www.korail.com/ticket/login",
+            )
+        ),
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        AsyncMock(side_effect=error),
+    )
+
+    with pytest.raises(type(error)):
+        await session._wait_for_login_authentication()
+
+
+@pytest.mark.asyncio
+async def test_login_search_confirmation_uses_header_after_uncertain_official_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    session._tab = SimpleNamespace(go_to=AsyncMock())
+    monkeypatch.setattr(session, "_wait_for_exact_text", AsyncMock())
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        AsyncMock(side_effect=BrowserSourceUnavailable("session_keepalive")),
+    )
+    wait_for_header = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_wait_for_authenticated_header", wait_for_header)
+    attempt = SimpleNamespace(
+        post_submit_check_attempted=False,
+        post_submit_authenticated=False,
+    )
+
+    assert await session._confirm_authenticated_search(attempt) is True
+
+    wait_for_header.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        BrowserProtectionDetected(stage="session_keepalive"),
+        BrowserRateLimited(),
+    ],
+    ids=("protected", "rate_limited"),
+)
+async def test_login_search_confirmation_propagates_explicit_official_probe_protection(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    session._tab = SimpleNamespace(go_to=AsyncMock())
+    monkeypatch.setattr(session, "_wait_for_exact_text", AsyncMock())
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        AsyncMock(side_effect=error),
+    )
+    attempt = SimpleNamespace(
+        post_submit_check_attempted=False,
+        post_submit_authenticated=False,
+    )
+
+    with pytest.raises(type(error)):
+        await session._confirm_authenticated_search(attempt)
 
 
 @pytest.mark.asyncio

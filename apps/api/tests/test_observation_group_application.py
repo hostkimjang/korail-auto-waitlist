@@ -21,6 +21,7 @@ from rail_waitlist.observations.group_application import (
     _locked_deferred_watches_query,
     process_watch_group_observation,
 )
+from rail_waitlist.provider_account_management.models import RailProviderAccount
 from rail_waitlist.schemas import ProviderCapabilities, SeatObservationResult
 from rail_waitlist.services import (
     add_outbox_event,
@@ -35,15 +36,15 @@ from rail_waitlist.services import (
 
 
 class RecordingObservationAdapter:
-    provider = Provider.MOCK
-
     def __init__(
         self,
         status: SeatObservationStatus,
         *,
+        provider: Provider = Provider.MOCK,
         reservation_once: bool = False,
         return_matching_seat_class: bool = True,
     ) -> None:
+        self.provider = provider
         self.status = status
         self.reservation_once = reservation_once
         self.return_matching_seat_class = return_matching_seat_class
@@ -122,11 +123,13 @@ async def persist_due_watch(
     *,
     dedupe_key: str,
     now: datetime | None = None,
+    provider: Provider = Provider.MOCK,
+    reservation_policy: ReservationPolicy = ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
 ) -> str:
     now = now or datetime.now(UTC)
     async with session_factory() as session:
         watch = Watch(
-            provider=Provider.MOCK,
+            provider=provider,
             origin="서울",
             origin_node_id="MOCK-SEOUL",
             destination="부산",
@@ -136,7 +139,7 @@ async def persist_due_watch(
             time_to=time(12),
             passenger_count=1,
             mode="official",
-            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            reservation_policy=reservation_policy,
             status=WatchStatus.SCHEDULED,
             dedupe_key=dedupe_key,
             next_check_at=now - timedelta(seconds=1),
@@ -186,6 +189,110 @@ async def test_group_deduplicates_provider_request_and_persists_each_watch(app) 
         observation_count = await session.scalar(select(func.count()).select_from(SeatObservation))
         assert {watch.status for watch in watches} == {WatchStatus.WATCHING}
         assert observation_count == 2
+
+
+@pytest.mark.parametrize("provider", [Provider.KORAIL, Provider.SRT])
+async def test_blocked_provider_account_stops_notify_only_observation_without_repeat_io_or_writes(
+    app,
+    provider: Provider,
+) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=provider,
+                credentials_ciphertext="test-ciphertext",
+                last_auth_status="provider_blocked",
+            )
+        )
+        await session.commit()
+
+    watch_ids = [
+        await persist_due_watch(
+            session_factory,
+            dedupe_key="blocked-account-group",
+            now=now,
+            provider=provider,
+            reservation_policy=ReservationPolicy.NOTIFY_ONLY,
+        )
+        for _ in range(2)
+    ]
+    adapter = RecordingObservationAdapter(SeatObservationStatus.AVAILABLE, provider=provider)
+    group_dependencies = dependencies(session_factory, [])
+
+    await process_watch_group_observation(
+        watch_ids,
+        now,
+        provider=provider,
+        adapter=adapter,
+        lease_grant=None,
+        dependencies=group_dependencies,
+    )
+
+    assert adapter.observe_calls == 0
+    async with session_factory() as session:
+        watches = list(
+            (
+                await session.scalars(select(Watch).where(Watch.id.in_(watch_ids)))
+            ).all()
+        )
+        assert len(watches) == 2
+        assert {watch.status for watch in watches} == {WatchStatus.AUTH_REQUIRED}
+        assert all(watch.next_check_at is None for watch in watches)
+        assert all(watch.cooldown_until is None for watch in watches)
+        observations_before_retry = await session.scalar(select(func.count()).select_from(SeatObservation))
+
+    await process_watch_group_observation(
+        watch_ids,
+        now + timedelta(minutes=5),
+        provider=provider,
+        adapter=adapter,
+        lease_grant=None,
+        dependencies=group_dependencies,
+    )
+
+    assert adapter.observe_calls == 0
+    async with session_factory() as session:
+        observations_after_retry = await session.scalar(select(func.count()).select_from(SeatObservation))
+        assert observations_after_retry == observations_before_retry == 0
+
+
+async def test_auth_required_account_does_not_block_public_seat_observation(app) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.KORAIL,
+                credentials_ciphertext="test-ciphertext",
+                last_auth_status="auth_required",
+            )
+        )
+        await session.commit()
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="auth-required-public-observation",
+        now=now,
+        provider=Provider.KORAIL,
+        reservation_policy=ReservationPolicy.NOTIFY_ONLY,
+    )
+    adapter = RecordingObservationAdapter(SeatObservationStatus.SOLD_OUT, provider=Provider.KORAIL)
+
+    await process_watch_group_observation(
+        [watch_id],
+        now,
+        provider=Provider.KORAIL,
+        adapter=adapter,
+        lease_grant=None,
+        dependencies=dependencies(session_factory, []),
+    )
+
+    assert adapter.observe_calls == 1
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.status is WatchStatus.WATCHING
 
 
 async def test_group_passes_the_exact_actionable_observation_to_the_status_transition(app) -> None:

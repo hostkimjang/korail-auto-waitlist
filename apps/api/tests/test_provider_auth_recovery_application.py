@@ -166,6 +166,14 @@ def make_transition(
             "provider_login_reverified_before_reservation",
             False,
         ),
+        (
+            "provider_account_provider_blocked_before_observation",
+            None,
+            "observed",
+            "observed",
+            "provider_login_reverified_before_observation",
+            False,
+        ),
     ],
 )
 async def test_auth_recovery_owner_preserves_reason_time_and_candidate_contract(

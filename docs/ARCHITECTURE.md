@@ -197,7 +197,8 @@ component는 바꾸지 않습니다.
 ### 좌석 변화 확인
 
 1. 스케줄러가 확인할 작업을 큐에 넣습니다.
-2. 작업자가 같은 운영사의 중복 실행과 호출 제한을 확인합니다.
+2. 작업자가 같은 운영사의 중복 실행과 호출 제한을 확인합니다. 계정에 실제 `provider_blocked`가
+   저장되어 있으면 provider I/O를 만들지 않고 작업을 인증 대기로 전환합니다.
 3. 새로운 관측값을 저장합니다.
 4. 이전 상태와 비교해 의미 있는 변화만 작업 상태와 알림으로 만듭니다.
 5. 확인이 불완전하면 좌석을 찾은 것으로 처리하지 않습니다.
@@ -524,6 +525,11 @@ session을 공식 same-origin 확인 요청으로 한 번 검증하고, 성공�
 실패한 session은 먼저 폐기한 뒤 새 로그인을 최대 한 번만 수행합니다. 일반 실패는 60초부터 최대 900초까지 지수
 backoff하고 보호 응답은 처음부터 900초를 적용합니다. 저장된 `auth_required`·`provider_blocked` 상태는 같은 DB
 revision에서 한 번만 복구를 시도하며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
+KORAIL `loginCheck`는 인증된 JSON만 양성 근거로 사용합니다. 403·429는 보호·호출 제한으로 즉시 중단하고,
+200 비JSON·JSON 파싱 실패처럼 상태를 확정할 수 없는 응답은 keepalive에서 재사용 기한을 연장하지 않습니다.
+단, 자격증명을 제출한 새 로그인 흐름에서는 이 불확실 응답만으로 보호를 단정하지 않고
+제한된 시간 동안 실제 로그아웃 버튼 DOM을 확인합니다. DOM과 공식 응답 어느 쪽에도 양성 근거가 없으면 인증
+성공으로 처리하지 않습니다.
 
 Pydoll의 인증된 단일 예약 시도 orchestration은 `korail_sidecar/pydoll/reservation_actor.py`가 canonical
 owner입니다. public direct URL 계산은 auth lock 밖에서 끝내고, credential 변경 폐기부터 lease·인증·검색·예약·
@@ -735,6 +741,10 @@ enabled account의 row lock·credential generation 재확인, provider I/O 전 t
 prewarm과 recoverable revision별 1회 복구, 재사용 가능한 session의 인증 상태 복원과 watch 재개 commit은
 `provider_account_management/runtime.py`가 소유합니다. registry에는 provider별 sanitized outcome과
 credential 없는 revision tuple·완료 여부만 남기며 provider·persistence 오류 본문은 로그에 넣지 않습니다.
+실제 `provider_blocked`가 저장된 동안 관측 worker도 같은 운영사의 좌석 provider I/O를 만들지 않습니다. 로그인
+manager가 보호 backoff 뒤 현재 credential generation을 인증하고 복구 전이를 commit하면 해당 watch를 즉시 다시
+스케줄합니다. 단순 `auth_required`는 로그인 없는 공개 좌석 관측까지 막는 provider-wide 보호 신호로 사용하지
+않습니다.
 top-level `provider_runtime.py`는 기존 public 29개·private 6개 표면과 local class/function 11개의 구형
 pickle lookup을 같은 canonical 객체로 유지하는 one-way compatibility facade입니다. `main.py`는 canonical
 runtime을 직접 조립하고 production code는 legacy facade를 다시 소비하지 않습니다.

@@ -11,6 +11,7 @@ import rail_waitlist.korail_pydoll_auth_actor as auth_actor_module
 import rail_waitlist.korail_pydoll_browser as browser_module
 from rail_waitlist.korail_pydoll_auth_actor import (
     BrowserProtectionDetected,
+    BrowserSourceUnavailable,
     KorailSessionActorState,
 )
 from rail_waitlist.korail_pydoll_browser import (
@@ -267,6 +268,37 @@ async def test_prewarm_protection_retires_the_session_and_marks_it_blocked() -> 
 
     assert actor.active_session is None
     assert actor.state is KorailSessionActorState.BLOCKED
+    assert session.authentication_count == 1
+    assert session.probe_count == 1
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_unavailable_probe_retires_the_session_and_remains_fail_closed() -> None:
+    class UnavailableProbeSession(_AuthSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            raise BrowserSourceUnavailable("session_keepalive")
+
+    session = UnavailableProbeSession()
+    actor = PydollAuthenticationSessionActor[UnavailableProbeSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_args: _AuthContext(session),  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+    )
+    assert await actor.verify_credentials(_credential()) is True
+
+    with pytest.raises(BrowserSourceUnavailable):
+        await actor.prewarm_credentials(_credential())
+
+    assert actor.active_session is None
+    assert actor.state is KorailSessionActorState.STALE
     assert session.authentication_count == 1
     assert session.probe_count == 1
     assert session.closed == 1

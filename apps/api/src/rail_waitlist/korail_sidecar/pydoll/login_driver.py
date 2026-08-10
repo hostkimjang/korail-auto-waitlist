@@ -246,12 +246,21 @@ class PydollLoginDomDriver:
             elapsed = self._monotonic() - submitted_at
             if not attempt.post_submit_check_attempted and elapsed >= session_probe_delay:
                 attempt.post_submit_check_attempted = True
-                attempt.post_submit_authenticated = bool(
-                    await self._port._login_step(
-                        "login_page_session_check",
-                        self._port._probe_official_authenticated_session(),
+                try:
+                    attempt.post_submit_authenticated = bool(
+                        await self._port._login_step(
+                            "login_page_session_check",
+                            self._port._probe_official_authenticated_session(),
+                        )
                     )
-                )
+                except BrowserSourceUnavailable:
+                    # A 200 HTML/invalid loginCheck response cannot attest either login
+                    # state. Continue bounded DOM polling after a submitted credential;
+                    # explicit protection and rate-limit classifications still propagate.
+                    self._event_logger.info(
+                        "KORAIL login session marker stage=login_page_official_session "
+                        "attempt=1 outcome=unavailable"
+                    )
                 self._event_logger.info(
                     "KORAIL login session marker stage=login_page_official_session "
                     "attempt=1 present=%s",
@@ -278,12 +287,19 @@ class PydollLoginDomDriver:
         )
         if not attempt.post_submit_check_attempted:
             attempt.post_submit_check_attempted = True
-            attempt.post_submit_authenticated = bool(
-                await self._port._login_step(
-                    "login_search_session_check",
-                    self._port._probe_official_authenticated_session(),
+            try:
+                attempt.post_submit_authenticated = bool(
+                    await self._port._login_step(
+                        "login_search_session_check",
+                        self._port._probe_official_authenticated_session(),
+                    )
                 )
-            )
+            except BrowserSourceUnavailable:
+                # The official probe is positive evidence only. Its unavailable form is
+                # not a protection verdict, so keep the initial-login DOM confirmation.
+                self._event_logger.info(
+                    "KORAIL login session marker stage=official_session outcome=unavailable"
+                )
         if attempt.post_submit_authenticated:
             self._event_logger.info(
                 "KORAIL login session marker stage=official_session present=true"
@@ -319,7 +335,7 @@ class PydollLoginDomDriver:
                 if (!response.ok) return { outcome: 'source_unavailable' };
                 const contentType = response.headers.get('content-type') || '';
                 if (!contentType.toLowerCase().includes('application/json')) {
-                  return { outcome: 'protected' };
+                  return { outcome: 'source_unavailable' };
                 }
                 try {
                   const payload = await response.json();
@@ -330,7 +346,7 @@ class PydollLoginDomDriver:
                         : 'logged_out',
                   };
                 } catch (_) {
-                  return { outcome: 'protected' };
+                  return { outcome: 'source_unavailable' };
                 }
               } catch (_) {
                 return { outcome: 'source_unavailable' };

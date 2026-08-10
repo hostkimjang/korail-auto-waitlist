@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -476,6 +477,90 @@ async def test_ready_srt_provider_blocked_session_is_reconciled_without_relogin(
         )
         assert latest_transition is not None
         assert latest_transition.reason == "provider_login_reverified_after_provider_block"
+
+
+async def test_provider_blocked_observation_watch_resumes_with_an_immediate_due_check(
+    app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    deferred_until = now + timedelta(minutes=5)
+    async with app.state.test_session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.KORAIL,
+                credentials_ciphertext=secret_box.encrypt_dict(
+                    {
+                        "login_method": "membership_number",
+                        "login_id": "1234567890",
+                        "password": "test-password",
+                    }
+                ),
+                enabled=True,
+                credential_version=4,
+                last_auth_status="provider_blocked",
+                updated_at=now,
+            )
+        )
+        watch = Watch(
+            provider=Provider.KORAIL,
+            origin="대전",
+            destination="서울",
+            travel_date=(now + timedelta(days=1)).date(),
+            time_from=time(9),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.NOTIFY_ONLY,
+            status=WatchStatus.AUTH_REQUIRED,
+            dedupe_key="runtime-korail-provider-blocked-observation-recovery",
+            cooldown_until=deferred_until,
+            next_check_at=deferred_until,
+        )
+        watch.transition_history.append(
+            WatchTransitionHistory(
+                from_status=WatchStatus.WATCHING,
+                to_status=WatchStatus.AUTH_REQUIRED,
+                reason="provider_account_provider_blocked_before_observation",
+                created_at=now,
+            )
+        )
+        session.add(watch)
+        await session.commit()
+        watch_id = watch.id
+
+    monkeypatch.setattr(
+        "rail_waitlist.watch_management.transition_runtime.get_execution_provider",
+        lambda _provider: SimpleNamespace(
+            capabilities=lambda: SimpleNamespace(seat_monitoring=True)
+        ),
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            StubRuntimeVerifier(),
+            registry,
+        )
+        == 1
+    )
+
+    async with app.state.test_session_factory() as session:
+        resumed_watch = await session.get(Watch, watch_id)
+        assert resumed_watch is not None
+        assert resumed_watch.status is WatchStatus.SCHEDULED
+        assert resumed_watch.cooldown_until is None
+        assert resumed_watch.next_check_at is not None
+        assert resumed_watch.next_check_at.replace(tzinfo=UTC) < deferred_until
+        latest_transition = await session.scalar(
+            select(WatchTransitionHistory)
+            .where(WatchTransitionHistory.watch_id == watch_id)
+            .order_by(WatchTransitionHistory.created_at.desc())
+            .limit(1)
+        )
+        assert latest_transition is not None
+        assert latest_transition.reason == "provider_login_reverified_before_observation"
 
 
 async def test_blocked_srt_session_reverification_is_bounded_per_revision(app) -> None:

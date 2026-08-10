@@ -74,7 +74,8 @@
 - [x] KORAIL Pydoll 검색 form·결과 DOM driver canonical owner 이동과 browser direct consumer·legacy exact facade 보존
 - [x] KORAIL Pydoll read-only 검색 actor canonical owner 이동과 replay-first·direct/UI·취소 안전 cleanup·legacy exact facade 보존
 - [x] KORAIL Pydoll credential-bound 인증 session actor canonical owner 이동과 secret-free fingerprint·TTL/횟수·취소 안전 cleanup·legacy exact facade 보존
-- [x] 활성 철도 계정의 시작 예열과 30초 sanitized telemetry 점검, 동일 generation `READY` 생략·120초 전 bounded 재예열, KORAIL 공식 session probe·단일 재로그인, 60~900초 backoff와 auth revision fence 계약
+- [x] 활성 철도 계정의 시작 예열과 30초 sanitized telemetry 점검, 동일 generation `READY` 생략·120초 전 bounded 재예열, KORAIL 인증 JSON positive-only probe·최초 로그인 DOM fallback·keepalive fail-closed, 403/429 보호 유지, 60~900초 backoff와 auth revision fence 계약
+- [x] 실제 `provider_blocked` 계정의 좌석 관측 provider I/O 차단과 인증 성공 뒤 즉시 감시 재스케줄 계약
 - [x] KORAIL Pydoll 단일 예약 actor canonical owner 이동과 exact identity·bounded expansion·1회 예약·취소/보호 cleanup·legacy exact facade 보존
 - [x] KORAIL Pydoll 로그인 DOM driver canonical owner 이동과 유일 method tab·active panel·공식 session 확인·secret-free stage·legacy exact facade 보존
 - [x] KORAIL Pydoll 예약 DOM driver canonical owner 이동과 동일 열차·좌석·1회 예매·결제 전 중단 안전 계약 보존
@@ -141,6 +142,7 @@
 - [x] 코레일+ 7.0.0 `booking`·`ticket`·`bookedTicket` BROWSABLE resolver와 예매 화면 확인
 - [x] 코레일+ `view=ticket`의 `나의 티켓` 오인계를 분리하고 `view=bookedTicket`이 `예약 승차권 조회 · 취소` 화면을 여는지 API 36에서 확인
 - [ ] 실제 결제 직전 예약이 있는 상태에서 코레일+ `bookedTicket` 첫 화면에 해당 예약이 표시되는지 확인
+- [ ] 실제 KORAIL 계정에서 보호 응답 뒤 900초 backoff 동안 로그인·좌석 관측 provider 요청이 0건이고, 단일 인증 복구 성공 뒤 감시가 자동 재개되는지 확인
 - [x] SRT 2.0.41 매니페스트의 `srapp://main` BROWSABLE resolver와 실제 승차권 예매 홈 확인
 - [x] SRT 2.0.41 설치 APK의 고정 문자열 extra `btnNo=2` 처리와 실제 `승차권 확인`·비로그인 안내 화면 확인
 - [x] SRT ticket 웜 실행의 목록 미갱신 재현과 결제 카드의 하단 `승차권 확인` 재선택 안내

@@ -84,7 +84,11 @@ async def resume_watches_after_verified_provider_login(
             and transition_at <= verified_at
         )
         preflight_auth_reverified = (
-            latest_transition.reason == "provider_account_not_authenticated_before_reservation"
+            latest_transition.reason
+            in {
+                "provider_account_not_authenticated_before_reservation",
+                "provider_account_provider_blocked_before_observation",
+            }
             and transition_at <= verified_at
         )
         non_auth_unknown = latest_transition.reason == "reservation_unknown"
@@ -136,7 +140,11 @@ async def resume_watches_after_verified_provider_login(
                 )
                 if auth_failure_reverified
                 else (
-                    "provider_login_reverified_before_reservation"
+                    (
+                        "provider_login_reverified_before_observation"
+                        if latest_transition.reason.endswith("_before_observation")
+                        else "provider_login_reverified_before_reservation"
+                    )
                     if preflight_auth_reverified
                     else "reservation_unknown_monitoring_resumed"
                 )

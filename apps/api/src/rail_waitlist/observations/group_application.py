@@ -45,6 +45,7 @@ OBSERVATION_WATCH_STATUSES = frozenset(
     }
 )
 OBSERVABLE_CANDIDATE_STATES = frozenset({"active", "observed", "seat_found"})
+ACCOUNT_AUTH_OBSERVATION_BLOCK_STATUSES = frozenset({"provider_blocked"})
 CONCLUSIVE_UNAVAILABLE_SEAT_STATUSES = frozenset(
     {
         SeatObservationStatus.UNAVAILABLE,
@@ -382,6 +383,57 @@ async def _pause_unexecutable_watch(
     )
 
 
+async def _blocking_provider_account_auth_status(
+    session: AsyncSession,
+    provider: Provider,
+) -> str | None:
+    """Return a persisted account state that must stop external observation I/O.
+
+    The provider runtime owns the bounded re-verification attempts. A watch worker must
+    only consume that sanitized state; retrying the provider from every due watch would
+    amplify an automation-protection response.
+    """
+    if provider not in {Provider.KORAIL, Provider.SRT}:
+        return None
+    auth_status = await session.scalar(
+        select(RailProviderAccount.last_auth_status).where(
+            RailProviderAccount.provider == provider,
+            RailProviderAccount.enabled.is_(True),
+            RailProviderAccount.last_auth_status.in_(ACCOUNT_AUTH_OBSERVATION_BLOCK_STATUSES),
+        )
+    )
+    if isinstance(auth_status, str) and auth_status in ACCOUNT_AUTH_OBSERVATION_BLOCK_STATUSES:
+        return auth_status
+    return None
+
+
+async def _defer_for_blocking_provider_account(
+    session: AsyncSession,
+    watch: Watch,
+    *,
+    dependencies: ObservationGroupDependencies,
+) -> None:
+    """Persist one account-wide observation hold without issuing provider I/O."""
+    if watch.status == WatchStatus.SCHEDULED:
+        await dependencies.apply_watch_transition(
+            session,
+            watch,
+            WatchStatus.WATCHING,
+            reason="worker_claimed_due_watch",
+        )
+    await dependencies.apply_watch_transition(
+        session,
+        watch,
+        WatchStatus.AUTH_REQUIRED,
+        reason="provider_account_provider_blocked_before_observation",
+    )
+    # The provider session manager owns the 900-second protection backoff and the
+    # generation-fenced recovery attempt. AUTH_REQUIRED is outside the due selector,
+    # so storing a second watch-local retry clock would misrepresent the real gate.
+    watch.cooldown_until = None
+    watch.next_check_at = None
+
+
 async def prepare_watch(
     watch_id: str,
     now: datetime,
@@ -421,6 +473,18 @@ async def prepare_watch(
                     watch,
                     reason="seat_monitoring_capability_unavailable",
                     event_type="watch.provider_capability_unavailable",
+                    dependencies=dependencies,
+                )
+                await session.commit()
+                return []
+            account_auth_status = await _blocking_provider_account_auth_status(
+                session,
+                watch.provider,
+            )
+            if account_auth_status is not None:
+                await _defer_for_blocking_provider_account(
+                    session,
+                    watch,
                     dependencies=dependencies,
                 )
                 await session.commit()

@@ -114,13 +114,10 @@ class ProviderRuntimePrewarmRegistry:
         if outcome is not None:
             previous = self.prewarm_retry_state.get(provider)
             failure_count = (
-                previous[1] + 1
-                if previous is not None and previous[0] == credential_version
-                else 1
+                previous[1] + 1 if previous is not None and previous[0] == credential_version else 1
             )
             backoff_seconds = min(
-                self.PREWARM_INITIAL_BACKOFF_SECONDS
-                * (2 ** (failure_count - 1)),
+                self.PREWARM_INITIAL_BACKOFF_SECONDS * (2 ** (failure_count - 1)),
                 self.PREWARM_MAX_BACKOFF_SECONDS,
             )
             if outcome == "provider_blocked":
@@ -365,7 +362,10 @@ async def recover_provider_sessions_once(
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 -- telemetry details remain redacted.
-                LOGGER.warning("Provider runtime session snapshot failed provider=%s", provider.value)
+                LOGGER.warning(
+                    "Provider runtime session snapshot failed provider=%s",
+                    provider.value,
+                )
             continue
 
         if new_recovery_revision:
@@ -386,7 +386,10 @@ async def recover_provider_sessions_once(
                 raise
             except Exception:  # noqa: BLE001 -- telemetry details remain redacted.
                 snapshot = None
-                LOGGER.warning("Provider runtime session snapshot failed provider=%s", provider.value)
+                LOGGER.warning(
+                    "Provider runtime session snapshot failed provider=%s",
+                    provider.value,
+                )
             credential_version = account_runtime.credentials.credential_version
             loop = asyncio.get_running_loop()
             now = loop.time()
@@ -418,8 +421,7 @@ async def recover_provider_sessions_once(
                 and snapshot.credential_generation
                 == str(account_runtime.credentials.credential_version)
                 and snapshot.local_reuse_remaining_seconds is not None
-                and snapshot.local_reuse_remaining_seconds
-                > registry.SESSION_REFRESH_WINDOW_SECONDS
+                and snapshot.local_reuse_remaining_seconds > registry.SESSION_REFRESH_WINDOW_SECONDS
             ):
                 registry.outcomes[provider] = "authenticated"
                 continue

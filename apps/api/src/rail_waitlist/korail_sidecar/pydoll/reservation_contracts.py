@@ -49,6 +49,12 @@ type KorailReservationProgressCallback = Callable[[KorailReservationProgress], N
 
 
 @dataclass(frozen=True)
+class KorailReservedSeat:
+    car_number: str
+    seat_number: str
+
+
+@dataclass(frozen=True)
 class KorailReservationRequest:
     origin: str
     destination: str
@@ -71,3 +77,4 @@ class KorailReservationResult:
     target_rechecked_at: datetime | None = None
     seat_selected_at: datetime | None = None
     reservation_requested_at: datetime | None = None
+    reserved_seats: tuple[KorailReservedSeat, ...] = ()

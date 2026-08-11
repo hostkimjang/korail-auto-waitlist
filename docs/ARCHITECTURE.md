@@ -53,6 +53,8 @@ Docker Compose는 위 서비스를 하나의 배포 단위로 실행합니다. �
 
 화면 갱신·좌석 관측 간격 API는 `timetable_refresh_interval_seconds`와 `observation_interval_seconds`를 각각 1~300초, 1~600초 범위로 관리합니다. 전역 관측 주기는 `observation_interval_seconds` 단일 DTO 필드를 사용하며, 웹 API 경계는 두 필드를 검증해 화면 모델로 명시적으로 변환하고 저장 요청에도 같은 필드명을 사용합니다. 브라우저 문서가 숨겨지면 정기 목록 조회뿐 아니라 SSE·Push 힌트가 만든 반복 무효화도 한 건으로 접고, 다시 보일 때 한 번만 최신 목록을 읽습니다. 결제기한 시계와 철도 계정 런타임 조회도 같은 가시성 경계를 지킵니다.
 
+좌석 관측의 사용자용 목표 시각 `next_check_at`과 watch별 중복 실행 방지 만료 시각 `observation_in_flight_until`은 별도 필드입니다. 작업자는 관측 준비 시 내부 만료 시각만 설정하고, 정상 완료나 명시적 cooldown 전환에서 이를 지웁니다. 예상하지 못한 provider·저장 실패에서는 만료까지 유지해 중복 호출을 막고, 만료 뒤 due selector가 다시 처리합니다. `GET /watches`는 내부 만료 시각을 노출하지 않고 `observation_execution_state`를 `idle | in_progress`로 투영합니다. 웹은 이 값을 `unknown` 경계에서 fail-closed로 검증하고 `in_progress`일 때 `next_check_at`보다 `좌석 관측 중`을 우선 표시합니다.
+
 공식 채널 인계는 provider payload의 임의 URI를 실행하지 않고 코드에 고정한 HTTPS 주소로 정규화합니다. 예매 단계는 운영사 예매 페이지, `payment_required`·완료 확인 단계는 예약·승차권 조회 페이지를 선택하며 HTTPS는 항상 새 브라우저 창으로 엽니다. 순수 PWA에는 Android `PackageManager` 권한이 없어 package 실행이나 설치 조회를 하지 않습니다. 코레일+는 예매에 `korailtalk://navigation?view=booking`, 예약 확인에 `korailtalk://navigation?view=bookedTicket`을 사용합니다. 후자는 하단 `나의 티켓`이 아니라 `전체메뉴 → 예약 승차권 조회 · 취소`와 같은 화면으로 이동합니다. SRT는 BROWSABLE `srapp://main`을 예매 홈에 사용하고, 같은 진입점에 앱이 명시적으로 읽는 고정 문자열 extra `btnNo=2`를 전달해 승차권 확인으로 이동합니다. 검증된 intent도 사용자 클릭 안에서 `target="_blank"` anchor로 실행해 설치 앱은 그대로 열고 미설치 HTTPS fallback은 외부 Custom Tab에 격리합니다. 코레일 booking·ticket과 SRT main·ticket은 서로 독립된 검증 버전·기능 플래그를 가지며, 사용자·여정·인증 데이터는 intent에 넣지 않습니다. 기본 빌드는 모든 앱 경로를 끕니다. 세부 QA 계약은 [Android 공식 앱 인계 검증](ANDROID_APP_HANDOFF_QA.md)에 있습니다.
 
 ### API
@@ -293,7 +295,7 @@ dependency bundle로 조립하는 호환 wrapper만 남고, 잠금·관측 저�
 
 Web Push는 단일 전역 구독을 마지막 브라우저의 값으로 덮어쓰지 않습니다. 브라우저와 설치된 PWA가 만든 push endpoint에서 외부에 노출하지 않는 기기 식별자를 만들고, 기기별 채널 행을 upsert합니다. 상태가 바뀌면 현재 활성 상태인 모든 알림 채널을 조회해 각 Web Push 기기에도 독립된 outbox event를 만들므로 Chrome·Edge·모바일을 함께 연결할 수 있습니다. 현재 기기가 미연결이면 설정 화면과 무관하게 전역 비차단 CTA를 표시하고, 해당 버튼의 직접 사용자 행동 안에서 권한 요청부터 구독과 서버 저장을 시작합니다. 브라우저가 직접 사용자 행동을 요구하므로 mount나 load에서 권한창을 강제하지 않으며, 브라우저 차단 상태는 사이트 권한 변경을 안내합니다. 사용자가 현재 기기 채널을 끄면 origin-local 억제 상태를 함께 저장해 전역 CTA가 즉시 다시 나타나지 않게 합니다. 설정 화면의 연결·해제와 시험 전송은 현재 브라우저 구독에 대응하는 행만 대상으로 합니다. Push service가 한 구독의 만료를 영구 응답으로 알리면 그 기기 채널만 비활성화하고 다른 활성 기기의 전달은 계속합니다.
 
-Web Push payload의 기본 클릭 목적지는 동일 출처의 PWA입니다. 서비스 워커는 같은 대기의 OS 알림을 안정적인 tag로 갱신하고, 알림을 누르면 PWA 범위의 기존 window client를 찾아 최소한의 이동 힌트를 전달한 뒤 focus합니다. 일부 Android 빌드는 백그라운드 PWA의 focus가 성공 응답 뒤에도 전면 전환을 만들지 못하므로, focus 결과가 제한 시간 안에 visible client로 확인되지 않으면 같은 client를 PWA 범위 내부 URL로 navigate해 전면 전환을 복구합니다. focus·navigate가 모두 실패하거나 실행 중인 창이 없으면 PWA 범위의 내부 URL을 `openWindow`로 엽니다. 새 window는 `openWindow` 자체의 표시 동작을 사용하며 불필요한 두 번째 focus를 기다리지 않습니다. manifest `launch_handler.client_mode`는 같은 회귀를 피하기 위해 `navigate-existing`을 사용합니다. 외부 철도사 URL은 알림의 기본 클릭 목적지로 사용하지 않습니다.
+Web Push payload의 기본 클릭 목적지는 동일 출처의 PWA입니다. 서비스 워커는 같은 대기의 OS 알림을 안정적인 tag로 갱신하고, 알림을 누르면 PWA 범위의 기존 window client를 찾아 최소한의 이동 힌트를 전달한 뒤 focus합니다. 일부 Android 빌드는 백그라운드 PWA의 focus가 성공 응답 뒤에도 전면 전환을 만들지 못하므로, focus 결과가 제한 시간 안에 visible client로 확인되지 않으면 같은 client를 PWA 범위 내부 URL로 navigate한 뒤 다시 focus합니다. navigate가 성공했더라도 재초점 결과가 visible이 아니면 전면 전환 성공으로 간주하지 않고 PWA 범위의 내부 URL을 `openWindow`로 엽니다. 실행 중인 창이 없거나 focus·navigate가 실패한 경우도 같은 복구 경로를 사용합니다. 새 window는 `openWindow` 자체의 표시 동작을 사용하며 불필요한 두 번째 focus를 기다리지 않습니다. manifest `launch_handler.client_mode`는 같은 회귀를 피하기 위해 `navigate-existing`을 사용합니다. 외부 철도사 URL은 알림의 기본 클릭 목적지로 사용하지 않습니다.
 
 종료된 PWA의 콜드 오픈에서는 navigation preload와 network-first 문서 요청으로 현재 배포의 `index.html`을 우선 사용합니다. 네트워크가 실제로 실패할 때만 캐시된 app shell로 복구하며, 같은 출처의 정적 script·style·image·font는 해시 URL별 캐시를 사용할 수 있습니다. Nginx는 `/assets/`의 존재하지 않는 이전 해시를 SPA 문서로 fallback하지 않고 404로 반환하고, `index.html`·`sw.js`는 재검증하도록 해 구 index와 삭제된 bundle이 섞인 흰 화면을 막습니다. 인증 API와 대기 목록 API는 캐시하지 않으므로 화면 뼈대가 보여도 로그인 상태와 최신 데이터는 서버 응답을 기다립니다.
 
@@ -320,6 +322,7 @@ iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push
 - `NOT_AVAILABLE` 뒤에는 확정적인 판매 불가 관측과 그 이후의 새 행동 가능 관측이 모두 있어야 다음 가용성 에피소드를 엽니다. 연속 행동 가능 관측만으로 즉시 재시도하지 않습니다.
 - `UNKNOWN`·일반 실패·보호 응답은 새 자동 시도로 재무장하지 않고 공식 예약 내역 확인 또는 계정·운영 상태 확인을 안내합니다.
 - 공식 확인에서 결제보류 종료가 확정되면 감시로 복귀하되, 예약 목록 부재와 목록에 남은 결제기한 경과를 같은 보류 종료 정책으로 다룹니다. 두 경우 모두 보류 종료 뒤 확정 비가용 관측과 그 이후의 새 행동 가능 관측이 있어야 다음 에피소드를 엽니다.
+- 사용자가 홈의 확인 대화상자에서 명시적으로 동의하면 `POST /watches/{watch_id}/reservation-rearm`이 종료된 결제보류 시도와 승인 시각을 후보에 저장하고 즉시 일반 관측 작업만 예약합니다. 명령 자체는 운영사를 호출하거나 예약하지 않습니다. 승인 뒤 같은 후보에서 더 늦게 생성된 운영사 공식 행동 가능 관측만 별도 episode를 열며, DB의 고유 episode fence가 provider 호출을 한 번으로 제한합니다. 매진·불확실 관측은 승인을 소비하지 않고, 진행 중 예약·미종료 보류·출발 경과·미인증 계정은 승인을 거절합니다.
 - 예약 결과는 공식 예약 내역에서 다시 확인할 수 있도록 안내합니다.
 - 결제 단계 전에 멈춥니다.
 
@@ -789,9 +792,31 @@ module attribute로 노출되던 SRT identity formatter 3개도 호환 alias로 
 
 화면에 표시하는 현재 좌석은 가장 최근의 유효한 관측을 사용합니다. 대기 등록 당시 정보는 변경 이력을 확인하기 위한 기록으로만 남깁니다.
 
+대기 등록 근거는 시간표가 제공한 실제 `train_type`을 함께 보존하고 `GET /watches`의 nullable
+`candidate.train_type`으로 투영합니다. migration 이전 등록 근거나 근거 없는 후보는 `null`이며 열차번호에서
+종류를 추정하지 않습니다.
+
+예약 결과·최신 예약 시도의 provider-neutral 좌석 계약은
+`reserved_seats: Array<{car_number: string; seat_number: string}>`입니다. 웹은 `unknown` 응답 경계에서 이를
+검증해 camelCase 화면 모델로 바꾸고, 각 좌석의 호차와 좌석번호가 모두 확인된 경우에만 결제 필요 카드와
+실시간 알림에 표시합니다. SRT는 검증된 예약 객체의 ticket car/seat만 사용하고, KORAIL은 결제 대기 공식
+상세 화면의 구조화된 history state에서 열차·날짜·구간·시각·좌석 등급이 요청과 모두 일치하는 단일
+`호차 + 좌석번호`만 사용합니다. 렌더링 본문은 제한된 보조 경계이며, 누락·부분값·중복값·알 수 없는 provider
+응답은 빈 목록으로 강등하되 확인된 결제 보류 상태 자체는 유지합니다. 비행동 결과의 좌석과 중복 좌석은 공통
+`ReservationResult` 경계에서 거절하며, 확인된 목록은 예약 시도 JSON, `GET /watches`, 예약 결과 outbox에 같은
+구조로 전달합니다.
+
 ## 중복과 장애를 다루는 방법
 
 - 상태 변경 요청은 같은 요청 키로 다시 들어오면 기존 결과를 재사용합니다.
+- 웹의 start 요청은 서로 다른 최초 시작·재개 에피소드마다 새 멱등 키를 만들고, 한 HTTP 호출 내부의
+  transport 재시도만 같은 키를 재사용합니다. 따라서 일시정지 전 start 결과가 이후 resume을 가로막지 않습니다.
+- pause·resume·cancel·정책 변경과 교차한 이전 웹 목록 응답은 mutation epoch로 폐기하고, 성공 응답을 반영한
+  뒤 canonical 목록을 다시 읽습니다. 기록 삭제 항목은 서버 목록에서 실제 부재가 확인될 때까지 tombstone으로
+  유지해 늦은 SSE 무효화가 화면에 되살리지 못하게 합니다.
+- 홈의 대기 취소는 watch row lock 아래 예약 claim과 직렬화합니다. 취소가 먼저면 `EXPIRED`가 이후 관측 저장과
+  예약 claim을 막고, `RESERVING`·`PAYMENT_REQUIRED`가 먼저면 취소를 409로 거절해 이미 시작된 외부 요청이나
+  임시 예약을 삭제 성공처럼 숨기지 않습니다. 종료 기록 DELETE는 활성 대기를 거절하는 기존 경계를 유지합니다.
 - 작업자는 중복 실행 방지 잠금을 얻은 작업만 처리합니다.
 - 오래 걸린 과거 응답이 최신 상태를 덮지 못하도록 갱신 순서를 확인합니다.
 - 외부 호출이 실패하면 재시도 간격을 점차 늘리고 운영사별 중단 시간을 적용합니다.

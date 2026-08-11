@@ -15,6 +15,7 @@ WATCH_ROUTES = {
     ("POST", "/api/v1/watches/{watch_id}/start"),
     ("POST", "/api/v1/watches/{watch_id}/pause"),
     ("POST", "/api/v1/watches/{watch_id}/cancel"),
+    ("POST", "/api/v1/watches/{watch_id}/reservation-rearm"),
     ("POST", "/api/v1/watches/{watch_id}/mock-transition"),
 }
 

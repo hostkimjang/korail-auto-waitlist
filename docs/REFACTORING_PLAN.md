@@ -5212,10 +5212,10 @@ npm run test:sites
 
 cd ../api
 uv lock --check
-python -m pytest
+uv run --python 3.12 --frozen --extra test --extra browser pytest
 uvx --from ruff==0.12.12 ruff check --select E,F,I .
-uv run --extra test python scripts/check_ruff_format_ratchet.py
-uv run --frozen --extra test mypy
+uv run --python 3.12 --frozen --extra test python scripts/check_ruff_format_ratchet.py
+uv run --python 3.12 --frozen --extra test --extra browser mypy
 
 cd ../..
 docker compose config --quiet

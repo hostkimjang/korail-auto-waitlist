@@ -198,8 +198,8 @@ async function bringClientToFront(client, targetUrl) {
     attemptClientAction(() => client.navigate(targetUrl)),
   );
   if (!navigated) return false;
-  await withSurfaceDeadline(attemptClientAction(() => navigated.focus()));
-  return true;
+  const refocused = await withSurfaceDeadline(attemptClientAction(() => navigated.focus()));
+  return Boolean(refocused && refocused.visibilityState === "visible");
 }
 
 async function focusOrOpenApp(data) {

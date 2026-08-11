@@ -17,16 +17,22 @@
 - [x] 새벽 `00:00–09:00`·저녁 `18:00–00:00` 시간 프리셋과 서비스 날짜 종료 경계 구분
 - [x] 일반실·특실별 대기 등록과 취소
 - [x] 홈의 감시·좌석 발견·결제 필요·인증 필요 상태
+- [x] pause·resume·cancel·정책 변경과 교차한 이전 목록 응답 폐기, mutation 후 canonical 재조회와 삭제 tombstone
+- [x] 홈 대기 취소와 예약 claim의 row-lock 직렬화, 관찰 중 취소 fence와 예매·결제 시작 뒤 409·공식 확인 보존
+- [x] 대기 후보에 시간표의 실제 열차 종류를 보존하고 `GET /watches`로 전달해 홈에서 열차번호와 함께 표시
+- [x] 공식 예약 결과에서 확인한 호차·좌석번호를 예약 시도에 보존하고 결제 필요 카드·실시간 알림에만 fail-closed 표시
 - [x] 같은 가용성 구간의 자동 예매 1회 DB fence와 판매 불가→재가용 관측 뒤에만 여는 다음 에피소드
 - [x] 예약 목록 부재·공식 결제기한 경과 두 결제보류 종료 경로의 감시 복귀와 비가용→재가용 뒤 재예매 계약
+- [x] 결제보류 종료 뒤 사용자 확인으로 공식 좌석을 즉시 다시 관측하고, 새 행동 가능 관측에서만 한 번 여는 자동 예매 재시작 계약
 - [x] 불확실·좌석 미확보 결과의 자동 반복 차단과 공식 확인·감시 복귀 외부 알림
 - [x] 화면 갱신 1~300초·전역 좌석 관측 1~600초의 일관된 API 응답·DB 제약·저장 계약
+- [x] 홈의 다음 좌석 관측 목표와 내부 실행 claim 분리, 실제 관측 중 상태의 명시적 표시
 - [x] hidden 탭의 SSE·수동 갱신 요청 단일 pending 접기와 결제기한·철도계정 polling 중단·복귀 즉시 갱신
 - [x] 브라우저 푸시·Telegram·Discord·Webhook 설정 화면
 - [x] 브라우저·설치 PWA별 Web Push 구독 저장과 모든 활성 기기 동시 발송, 현재 기기 연결·해제 계약
 - [x] 설정 화면 밖 전역 OS 알림 연결 CTA와 직접 사용자 행동 권한 요청, 명시적 기기 해제 뒤 재안내 억제
 - [x] 만료된 Web Push 구독만 비활성화하고 다른 활성 기기의 발송을 유지하는 실패 격리
-- [x] Web Push의 접속 중 상태 갱신 힌트와 알림 클릭 시 PWA 포커스·navigate 복구·열기 계약
+- [x] Web Push의 접속 중 상태 갱신 힌트와 알림 클릭 시 PWA focus·navigate 뒤 visible 재확인·`openWindow` 복구 계약
 - [x] PWA 온라인 navigation의 현재 문서 우선·오프라인 shell fallback, 이전 해시 asset 404와 navigation preload 계약
 - [x] 중요 상태·시험 Web Push의 높은 전달 우선순위와 진동 힌트, `reserving` 긴급 갱신 계약
 - [x] 상태 전이 알림의 실제 후보 열차·운행일·출도착시각·좌석등급·인원과 예약 단계 구조화, 근거 없는 후보 추정 금지
@@ -50,6 +56,7 @@
 - [x] OCI ARM64 네이티브 환경의 KORAIL Chromium 이미지 빌드와 외부 요청 없는 151개 fixture 검증
 - [x] OCI ARM64 첫 전체 배포의 전체 이미지 빌드·migration 성공과 seccomp 사용자 네임스페이스 거부에 따른 adapter readiness 실패 확인
 - [x] Linux Bash 운영 진입점, 무파괴 stop·복구·profile·복원 계약 테스트와 WSL2 Ubuntu 전체 프로필 재빌드·재생성·health 확인
+- [x] API 검증 진입점의 Python 3.12·고정 lock·test/browser 의존성 고정과 Make·Bash·PowerShell 품질 gate 일치
 - [x] Windows PowerShell 5.1 호환 필수 비밀값 생성 절차에서 다섯 값의 이름·고유성·48바이트 길이 검증
 - [x] Web Push VAPID Docker 생성 명령의 P-256 키 쌍 검증과 subject·키 보존·교체 시 재구독·HTTPS 조건 문서화
 - [x] 효과 없는 KORAIL accountless 설정·앱 조립 제거와 browser sidecar HTTP client 기능 owner 분리
@@ -142,6 +149,8 @@
 - [x] 코레일+ 7.0.0 `booking`·`ticket`·`bookedTicket` BROWSABLE resolver와 예매 화면 확인
 - [x] 코레일+ `view=ticket`의 `나의 티켓` 오인계를 분리하고 `view=bookedTicket`이 `예약 승차권 조회 · 취소` 화면을 여는지 API 36에서 확인
 - [ ] 실제 결제 직전 예약이 있는 상태에서 코레일+ `bookedTicket` 첫 화면에 해당 예약이 표시되는지 확인
+- [ ] 실제 KORAIL·SRT 결제 대기 예약에서 레일웨잇의 호차·좌석번호가 공식 예약 내역과 일치하는지 확인
+- [ ] 실제 KORAIL·SRT 결제보류 종료 건에서 사용자 확인 재시작이 공식 좌석 재관측 뒤 한 번만 예매하고, 중복 클릭·매진 관측에서는 호출하지 않는지 확인
 - [ ] 실제 KORAIL 계정에서 보호 응답 뒤 900초 backoff 동안 로그인·좌석 관측 provider 요청이 0건이고, 단일 인증 복구 성공 뒤 감시가 자동 재개되는지 확인
 - [x] SRT 2.0.41 매니페스트의 `srapp://main` BROWSABLE resolver와 실제 승차권 예매 홈 확인
 - [x] SRT 2.0.41 설치 APK의 고정 문자열 extra `btnNo=2` 처리와 실제 `승차권 확인`·비로그인 안내 화면 확인

@@ -1,4 +1,4 @@
-import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import type { WatchReadModel } from "../../api/watches";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
@@ -21,6 +21,7 @@ interface WatchMutationRequests {
   pauseWatchRequest: (id: string) => Promise<WatchMutationRecord>;
   startWatchRequest: (id: string) => Promise<WatchMutationRecord>;
   cancelWatchRequest: (id: string) => Promise<WatchMutationRecord>;
+  rearmReservationRequest: (id: string) => Promise<WatchMutationRecord>;
   updateWatchRequest: (
     id: string,
     payload: { reservation_policy: ReservationPolicy },
@@ -32,9 +33,10 @@ export interface UseWatchMutationsOptions extends WatchMutationRequests {
   demo: boolean;
   watches: ReadonlyArray<WatchMutationRecord>;
   commitWatches: CommitWatches;
+  commitWatchDeletion: (watchId: string) => void;
   pushToast: (message: string) => void;
-  beginReservationPolicyMutation: () => void;
-  endReservationPolicyMutation: () => void;
+  beginWatchMutation: () => void;
+  endWatchMutation: () => void;
   requestWatchesRefresh: () => void;
 }
 
@@ -42,9 +44,11 @@ export interface WatchMutationController {
   pauseWatch: (id: string) => Promise<void>;
   resumeWatch: (id: string) => Promise<void>;
   cancelWatch: (id: string) => Promise<WatchCancellationResult>;
+  rearmReservation: (id: string) => Promise<void>;
   changeReservationPolicy: (id: string, policy: ReservationPolicy) => Promise<void>;
   deleteWatchRecord: (id: string) => Promise<void>;
   reservationPolicyUpdatingIds: ReadonlySet<string>;
+  watchMutationPendingIds: ReadonlySet<string>;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -74,21 +78,43 @@ export function useWatchMutations({
   demo,
   watches,
   commitWatches,
+  commitWatchDeletion,
   pushToast,
-  beginReservationPolicyMutation,
-  endReservationPolicyMutation,
+  beginWatchMutation,
+  endWatchMutation,
   requestWatchesRefresh,
   pauseWatchRequest,
   startWatchRequest,
   cancelWatchRequest,
+  rearmReservationRequest,
   updateWatchRequest,
   deleteWatchRequest,
 }: UseWatchMutationsOptions): WatchMutationController {
   const [reservationPolicyUpdatingIds, setReservationPolicyUpdatingIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const pendingWatchIdsRef = useRef<Set<string>>(new Set());
+  const [watchMutationPendingIds, setWatchMutationPendingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const beginMutation = useCallback((id: string): boolean => {
+    if (pendingWatchIdsRef.current.has(id)) return false;
+    pendingWatchIdsRef.current.add(id);
+    setWatchMutationPendingIds(new Set(pendingWatchIdsRef.current));
+    beginWatchMutation();
+    return true;
+  }, [beginWatchMutation]);
+
+  const endMutation = useCallback((id: string): void => {
+    pendingWatchIdsRef.current.delete(id);
+    setWatchMutationPendingIds(new Set(pendingWatchIdsRef.current));
+    endWatchMutation();
+    requestWatchesRefresh();
+  }, [endWatchMutation, requestWatchesRefresh]);
 
   const pauseWatch = useCallback(async (id: string): Promise<void> => {
+    if (!beginMutation(id)) return;
     try {
       if (demo) {
         commitWatches((items) => items.map((watch) => watch.id === id
@@ -101,10 +127,20 @@ export function useWatchMutations({
       pushToast("대기를 일시정지했습니다.");
     } catch (error: unknown) {
       pushToast(errorMessage(error, "대기를 일시정지하지 못했습니다."));
+    } finally {
+      endMutation(id);
     }
-  }, [commitWatches, demo, pauseWatchRequest, pushToast]);
+  }, [
+    beginMutation,
+    commitWatches,
+    demo,
+    endMutation,
+    pauseWatchRequest,
+    pushToast,
+  ]);
 
   const resumeWatch = useCallback(async (id: string): Promise<void> => {
+    if (!beginMutation(id)) return;
     try {
       if (demo) {
         commitWatches((items) => items.map((watch) => watch.id === id
@@ -117,10 +153,26 @@ export function useWatchMutations({
       pushToast("대기를 재개했습니다.");
     } catch (error: unknown) {
       pushToast(errorMessage(error, "대기를 재개하지 못했습니다."));
+    } finally {
+      endMutation(id);
     }
-  }, [commitWatches, demo, pushToast, startWatchRequest]);
+  }, [
+    beginMutation,
+    commitWatches,
+    demo,
+    endMutation,
+    pushToast,
+    startWatchRequest,
+  ]);
 
   const cancelWatch = useCallback(async (id: string): Promise<WatchCancellationResult> => {
+    if (!beginMutation(id)) {
+      return watches.find((watch) => watch.id === id) ?? {
+        id,
+        status: "expired",
+        statusLabel: "만료",
+      };
+    }
     try {
       if (demo) {
         const current = watches.find((watch) => watch.id === id);
@@ -150,14 +202,24 @@ export function useWatchMutations({
     } catch (error: unknown) {
       pushToast(errorMessage(error, "대기를 취소하지 못했습니다."));
       throw error;
+    } finally {
+      endMutation(id);
     }
-  }, [cancelWatchRequest, commitWatches, demo, pushToast, watches]);
+  }, [
+    beginMutation,
+    cancelWatchRequest,
+    commitWatches,
+    demo,
+    endMutation,
+    pushToast,
+    watches,
+  ]);
 
   const changeReservationPolicy = useCallback(async (
     id: string,
     reservationPolicy: ReservationPolicy,
   ): Promise<void> => {
-    beginReservationPolicyMutation();
+    if (!beginMutation(id)) return;
     setReservationPolicyUpdatingIds((items) => new Set(items).add(id));
     try {
       let updated: WatchMutationRecord | null;
@@ -176,8 +238,7 @@ export function useWatchMutations({
     } catch (error: unknown) {
       pushToast(errorMessage(error, "대기 실행 방식을 변경하지 못했습니다."));
     } finally {
-      endReservationPolicyMutation();
-      requestWatchesRefresh();
+      endMutation(id);
       setReservationPolicyUpdatingIds((items) => {
         const next = new Set(items);
         next.delete(id);
@@ -185,32 +246,75 @@ export function useWatchMutations({
       });
     }
   }, [
-    beginReservationPolicyMutation,
+    beginMutation,
     commitWatches,
     demo,
-    endReservationPolicyMutation,
+    endMutation,
     pushToast,
-    requestWatchesRefresh,
     updateWatchRequest,
     watches,
   ]);
 
+  const rearmReservation = useCallback(async (id: string): Promise<void> => {
+    if (!beginMutation(id)) return;
+    try {
+      if (demo) {
+        commitWatches((items) => items.map((watch) => watch.id !== id
+          ? watch
+          : {
+            ...watch,
+            latestReservationAttempt: watch.latestReservationAttempt === null
+              ? null
+              : { ...watch.latestReservationAttempt, manualRearmAvailable: false },
+          }));
+      } else {
+        const updated = await rearmReservationRequest(id);
+        commitWatches((items) => replaceWatch(items, id, updated));
+      }
+      pushToast("자동 예매 재시작을 확인했습니다. 좌석을 다시 관측한 뒤 가능하면 한 번 시도합니다.");
+    } catch (error: unknown) {
+      pushToast(errorMessage(error, "자동 예매를 다시 시작하지 못했습니다."));
+      throw error;
+    } finally {
+      endMutation(id);
+    }
+  }, [
+    beginMutation,
+    commitWatches,
+    demo,
+    endMutation,
+    pushToast,
+    rearmReservationRequest,
+  ]);
+
   const deleteWatchRecord = useCallback(async (id: string): Promise<void> => {
+    if (!beginMutation(id)) return;
     try {
       if (!demo) await deleteWatchRequest(id);
-      commitWatches((items) => items.filter((watch) => watch.id !== id));
+      commitWatchDeletion(id);
       pushToast("대기 기록을 삭제했습니다.");
     } catch (error: unknown) {
       pushToast(errorMessage(error, "대기 기록을 삭제하지 못했습니다."));
+    } finally {
+      endMutation(id);
     }
-  }, [commitWatches, deleteWatchRequest, demo, pushToast]);
+  }, [
+    beginMutation,
+    commitWatchDeletion,
+    deleteWatchRequest,
+    demo,
+    endMutation,
+    pushToast,
+  ]);
 
   return {
     pauseWatch,
     resumeWatch,
     cancelWatch,
+    rearmReservation,
     changeReservationPolicy,
     deleteWatchRecord,
     reservationPolicyUpdatingIds,
+    watchMutationPendingIds,
   };
 }

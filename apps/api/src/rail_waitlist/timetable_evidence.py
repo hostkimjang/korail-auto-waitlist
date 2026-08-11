@@ -98,11 +98,12 @@ async def persist_timetable_seat_evidence(
                 if seat.provenance.fresh_until is not None
                 else None
             )
-            hash_values = {
+            hash_values: dict[str, object] = {
                 "provider": provider.value,
                 "origin_node_id": origin_node_id,
                 "destination_node_id": destination_node_id,
                 "canonical_train_number": normalize_official_train_number(item.train_number),
+                "train_type": item.train_type,
                 "departure_at": departure_at.isoformat(),
                 "passenger_count": passenger_count,
                 "seat_class": seat.seat_class.value,
@@ -128,6 +129,7 @@ async def persist_timetable_seat_evidence(
                     origin_node_id=origin_node_id,
                     destination_node_id=destination_node_id,
                     canonical_train_number=hash_values["canonical_train_number"],
+                    train_type=item.train_type,
                     departure_at=departure_at,
                     passenger_count=passenger_count,
                     seat_class=seat.seat_class,

@@ -31,15 +31,16 @@ from .reservation_contracts import (
     KorailReservationProgressCallback,
     KorailReservationRequest,
     KorailReservationResult,
+    KorailReservedSeat,
 )
 
 __all__ = (
+    "KORAIL_ROUTE_HEADING",
     "Any",
     "Awaitable",
     "BrowserSourceUnavailable",
     "Callable",
     "CurrentSchedule",
-    "KORAIL_ROUTE_HEADING",
     "KorailCredentialInput",
     "KorailReservationOutcome",
     "KorailReservationRequest",
@@ -173,6 +174,80 @@ def _reservation_date_markers(value: date) -> tuple[str, ...]:
     )
 
 
+_RESERVED_SEAT_PATTERN = re.compile(
+    r"(?<!\d)([1-9]\d?)호차\s+([1-9]\d{0,2}[A-D])(?:석|좌석)?"
+    r"(?![0-9A-Z가-힣])",
+    re.IGNORECASE,
+)
+
+
+def _single_reserved_seat(body: str) -> tuple[KorailReservedSeat, ...]:
+    matches = {
+        (match.group(1), match.group(2).upper()) for match in _RESERVED_SEAT_PATTERN.finditer(body)
+    }
+    if len(matches) != 1:
+        return ()
+    car_number, seat_number = next(iter(matches))
+    return (KorailReservedSeat(car_number=car_number, seat_number=seat_number),)
+
+
+def _reserved_seats_from_history_state(
+    value: object,
+    request: KorailReservationRequest,
+) -> tuple[KorailReservedSeat, ...]:
+    """Read the exact seat fields consumed by KORAIL's reservation-detail bundle."""
+    if not isinstance(value, Mapping):
+        return ()
+    try:
+        if _normalized_train_number(str(value.get("trainNumber", ""))) != (
+            _normalized_train_number(request.train_number)
+        ):
+            return ()
+        departure_date = str(value.get("departureDate", "")).strip()
+        departure_time = str(value.get("departureTime", "")).strip()
+        arrival_time = str(value.get("arrivalTime", "")).strip()
+        if departure_date != request.travel_date.strftime("%Y%m%d"):
+            return ()
+        if re.fullmatch(r"[0-9]{4}(?:[0-9]{2})?", departure_time) is None:
+            return ()
+        if re.fullmatch(r"[0-9]{4}(?:[0-9]{2})?", arrival_time) is None:
+            return ()
+        if departure_time[:4] != request.departure_time.strftime("%H%M"):
+            return ()
+        if arrival_time[:4] != request.arrival_time.strftime("%H%M"):
+            return ()
+        if normalize_korail_station(str(value.get("origin", ""))) != (
+            normalize_korail_station(request.origin)
+        ):
+            return ()
+        if normalize_korail_station(str(value.get("destination", ""))) != (
+            normalize_korail_station(request.destination)
+        ):
+            return ()
+    except (BrowserSourceUnavailable, TypeError, ValueError):
+        return ()
+
+    raw_seats = value.get("seats")
+    # KORAIL automatic reservation is currently allowed for exactly one passenger.
+    if not isinstance(raw_seats, list) or len(raw_seats) != 1:
+        return ()
+    raw_seat = raw_seats[0]
+    if not isinstance(raw_seat, Mapping):
+        return ()
+    if str(raw_seat.get("seatClass", "")).strip() != request.seat_class.label:
+        return ()
+    raw_car_number = str(raw_seat.get("carNumber", "")).strip()
+    raw_seat_number = str(raw_seat.get("seatNumber", "")).strip().upper()
+    if re.fullmatch(r"0*[1-9][0-9]?", raw_car_number) is None:
+        return ()
+    seat_match = re.fullmatch(r"0*([1-9][0-9]{0,2})([A-D])", raw_seat_number)
+    if seat_match is None:
+        return ()
+    car_number = str(int(raw_car_number))
+    seat_number = f"{int(seat_match.group(1))}{seat_match.group(2)}"
+    return (KorailReservedSeat(car_number=car_number, seat_number=seat_number),)
+
+
 def _sanitized_class_tokens(value: object) -> tuple[str, ...]:
     return tuple(
         token for token in str(value).split()[:8] if re.fullmatch(r"[A-Za-z0-9_-]{1,40}", token)
@@ -225,6 +300,7 @@ class PydollReservationDomDriver:
             *,
             seat_clicked: bool = False,
             reservation_clicked: bool = False,
+            reserved_seats: tuple[KorailReservedSeat, ...] = (),
         ) -> KorailReservationResult:
             return KorailReservationResult(
                 outcome=outcome,
@@ -234,6 +310,7 @@ class PydollReservationDomDriver:
                 target_rechecked_at=target_rechecked_at,
                 seat_selected_at=seat_selected_at,
                 reservation_requested_at=reservation_requested_at,
+                reserved_seats=reserved_seats,
             )
 
         rows = await self._visible_elements("li.tckList")
@@ -290,6 +367,7 @@ class PydollReservationDomDriver:
                     terminal.reason,
                     seat_clicked=True,
                     reservation_clicked=attempt.reservation_clicked,
+                    reserved_seats=terminal.reserved_seats,
                 )
             if not attempt.reservation_clicked:
                 candidates = []
@@ -410,6 +488,54 @@ class PydollReservationDomDriver:
             return len(seat_controls) == 1
         except Exception:  # noqa: BLE001 -- changed official state fails closed.
             return False
+
+    async def reserved_seats_from_preserved_state(
+        self,
+        request: KorailReservationRequest,
+    ) -> tuple[KorailReservedSeat, ...]:
+        script = """
+            (() => {
+              const state = history.state?.state;
+              if (!state || typeof state !== 'object') return null;
+              if (!Array.isArray(state.reservedTrainList) ||
+                  state.reservedTrainList.length !== 1) return null;
+              const train = state.reservedTrainList[0];
+              if (!train || typeof train !== 'object') return null;
+              const seatInfo = train.seat_infos?.seat_info;
+              if (!Array.isArray(seatInfo) || seatInfo.length !== 1) return null;
+              return {
+                trainNumber: train.h_trn_no,
+                departureDate: train.h_dpt_dt,
+                departureTime: train.h_dpt_tm,
+                arrivalTime: train.h_arv_tm,
+                origin: train.h_dpt_rs_stn_nm,
+                destination: train.h_arv_rs_stn_nm,
+                seats: seatInfo.map((seat) => ({
+                  seatClass: seat?.h_psrm_cl_nm,
+                  carNumber: seat?.h_srcar_no,
+                  seatNumber: seat?.h_seat_no,
+                })),
+              };
+            })()
+        """
+        try:
+            response = await self._execute_script(
+                script,
+                return_by_value=True,
+                await_promise=False,
+                timeout=self._timeout_ms,
+            )
+            if not isinstance(response, Mapping):
+                return ()
+            command_result = response.get("result")
+            if not isinstance(command_result, Mapping):
+                return ()
+            script_result = command_result.get("result")
+            if not isinstance(script_result, Mapping):
+                return ()
+            return _reserved_seats_from_history_state(script_result.get("value"), request)
+        except Exception:  # noqa: BLE001 -- changed official state fails closed.
+            return ()
 
     async def actionable_seat_controls(
         self,
@@ -592,8 +718,12 @@ class PydollReservationDomDriver:
         )
         pending_markers = all(marker in body for marker in ("예약취소", "장바구니", "결제하기"))
         if path.rstrip("/") == "/ticket/reservation/detail" and target_markers and pending_markers:
+            reserved_seats = await self.reserved_seats_from_preserved_state(request)
+            if not reserved_seats:
+                reserved_seats = _single_reserved_seat(body)
             return KorailReservationResult(
                 KorailReservationOutcome.PAYMENT_REQUIRED,
                 "reservation_pending_payment",
+                reserved_seats=reserved_seats,
             )
         return None

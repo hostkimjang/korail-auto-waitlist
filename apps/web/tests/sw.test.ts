@@ -445,7 +445,12 @@ describe("service worker notification click contract", () => {
 
   it("navigates a background client that focus alone cannot bring to the foreground", async () => {
     const background = windowClient("https://railwait.test/reservations", "hidden");
-    background.focus.mockResolvedValue(background);
+    background.focus
+      .mockResolvedValueOnce(background)
+      .mockImplementationOnce(async () => {
+        background.visibilityState = "visible";
+        return background;
+      });
     background.navigate.mockResolvedValue(background);
     const { listeners, openWindow } = loadServiceWorker([background]);
 
@@ -461,7 +466,13 @@ describe("service worker notification click contract", () => {
 
   it("recovers inside the existing client when navigation succeeds after a focus failure", async () => {
     const stale = windowClient("https://railwait.test/settings");
-    stale.focus.mockRejectedValue(new Error("focus is not allowed"));
+    stale.visibilityState = "hidden";
+    stale.focus
+      .mockRejectedValueOnce(new Error("focus is not allowed"))
+      .mockImplementationOnce(async () => {
+        stale.visibilityState = "visible";
+        return stale;
+      });
     stale.navigate.mockResolvedValue(stale);
     const { listeners, openWindow } = loadServiceWorker([stale]);
 
@@ -475,7 +486,7 @@ describe("service worker notification click contract", () => {
     expect(openWindow).not.toHaveBeenCalled();
   });
 
-  it("falls back to navigation when a wedged focus call never settles", async () => {
+  it("opens the app when focus remains wedged after navigation", async () => {
     vi.useFakeTimers();
     try {
       const wedged = windowClient("https://railwait.test/", "hidden");
@@ -497,7 +508,7 @@ describe("service worker notification click contract", () => {
       await work;
 
       expect(wedged.navigate).toHaveBeenCalledWith("https://railwait.test/");
-      expect(openWindow).not.toHaveBeenCalled();
+      expect(openWindow).toHaveBeenCalledWith("https://railwait.test/");
     } finally {
       vi.useRealTimers();
     }
@@ -544,6 +555,28 @@ describe("service worker notification click contract", () => {
       kind: "click",
       watchId: "watch-one",
       status: "payment_required",
+    }));
+  });
+
+  it("opens the app when navigation succeeds but the client remains hidden after refocus", async () => {
+    const background = windowClient("https://railwait.test/reservations", "hidden");
+    const opened = windowClient("https://railwait.test/");
+    const { listeners, openWindow } = loadServiceWorker([background]);
+    openWindow.mockResolvedValue(opened);
+
+    await dispatchNotificationClick(listeners, {
+      url: "/?from=notification",
+      watchId: "watch-one",
+      status: "seat_found",
+    });
+
+    expect(background.focus).toHaveBeenCalledTimes(2);
+    expect(background.navigate).toHaveBeenCalledWith("https://railwait.test/?from=notification");
+    expect(openWindow).toHaveBeenCalledWith("https://railwait.test/?from=notification");
+    expect(opened.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "click",
+      watchId: "watch-one",
+      status: "seat_found",
     }));
   });
 

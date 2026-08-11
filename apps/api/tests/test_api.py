@@ -1350,6 +1350,84 @@ async def test_watch_crud_transition_and_idempotency(client, db_engine):
         assert list((await session.scalars(select(WatchCandidate))).all()) == []
 
 
+async def test_paused_watch_start_returns_and_persists_canonical_scheduled_state(
+    client,
+    db_engine,
+) -> None:
+    created = await client.post("/api/v1/watches", json=watch_payload())
+    watch_id = created.json()["id"]
+    await client.post(f"/api/v1/watches/{watch_id}/start")
+    paused = await client.post(f"/api/v1/watches/{watch_id}/pause")
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+
+    resumed = await client.post(f"/api/v1/watches/{watch_id}/start")
+
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "scheduled"
+    assert resumed.json()["next_check_at"] is not None
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        persisted = await session.get(Watch, watch_id)
+        assert persisted is not None
+        assert persisted.status is WatchStatus.SCHEDULED
+        assert persisted.next_check_at is not None
+
+
+async def test_delete_active_watch_requires_cancellation(client, db_engine) -> None:
+    created = await client.post("/api/v1/watches", json=watch_payload())
+    watch_id = created.json()["id"]
+    started = await client.post(f"/api/v1/watches/{watch_id}/start")
+    assert started.status_code == 200
+    assert started.json()["status"] == "scheduled"
+
+    deleted = await client.delete(f"/api/v1/watches/{watch_id}")
+
+    assert deleted.status_code == 409
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        persisted = await session.get(Watch, watch_id)
+        assert persisted is not None
+        assert persisted.status is WatchStatus.SCHEDULED
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(WatchCandidate)
+                .where(WatchCandidate.watch_id == watch_id)
+            )
+            == 1
+        )
+
+
+async def test_payment_required_watch_cannot_hide_hold_by_cancelling(client) -> None:
+    created = await client.post("/api/v1/watches", json=watch_payload())
+    watch_id = created.json()["id"]
+    await client.post(f"/api/v1/watches/{watch_id}/start")
+    await client.post(f"/api/v1/watches/{watch_id}/mock-transition?target=watching")
+    await client.post(f"/api/v1/watches/{watch_id}/mock-transition?target=seat_found")
+    payment_required = await client.post(
+        f"/api/v1/watches/{watch_id}/mock-transition",
+        params={
+            "target": "payment_required",
+            "payment_deadline": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+        },
+    )
+    assert payment_required.status_code == 200, payment_required.text
+    assert payment_required.json()["status"] == "payment_required"
+
+    cancelled = await client.post(f"/api/v1/watches/{watch_id}/cancel")
+
+    assert cancelled.status_code == 409
+    assert cancelled.json()["detail"] == (
+        "예매 요청이 이미 시작되었거나 결제가 필요한 예약이 있어 대기를 취소할 수 "
+        "없습니다. 공식 예약 내역을 확인해 주세요."
+    )
+    current = await client.get(f"/api/v1/watches/{watch_id}")
+    assert current.status_code == 200
+    assert current.json()["status"] == "payment_required"
+    assert current.json()["payment_deadline"] is not None
+
+
 async def test_concurrent_watch_create_reuses_one_idempotent_resource(client, db_engine):
     headers = {"Idempotency-Key": "concurrent-create-seoul-busan"}
     first, second = await asyncio.gather(
@@ -1637,10 +1715,12 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
         "started_at": started_at.isoformat().replace("+00:00", "Z"),
         "finished_at": (started_at + timedelta(seconds=4)).isoformat().replace("+00:00", "Z"),
         "progress_stages": [],
+        "reserved_seats": [],
         "post_deadline_reconciled_at": None,
         "payment_hold_end_reason": None,
         "retryable": True,
         "manual_check_required": False,
+        "manual_rearm_available": False,
         "retry_condition": "new_availability_episode",
     }
     assert attempts[1]["outcome"] == "failed"
@@ -1715,10 +1795,12 @@ async def test_watch_read_projects_ended_srt_374_hold_as_new_episode_retry(app, 
         "started_at": started_at.isoformat().replace("+00:00", "Z"),
         "finished_at": (started_at + timedelta(seconds=2)).isoformat().replace("+00:00", "Z"),
         "progress_stages": [],
+        "reserved_seats": [],
         "post_deadline_reconciled_at": reconciled_at.isoformat().replace("+00:00", "Z"),
         "payment_hold_end_reason": "confirmed_payment_hold_no_longer_present",
         "retryable": True,
         "manual_check_required": False,
+        "manual_rearm_available": False,
         "retry_condition": "new_availability_episode",
     }
 

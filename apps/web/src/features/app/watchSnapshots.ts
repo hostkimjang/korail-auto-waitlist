@@ -4,6 +4,7 @@ import {
   type WatchLifecycleSnapshot,
 } from "./watchLifecycleSnapshot";
 import type {
+  ReservedSeat,
   ReservationProgressStage,
 } from "../../domain/reservationAttempt";
 
@@ -30,6 +31,7 @@ export interface SeatFoundTransition {
   reservationPolicy?: string;
   paymentDeadline?: string | null;
   reservationProgress?: ReadonlyArray<ReservationProgressStage>;
+  reservedSeats?: ReadonlyArray<ReservedSeat>;
 }
 
 export type SeatAvailabilityLostTransition = SeatFoundTransition;
@@ -107,6 +109,7 @@ function transitionContext(
     ? undefined
     : watch.reservationCandidateContexts[attemptCandidateId];
   const reservationProgress = watch.latestReservationAttempt?.progressStages ?? [];
+  const reservedSeats = watch.latestReservationAttempt?.reservedSeats ?? [];
   return {
     id: watch.id,
     provider: watch.provider,
@@ -122,6 +125,7 @@ function transitionContext(
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(finishedAt === undefined ? {} : { finishedAt }),
     ...(reservationProgress.length === 0 ? {} : { reservationProgress }),
+    ...(reservedSeats.length === 0 ? {} : { reservedSeats }),
     reservationPolicy: watch.reservationPolicy,
     paymentDeadline: watch.paymentDeadline,
   };

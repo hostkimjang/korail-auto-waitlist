@@ -1,4 +1,5 @@
 import type { AppNotificationInput } from "./notificationCenter";
+import { normalizeReservedSeats } from "../../domain/reservationAttempt";
 import {
   buildReservationRecoveryToast,
   buildWatchActionToast,
@@ -137,6 +138,9 @@ function transitionFromEvent(
     revisionAt,
   );
   const monitoringResumed = event.payload.monitoring_resumed;
+  const reservedSeats = status === "payment_required"
+    ? normalizeReservedSeats(event.payload.reserved_seats)
+    : [];
   return {
     id: watchId,
     provider: watch.provider,
@@ -156,6 +160,7 @@ function transitionFromEvent(
     ...(startedAt === null ? {} : { startedAt }),
     ...(finishedAt === null ? {} : { finishedAt }),
     ...(progress.length === 0 ? {} : { reservationProgress: progress }),
+    ...(reservedSeats.length === 0 ? {} : { reservedSeats }),
     ...(typeof monitoringResumed === "boolean" ? { monitoringResumed } : {}),
   };
 }

@@ -80,8 +80,9 @@ interface DemoStation {
   providerMembershipVerified: false;
 }
 
-interface DemoWatchCandidateInput extends Omit<MappedWatchCandidate, "id"> {
+interface DemoWatchCandidateInput extends Omit<MappedWatchCandidate, "id" | "train_type"> {
   id?: string;
+  train_type?: string | null;
 }
 
 export interface DemoWatchInput {
@@ -111,10 +112,12 @@ export function createDemoWatch(input: DemoWatchInput): ProjectedWatch {
     .map((candidate, index): ProjectedWatchCandidate => ({
       id: candidate.id ?? `${input.id}:candidate:${index + 1}`,
       trainNumber: candidate.train_number,
+      trainType: candidate.train_type ?? null,
       departureAt: candidate.departure_at,
       arrivalAt: candidate.arrival_at,
       seatClass: candidate.seat_class,
       train_number: candidate.train_number,
+      train_type: candidate.train_type ?? null,
       departure_at: candidate.departure_at,
       arrival_at: candidate.arrival_at,
       seat_class: candidate.seat_class,
@@ -146,6 +149,7 @@ export function createDemoWatch(input: DemoWatchInput): ProjectedWatch {
     createdAt: null,
     updatedAt: null,
     train: input.train,
+    trainType: candidates[0]?.trainType ?? null,
     route: input.route,
     departure: input.departure,
     arrival: input.arrival,
@@ -164,12 +168,14 @@ export function createDemoWatch(input: DemoWatchInput): ProjectedWatch {
     officialBookingUrl: input.officialBookingUrl ?? null,
     operational: null,
     latestReservationAttempt: null,
+    paymentRequiredReservedSeats: [],
     seatFoundObservation: null,
     reservationCandidateContexts,
     reservationPolicy,
     seatObservationMode: "balanced",
     focusedObservationIntervalSeconds: 25,
     nextCheckAt: null,
+    observationExecutionState: "idle",
   };
 }
 

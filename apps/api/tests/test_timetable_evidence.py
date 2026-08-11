@@ -254,6 +254,39 @@ async def test_observed_add_to_watch_seats_issue_evidence_and_create_watches(cli
             ),
         )
         assert created.status_code == 201, created.text
+        assert created.json()["candidates"][0]["train_type"] == "KTX"
+
+
+async def test_legacy_evidence_without_train_type_projects_null(client, db_engine) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with factory() as session:
+        evidence = TimetableSeatEvidence(
+            evidence_hash="f" * 64,
+            provider=Provider.KORAIL,
+            origin_node_id="0010",
+            destination_node_id="0001",
+            canonical_train_number="26",
+            train_type=None,
+            departure_at=DEPARTURE.astimezone(UTC),
+            passenger_count=1,
+            seat_class=SeatClass.STANDARD,
+            status=SeatObservationStatus.SOLD_OUT,
+            provenance_kind="official_provider",
+            source="legacy-provider",
+            observed_at=now,
+            registration_allowed=True,
+            created_at=now,
+            registration_valid_until=now + timedelta(minutes=5),
+        )
+        session.add(evidence)
+        await session.commit()
+        evidence_id = evidence.id
+
+    created = await client.post("/api/v1/watches", json=watch_payload(evidence_id))
+
+    assert created.status_code == 201, created.text
+    assert created.json()["candidates"][0]["train_type"] is None
 
 
 async def test_provider_and_user_confirmed_provenance_remain_distinct(

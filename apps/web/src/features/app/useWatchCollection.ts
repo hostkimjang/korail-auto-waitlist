@@ -65,8 +65,11 @@ interface UseWatchCollectionOptions<TWatch extends LegacyWatchSnapshot> {
 export interface WatchCollectionController<TWatch extends LegacyWatchSnapshot> {
   watches: ReadonlyArray<TWatch>;
   commitWatches: Dispatch<SetStateAction<ReadonlyArray<TWatch>>>;
+  commitWatchDeletion: (watchId: string) => void;
   refreshState: WatchRefreshState;
   requestRefresh: () => void;
+  beginWatchMutation: () => void;
+  endWatchMutation: () => void;
   beginReservationPolicyMutation: () => void;
   endReservationPolicyMutation: () => void;
 }
@@ -107,7 +110,8 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
   const hasCanonicalSnapshotRef = useRef(false);
   const lifecycleEpochRef = useRef(0);
   const activeLifecycleEpochRef = useRef<number | null>(null);
-  const reservationPolicyMutationGuardRef = useRef(createReservationPolicyMutationGuard());
+  const watchMutationGuardRef = useRef(createReservationPolicyMutationGuard());
+  const deletedWatchIdsRef = useRef(new Set<string>());
   const refreshAnimationRef = useRef<RefreshAnimation>({
     generation: 0,
     startedAt: 0,
@@ -126,9 +130,14 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
     });
   }, []);
 
+  const commitWatchDeletion = useCallback((watchId: string): void => {
+    deletedWatchIdsRef.current.add(watchId);
+    commitWatches((current) => current.filter((watch) => watch.id !== watchId));
+  }, [commitWatches]);
+
   const reloadWatches = useCallback(async (lifecycleEpoch: number): Promise<void> => {
     if (demo || activeLifecycleEpochRef.current !== lifecycleEpoch) return;
-    const reservationPolicyMutationSnapshot = reservationPolicyMutationGuardRef.current.snapshot();
+    const watchMutationSnapshot = watchMutationGuardRef.current.snapshot();
     const refreshAnimation = refreshAnimationRef.current;
     refreshAnimation.generation += 1;
     const refreshGeneration = refreshAnimation.generation;
@@ -141,18 +150,23 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
     try {
       const watchItems = await loadWatches();
       if (activeLifecycleEpochRef.current !== lifecycleEpoch) return;
-      if (!reservationPolicyMutationGuardRef.current.isCurrent(
-        reservationPolicyMutationSnapshot,
+      if (!watchMutationGuardRef.current.isCurrent(
+        watchMutationSnapshot,
       )) {
-        // A policy PATCH crossed this GET. Its older snapshot must not overwrite
-        // the newer ticket-level choice; the mutation schedules a fresh reload.
+        // A watch mutation crossed this GET. Its older snapshot must not overwrite
+        // the mutation response; every mutation schedules a fresh canonical reload.
         return;
+      }
+      const deletedWatchIds = deletedWatchIdsRef.current;
+      const visibleWatchItems = watchItems.filter((watch) => !deletedWatchIds.has(watch.id));
+      for (const watchId of deletedWatchIds) {
+        if (!watchItems.some((watch) => watch.id === watchId)) deletedWatchIds.delete(watchId);
       }
       const isInitialCanonicalSnapshot = !hasCanonicalSnapshotRef.current;
       hasCanonicalSnapshotRef.current = true;
       const previous = watchesRef.current;
       const previousSnapshots = previous.map((watch) => snapshotOfRef.current(watch));
-      const nextSnapshots = watchItems.map((watch) => snapshotOfRef.current(watch));
+      const nextSnapshots = visibleWatchItems.map((watch) => snapshotOfRef.current(watch));
       const transitions = detectSeatFoundTransitions(previousSnapshots, nextSnapshots);
       const availabilityLosses = detectSeatAvailabilityLostTransitions(
         previousSnapshots,
@@ -165,7 +179,7 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
         const notice = buildLiveReservationNotice(event, nextSnapshots);
         return notice === null ? [] : [notice];
       });
-      const reconciled = reconcileWatchSnapshots(previous, watchItems);
+      const reconciled = reconcileWatchSnapshots(previous, visibleWatchItems);
       watchesRef.current = reconciled;
       setWatches(reconciled);
       setRefreshState((current) => ({ ...current, lastRefreshedAt: new Date() }));
@@ -259,16 +273,22 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
     reloadCoordinatorRef.current?.request();
   }, []);
 
-  const beginReservationPolicyMutation = useCallback((): void => {
-    reservationPolicyMutationGuardRef.current.begin();
+  const beginWatchMutation = useCallback((): void => {
+    watchMutationGuardRef.current.begin();
   }, []);
 
-  const endReservationPolicyMutation = useCallback((): void => {
-    reservationPolicyMutationGuardRef.current.end();
+  const endWatchMutation = useCallback((): void => {
+    watchMutationGuardRef.current.end();
   }, []);
+
+  const beginReservationPolicyMutation = beginWatchMutation;
+  const endReservationPolicyMutation = endWatchMutation;
 
   useEffect(() => {
-    if (!authenticated) hasCanonicalSnapshotRef.current = false;
+    if (!authenticated) {
+      hasCanonicalSnapshotRef.current = false;
+      deletedWatchIdsRef.current.clear();
+    }
   }, [authenticated]);
 
   useEffect(() => {
@@ -337,8 +357,11 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
   return {
     watches,
     commitWatches,
+    commitWatchDeletion,
     refreshState,
     requestRefresh,
+    beginWatchMutation,
+    endWatchMutation,
     beginReservationPolicyMutation,
     endReservationPolicyMutation,
   };

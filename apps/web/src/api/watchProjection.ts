@@ -2,6 +2,7 @@ import { seatObservationReasonMeta } from "../domain/seatDiagnostics";
 import {
   mapLatestReservationAttempt,
   type LatestReservationAttempt,
+  type ReservedSeat,
 } from "../domain/reservationAttempt";
 import {
   normalizeReservationPolicy,
@@ -9,6 +10,8 @@ import {
 } from "../domain/reservationPolicy";
 import {
   isWatchSeatClass,
+  normalizeWatchObservationExecutionState,
+  type WatchObservationExecutionState,
   type WatchObservationMode,
   type WatchProvider,
   type WatchSeatClass,
@@ -43,6 +46,7 @@ interface WatchCandidateReadModelBase {
 
 export interface WatchCandidateReadModel extends WatchCandidateReadModelBase {
   trainNumber: string;
+  trainType?: string | null;
   departureAt: string;
   arrivalAt: string | null;
   seatClass: WatchSeatClass;
@@ -50,6 +54,7 @@ export interface WatchCandidateReadModel extends WatchCandidateReadModelBase {
 
 export interface MappedWatchCandidate extends WatchCandidateReadModelBase {
   train_number: string;
+  train_type?: string | null;
   departure_at: string;
   arrival_at: string | null;
   seat_class: WatchSeatClass;
@@ -82,6 +87,7 @@ interface WatchReadModelBase {
   provider: WatchProvider;
   status: WatchStatus;
   train: string;
+  trainType?: string | null;
   route: string;
   departure: string;
   arrival: string;
@@ -100,6 +106,7 @@ interface WatchReadModelBase {
   officialBookingUrl: string | null;
   operational: OperationalCandidateMeta | null;
   latestReservationAttempt: LatestReservationAttempt | null;
+  paymentRequiredReservedSeats: ReadonlyArray<ReservedSeat>;
   latestReservationAttemptCandidateId?: string | null;
   seatFoundObservation: SeatFoundObservation | null;
   reservationCandidateContexts: Record<string, ReservationCandidateContext>;
@@ -107,6 +114,7 @@ interface WatchReadModelBase {
   seatObservationMode: WatchObservationMode;
   focusedObservationIntervalSeconds: number;
   nextCheckAt: string | null;
+  observationExecutionState?: WatchObservationExecutionState;
 }
 
 export interface WatchReadModel extends WatchReadModelBase {
@@ -114,6 +122,7 @@ export interface WatchReadModel extends WatchReadModelBase {
   paymentDeadline: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  observationExecutionState: WatchObservationExecutionState;
 }
 
 export interface MappedWatch extends WatchReadModelBase {
@@ -285,10 +294,12 @@ export function mapWatch(value: unknown): ProjectedWatch {
           mapped: {
             id: candidate.id,
             trainNumber: candidate.train_number,
+            trainType: candidate.train_type,
             departureAt: candidate.departure_at,
             arrivalAt: candidate.arrival_at,
             seatClass: candidate.seat_class,
             train_number: candidate.train_number,
+            train_type: candidate.train_type,
             departure_at: candidate.departure_at,
             arrival_at: candidate.arrival_at,
             seat_class: candidate.seat_class,
@@ -304,14 +315,6 @@ export function mapWatch(value: unknown): ProjectedWatch {
       : ["auth_required", "failed"].includes(watch.status)
         ? prioritizedCandidates.find(({ raw }) => raw.state === "failed")
         : null;
-  const selectedCandidate = statePreferredCandidate
-    ?? (watch.status === "seat_found"
-      ? prioritizedCandidates.find(({ raw }) => (
-        hasActionableLatestObservation(raw, watch.provider)
-      ))
-      : null)
-    ?? prioritizedCandidates[0]
-    ?? null;
   const latestAttemptOwner = prioritizedCandidates.reduce<{
     candidateId: string;
     attempt: LatestReservationAttempt;
@@ -323,8 +326,24 @@ export function mapWatch(value: unknown): ProjectedWatch {
     }
     return latest;
   }, null);
+  const endedHoldCandidate = watch.status === "watching"
+    && latestAttemptOwner?.attempt.paymentHoldEndedAt
+    ? prioritizedCandidates.find(({ mapped }) => mapped.id === latestAttemptOwner.candidateId)
+    : null;
+  const selectedCandidate = statePreferredCandidate
+    ?? endedHoldCandidate
+    ?? (watch.status === "seat_found"
+      ? prioritizedCandidates.find(({ raw }) => (
+        hasActionableLatestObservation(raw, watch.provider)
+      ))
+      : null)
+    ?? prioritizedCandidates[0]
+    ?? null;
   const candidate = selectedCandidate?.raw ?? null;
   const mappedCandidate = selectedCandidate?.mapped ?? null;
+  const selectedCandidateReservationAttempt = mapLatestReservationAttempt(
+    candidate?.latest_reservation_attempt,
+  );
   const seatClass = mappedCandidate?.seatClass
     ?? watchSeatClass(watch.seat_class)
     ?? "any";
@@ -407,7 +426,13 @@ export function mapWatch(value: unknown): ProjectedWatch {
   const operational = mapOperationalCandidate(candidate);
   const latestReservationAttempt = latestAttemptOwner?.attempt ?? null;
   if (currentObservation) seatEvidenceLabel = currentObservation.label;
-  const seatFoundObservation: SeatFoundObservation | null = watch.status === "seat_found"
+  const paymentHoldEndedForSelectedCandidate = latestReservationAttempt?.paymentHoldEndedAt !== null
+    && latestReservationAttempt?.paymentHoldEndedAt !== undefined
+    && latestAttemptOwner?.candidateId === mappedCandidate?.id;
+  const seatFoundObservation: SeatFoundObservation | null = (
+    watch.status === "seat_found"
+      || (watch.status === "watching" && paymentHoldEndedForSelectedCandidate)
+  )
     && currentObservation?.actionable
     && ["KORAIL", "SRT", "MOCK"].includes(normalizedProvider)
     ? {
@@ -451,6 +476,7 @@ export function mapWatch(value: unknown): ProjectedWatch {
       : Array.isArray(watch.train_numbers) && typeof watch.train_numbers[0] === "string"
         ? watch.train_numbers[0]
         : "열차 미정",
+    trainType: mappedCandidate?.trainType ?? null,
     route: `${watch.origin} → ${watch.destination}`,
     departure: mappedCandidate !== null
       ? timetableTimeLabel(mappedCandidate.departureAt)
@@ -469,6 +495,9 @@ export function mapWatch(value: unknown): ProjectedWatch {
     lastCheckedLabel,
     operational,
     latestReservationAttempt,
+    paymentRequiredReservedSeats: watch.status === "payment_required"
+      ? selectedCandidateReservationAttempt?.reservedSeats ?? []
+      : [],
     latestReservationAttemptCandidateId: latestAttemptOwner?.candidateId ?? null,
     origin: watch.origin,
     destination: watch.destination,
@@ -484,5 +513,8 @@ export function mapWatch(value: unknown): ProjectedWatch {
       ? Number(watch.focused_observation_interval_seconds)
       : 25,
     nextCheckAt: awareTimestamp(watch.next_check_at) ? watch.next_check_at : null,
+    observationExecutionState: normalizeWatchObservationExecutionState(
+      watch.observation_execution_state,
+    ),
   };
 }

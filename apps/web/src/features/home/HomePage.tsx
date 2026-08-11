@@ -39,7 +39,9 @@ export interface HomePageProps {
   onResume: ActiveWatchListProps["onResume"];
   onCancel: ActiveWatchListProps["onCancel"];
   onChangeReservationPolicy?: ActiveWatchListProps["onChangeReservationPolicy"];
+  onManualReservationRearm?: ActiveWatchListProps["onManualReservationRearm"];
   reservationPolicyUpdatingIds?: ReadonlySet<string>;
+  watchMutationPendingIds?: ReadonlySet<string>;
   onToast: HomeToast;
   renderSeatFoundAction: NonNullable<ActiveWatchListProps["renderSeatFoundAction"]>;
 }
@@ -54,6 +56,7 @@ export interface HomeCompatibilityProps extends Pick<
   | "onCancel"
   | "onChangeReservationPolicy"
   | "reservationPolicyUpdatingIds"
+  | "watchMutationPendingIds"
   | "onToast"
 > {
   paymentWatch?: LegacyPaymentRequiredWatch | null;
@@ -122,7 +125,9 @@ export function HomePage({
   onResume,
   onCancel,
   onChangeReservationPolicy,
+  onManualReservationRearm,
   reservationPolicyUpdatingIds = new Set<string>(),
+  watchMutationPendingIds = new Set<string>(),
   onToast,
   renderSeatFoundAction,
 }: HomePageProps): ReactElement {
@@ -151,10 +156,12 @@ export function HomePage({
         onResume={onResume}
         onCancel={onCancel}
         reservationPolicyUpdatingIds={reservationPolicyUpdatingIds}
+        watchMutationPendingIds={watchMutationPendingIds}
         onOpenRailAccounts={onOpenRailAccounts}
         renderSeatFoundAction={renderSeatFoundAction}
         {...(onRefreshWatches ? { onRefresh: onRefreshWatches } : {})}
         {...(onChangeReservationPolicy ? { onChangeReservationPolicy } : {})}
+        {...(onManualReservationRearm ? { onManualReservationRearm } : {})}
       />
     </div>
   );

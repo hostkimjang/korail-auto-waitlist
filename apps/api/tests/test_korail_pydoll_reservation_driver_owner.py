@@ -58,6 +58,7 @@ PRIVATE_SYMBOLS = {
     "_has_exact_train_number_marker",
     "_normalized_train_number",
     "_reservation_date_markers",
+    "_single_reserved_seat",
     "_sanitized_class_tokens",
 }
 OWNER_DEFINITIONS = {
@@ -72,6 +73,7 @@ OWNER_DEFINITIONS = {
     "_has_exact_train_number_marker",
     "_normalized_train_number",
     "_reservation_date_markers",
+    "_single_reserved_seat",
     "_sanitized_class_tokens",
 }
 LEGACY_PICKLES = {

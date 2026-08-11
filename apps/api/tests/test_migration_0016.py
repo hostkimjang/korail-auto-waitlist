@@ -44,9 +44,7 @@ def test_migration_0016_adds_persisted_ui_preferences(tmp_path, monkeypatch):
 
     command.downgrade(config, "0015_execution_lease")
     with sqlite3.connect(database_path) as connection:
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(admin_accounts)")
-        }
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(admin_accounts)")}
         assert "timetable_refresh_interval_seconds" not in columns
         assert "preferences_updated_at" not in columns
 

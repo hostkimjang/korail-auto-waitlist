@@ -1,10 +1,12 @@
 import type { ReservationCandidateContext, WatchReadModel } from "../../api/watchProjection";
 import type {
   PaymentHoldEndReason,
+  ReservedSeat,
   ReservationAttemptOutcome,
   ReservationProgressStage,
   ReservationRetryCondition,
 } from "../../domain/reservationAttempt";
+import { normalizeReservedSeats } from "../../domain/reservationAttempt";
 import { normalizeReservationPolicy, type ReservationPolicy } from "../../domain/reservationPolicy";
 import { isWatchStatus, type WatchStatus } from "../../domain/watch";
 
@@ -36,6 +38,7 @@ export interface WatchLifecycleAttempt {
   progressStages?: ReadonlyArray<ReservationProgressStage>;
   paymentHoldEndedAt: string | null;
   paymentHoldEndReason?: PaymentHoldEndReason | null;
+  reservedSeats?: ReadonlyArray<ReservedSeat>;
 }
 
 export type WatchLifecycleCandidateContext = Partial<ReservationCandidateContext>;
@@ -83,6 +86,11 @@ function trimmedText(value: unknown): string | null {
 function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
   if (!isRecord(value)) return null;
   const reason = value.paymentHoldEndReason;
+  const legacyReservedSeats = Array.isArray(value.reservedSeats)
+    ? value.reservedSeats.map((seat) => isRecord(seat)
+      ? { car_number: seat.carNumber, seat_number: seat.seatNumber }
+      : seat)
+    : value.reserved_seats;
   return {
     outcome: typeof value.outcome === "string"
       && [
@@ -116,6 +124,7 @@ function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
       || reason === "confirmed_payment_hold_no_longer_present"
       ? reason
       : null,
+    reservedSeats: normalizeReservedSeats(legacyReservedSeats),
   };
 }
 
@@ -168,6 +177,7 @@ export function mapWatchLifecycleSnapshot(watch: WatchReadModel): WatchLifecycle
         progressStages: attempt.progressStages ?? [],
         paymentHoldEndedAt: attempt.paymentHoldEndedAt,
         paymentHoldEndReason: attempt.paymentHoldEndReason ?? null,
+        reservedSeats: attempt.reservedSeats ?? [],
       },
     latestReservationAttemptCandidateId: watch.latestReservationAttemptCandidateId ?? null,
     paymentDeadline: watch.paymentDeadline ?? null,

@@ -305,10 +305,13 @@ export async function createWatch(
 
 export async function startWatch(id: string): Promise<ProjectedWatch> {
   const normalizedId = watchId(id);
+  // One logical start episode owns one key. If the request transport retries this
+  // invocation it reuses the header, while a later pause -> resume gets a new key.
+  const idempotencyKey = crypto.randomUUID();
   try {
     return mapWatch(await request(`/watches/${normalizedId}/start`, {
       method: "POST",
-      headers: { "Idempotency-Key": `watch-start:${id}` },
+      headers: { "Idempotency-Key": idempotencyKey },
     }));
   } catch (error) {
     if (error instanceof ApiError) error.operation = "watch.start";
@@ -342,6 +345,14 @@ export async function cancelWatch(id: string): Promise<ProjectedWatch> {
   return mapWatch(await request(`/watches/${normalizedId}/cancel`, {
     method: "POST",
     headers: { "Idempotency-Key": `watch-cancel:${id}` },
+  }));
+}
+
+export async function rearmWatchReservation(id: string): Promise<ProjectedWatch> {
+  const normalizedId = watchId(id);
+  return mapWatch(await request(`/watches/${normalizedId}/reservation-rearm`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
   }));
 }
 

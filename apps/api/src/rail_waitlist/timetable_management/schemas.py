@@ -234,7 +234,7 @@ class TimetableSeatEvidenceRead(ApiModel):
 class TimetableItem(ApiModel):
     provider: Provider
     train_number: str
-    train_type: str
+    train_type: str = Field(min_length=1, max_length=40)
     origin: str
     destination: str
     departure_at: datetime
@@ -247,6 +247,16 @@ class TimetableItem(ApiModel):
     seat_classes: list[SeatClassAvailability] = Field(default_factory=list, max_length=5)
     official_booking_url: AnyHttpUrl
     official_search_url: AnyHttpUrl | None = None
+
+    @field_validator("train_type", mode="before")
+    @classmethod
+    def normalize_train_type(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("train_type cannot be blank")
+        return normalized
 
     @field_validator("official_booking_url", "official_search_url")
     @classmethod

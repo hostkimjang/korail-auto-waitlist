@@ -23,6 +23,7 @@ PUBLIC_SYMBOLS = {
     "KorailReservationConfirmationResult",
     "KorailReservationOutcomeValue",
     "KorailReservationSeatClassValue",
+    "KorailReservedSeat",
     "KorailReserveOnceRequest",
     "KorailReserveOnceResult",
     "KorailSessionActorStateValue",
@@ -35,6 +36,7 @@ MODEL_SYMBOLS = {
     "KorailSessionStateResult",
     "KorailReservationConfirmationRequest",
     "KorailReservationConfirmationResult",
+    "KorailReservedSeat",
     "KorailReserveOnceRequest",
     "KorailReserveOnceResult",
 }
@@ -192,8 +194,10 @@ def test_reserve_result_preserves_progress_evidence_contract() -> None:
         target_rechecked_at=now + timedelta(seconds=1),
         seat_selected_at=now + timedelta(seconds=2),
         reservation_requested_at=now + timedelta(seconds=3),
+        reserved_seats=[{"car_number": "4", "seat_number": "8A"}],
     )
     assert result.reservation_requested_at == now + timedelta(seconds=3)
+    assert result.reserved_seats[0].seat_number == "8A"
     with pytest.raises(ValidationError, match="seat_selected_at requires seat_clicked"):
         canonical.KorailReserveOnceResult.model_validate(
             {**result.model_dump(), "seat_clicked": False}
@@ -203,6 +207,16 @@ def test_reserve_result_preserves_progress_evidence_contract() -> None:
             {
                 **result.model_dump(),
                 "target_rechecked_at": now + timedelta(seconds=4),
+            }
+        )
+    with pytest.raises(ValidationError):
+        canonical.KorailReserveOnceResult.model_validate(
+            {
+                **result.model_dump(),
+                "reserved_seats": [
+                    {"car_number": "4", "seat_number": "8A"},
+                    {"car_number": "5", "seat_number": "9B"},
+                ],
             }
         )
 
@@ -240,6 +254,7 @@ symbols = {
     "KorailReservationConfirmationResult",
     "KorailReservationOutcomeValue",
     "KorailReservationSeatClassValue",
+    "KorailReservedSeat",
     "KorailReserveOnceRequest",
     "KorailReserveOnceResult",
     "KorailSessionActorStateValue",

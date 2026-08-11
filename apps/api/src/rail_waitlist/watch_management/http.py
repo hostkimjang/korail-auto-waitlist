@@ -20,7 +20,14 @@ from ..reservations.attempt_runtime import (
     complete_reservation_attempt,
 )
 from ..reservations.contracts import ReservationResult
+from ..reservations.manual_rearm_application import (
+    ManualReservationRearmNotFound,
+    ManualReservationRearmRejected,
+)
+from ..reservations.manual_rearm_runtime import authorize_manual_reservation_rearm
 from .application import should_enqueue_after_policy_update, should_enqueue_after_start
+from .cancel_application import WatchCancellationInProgress
+from .cancel_runtime import cancel_watch as cancel_watch_runtime
 from .command_runtime import create_watch, update_watch
 from .create_application import (
     WatchCreateForbidden,
@@ -251,13 +258,35 @@ async def watches_cancel(
 ) -> WatchRead:
     watch = await _find_watch_or_404(session, watch_id)
     try:
-        cancelled = await transition_watch(session, watch, WatchStatus.EXPIRED, idempotency_key)
+        cancelled = await cancel_watch_runtime(session, watch, idempotency_key)
+    except WatchTransitionCommandNotFound as error:
+        raise HTTPException(404, str(error)) from None
     except IdempotencyConflict as error:
+        raise HTTPException(409, str(error)) from None
+    except (WatchCancellationInProgress, WatchTransitionRejected) as error:
         raise HTTPException(409, str(error)) from None
     return await watch_read(
         session,
         cancelled,
     )
+
+
+@router.post("/watches/{watch_id}/reservation-rearm", response_model=WatchRead)
+async def watches_reservation_rearm(
+    watch_id: str,
+    session: Session,
+    _idempotency_key: IdempotencyKey = None,
+) -> WatchRead:
+    """Authorize one retry after an officially confirmed payment-hold end."""
+    try:
+        result = await authorize_manual_reservation_rearm(session, watch_id)
+    except ManualReservationRearmNotFound as error:
+        raise HTTPException(404, str(error)) from None
+    except ManualReservationRearmRejected as error:
+        raise HTTPException(409, str(error)) from None
+    if result.created:
+        enqueue_immediate_watch_processing(result.watch.id)
+    return await watch_read(session, result.watch)
 
 
 @router.post("/watches/{watch_id}/mock-transition", response_model=WatchRead)

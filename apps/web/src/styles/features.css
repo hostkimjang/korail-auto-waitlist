@@ -67,6 +67,13 @@
   font-weight: 800;
 }
 
+.payment-reserved-seats {
+  width: fit-content;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .watch-management-hero {
   min-height: 250px;
   display: flex;
@@ -607,10 +614,29 @@
 .watch-booking-action {
   grid-area: booking;
   min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .watch-booking-button {
   min-width: 72px;
+}
+
+.watch-rearm-button {
+  min-height: 44px;
+  white-space: normal;
+}
+
+.reservation-rearm-panel {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.reservation-rearm-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: #9a5b17;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .watch-control-actions {

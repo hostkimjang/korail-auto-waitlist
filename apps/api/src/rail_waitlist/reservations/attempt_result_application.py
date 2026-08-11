@@ -115,6 +115,7 @@ async def complete_reservation_attempt(
     attempt.official_handoff_url = (
         str(result.official_handoff_url) if result.official_handoff_url is not None else None
     )
+    attempt.reserved_seats = [seat.model_dump() for seat in result.reserved_seats]
     if result.progress_stages:
         attempt.progress_stages = [
             {
@@ -137,6 +138,7 @@ async def complete_reservation_attempt(
         attempt.outcome = ReservationOutcome.UNKNOWN
         attempt.payment_deadline = None
         attempt.official_handoff_url = None
+        attempt.reserved_seats = []
         # An already unusable hold is ambiguous rather than authentication failure.
         # The UNKNOWN attempt remains the durable no-retry fence.
         candidate.state = "observed"
@@ -285,6 +287,7 @@ async def complete_reservation_attempt(
             "retryable": result_policy.retryable,
             "manual_check_required": result_policy.manual_check_required,
             "retry_condition": result_policy.retry_condition,
+            "reserved_seats": [seat.model_dump() for seat in result.reserved_seats],
             **({"progress_stages": persisted_progress} if persisted_progress else {}),
         },
         dedupe_key=f"reservation-result:{attempt.id}",

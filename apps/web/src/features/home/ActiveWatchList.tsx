@@ -2,12 +2,14 @@ import { ArrowRight, ArrowsClockwise, Clock, Pause, Play, Plus, Trash } from "@p
 import type { ReactElement, ReactNode } from "react";
 
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
+import { formatTrainIdentity } from "../../domain/watch";
 import { StatusPill } from "../../shared/ui/StatusPill";
 import {
   activeWatchRefreshLabel,
   presentActiveWatchRow,
   type ActiveWatch,
 } from "./activeWatchViewModel";
+import { ReservationRearmConfirm } from "./ReservationRearmConfirm";
 
 export type { WatchStatus } from "../../domain/watch";
 export type {
@@ -23,7 +25,9 @@ export interface WatchRowProps {
   onCancel: (watchId: string) => void | Promise<void>;
   onOpenRailAccounts?: () => void;
   onChangeReservationPolicy?: (watchId: string, policy: ReservationPolicy) => void | Promise<void>;
+  onManualReservationRearm?: (watchId: string) => void | Promise<void>;
   isReservationPolicyUpdating?: boolean;
+  isMutationPending?: boolean;
   renderSeatFoundAction?: (watch: ActiveWatch) => ReactNode;
 }
 
@@ -39,7 +43,9 @@ export interface ActiveWatchListProps {
   onCancel: WatchRowProps["onCancel"];
   onOpenRailAccounts?: WatchRowProps["onOpenRailAccounts"];
   onChangeReservationPolicy?: WatchRowProps["onChangeReservationPolicy"];
+  onManualReservationRearm?: WatchRowProps["onManualReservationRearm"];
   reservationPolicyUpdatingIds?: ReadonlySet<string>;
+  watchMutationPendingIds?: ReadonlySet<string>;
   renderSeatFoundAction?: WatchRowProps["renderSeatFoundAction"];
 }
 
@@ -50,7 +56,9 @@ export function WatchRow({
   onCancel,
   onOpenRailAccounts,
   onChangeReservationPolicy,
+  onManualReservationRearm,
   isReservationPolicyUpdating = false,
+  isMutationPending = false,
   renderSeatFoundAction,
 }: WatchRowProps): ReactElement {
   const presentation = presentActiveWatchRow(watch, isReservationPolicyUpdating);
@@ -58,10 +66,17 @@ export function WatchRow({
     ? renderSeatFoundAction?.(watch)
     : null;
   return (
-    <article className={presentation.isAuthRequired ? "watch-row is-auth-required" : "watch-row"}>
+    <article
+      className={presentation.isAuthRequired ? "watch-row is-auth-required" : "watch-row"}
+      aria-busy={isMutationPending}
+      tabIndex={-1}
+    >
       <div className="watch-provider">
         <span className={`provider-chip ${watch.provider === "SRT" ? "provider-srt" : "provider-korail"}`}>{watch.provider}</span>
-        <div><strong>{watch.route}</strong><span>{watch.train} · {watch.date}</span></div>
+        <div>
+          <strong>{watch.route}</strong>
+          <span>{formatTrainIdentity(watch.trainType, watch.train)} · {watch.date}</span>
+        </div>
       </div>
       <div className="watch-time"><strong>{watch.departure}</strong><ArrowRight size={18} /><strong>{watch.arrival}</strong></div>
       <div className="watch-state">
@@ -107,9 +122,13 @@ export function WatchRow({
             role="switch"
             aria-label={`${watch.train} ${watch.seatClassLabel} 좌석 재발견마다 자동 예매 설정`}
             aria-checked={presentation.automaticReservationEnabled}
-            aria-busy={isReservationPolicyUpdating}
+            aria-busy={isReservationPolicyUpdating || isMutationPending}
             className={presentation.automaticReservationEnabled ? "watch-policy-switch is-on" : "watch-policy-switch"}
-            disabled={presentation.policySwitchDisabled || !onChangeReservationPolicy}
+            disabled={
+              isMutationPending
+              || presentation.policySwitchDisabled
+              || !onChangeReservationPolicy
+            }
             title={presentation.policySwitchTitle}
             onClick={() => onChangeReservationPolicy?.(watch.id, presentation.nextReservationPolicy)}
           >
@@ -121,11 +140,24 @@ export function WatchRow({
             </button>
           ) : null}
         </div>
-        {seatFoundAction && <div className="watch-booking-action">{seatFoundAction}</div>}
+        {(seatFoundAction || (
+          presentation.canManualRearmReservation && onManualReservationRearm
+        )) && <div className="watch-booking-action">
+          {seatFoundAction}
+          {presentation.canManualRearmReservation && onManualReservationRearm ? (
+            <ReservationRearmConfirm
+              watchId={watch.id}
+              trainLabel={formatTrainIdentity(watch.trainType, watch.train)}
+              seatClassLabel={watch.seatClassLabel}
+              mutationPending={isMutationPending}
+              onConfirm={onManualReservationRearm}
+            />
+          ) : null}
+        </div>}
         <div className="watch-control-actions">
-          {watch.status === "paused" && <button type="button" className="icon-button" aria-label="대기 재개" onClick={() => onResume(watch.id)}><Play size={20} /></button>}
-          {presentation.canPause && <button type="button" className="icon-button" aria-label="대기 일시정지" onClick={() => onPause(watch.id)}><Pause size={20} /></button>}
-          <button type="button" className="icon-button danger" aria-label="대기 취소" onClick={() => onCancel(watch.id)}><Trash size={20} /></button>
+          {watch.status === "paused" && <button type="button" className="icon-button" aria-label="대기 재개" aria-busy={isMutationPending} disabled={isMutationPending} onClick={() => onResume(watch.id)}><Play size={20} /></button>}
+          {presentation.canPause && <button type="button" className="icon-button" aria-label="대기 일시정지" aria-busy={isMutationPending} disabled={isMutationPending} onClick={() => onPause(watch.id)}><Pause size={20} /></button>}
+          <button type="button" className="icon-button danger" aria-label="대기 취소" aria-busy={isMutationPending} disabled={isMutationPending} onClick={() => onCancel(watch.id)}><Trash size={20} /></button>
         </div>
       </div>
     </article>
@@ -144,7 +176,9 @@ export function ActiveWatchList({
   onCancel,
   onOpenRailAccounts,
   onChangeReservationPolicy,
+  onManualReservationRearm,
   reservationPolicyUpdatingIds = new Set<string>(),
+  watchMutationPendingIds = new Set<string>(),
   renderSeatFoundAction,
 }: ActiveWatchListProps): ReactElement {
   const lastRefreshedLabel = activeWatchRefreshLabel(lastRefreshedAt);
@@ -182,8 +216,10 @@ export function ActiveWatchList({
             onResume={onResume}
             onCancel={onCancel}
             isReservationPolicyUpdating={reservationPolicyUpdatingIds.has(watch.id)}
+            isMutationPending={watchMutationPendingIds.has(watch.id)}
             {...(onOpenRailAccounts ? { onOpenRailAccounts } : {})}
             {...(onChangeReservationPolicy ? { onChangeReservationPolicy } : {})}
+            {...(onManualReservationRearm ? { onManualReservationRearm } : {})}
             {...(renderSeatFoundAction ? { renderSeatFoundAction } : {})}
           />
         )) : (

@@ -145,12 +145,12 @@ async def _snapshot() -> dict[str, object] | None:
             (
                 WatchStatus.SEAT_FOUND,
                 "authorized_seat_observation_summary_seat_found",
-                None,
+                observations[("9002", "standard")].id,
             ),
             (
                 WatchStatus.OFFICIAL_WAITLIST,
                 "authorized_seat_observation_summary_official_waitlist",
-                None,
+                observations[("9003", "standard")].id,
             ),
         }
         actual_summary_transitions = {

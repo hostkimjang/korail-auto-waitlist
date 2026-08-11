@@ -18,7 +18,7 @@ from ..domain import (
     WatchStatus,
 )
 from ..observations.contracts import ObservationErrorCategory
-from ..reservations.contracts import ReservationProgressStage
+from ..reservations.contracts import ReservationProgressStage, ReservedSeat
 from ..schema_base import ApiModel
 from ..timetable_management.schemas import TimetableSeatEvidenceRead
 
@@ -171,6 +171,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
     started_at: datetime
     finished_at: datetime | None
     progress_stages: list[ReservationProgressStage] = Field(default_factory=list)
+    reserved_seats: list[ReservedSeat] = Field(default_factory=list, max_length=9)
     post_deadline_reconciled_at: datetime | None = None
     payment_hold_end_reason: (
         Literal[
@@ -181,6 +182,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
     ) = None
     retryable: bool
     manual_check_required: bool
+    manual_rearm_available: bool = False
     retry_condition: (
         Literal[
             "new_availability_episode",
@@ -240,6 +242,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
 class WatchCandidateRead(ApiModel):
     id: str
     train_number: str
+    train_type: str | None = Field(default=None, min_length=1, max_length=40)
     departure_at: datetime
     scheduled_departure_at: datetime
     estimated_departure_at: datetime | None
@@ -345,6 +348,7 @@ class WatchRead(ApiModel):
     focused_observation_interval_seconds: int
     status: WatchStatus
     next_check_at: datetime | None
+    observation_execution_state: Literal["idle", "in_progress"] = "idle"
     cooldown_until: datetime | None
     payment_deadline: datetime | None
     reservation_attempted: bool

@@ -70,6 +70,7 @@ def _attempt_payload(**overrides: object) -> dict[str, object]:
         "started_at": "2026-08-07T00:00:00Z",
         "finished_at": "2026-08-07T00:01:00Z",
         "progress_stages": [],
+        "reserved_seats": [],
         "post_deadline_reconciled_at": "2026-08-07T00:02:00Z",
         "payment_hold_end_reason": "confirmed_payment_hold_no_longer_present",
         "retryable": True,
@@ -84,6 +85,7 @@ def _candidate_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "id": "candidate-1",
         "train_number": "MOCK-118",
+        "train_type": None,
         "departure_at": "2026-08-08T06:35:00Z",
         "scheduled_departure_at": "2026-08-08T06:35:00Z",
         "estimated_departure_at": None,
@@ -151,15 +153,18 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "started_at",
         "finished_at",
         "progress_stages",
+        "reserved_seats",
         "post_deadline_reconciled_at",
         "payment_hold_end_reason",
         "retryable",
         "manual_check_required",
+        "manual_rearm_available",
         "retry_condition",
     )
     assert tuple(canonical.WatchCandidateRead.model_fields) == (
         "id",
         "train_number",
+        "train_type",
         "departure_at",
         "scheduled_departure_at",
         "estimated_departure_at",
@@ -207,6 +212,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "focused_observation_interval_seconds",
         "status",
         "next_check_at",
+        "observation_execution_state",
         "cooldown_until",
         "payment_deadline",
         "reservation_attempted",
@@ -220,6 +226,14 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     assert canonical.WatchCandidateRead.model_fields["latest_observation"].default is None
     assert canonical.WatchCandidateRead.model_fields["latest_reservation_attempt"].default is None
     assert canonical.WatchRead.model_fields["last_checked_at"].default is None
+    assert canonical.WatchRead.model_fields["observation_execution_state"].default == "idle"
+    execution_state_annotation = canonical.WatchRead.model_fields[
+        "observation_execution_state"
+    ].annotation
+    assert set(get_args(execution_state_annotation)) == {
+        "idle",
+        "in_progress",
+    }
     assert all(
         model.model_config == {"from_attributes": True}
         for model in (
@@ -236,11 +250,11 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     [
         (
             canonical.WatchCandidateLatestReservationAttemptRead,
-            "aed87993ebd4c2d81fa1d69344ac4537bd440c5f6644ae06998761a027907a9d",
+            "1dfa4793b0a84e8c2daea00b66a13d07e66ec20f7ff6dbbab276f4e1c8edbb4c",
         ),
         (
             canonical.WatchCandidateRead,
-            "7258042b2dc12381b6cae5ab66ebc013b29134f763c32fcb833715f92f45f9f9",
+            "2ff2d59614652f6156889aae0c8258a6e31ea7eb2833a16a50303d0b5f032335",
         ),
         (
             canonical.WatchCandidateLatestObservationRead,
@@ -248,7 +262,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         ),
         (
             canonical.WatchRead,
-            "8468e44f688ececb3d371aeb43530647f2039917fe7a65dce26c522010d61a13",
+            "809b442c18fac10b3c441d570b279c12318ce3cc6e8cedc8e773d086607e1c0f",
         ),
     ],
 )

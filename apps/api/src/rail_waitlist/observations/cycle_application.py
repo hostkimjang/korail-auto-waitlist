@@ -52,6 +52,7 @@ async def finish_observation_cycle(
     previous_fingerprint: str | None,
     now: datetime,
 ) -> None:
+    watch.observation_in_flight_until = None
     current_fingerprint = await latest_observation_fingerprint(session, watch)
     if previous_fingerprint is not None and current_fingerprint == previous_fingerprint:
         watch.unchanged_runs += 1

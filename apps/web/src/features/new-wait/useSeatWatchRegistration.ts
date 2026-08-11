@@ -34,6 +34,7 @@ export interface SeatWatchRegistrationTrain extends Pick<
   | "arrival"
   | "official_booking_url"
 > {
+  train_type?: Timetable["train_type"];
   seat_classes: SeatWatchRegistrationSeat[];
 }
 

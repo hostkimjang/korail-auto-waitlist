@@ -164,6 +164,11 @@ class KorailReserveOnceRequest(_InternalModel):
         return self
 
 
+class KorailReservedSeat(_InternalModel):
+    car_number: str = Field(min_length=1, max_length=10, pattern=r"^[0-9]+$")
+    seat_number: str = Field(min_length=2, max_length=10, pattern=r"^[0-9]+[A-D]$")
+
+
 class KorailReserveOnceResult(_InternalModel):
     outcome: KorailReservationOutcomeValue
     reason: str = Field(min_length=1, max_length=100)
@@ -173,6 +178,7 @@ class KorailReserveOnceResult(_InternalModel):
     target_rechecked_at: datetime | None = None
     seat_selected_at: datetime | None = None
     reservation_requested_at: datetime | None = None
+    reserved_seats: list[KorailReservedSeat] = Field(default_factory=list, max_length=1)
 
     @field_validator(
         "session_ready_at",
@@ -204,6 +210,11 @@ class KorailReserveOnceResult(_InternalModel):
         ]
         if times != sorted(times):
             raise ValueError("reservation progress times must be chronological")
+        seat_keys = [(seat.car_number, seat.seat_number) for seat in self.reserved_seats]
+        if len(seat_keys) != len(set(seat_keys)):
+            raise ValueError("reserved_seats must contain unique car and seat pairs")
+        if self.outcome != "payment_required" and self.reserved_seats:
+            raise ValueError("only payment_required can contain reserved seats")
         return self
 
 

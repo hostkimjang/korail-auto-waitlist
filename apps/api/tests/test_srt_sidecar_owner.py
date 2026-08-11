@@ -33,7 +33,7 @@ CONTRACT_MODULE = "rail_waitlist.srt_sidecar.contracts"
 CLIENT_MODULE = "rail_waitlist.srt_sidecar.client"
 SESSION_MODULE = "rail_waitlist.srt_sidecar.session_contract"
 CREDENTIAL_MODULE = "rail_waitlist.provider_account_management.contracts"
-SCHEMA_SHA256 = "b3eebad64aaa534e21f77b114ca215e7e5510c0ba47ffce7206094c60cf8162c"
+SCHEMA_SHA256 = "eb5fd68726db4de933a57ce03c6ed2d4f68ad36636b631523337dc7ce2eb7ced"
 
 CONTRACT_SYMBOLS = {
     "BaseModel",
@@ -361,10 +361,10 @@ def test_srt_sidecar_openapi_shape_is_unchanged() -> None:
     ).encode()
 
     assert hashlib.sha256(encoded).hexdigest() == (
-        "228c2dc75eae0ee602c078943e6ccb18dcf868a83bdcbbe69d707aa310ae3095"
+        "f08b8f86b5d60ef62cbd5561a9aade75f681afe569bef3c2d5175dadd3760937"
     )
     assert len(schema["paths"]) == 7
-    assert len(schema["components"]["schemas"]) == 35
+    assert len(schema["components"]["schemas"]) == 36
 
 
 @pytest.mark.parametrize(

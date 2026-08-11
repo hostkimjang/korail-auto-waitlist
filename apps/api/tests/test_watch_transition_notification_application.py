@@ -320,9 +320,7 @@ async def test_latest_attempt_selects_its_candidate_and_preserves_cleared_deadli
         assert event.payload["workflow_stage"] == "payment_required"
         assert event.payload["retry_condition"] is None
         assert event.payload["payment_deadline"] == deadline.isoformat()
-        assert "08월 05일 13:00까지 공식 플랫폼에서 결제해 주세요." in event.payload[
-            "message"
-        ]
+        assert "08월 05일 13:00까지 공식 플랫폼에서 결제해 주세요." in event.payload["message"]
 
 
 async def test_latest_not_available_attempt_structures_monitoring_retry(db_engine) -> None:

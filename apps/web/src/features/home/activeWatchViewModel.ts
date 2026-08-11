@@ -1,7 +1,12 @@
 import type { WatchReadModel } from "../../api/watchProjection";
 import type { LatestReservationAttempt } from "../../domain/reservationAttempt";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
-import type { WatchProvider, WatchSeatClass, WatchStatus } from "../../domain/watch";
+import type {
+  WatchObservationExecutionState,
+  WatchProvider,
+  WatchSeatClass,
+  WatchStatus,
+} from "../../domain/watch";
 import type { OperationalCandidateMeta } from "../../domain/watchOperational";
 
 export type RailAccountAuthStatus =
@@ -28,6 +33,7 @@ export interface ActiveWatch {
   provider: WatchProvider;
   route: string;
   train: string;
+  trainType?: string | null;
   date: string;
   departure: string;
   arrival: string;
@@ -48,6 +54,7 @@ export interface ActiveWatch {
   seatFoundObservation?: SeatFoundObservationContext | null;
   reservationPolicy?: ReservationPolicy;
   nextCheckAt?: string | null;
+  observationExecutionState?: WatchObservationExecutionState;
   operational?: OperationalCandidateMeta | null;
   latestReservationAttempt?: LatestReservationAttempt | null;
 }
@@ -56,6 +63,7 @@ export interface ActiveWatchRowPresentation {
   authSummary: string;
   automaticReservationEnabled: boolean;
   canPause: boolean;
+  canManualRearmReservation: boolean;
   canRenderSeatFoundAction: boolean;
   hasAuthenticatedAccount: boolean;
   isAuthRequired: boolean;
@@ -105,7 +113,10 @@ function koreaTimeLabel(value: string): string {
 
 function reservationAttemptLabel(attempt: LatestReservationAttempt): string {
   if (attempt.paymentHoldEndedAt !== null) {
-    return `결제 보류 종료 확인 · 감시 계속 · ${koreaTimeLabel(attempt.paymentHoldEndedAt)} · 매진 후 좌석이 다시 열리면 자동 예매`;
+    const nextAction = attempt.manualRearmAvailable
+      ? " · 다시 시도하려면 사용자 확인 필요"
+      : " · 감시 계속";
+    return `이전 예약을 결제하지 않았습니다 · ${koreaTimeLabel(attempt.paymentHoldEndedAt)}${nextAction}`;
   }
   const occurredAt = attempt.finishedAt ?? attempt.startedAt;
   const time = koreaTimeLabel(occurredAt);
@@ -141,6 +152,7 @@ export function mapActiveWatch(
     provider: watch.provider,
     route: watch.route,
     train: watch.train,
+    trainType: watch.trainType ?? null,
     date: watch.date,
     departure: watch.departure,
     arrival: watch.arrival,
@@ -167,6 +179,7 @@ export function mapActiveWatch(
       },
     reservationPolicy: watch.reservationPolicy,
     nextCheckAt: watch.nextCheckAt,
+    observationExecutionState: watch.observationExecutionState,
     operational: watch.operational,
     latestReservationAttempt: watch.latestReservationAttempt,
   };
@@ -206,12 +219,22 @@ export function presentActiveWatchRow(
           : `${watch.provider} 계정 재확인 필요`,
     automaticReservationEnabled,
     canPause: pausableWatchStatuses.has(watch.status),
-    canRenderSeatFoundAction: watch.status === "seat_found" && watch.seatFoundObservation !== null
-      && watch.seatFoundObservation !== undefined,
+    canManualRearmReservation: watch.status === "watching"
+      && automaticReservationEnabled
+      && paymentHoldEnded
+      && watch.latestReservationAttempt?.manualRearmAvailable === true,
+    canRenderSeatFoundAction: (
+      watch.status === "seat_found"
+        || (watch.status === "watching" && paymentHoldEnded)
+    ) && watch.seatFoundObservation !== null && watch.seatFoundObservation !== undefined,
     hasAuthenticatedAccount,
     isAuthRequired: watch.status === "auth_required",
     isProviderReverificationPending,
-    nextCheckLabel: watch.nextCheckAt ? `다음 관측 예정 ${koreaTimeLabel(watch.nextCheckAt)}` : null,
+    nextCheckLabel: watch.observationExecutionState === "in_progress"
+      ? "좌석 관측 중"
+      : watch.nextCheckAt
+        ? `다음 좌석 관측 목표 ${koreaTimeLabel(watch.nextCheckAt)}`
+        : null,
     nextReservationPolicy: automaticReservationEnabled
       ? "notify_only"
       : "reserve_once_before_payment",
@@ -226,8 +249,10 @@ export function presentActiveWatchRow(
     shouldShowRegistrationEvidence: Boolean(
       watch.registrationEvidenceLabel && watch.registrationEvidenceLabel !== seatEvidenceLabel,
     ),
-    statusLabel: watch.status === "seat_found" && paymentHoldEnded
-      ? "이전 결제 보류 종료 · 매진 후 재발견 대기"
+    statusLabel: paymentHoldEnded && watch.status === "watching"
+      ? "이전 예약 미결제 · 감시 중"
+      : watch.status === "seat_found" && paymentHoldEnded
+        ? "이전 예약 미결제 · 좌석 발견"
       : watch.status === "seat_found"
         ? "좌석 발견 · 감시 계속"
         : isProviderReverificationPending

@@ -18,9 +18,7 @@ def test_migration_0030_persists_reservation_progress(tmp_path, monkeypatch) -> 
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == (
-        "0030_attempt_progress"
-    )
+    assert ScriptDirectory.from_config(config).get_current_head() == ("0033_observation_in_flight")
 
     command.upgrade(config, "head")
     with sqlite3.connect(database_path) as connection:

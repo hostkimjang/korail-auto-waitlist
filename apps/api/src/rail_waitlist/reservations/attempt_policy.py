@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from ..domain import ReservationOutcome, SeatObservationStatus
+from ..domain import Provider, ReservationOutcome, SeatObservationStatus
 from .provider_confirmation.contracts import ReservationConfirmationOutcome
 
 CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
 PAYMENT_HOLD_RETRY_EPISODE_PREFIX = "availability-after-hold:"
+MANUAL_PAYMENT_HOLD_REARM_EPISODE_PREFIX = "manual-after-hold:"
 
 RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
     {
@@ -21,14 +22,20 @@ RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
 )
 
 
+def official_seat_observation_source(provider: Provider) -> str | None:
+    """Return the exact execution-adapter provenance allowed to consume a rearm."""
+    if provider is Provider.KORAIL:
+        return "korail-official-page-browser"
+    if provider is Provider.SRT:
+        return "srtrain-2.6.7-accountless"
+    return None
+
+
 def payment_hold_retry_episode_key(
     hold_attempt_id: str,
     unavailable_observation_id: str,
 ) -> str:
-    return (
-        f"{PAYMENT_HOLD_RETRY_EPISODE_PREFIX}"
-        f"{hold_attempt_id}:{unavailable_observation_id}"
-    )
+    return f"{PAYMENT_HOLD_RETRY_EPISODE_PREFIX}{hold_attempt_id}:{unavailable_observation_id}"
 
 
 def parse_payment_hold_retry_episode_key(episode_key: str) -> tuple[str, str] | None:
@@ -39,6 +46,29 @@ def parse_payment_hold_retry_episode_key(episode_key: str) -> tuple[str, str] | 
     if not separator or not hold_attempt_id or not unavailable_observation_id:
         return None
     return hold_attempt_id, unavailable_observation_id
+
+
+def manual_payment_hold_rearm_episode_key(
+    hold_attempt_id: str,
+    candidate_id: str,
+    observation_id: str,
+) -> str:
+    return (
+        f"{MANUAL_PAYMENT_HOLD_REARM_EPISODE_PREFIX}"
+        f"{hold_attempt_id}:{candidate_id}:{observation_id}"
+    )
+
+
+def parse_manual_payment_hold_rearm_episode_key(
+    episode_key: str,
+) -> tuple[str, str, str] | None:
+    if not episode_key.startswith(MANUAL_PAYMENT_HOLD_REARM_EPISODE_PREFIX):
+        return None
+    encoded_ids = episode_key.removeprefix(MANUAL_PAYMENT_HOLD_REARM_EPISODE_PREFIX)
+    parts = encoded_ids.split(":")
+    if len(parts) != 3 or any(not part for part in parts):
+        return None
+    return parts[0], parts[1], parts[2]
 
 
 class ConfirmedAbsentRetrySource(Protocol):

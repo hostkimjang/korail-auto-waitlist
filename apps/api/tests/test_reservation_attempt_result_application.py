@@ -223,7 +223,9 @@ async def test_terminal_result_reuses_progress_already_persisted_during_provider
         dependencies=make_dependencies(transitions, events),
     )
 
-    result_event = next(event for event in events if event["event_type"] == "watch.reservation_result")
+    result_event = next(
+        event for event in events if event["event_type"] == "watch.reservation_result"
+    )
     result_payload = cast(dict[str, object], result_event["payload"])
     assert result_payload["progress_stages"] == attempt.progress_stages
 

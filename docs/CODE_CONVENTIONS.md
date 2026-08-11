@@ -145,7 +145,8 @@ persistence/provider/notification 구현 -> application이 정의한 Protocol
   추가하지 않습니다. 남은 코드는 canonical actor·driver·lifecycle의 조립과 compatibility seam으로 제한하고,
   exact local definition·method inventory·production consumer·passive import 계약을 구조 테스트로 고정합니다.
 - API 검증은 첫 단계에서 `uv lock --check`를 실행해 pyproject와 커밋된 lock 불일치를 테스트 전에
-  차단하고, mypy는 `uv run --frozen --extra test mypy`로 같은 lock을 사용합니다.
+  차단합니다. 전체 pytest와 mypy는 `uv run --python 3.12 --frozen --extra test --extra browser`를
+  공통 기반으로 사용해 Python 3.12, 커밋된 lock, 테스트·브라우저 의존성을 동일하게 고정합니다.
 - FastAPI route는 인증, 요청·응답 검증, 트랜잭션 진입, application 오류의 HTTP 변환만 담당합니다.
 - Pydantic schema는 transport 계약이고 도메인 객체를 대신하지 않습니다. 외부 provider 응답도 경계에서 검증한 뒤 내부 결과로 변환합니다.
 - 외부 provider의 JSON row는 `object`에서 시작해 문자열 키 object인지 각 원소를 검증합니다. pagination

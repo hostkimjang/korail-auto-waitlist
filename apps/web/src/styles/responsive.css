@@ -1136,7 +1136,8 @@
   .watch-control-actions { grid-area: controls; }
 
   .watch-booking-action,
-  .watch-booking-button {
+  .watch-booking-button,
+  .watch-rearm-button {
     width: 100%;
   }
 

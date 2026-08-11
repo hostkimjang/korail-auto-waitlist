@@ -58,6 +58,7 @@ describe("demo watch fixtures", () => {
       reservationPolicy: "reserve_once_before_payment",
       candidates: [{
         train_number: "SRT 327",
+        train_type: "SRT",
         departure_at: "2026-08-04T10:42:00+09:00",
         arrival_at: "2026-08-04T13:14:00+09:00",
         seat_class: "standard",
@@ -74,10 +75,12 @@ describe("demo watch fixtures", () => {
     expect(watch.candidates).toEqual([{
       id: "watch-demo:candidate:1",
       trainNumber: "SRT 327",
+      trainType: "SRT",
       departureAt: "2026-08-04T10:42:00+09:00",
       arrivalAt: "2026-08-04T13:14:00+09:00",
       seatClass: "standard",
       train_number: "SRT 327",
+      train_type: "SRT",
       departure_at: "2026-08-04T10:42:00+09:00",
       arrival_at: "2026-08-04T13:14:00+09:00",
       seat_class: "standard",

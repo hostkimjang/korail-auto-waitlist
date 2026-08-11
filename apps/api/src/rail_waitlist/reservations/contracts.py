@@ -62,6 +62,16 @@ class ReservationProgressStage(ProviderContractModel):
         return value
 
 
+class ReservedSeat(ProviderContractModel):
+    car_number: str = Field(min_length=1, max_length=10, pattern=r"^[A-Za-z0-9-]+$")
+    seat_number: str = Field(min_length=1, max_length=10, pattern=r"^[A-Za-z0-9-]+$")
+
+    @field_validator("car_number", "seat_number", mode="before")
+    @classmethod
+    def normalize_identifier(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
+
+
 class ReservationResult(ProviderContractModel):
     """A reserved outcome is a temporary hold, never a completed payment."""
 
@@ -76,6 +86,7 @@ class ReservationResult(ProviderContractModel):
     payment_deadline: datetime | None = None
     official_handoff_url: AnyHttpUrl | None = None
     progress_stages: tuple[ReservationProgressStage, ...] = ()
+    reserved_seats: tuple[ReservedSeat, ...] = Field(default=(), max_length=9)
 
     @field_validator("observed_at", "payment_deadline")
     @classmethod
@@ -112,15 +123,22 @@ class ReservationResult(ProviderContractModel):
             raise ValueError("reservation progress stages must be chronological")
         if any(progress_time > self.observed_at for progress_time in progress_times):
             raise ValueError("reservation progress cannot occur after the result observation")
+        seat_keys = [(seat.car_number, seat.seat_number) for seat in self.reserved_seats]
+        if len(seat_keys) != len(set(seat_keys)):
+            raise ValueError("reserved_seats must contain unique car and seat pairs")
         actionable = self.outcome in {"payment_required", "reserved"}
         if actionable and self.official_handoff_url is None:
             raise ValueError(
                 f"{self.outcome} is not payment completion and requires an official_handoff_url"
             )
         if not actionable and (
-            self.payment_deadline is not None or self.official_handoff_url is not None
+            self.payment_deadline is not None
+            or self.official_handoff_url is not None
+            or self.reserved_seats
         ):
-            raise ValueError("only payment_required or reserved can include payment handoff data")
+            raise ValueError(
+                "only payment_required or reserved can include payment handoff or seat data"
+            )
         if self.payment_deadline is not None and self.payment_deadline <= self.observed_at:
             raise ValueError("payment_deadline must be later than observed_at")
         if (

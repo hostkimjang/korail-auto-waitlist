@@ -318,6 +318,7 @@ describe("live reservation notices", () => {
         attempt_started_at: "2026-08-10T13:01:13.901Z",
         attempt_finished_at: "2026-08-10T13:01:21.618Z",
         outcome: "payment_required",
+        reserved_seats: [{ car_number: "2", seat_number: "7C" }],
         progress_stages: [
           { stage: "authenticated_session_ready", occurred_at: "2026-08-10T13:01:18.506Z" },
           { stage: "target_rechecked", occurred_at: "2026-08-10T13:01:19.651Z" },
@@ -328,6 +329,7 @@ describe("live reservation notices", () => {
     }, [watch]);
 
     expect(notice?.durationMs).toBe(7_717);
+    expect(notice?.meta).toContain("예약 좌석 2호차 7C");
     expect(notice?.steps?.map((step) => [step.label, step.durationMs])).toEqual([
       ["좌석 발견", undefined],
       ["자동 예매 요청 시작", undefined],

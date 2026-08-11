@@ -1130,9 +1130,7 @@ async def test_official_session_probe_returns_only_explicit_authentication_outco
     expected: bool,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
-    execute_script = AsyncMock(
-        return_value={"result": {"result": {"value": {"outcome": outcome}}}}
-    )
+    execute_script = AsyncMock(return_value={"result": {"result": {"value": {"outcome": outcome}}}})
     session._tab = SimpleNamespace(execute_script=execute_script)
 
     authenticated = await session._probe_official_authenticated_session()
@@ -1477,7 +1475,7 @@ async def test_post_submit_auth_keeps_observing_login_url_until_exact_detail(
     assert official_session_probe.await_count == 2
 
     snapshot.return_value = PydollPageSnapshot(
-        "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+        "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 4호차 8A 예약취소 장바구니 결제하기",
         (),
         url="https://www.korail.com/ticket/reservation/detail",
     )
@@ -1485,6 +1483,7 @@ async def test_post_submit_auth_keeps_observing_login_url_until_exact_detail(
 
     assert detail is not None
     assert detail.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert [(seat.car_number, seat.seat_number) for seat in detail.reserved_seats] == [("4", "8A")]
     assert official_session_probe.await_count == 2
 
 
@@ -2780,6 +2779,7 @@ def test_internal_reserve_endpoint_is_bearer_protected_and_returns_no_credential
         "reason": "reservation_pending_payment",
         "seat_clicked": True,
         "reservation_clicked": True,
+        "reserved_seats": [],
     }
     assert "fixture-login" not in response.text
     assert "fixture-password" not in response.text

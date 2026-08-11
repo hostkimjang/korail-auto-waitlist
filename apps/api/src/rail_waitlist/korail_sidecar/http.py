@@ -43,6 +43,7 @@ from .contracts import (
     KorailReservationConfirmationRequest,
     KorailReservationConfirmationResult,
     KorailReservationOutcomeValue,
+    KorailReservedSeat,
     KorailReserveOnceRequest,
     KorailReserveOnceResult,
     KorailReserveProgressFrame,
@@ -165,6 +166,11 @@ class _Outcome(Protocol):
     value: KorailReservationOutcomeValue
 
 
+class _ReservedSeat(Protocol):
+    car_number: str
+    seat_number: str
+
+
 class _ReserveOnceResult(Protocol):
     outcome: _Outcome
     reason: str
@@ -174,6 +180,7 @@ class _ReserveOnceResult(Protocol):
     target_rechecked_at: datetime | None
     seat_selected_at: datetime | None
     reservation_requested_at: datetime | None
+    reserved_seats: tuple[_ReservedSeat, ...]
 
 
 class _ReservationProgress(Protocol):
@@ -225,6 +232,13 @@ def create_adapter_app(
             target_rechecked_at=result.target_rechecked_at,
             seat_selected_at=result.seat_selected_at,
             reservation_requested_at=result.reservation_requested_at,
+            reserved_seats=[
+                KorailReservedSeat(
+                    car_number=seat.car_number,
+                    seat_number=seat.seat_number,
+                )
+                for seat in result.reserved_seats
+            ],
         )
 
     def failed_reservation_result() -> KorailReserveOnceResult:

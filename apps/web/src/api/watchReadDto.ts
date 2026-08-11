@@ -12,6 +12,7 @@ type UnknownRecord = Record<string, unknown>;
 export interface WatchCandidateReadDto {
   id: string;
   train_number: string;
+  train_type: string | null;
   departure_at: string;
   arrival_at: string | null;
   seat_class: WatchSeatClass;
@@ -50,6 +51,7 @@ export interface WatchReadDto {
   seat_observation_mode: unknown;
   focused_observation_interval_seconds: unknown;
   next_check_at: unknown;
+  observation_execution_state: unknown;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -70,6 +72,22 @@ function isCalendarDate(value: string): boolean {
     && parsed.getUTCFullYear() === year
     && parsed.getUTCMonth() === month - 1
     && parsed.getUTCDate() === day;
+}
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+  });
+}
+
+function optionalDisplayText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 40 && !hasControlCharacter(normalized)
+    ? normalized
+    : null;
 }
 
 export function parseWatchReadDto(value: unknown): WatchReadDto {
@@ -101,6 +119,7 @@ export function parseWatchReadDto(value: unknown): WatchReadDto {
     seat_observation_mode: value.seat_observation_mode,
     focused_observation_interval_seconds: value.focused_observation_interval_seconds,
     next_check_at: value.next_check_at,
+    observation_execution_state: value.observation_execution_state,
   };
 }
 
@@ -126,6 +145,7 @@ export function parseWatchCandidateReadDto(value: unknown): WatchCandidateReadDt
   return {
     id,
     train_number: trainNumber,
+    train_type: optionalDisplayText(value.train_type),
     departure_at: departureAt,
     arrival_at: arrivalAt,
     seat_class: value.seat_class,

@@ -20,6 +20,7 @@ from .auth_actor import (
     KorailSessionActorState,
     PydollAuthenticationSessionLease,
 )
+from .auth_actor import PydollAuthenticationSession as _PydollAuthenticationSession
 from .auth_contracts import KorailCredentialInput
 from .page_contracts import (
     KORAIL_ROUTE_HEADING,
@@ -51,7 +52,7 @@ __all__ = (
 )
 
 
-class PydollReservationSession(Protocol):
+class PydollReservationSession(_PydollAuthenticationSession, Protocol):
     async def open(self) -> PydollPageSnapshot: ...
 
     async def navigate(self, url: str) -> PydollPageSnapshot: ...

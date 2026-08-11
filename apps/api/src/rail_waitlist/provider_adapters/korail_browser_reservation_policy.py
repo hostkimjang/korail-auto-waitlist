@@ -18,6 +18,7 @@ from ..reservations.contracts import (
     ReservationProgressStageName,
     ReservationRequest,
     ReservationResult,
+    ReservedSeat,
 )
 
 RESERVATION_SOURCE = "korail-pydoll-reservation"
@@ -108,6 +109,13 @@ def project_reservation_result(
             observed_at=observed_at,
             official_handoff_url=PAYMENT_HANDOFF_URL,
             progress_stages=progress_stages,
+            reserved_seats=tuple(
+                ReservedSeat(
+                    car_number=seat.car_number,
+                    seat_number=seat.seat_number,
+                )
+                for seat in result.reserved_seats
+            ),
         )
     if result.outcome == "auth_required":
         outcome = ReservationOutcome.AUTH_REQUIRED

@@ -18,6 +18,7 @@ import {
   deleteWatch,
   fetchWatches,
   pauseWatch as pauseWatchRequest,
+  rearmWatchReservation,
   startWatch,
   updateWatch,
 } from "./api/watches";
@@ -136,10 +137,11 @@ export function App(): ReactElement {
   const {
     watches,
     commitWatches,
+    commitWatchDeletion,
     refreshState: watchRefreshState,
     requestRefresh: requestWatchesRefresh,
-    beginReservationPolicyMutation,
-    endReservationPolicyMutation,
+    beginWatchMutation,
+    endWatchMutation,
   } = useWatchCollection({
     authenticated: auth.authenticated,
     demo: auth.demo,
@@ -162,20 +164,24 @@ export function App(): ReactElement {
     pauseWatch,
     resumeWatch,
     cancelWatch: cancelWatchItem,
+    rearmReservation,
     changeReservationPolicy: changeWatchReservationPolicy,
     deleteWatchRecord,
     reservationPolicyUpdatingIds,
+    watchMutationPendingIds,
   } = useWatchMutations({
     demo: auth.demo,
     watches,
     commitWatches,
+    commitWatchDeletion,
     pushToast: setToast,
-    beginReservationPolicyMutation,
-    endReservationPolicyMutation,
+    beginWatchMutation,
+    endWatchMutation,
     requestWatchesRefresh,
     pauseWatchRequest,
     startWatchRequest: startWatch,
     cancelWatchRequest: cancelWatch,
+    rearmReservationRequest: rearmWatchReservation,
     updateWatchRequest: updateWatch,
     deleteWatchRequest: deleteWatch,
   });
@@ -206,6 +212,7 @@ export function App(): ReactElement {
           reservationPolicy: form.reservationPolicy,
           candidates: [{
             train_number: item.train_number ?? item.name,
+            train_type: item.train_type ?? null,
             departure_at: item.departure_at,
             arrival_at: item.arrival_at ?? null,
             seat_class: seatClass,
@@ -283,7 +290,7 @@ export function App(): ReactElement {
           />
         </>}
       >
-        {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={async (watchId) => { await cancelWatchItem(watchId); }} onChangeReservationPolicy={changeWatchReservationPolicy} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
+        {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={async (watchId) => { await cancelWatchItem(watchId); }} onChangeReservationPolicy={changeWatchReservationPolicy} onManualReservationRearm={rearmReservation} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} watchMutationPendingIds={watchMutationPendingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
         {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
         {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
         {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={onSettingsSectionChange} onLogout={signOut} initialSection={settingsInitialSection} />}

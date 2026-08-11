@@ -5,6 +5,8 @@ import {
   paymentDeadlineInstant,
   paymentDeadlineState,
 } from "../../domain/paymentDeadline";
+import { formatReservedSeats } from "../../domain/reservationAttempt";
+import { formatTrainIdentity } from "../../domain/watch";
 import { usePaymentDeadlineClock } from "../../hooks/usePaymentDeadlineClock";
 import { PaymentDeadlineStatus } from "../../shared/ui/PaymentDeadlineStatus";
 import { StatusPill } from "../../shared/ui/StatusPill";
@@ -42,13 +44,16 @@ function PaymentRequiredCard({ watch, onOpenPayment, now }: {
   const [routeOrigin = "출발역", routeDestination = "도착역"] = String(watch.route ?? "").split(" → ");
   const origin = watch.origin || routeOrigin;
   const destination = watch.destination || routeDestination;
+  const reservedSeatLabel = formatReservedSeats(watch.reservedSeats ?? []);
   return (
     <article className="payment-hero payment-required-card" aria-labelledby={`payment-title-${watch.id}`}>
       <div className="payment-trip">
         <StatusPill status="payment_required">결제 필요</StatusPill>
         <div className="trip-title-row">
           <h2 id={`payment-title-${watch.id}`}>{origin} <ArrowRight aria-hidden="true" /> {destination}</h2>
-          <span className={`provider-chip ${watch.provider === "SRT" ? "provider-srt" : "provider-korail"}`}>{watch.train}</span>
+          <span className={`provider-chip ${watch.provider === "SRT" ? "provider-srt" : "provider-korail"}`}>
+            {formatTrainIdentity(watch.trainType, watch.train)}
+          </span>
         </div>
         <div className="trip-times" aria-label={`${origin} ${watch.departure} 출발, ${destination} ${watch.arrival} 도착`}>
           <div><strong>{watch.departure}</strong><span>{watch.date}</span></div>
@@ -56,6 +61,9 @@ function PaymentRequiredCard({ watch, onOpenPayment, now }: {
           <div><strong>{watch.arrival}</strong><span>{watch.date}</span></div>
         </div>
         {watch.seatClassLabel ? <span className="payment-seat-class">{watch.seatClassLabel} 임시 예약</span> : null}
+        {reservedSeatLabel ? (
+          <span className="payment-reserved-seats">예약 좌석 {reservedSeatLabel}</span>
+        ) : null}
       </div>
       <div className="payment-action">
         <PaymentDeadlineStatus value={watch.paymentDeadline} now={now} />

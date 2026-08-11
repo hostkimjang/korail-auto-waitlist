@@ -36,6 +36,7 @@ from ..provider_adapters.srt_station_roster import (
     load_srt_station_roster,
 )
 from ..reservations.contracts import ReservationRequest, ReservationResult
+from ..reservations.contracts import ReservedSeat as _ReservedSeat
 from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -94,6 +95,8 @@ class _SrtReservation(Protocol):
 
 class _SrtTicket(Protocol):
     seat_type_code: str
+    car: str
+    seat: str
 
 
 class _SrtClient(Protocol):
@@ -217,6 +220,18 @@ def _reservation_passenger_count(reservation: _SrtReservation) -> int | None:
     except (TypeError, ValueError):
         return None
     return count if count > 0 else None
+
+
+def _reservation_seats(reservation: _SrtReservation) -> tuple[_ReservedSeat, ...]:
+    try:
+        seats = tuple(
+            _ReservedSeat(car_number=str(ticket.car), seat_number=str(ticket.seat))
+            for ticket in reservation.tickets
+        )
+    except (AttributeError, TypeError, ValueError):
+        return ()
+    keys = {(seat.car_number, seat.seat_number) for seat in seats}
+    return seats if len(keys) == len(seats) else ()
 
 
 @dataclass
@@ -578,6 +593,9 @@ class SrtReservationExecutor:
                     source=SRT_RESERVATION_SOURCE,
                     observed_at=observed_at,
                 )
+            reserved_seats = _reservation_seats(reservation)
+            if len(reserved_seats) != request.passenger_count:
+                reserved_seats = ()
             deadline = _payment_deadline(reservation)
             if deadline is not None and deadline <= observed_at:
                 deadline = None
@@ -587,6 +605,7 @@ class SrtReservationExecutor:
                 observed_at=observed_at,
                 payment_deadline=deadline,
                 official_handoff_url=_cast(_AnyHttpUrl, SRT_RESERVATION_HANDOFF_URL),
+                reserved_seats=reserved_seats,
             )
 
 

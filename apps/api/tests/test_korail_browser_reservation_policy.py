@@ -67,6 +67,7 @@ def _wire_result(
     *,
     reservation_clicked: bool = False,
     progress_times: tuple[datetime, ...] = (),
+    reserved_seats: list[dict[str, str]] | None = None,
 ) -> KorailReserveOnceResult:
     padded = (*progress_times, None, None, None, None)
     return KorailReserveOnceResult(
@@ -78,6 +79,7 @@ def _wire_result(
         target_rechecked_at=padded[1],
         seat_selected_at=padded[2],
         reservation_requested_at=padded[3],
+        reserved_seats=reserved_seats or [],
     )
 
 
@@ -284,6 +286,7 @@ PROGRESS_TIMES = (
                 "payment_required",
                 reservation_clicked=True,
                 progress_times=PROGRESS_TIMES,
+                reserved_seats=[{"car_number": "4", "seat_number": "8A"}],
             ),
             ReservationOutcome.PAYMENT_REQUIRED,
         ),
@@ -329,6 +332,9 @@ def test_wire_result_priority_and_progress_are_preserved(
             "reservation_requested",
         ]
         assert tuple(stage.occurred_at for stage in result.progress_stages) == PROGRESS_TIMES
+        assert [seat.model_dump() for seat in result.reserved_seats] == [
+            {"car_number": "4", "seat_number": "8A"}
+        ]
     else:
         assert result.official_handoff_url is None
         assert result.progress_stages == ()

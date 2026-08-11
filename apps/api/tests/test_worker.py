@@ -1123,6 +1123,7 @@ class ExpiredDeadlineReservationAdapter(CountingMockAdapter):
             observed_at=observed_at,
             payment_deadline=observed_at + timedelta(minutes=5),
             official_handoff_url=self.official_booking_url(),
+            reserved_seats=[{"car_number": "4", "seat_number": "8A"}],
         )
 
 
@@ -2018,8 +2019,7 @@ async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
         await session.flush()
         payment_deadline = (
             hold_ended_at - timedelta(seconds=1)
-            if confirmation_outcome
-            is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+            if confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
             else None
         )
         first_attempt = ReservationAttempt(
@@ -2079,9 +2079,7 @@ async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
             rediscovered,
             Provider.SRT,
         )
-        assert episode_key == (
-            f"availability-after-hold:{first_attempt.id}:{unavailable.id}"
-        )
+        assert episode_key == (f"availability-after-hold:{first_attempt.id}:{unavailable.id}")
 
         second_attempt, created = await begin_reservation_attempt(
             session,
@@ -2191,12 +2189,15 @@ async def test_watch_payment_hold_fences_reactivated_lower_candidate_without_loc
         session.add_all([unavailable, rediscovered])
         await session.flush()
 
-        assert await _retryable_reservation_episode_key(
-            session,
-            lower,
-            rediscovered,
-            Provider.SRT,
-        ) == f"availability-after-hold:{hold.id}:{unavailable.id}"
+        assert (
+            await _retryable_reservation_episode_key(
+                session,
+                lower,
+                rediscovered,
+                Provider.SRT,
+            )
+            == f"availability-after-hold:{hold.id}:{unavailable.id}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -2837,6 +2838,7 @@ async def test_terminal_watch_fences_late_reservation_result(client, app, db_eng
         assert candidate.state == "expired"
         assert attempt.outcome is ReservationOutcome.UNKNOWN
         assert attempt.payment_deadline is None
+        assert attempt.reserved_seats == []
         assert fenced_event.payload["reason"] == "watch_state_changed_during_provider_call"
     assert adapter.reserve_calls == 1
 

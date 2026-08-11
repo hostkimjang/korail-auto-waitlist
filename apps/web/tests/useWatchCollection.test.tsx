@@ -25,6 +25,7 @@ interface TestWatch {
   id: string;
   status:
     | "watching"
+    | "paused"
     | "seat_found"
     | "reserving"
     | "payment_required"
@@ -708,6 +709,91 @@ describe("useWatchCollection", () => {
     expect(result.current.watches[0]?.reservationPolicy)
       .toBe("reserve_once_before_payment");
 
+    unmount();
+  });
+
+  it("does not let a pre-resume GET restore the paused badge after resume succeeds", async () => {
+    const staleReload = deferred<ReadonlyArray<TestWatch>>();
+    const resumed = watch("notify_only", "watching");
+    const loadWatches = vi.fn()
+      .mockReturnValueOnce(staleReload.promise)
+      .mockResolvedValue([resumed]);
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    const { result, unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [watch("notify_only", "paused")],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+    act(() => {
+      result.current.beginWatchMutation();
+      result.current.commitWatches([resumed]);
+      result.current.endWatchMutation();
+      result.current.requestRefresh();
+    });
+
+    await act(async () => {
+      staleReload.resolve([watch("notify_only", "paused")]);
+      await staleReload.promise;
+    });
+    expect(result.current.watches[0]?.status).toBe("watching");
+
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+    expect(result.current.watches[0]?.status).toBe("watching");
+    unmount();
+  });
+
+  it("keeps a deleted watch hidden through a stale event reload until absence is canonical", async () => {
+    const initial = watch("reserve_once_before_payment", "watching");
+    const staleReload = deferred<ReadonlyArray<TestWatch>>();
+    const loadWatches = vi.fn()
+      .mockResolvedValueOnce([initial])
+      .mockReturnValueOnce(staleReload.promise)
+      .mockResolvedValue([]);
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    const { result, unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+    act(() => result.current.commitWatchDeletion(initial.id));
+    expect(result.current.watches).toEqual([]);
+
+    act(() => onEvent?.({ event_type: "watch.updated", aggregate_id: initial.id }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      staleReload.resolve([initial]);
+      await staleReload.promise;
+    });
+    expect(result.current.watches).toEqual([]);
+
+    act(() => result.current.requestRefresh());
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(3));
+    expect(result.current.watches).toEqual([]);
     unmount();
   });
 

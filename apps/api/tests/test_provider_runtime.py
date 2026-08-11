@@ -816,9 +816,7 @@ async def test_authenticated_ready_session_refreshes_only_inside_window(
         )
         == expected_attempts
     )
-    assert verifier.prewarm_calls == (
-        [(Provider.KORAIL, 4)] if expected_attempts else []
-    )
+    assert verifier.prewarm_calls == ([(Provider.KORAIL, 4)] if expected_attempts else [])
 
 
 async def test_failed_keepalive_waits_for_cooldown_before_retry(
@@ -859,18 +857,21 @@ async def test_failed_keepalive_waits_for_cooldown_before_retry(
     )
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory, verifier, registry
-    ) == 1
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory, verifier, registry
-    ) == 0
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
     generation, failure_count, _retry_not_before = registry.prewarm_retry_state[Provider.KORAIL]
     assert (generation, failure_count) == (4, 1)
     registry.prewarm_retry_state[Provider.KORAIL] = (generation, failure_count, 0.0)
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory, verifier, registry
-    ) == 1
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
     assert verifier.prewarm_calls == [
         (Provider.KORAIL, 4),
         (Provider.KORAIL, 4),
@@ -918,14 +919,13 @@ async def test_authenticated_account_does_not_compete_with_active_or_blocked_ses
     )
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
-    assert await recover_provider_sessions_once(
-        app.state.test_session_factory, verifier, registry
-    ) == 0
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
     assert verifier.prewarm_calls == []
     if state is ProviderSessionRuntimeState.BLOCKED:
-        generation, failure_count, retry_not_before = registry.prewarm_retry_state[
-            Provider.KORAIL
-        ]
+        generation, failure_count, retry_not_before = registry.prewarm_retry_state[Provider.KORAIL]
         assert (generation, failure_count) == (4, 1)
         assert retry_not_before > asyncio.get_running_loop().time()
     else:

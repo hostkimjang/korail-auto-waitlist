@@ -12,6 +12,8 @@ from ..watch_management.models import ReservationAttempt, SeatObservation, Watch
 from .attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
     RESERVATION_RETRY_EDGE_OBSERVATIONS,
+    official_seat_observation_source,
+    parse_manual_payment_hold_rearm_episode_key,
     parse_payment_hold_retry_episode_key,
 )
 from .attempt_timing_application import latest_candidate_seat_detected_at
@@ -100,6 +102,7 @@ async def begin_reservation_attempt(
         else None
     )
     payment_hold_retry_authorized = False
+    manual_payment_hold_retry_authorized = False
     referenced_payment_hold: ReservationAttempt | None = None
     if payment_hold_episode is not None:
         hold_attempt_id, unavailable_observation_id = payment_hold_episode
@@ -127,7 +130,37 @@ async def begin_reservation_attempt(
                     .limit(1)
                 )
                 payment_hold_retry_authorized = actionable_after_edge is not None
-    if payment_hold_fence is not None and not payment_hold_retry_authorized:
+    manual_payment_hold_episode = parse_manual_payment_hold_rearm_episode_key(
+        normalized_episode_key
+    )
+    if manual_payment_hold_episode is not None:
+        hold_attempt_id, candidate_id, observation_id = manual_payment_hold_episode
+        manual_rearm_authorized_at = candidate.manual_rearm_authorized_at
+        if (
+            retry_authorized
+            and payment_hold_fence is not None
+            and payment_hold_fence.attempt.id == hold_attempt_id
+            and candidate_id == candidate.id
+            and candidate.manual_rearm_source_attempt_id == hold_attempt_id
+            and manual_rearm_authorized_at is not None
+        ):
+            official_source = official_seat_observation_source(watch.provider)
+            actionable_after_authorization = await session.scalar(
+                select(SeatObservation.id)
+                .where(
+                    SeatObservation.candidate_id == candidate.id,
+                    SeatObservation.id == observation_id,
+                    SeatObservation.observed_at > manual_rearm_authorized_at,
+                    SeatObservation.source == official_source,
+                    SeatObservation.status.in_(dependencies.actionable_seat_statuses),
+                )
+                .order_by(SeatObservation.observed_at, SeatObservation.id)
+                .limit(1)
+            )
+            manual_payment_hold_retry_authorized = actionable_after_authorization is not None
+    if payment_hold_fence is not None and not (
+        payment_hold_retry_authorized or manual_payment_hold_retry_authorized
+    ):
         # A watch-scoped hold may belong to another candidate. Returning that durable
         # blocker with created=False keeps the execution caller side-effect free even
         # when this candidate has no local attempt to replay.
@@ -137,6 +170,13 @@ async def begin_reservation_attempt(
         if blocking_attempt is not None:
             return blocking_attempt, False
         raise ValueError("payment-hold retry episode does not reference this watch")
+    if manual_payment_hold_episode is not None and not manual_payment_hold_retry_authorized:
+        blocking_attempt = latest_attempt or (
+            payment_hold_fence.attempt if payment_hold_fence else None
+        )
+        if blocking_attempt is not None:
+            return blocking_attempt, False
+        raise ValueError("manual payment-hold retry episode does not reference this watch")
     not_available_retry_authorized = False
     if (
         latest_attempt is not None
@@ -188,6 +228,7 @@ async def begin_reservation_attempt(
                 not_available_retry_authorized,
                 provider_auth_retry_authorized,
                 payment_hold_retry_authorized,
+                manual_payment_hold_retry_authorized,
                 confirmed_absent_retry_authorized,
             )
         )

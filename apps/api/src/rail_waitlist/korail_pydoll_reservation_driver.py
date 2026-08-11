@@ -41,6 +41,7 @@ urlsplit = _owner.urlsplit
 _has_exact_train_number_marker = _owner._has_exact_train_number_marker
 _normalized_train_number = _owner._normalized_train_number
 _reservation_date_markers = _owner._reservation_date_markers
+_single_reserved_seat = _owner._single_reserved_seat
 _sanitized_class_tokens = _owner._sanitized_class_tokens
 
 del _owner

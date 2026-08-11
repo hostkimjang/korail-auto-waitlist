@@ -87,6 +87,7 @@ class TimetableSeatEvidence(Base):
     origin_node_id: Mapped[str] = mapped_column(String(80))
     destination_node_id: Mapped[str] = mapped_column(String(80))
     canonical_train_number: Mapped[str] = mapped_column(String(40))
+    train_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     departure_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     passenger_count: Mapped[int] = mapped_column(Integer)
     seat_class: Mapped[SeatClass] = mapped_column(Enum(SeatClass, native_enum=False))

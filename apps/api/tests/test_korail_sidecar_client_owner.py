@@ -415,9 +415,7 @@ async def test_reserve_progress_stream_is_ordered_and_sent_once() -> None:
     )
     times = [datetime(2026, 8, 7, 3, 0, index, tzinfo=UTC) for index in range(4)]
     lines = [
-        json.dumps(
-            {"type": "progress", "stage": stage, "occurred_at": occurred_at.isoformat()}
-        )
+        json.dumps({"type": "progress", "stage": stage, "occurred_at": occurred_at.isoformat()})
         for stage, occurred_at in zip(stage_names, times, strict=True)
     ]
     lines.append(
@@ -456,10 +454,7 @@ async def test_reserve_progress_stream_is_ordered_and_sent_once() -> None:
     "lines",
     [
         [],
-        [
-            '{"type":"progress","stage":"target_rechecked",'
-            '"occurred_at":"2026-08-07T03:00:00Z"}'
-        ],
+        ['{"type":"progress","stage":"target_rechecked","occurred_at":"2026-08-07T03:00:00Z"}'],
         [
             '{"type":"result","result":{"outcome":"failed","reason":"failed",'
             '"seat_clicked":false,"reservation_clicked":false}}',

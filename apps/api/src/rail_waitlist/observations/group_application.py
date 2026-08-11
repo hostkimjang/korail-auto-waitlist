@@ -21,6 +21,8 @@ from ..provider_circuit.models import ProviderCircuit
 from ..provider_contracts import ObservationProvider
 from ..reservations.attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
+    manual_payment_hold_rearm_episode_key,
+    official_seat_observation_source,
     payment_hold_retry_episode_key,
 )
 from ..reservations.payment_hold_retry_application import (
@@ -46,6 +48,7 @@ OBSERVATION_WATCH_STATUSES = frozenset(
 )
 OBSERVABLE_CANDIDATE_STATES = frozenset({"active", "observed", "seat_found"})
 ACCOUNT_AUTH_OBSERVATION_BLOCK_STATUSES = frozenset({"provider_blocked"})
+OBSERVATION_IN_FLIGHT_DURATION = timedelta(minutes=1)
 CONCLUSIVE_UNAVAILABLE_SEAT_STATUSES = frozenset(
     {
         SeatObservationStatus.UNAVAILABLE,
@@ -244,6 +247,18 @@ async def retryable_reservation_episode_key(
         is_payment_hold_ended=is_payment_hold_ended,
     )
     if payment_hold_fence is not None:
+        manual_rearm_authorized_at = candidate.manual_rearm_authorized_at
+        if (
+            current_observation.source == official_seat_observation_source(provider)
+            and candidate.manual_rearm_source_attempt_id == payment_hold_fence.attempt.id
+            and manual_rearm_authorized_at is not None
+            and _as_utc(current_observation.observed_at) > _as_utc(manual_rearm_authorized_at)
+        ):
+            return manual_payment_hold_rearm_episode_key(
+                payment_hold_fence.attempt.id,
+                candidate.id,
+                current_observation.id,
+            )
         unavailable_observation = await conclusive_unavailable_after_hold(
             session,
             payment_hold_fence,
@@ -455,6 +470,11 @@ async def prepare_watch(
                 return []
             if watch.next_check_at is not None and _as_utc(watch.next_check_at) > now:
                 return []
+            if (
+                watch.observation_in_flight_until is not None
+                and _as_utc(watch.observation_in_flight_until) > now
+            ):
+                return []
             if watch.mode == "experimental":
                 await _pause_unexecutable_watch(
                     session,
@@ -573,11 +593,9 @@ async def prepare_watch(
                     WatchStatus.WATCHING,
                     reason="worker_claimed_due_watch",
                 )
-            watch.next_check_at = (
-                min(deferred_retry_times)
-                if deferred_retry_times and len(deferred_retry_times) == len(candidates)
-                else now + timedelta(minutes=1)
-            )
+            if deferred_retry_times and len(deferred_retry_times) == len(candidates):
+                watch.next_check_at = min(deferred_retry_times)
+            watch.observation_in_flight_until = now + OBSERVATION_IN_FLIGHT_DURATION
             targets = [
                 ObservationTarget(
                     watch_id=watch.id,
@@ -617,7 +635,7 @@ async def defer_watch_group_observation(
     deferred_until = _as_utc(deferred_until)
     if deferred_until <= now:
         return
-    latest_eligible_check = now + timedelta(minutes=1) if prepared else now
+    latest_eligible_check = None if prepared else now
     async with dependencies.session_factory() as session:
         try:
             if not await _lease_allows_locked_write(
@@ -637,24 +655,28 @@ async def defer_watch_group_observation(
             for watch in watches:
                 watch.cooldown_until = deferred_until
                 watch.next_check_at = deferred_until
+                watch.observation_in_flight_until = None
             await session.commit()
         except Exception:
             await session.rollback()
             raise
 
 
-def _locked_deferred_watches_query(watch_ids: list[str], latest_eligible_check: datetime):
-    return (
-        select(Watch)
-        .where(
-            Watch.id.in_(watch_ids),
-            Watch.status.in_(OBSERVATION_WATCH_STATUSES),
-            Watch.next_check_at.is_not(None),
-            Watch.next_check_at <= latest_eligible_check,
+def _locked_deferred_watches_query(watch_ids: list[str], latest_eligible_check: datetime | None):
+    predicates = [
+        Watch.id.in_(watch_ids),
+        Watch.status.in_(OBSERVATION_WATCH_STATUSES),
+    ]
+    if latest_eligible_check is None:
+        predicates.append(Watch.observation_in_flight_until.is_not(None))
+    else:
+        predicates.extend(
+            [
+                Watch.next_check_at.is_not(None),
+                Watch.next_check_at <= latest_eligible_check,
+            ]
         )
-        .order_by(Watch.id)
-        .with_for_update()
-    )
+    return select(Watch).where(*predicates).order_by(Watch.id).with_for_update()
 
 
 async def persist_observation_cycle(
@@ -833,6 +855,7 @@ async def apply_current_circuit_to_watch(
                     reason="provider_circuit_manual_hold_during_observation",
                 )
                 watch.next_check_at = None
+            watch.observation_in_flight_until = None
             await session.commit()
         except Exception:
             await session.rollback()
@@ -923,7 +946,7 @@ async def process_watch_group_observation(
                     ):
                         return
                     await defer_watch_group_observation(
-                        watch_ids,
+                        list(prepared),
                         deferred_until,
                         now,
                         lease_grant=lease_grant,

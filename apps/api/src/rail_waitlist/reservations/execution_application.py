@@ -356,6 +356,7 @@ async def confirm_provider_reservation_result(
                 payment_deadline=confirmation.payment_deadline,
                 official_handoff_url=confirmation.official_handoff_url,
                 progress_stages=result.progress_stages,
+                reserved_seats=result.reserved_seats,
             ),
             confirmation,
         )
@@ -467,9 +468,7 @@ async def execute_reservation(
         expected_credential_version=provider_credential_version,
     )
     try:
-        if target.provider is Provider.KORAIL and isinstance(
-            adapter, ReservationProgressProvider
-        ):
+        if target.provider is Provider.KORAIL and isinstance(adapter, ReservationProgressProvider):
             cumulative_progress: tuple[ReservationProgressStage, ...] = ()
 
             async def on_progress(progress: ReservationProgressStage) -> None:

@@ -23,6 +23,11 @@ export interface ReservationProgressStage {
   occurredAt: string;
 }
 
+export interface ReservedSeat {
+  carNumber: string;
+  seatNumber: string;
+}
+
 type ReservationConfirmationOutcome =
   | "confirmed_payment_required"
   | "not_found"
@@ -42,8 +47,10 @@ export interface LatestReservationAttempt {
   manualCheckRequired: boolean;
   retryCondition: ReservationRetryCondition | null;
   paymentHoldEndedAt: string | null;
+  manualRearmAvailable?: boolean;
   paymentHoldEndReason?: PaymentHoldEndReason | null;
   progressStages?: ReadonlyArray<ReservationProgressStage>;
+  reservedSeats?: ReadonlyArray<ReservedSeat>;
 }
 
 const outcomes: ReadonlySet<string> = new Set([
@@ -125,6 +132,38 @@ function mapProgressStages(
   return parsed;
 }
 
+function boundedSeatIdentifier(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return /^[A-Z0-9-]{1,10}$/.test(normalized) ? normalized : null;
+}
+
+export function normalizeReservedSeats(value: unknown): ReadonlyArray<ReservedSeat> {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return [];
+  if (value.length > 9) return [];
+  const seats: ReservedSeat[] = [];
+  const identities = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item)) return [];
+    const carNumber = boundedSeatIdentifier(item.car_number);
+    const seatNumber = boundedSeatIdentifier(item.seat_number);
+    if (carNumber === null || seatNumber === null) return [];
+    const identity = `${carNumber}\u0000${seatNumber}`;
+    if (identities.has(identity)) return [];
+    identities.add(identity);
+    seats.push({ carNumber, seatNumber });
+  }
+  return seats;
+}
+
+export function formatReservedSeats(seats: ReadonlyArray<ReservedSeat>): string | null {
+  if (seats.length === 0) return null;
+  return seats.map(({ carNumber, seatNumber }) => (
+    `${carNumber.endsWith("호차") ? carNumber : `${carNumber}호차`} ${seatNumber}`
+  )).join(", ");
+}
+
 export function mapLatestReservationAttempt(value: unknown): LatestReservationAttempt | null {
   if (!isRecord(value) || typeof value.outcome !== "string") return null;
   const outcome = value.outcome.toLowerCase();
@@ -202,6 +241,9 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
     && !value.manual_check_required
     ? postDeadlineReconciledAt
     : null;
+  const reservedSeats = outcome === "payment_required" || outcome === "reserved"
+    ? normalizeReservedSeats(value.reserved_seats)
+    : [];
 
   return {
     outcome: outcome as ReservationAttemptOutcome,
@@ -211,7 +253,9 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
     manualCheckRequired: value.manual_check_required,
     retryCondition,
     paymentHoldEndedAt,
+    manualRearmAvailable: paymentHoldEndedAt !== null && value.manual_rearm_available === true,
     progressStages,
+    reservedSeats,
     ...(paymentHoldEndedAt === null ? {} : { paymentHoldEndReason }),
   };
 }

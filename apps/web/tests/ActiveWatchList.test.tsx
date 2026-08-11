@@ -1,5 +1,6 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ActiveWatchList, type ActiveWatch } from "../src/features/home/ActiveWatchList";
@@ -22,6 +23,21 @@ function watch(index: number): ActiveWatch {
 }
 
 describe("ActiveWatchList", () => {
+  it("shows a separately verified train type beside a numeric train number", () => {
+    render(
+      <ActiveWatchList
+        watches={[{ ...watch(1), train: "22", trainType: "KTX-청룡" }]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("KTX-청룡 · 22 · 8월 1일")).toBeTruthy();
+  });
+
   it("does not expose the retired per-watch balanced and focused interval controls", () => {
     render(
       <ActiveWatchList
@@ -72,6 +88,40 @@ describe("ActiveWatchList", () => {
       .toBeTruthy();
     expect(policy?.textContent).toContain("좌석 재발견마다 자동 예매");
     expect(toggle.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("disables every conflicting row mutation while that watch is busy", async () => {
+    const user = userEvent.setup();
+    const onPause = vi.fn();
+    const onCancel = vi.fn();
+    const onChangeReservationPolicy = vi.fn();
+
+    render(
+      <ActiveWatchList
+        watches={[watch(1)]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={onPause}
+        onResume={vi.fn()}
+        onCancel={onCancel}
+        onChangeReservationPolicy={onChangeReservationPolicy}
+        watchMutationPendingIds={new Set(["watch-1"])}
+      />,
+    );
+
+    const row = screen.getByRole("article");
+    const pause = within(row).getByRole("button", { name: "대기 일시정지" });
+    const cancel = within(row).getByRole("button", { name: "대기 취소" });
+    const policy = within(row).getByRole("switch");
+    expect(row.getAttribute("aria-busy")).toBe("true");
+    for (const control of [pause, cancel, policy]) {
+      expect((control as HTMLButtonElement).disabled).toBe(true);
+      expect(control.getAttribute("aria-busy")).toBe("true");
+      await user.click(control);
+    }
+    expect(onPause).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onChangeReservationPolicy).not.toHaveBeenCalled();
   });
 
   it("renders every active watch without a hidden display cap", async () => {
@@ -136,6 +186,32 @@ describe("ActiveWatchList", () => {
     expect(screen.getByRole("status").textContent).toBe("최근 갱신 09:07:05");
   });
 
+  it("keeps the last completed observation while hiding an in-flight claim timestamp", () => {
+    render(
+      <ActiveWatchList
+        watches={[{
+          ...watch(1),
+          lastCheckedLabel: "최근 확인 14:02",
+          nextCheckAt: "2026-08-08T05:03:58Z",
+          observationExecutionState: "in_progress",
+        }]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("최근 확인 14:02")).toBeTruthy();
+    expect(screen.getByText("좌석 관측 중")).toBeTruthy();
+    expect(screen.queryByText(/다음 좌석 관측 목표/)).toBeNull();
+    expect(screen.getByRole("article").getAttribute("aria-busy")).toBe("false");
+    expect((screen.getByRole("button", {
+      name: "대기 일시정지",
+    }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("gives same-train standard and first-class watches distinct visible evidence text", () => {
     const standard = watch(1);
     const first: ActiveWatch = {
@@ -164,7 +240,7 @@ describe("ActiveWatchList", () => {
     expect(screen.getByText("특실 · 예매 가능 · 공식 페이지에서 직접 확인 12:34")).toBeTruthy();
   });
 
-  it("renders a booking action only for seat-found watches", async () => {
+  it("renders a booking action only with a current actionable observation", async () => {
     const user = userEvent.setup();
     const watching = watch(1);
     const seatFound: ActiveWatch = {
@@ -339,11 +415,15 @@ describe("ActiveWatchList", () => {
     expect(screen.getByText("좌석 임시 확보 · 결제 필요 · 22:16:00")).toBeTruthy();
   });
 
-  it("shows a finalized ended hold as monitoring for a new availability episode", () => {
+  it("offers a confirmation-gated manual rearm after an ended unpaid hold", async () => {
+    const user = userEvent.setup();
+    let resolveRearm: (() => void) | undefined;
+    const rearmTask = new Promise<void>((resolve) => { resolveRearm = resolve; });
+    const onManualReservationRearm = vi.fn(() => rearmTask);
     const endedHold: ActiveWatch = {
       ...watch(4),
-      status: "seat_found",
-      statusLabel: "좌석 발견",
+      status: "watching",
+      statusLabel: "감시 중",
       reservationPolicy: "reserve_once_before_payment",
       accountAuthStatus: "authenticated",
       latestReservationAttempt: {
@@ -354,6 +434,7 @@ describe("ActiveWatchList", () => {
         manualCheckRequired: false,
         retryCondition: "new_availability_episode",
         paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        manualRearmAvailable: true,
       },
     };
 
@@ -365,14 +446,207 @@ describe("ActiveWatchList", () => {
         onPause={vi.fn()}
         onResume={vi.fn()}
         onCancel={vi.fn()}
+        onManualReservationRearm={onManualReservationRearm}
       />,
     );
 
-    expect(screen.getByText("이전 결제 보류 종료 · 매진 후 재발견 대기")).toBeTruthy();
+    expect(screen.getByText("이전 예약 미결제 · 감시 중")).toBeTruthy();
     expect(screen.getByText(
-      "결제 보류 종료 확인 · 감시 계속 · 17:24:00 · 매진 후 좌석이 다시 열리면 자동 예매",
+      "이전 예약을 결제하지 않았습니다 · 17:24:00 · 다시 시도하려면 사용자 확인 필요",
     )).toBeTruthy();
     expect(screen.queryByText(/좌석 임시 확보 · 결제 필요/)).toBeNull();
+
+    const trigger = screen.getByRole("button", { name: /자동 예매 다시 시도/ });
+    expect(trigger.className).toContain("watch-rearm-button");
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "자동 예매를 다시 시작할까요?" });
+    expect(dialog.getAttribute("aria-busy")).toBe("false");
+    expect(within(dialog).getByText("열차 4")).toBeTruthy();
+    expect(within(dialog).getByText("일반실")).toBeTruthy();
+    expect(within(dialog).getByText(/좌석 감시를 즉시 실행/)).toBeTruthy();
+    expect(onManualReservationRearm).not.toHaveBeenCalled();
+
+    const confirm = within(dialog).getByRole("button", { name: "확인하고 다시 시작" });
+    await user.click(confirm);
+    expect(onManualReservationRearm).toHaveBeenCalledOnce();
+    expect(onManualReservationRearm).toHaveBeenCalledWith("watch-4");
+    expect(dialog.getAttribute("aria-busy")).toBe("true");
+    expect((within(dialog).getByRole("button", {
+      name: "다시 시작 중…",
+    }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dialog).getByRole("button", { name: "취소" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+
+    resolveRearm?.();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps direct official handoff distinct from manual rearm for a fresh ended-hold observation", () => {
+    const endedHold: ActiveWatch = {
+      ...watch(4),
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "payment_required",
+        startedAt: "2026-08-02T08:20:00Z",
+        finishedAt: "2026-08-02T08:22:00Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        manualRearmAvailable: true,
+      },
+      seatFoundObservation: {
+        kind: "official_provider",
+        observedAt: "2026-08-02T08:24:01Z",
+        observedLabel: "최근 확인 17:24",
+      },
+    };
+
+    render(
+      <ActiveWatchList
+        watches={[endedHold]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+        onManualReservationRearm={vi.fn()}
+        renderSeatFoundAction={() => <button type="button">공식 예매 열기</button>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "공식 예매 열기" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /자동 예매 다시 시도/ })).toBeTruthy();
+  });
+
+  it("keeps the rearm dialog open when the server rejects the confirmation", async () => {
+    const user = userEvent.setup();
+    const onManualReservationRearm = vi.fn().mockRejectedValue(new Error("409"));
+    const endedHold: ActiveWatch = {
+      ...watch(4),
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "payment_required",
+        startedAt: "2026-08-02T08:20:00Z",
+        finishedAt: "2026-08-02T08:22:00Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        manualRearmAvailable: true,
+      },
+    };
+
+    render(
+      <ActiveWatchList
+        watches={[endedHold]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+        onManualReservationRearm={onManualReservationRearm}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /자동 예매 다시 시도/ }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "확인하고 다시 시작" }));
+
+    await waitFor(() => expect(dialog.getAttribute("aria-busy")).toBe("false"));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(onManualReservationRearm).toHaveBeenCalledOnce();
+  });
+
+  it("restores focus to the stable watch row when canonical success removes the trigger", async () => {
+    const user = userEvent.setup();
+    const initial: ActiveWatch = {
+      ...watch(4),
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "payment_required",
+        startedAt: "2026-08-02T08:20:00Z",
+        finishedAt: "2026-08-02T08:22:00Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        manualRearmAvailable: true,
+      },
+    };
+    const onManualReservationRearm = vi.fn();
+
+    function CanonicalSuccessHarness() {
+      const [current, setCurrent] = useState(initial);
+      return (
+        <ActiveWatchList
+          watches={[current]}
+          onCreate={vi.fn()}
+          onViewAll={vi.fn()}
+          onPause={vi.fn()}
+          onResume={vi.fn()}
+          onCancel={vi.fn()}
+          onManualReservationRearm={async (watchId) => {
+            onManualReservationRearm(watchId);
+            setCurrent((item) => {
+              const attempt = item.latestReservationAttempt;
+              return {
+                ...item,
+                latestReservationAttempt: attempt
+                  ? { ...attempt, manualRearmAvailable: false }
+                  : null,
+              };
+            });
+          }}
+        />
+      );
+    }
+
+    render(<CanonicalSuccessHarness />);
+    const row = screen.getByRole("article");
+    expect(row.getAttribute("tabindex")).toBe("-1");
+    await user.click(screen.getByRole("button", { name: /자동 예매 다시 시도/ }));
+    await user.click(screen.getByRole("button", { name: "확인하고 다시 시작" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("button", { name: /자동 예매 다시 시도/ })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    expect(onManualReservationRearm).toHaveBeenCalledWith("watch-4");
+  });
+
+  it("does not expose manual rearm without every server-confirmed precondition", () => {
+    const base: ActiveWatch = {
+      ...watch(4),
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "payment_required",
+        startedAt: "2026-08-02T08:20:00Z",
+        finishedAt: "2026-08-02T08:22:00Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        manualRearmAvailable: false,
+      },
+    };
+
+    render(
+      <ActiveWatchList
+        watches={[base, { ...base, id: "notify", reservationPolicy: "notify_only" }]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+        onManualReservationRearm={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /자동 예매 다시 시도/ })).toBeNull();
   });
 
   it("keeps a seat-found hold fail-closed without the finalized end marker", () => {

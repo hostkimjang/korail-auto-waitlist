@@ -139,6 +139,7 @@ def test_legacy_policy_reassignment_cannot_weaken_canonical_handoff_validation(
 def test_reservation_models_have_canonical_owners_and_unchanged_fields() -> None:
     assert canonical.ReservationRequest.__module__ == "rail_waitlist.reservations.contracts"
     assert canonical.ReservationProgressStage.__module__ == "rail_waitlist.reservations.contracts"
+    assert canonical.ReservedSeat.__module__ == "rail_waitlist.reservations.contracts"
     assert canonical.ReservationResult.__module__ == "rail_waitlist.reservations.contracts"
     assert tuple(canonical.ReservationRequest.model_fields) == (
         "provider",
@@ -156,6 +157,7 @@ def test_reservation_models_have_canonical_owners_and_unchanged_fields() -> None
         "arrival_at",
     )
     assert tuple(canonical.ReservationProgressStage.model_fields) == ("stage", "occurred_at")
+    assert tuple(canonical.ReservedSeat.model_fields) == ("car_number", "seat_number")
     assert tuple(canonical.ReservationResult.model_fields) == (
         "outcome",
         "source",
@@ -164,10 +166,13 @@ def test_reservation_models_have_canonical_owners_and_unchanged_fields() -> None
         "payment_deadline",
         "official_handoff_url",
         "progress_stages",
+        "reserved_seats",
     )
     assert canonical.ReservationResult.model_fields["progress_stages"].default == ()
+    assert canonical.ReservationResult.model_fields["reserved_seats"].default == ()
     assert canonical.ReservationRequest.model_config["extra"] == "forbid"
     assert canonical.ReservationProgressStage.model_config["extra"] == "forbid"
+    assert canonical.ReservedSeat.model_config["extra"] == "forbid"
     assert canonical.ReservationResult.model_config["extra"] == "forbid"
 
 
@@ -184,7 +189,7 @@ def test_reservation_models_have_canonical_owners_and_unchanged_fields() -> None
         ),
         (
             canonical.ReservationResult,
-            "a70c3bd0909b96d47b17842729da1018ad92cdd1ad5baeb237761f03ffb7cf1b",
+            "8fd38d98c43eeab874c5ab80a7aabd59fc9023cb646c638eec1acb490ad69a2f",
         ),
     ],
 )

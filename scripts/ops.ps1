@@ -42,15 +42,19 @@ function Invoke-ApiVerification {
         if ($LASTEXITCODE -ne 0) {
             throw "API lock check failed with exit code $LASTEXITCODE"
         }
-        & uv run --extra test pytest
+        & uv run --python 3.12 --frozen --extra test --extra browser pytest
         if ($LASTEXITCODE -ne 0) {
             throw "API pytest failed with exit code $LASTEXITCODE"
         }
-        & uvx --from ruff==0.12.12 ruff check .
+        & uvx --from ruff==0.12.12 ruff check --select E,F,I .
         if ($LASTEXITCODE -ne 0) {
             throw "API Ruff check failed with exit code $LASTEXITCODE"
         }
-        & uv run --frozen --extra test --extra browser mypy
+        & uv run --python 3.12 --frozen --extra test python scripts/check_ruff_format_ratchet.py
+        if ($LASTEXITCODE -ne 0) {
+            throw "API Ruff format ratchet failed with exit code $LASTEXITCODE"
+        }
+        & uv run --python 3.12 --frozen --extra test --extra browser mypy
         if ($LASTEXITCODE -ne 0) {
             throw "API mypy check failed with exit code $LASTEXITCODE"
         }

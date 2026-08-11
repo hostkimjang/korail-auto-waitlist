@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-from datetime import date, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -141,6 +141,151 @@ def test_reservation_driver_keeps_css_metadata_bounded_like_browser_controls() -
     )
 
     assert tokens == ("one", "two", "three", "four", "five", "six", "seven")
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        "좌석 정보 없음",
+        "4호차 8A 5호차 9B",
+        "4호차 좌석 미정",
+        "안내번호 4호차8A",
+    ),
+)
+def test_payment_detail_seat_parser_fails_closed_for_uncertain_text(body: str) -> None:
+    assert reservation_driver_module._single_reserved_seat(body) == ()
+
+
+def test_payment_detail_seat_parser_accepts_one_explicit_car_and_seat() -> None:
+    seats = reservation_driver_module._single_reserved_seat("배정 좌석 4호차 8a 결제하기")
+
+    assert [(seat.car_number, seat.seat_number) for seat in seats] == [("4", "8A")]
+
+
+def _official_reservation_history_state() -> dict[str, object]:
+    return {
+        "trainNumber": "00118",
+        "departureDate": "20260802",
+        "departureTime": "063500",
+        "arrivalTime": "074900",
+        "origin": "대전역",
+        "destination": "서울역",
+        "seats": [
+            {
+                "seatClass": "특실",
+                "carNumber": "0004",
+                "seatNumber": "002c",
+            }
+        ],
+    }
+
+
+def test_payment_detail_reads_exact_official_history_seat_fields() -> None:
+    seats = reservation_driver_module._reserved_seats_from_history_state(
+        _official_reservation_history_state(),
+        _request(),
+    )
+
+    assert [(seat.car_number, seat.seat_number) for seat in seats] == [("4", "2C")]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("trainNumber", "119"),
+        ("departureDate", "20260803"),
+        ("departureTime", "064000"),
+        ("arrivalTime", "075000"),
+        ("origin", "서울"),
+        ("destination", "대전"),
+        ("seats", []),
+        (
+            "seats",
+            [{"seatClass": "일반실", "carNumber": "0004", "seatNumber": "002C"}],
+        ),
+        (
+            "seats",
+            [{"seatClass": "특실", "carNumber": "0004", "seatNumber": "입석"}],
+        ),
+    ),
+)
+def test_payment_detail_history_seat_fields_fail_closed_on_target_mismatch(
+    field: str,
+    value: object,
+) -> None:
+    state = _official_reservation_history_state()
+    state[field] = value
+
+    assert reservation_driver_module._reserved_seats_from_history_state(state, _request()) == ()
+
+
+@pytest.mark.asyncio
+async def test_payment_detail_reads_seat_from_preserved_history_state_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    execute_script = AsyncMock(
+        return_value={
+            "result": {
+                "result": {
+                    "value": _official_reservation_history_state(),
+                }
+            }
+        }
+    )
+    monkeypatch.setattr(session._reservation_driver, "_execute_script", execute_script)
+
+    seats = await session._reservation_driver.reserved_seats_from_preserved_state(_request())
+
+    assert [(seat.car_number, seat.seat_number) for seat in seats] == [("4", "2C")]
+    execute_script.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_payment_terminal_projects_structured_seat_when_body_has_no_seat_text() -> None:
+    port = SimpleNamespace(
+        _snapshot=AsyncMock(
+            return_value=reservation_driver_module.PydollPageSnapshot(
+                body_text=(
+                    "KTX 118 2026-08-02 대전 06:35 서울 07:49 특실 예약취소 장바구니 결제하기"
+                ),
+                rows=(),
+                url="https://www.korail.com/ticket/reservation/detail",
+            )
+        )
+    )
+    execute_script = AsyncMock(
+        return_value={
+            "result": {
+                "result": {
+                    "value": _official_reservation_history_state(),
+                }
+            }
+        }
+    )
+    driver = reservation_driver_module.PydollReservationDomDriver(
+        port=port,
+        timeout_ms=1_000,
+        timeout_seconds=1.0,
+        execute_script=execute_script,
+        visible_elements=AsyncMock(return_value=[]),
+        current_schedule=AsyncMock(return_value=(date(2026, 8, 2), 6)),
+        read_control_state=AsyncMock(),
+        monotonic=lambda: 0.0,
+        sleep=AsyncMock(),
+        utc_now=lambda: datetime(2026, 8, 2, tzinfo=UTC),
+        event_logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+    )
+
+    result = await driver.probe_reservation_terminal(_request())
+
+    assert result is not None
+    assert result.outcome is reservation_contracts_module.KorailReservationOutcome.PAYMENT_REQUIRED
+    assert [(seat.car_number, seat.seat_number) for seat in result.reserved_seats] == [("4", "2C")]
 
 
 def test_reservation_driver_has_no_browser_or_actor_dependencies() -> None:

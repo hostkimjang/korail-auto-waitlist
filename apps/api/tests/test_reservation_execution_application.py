@@ -27,6 +27,7 @@ from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
+from rail_waitlist.reservations.contracts import ReservedSeat
 from rail_waitlist.reservations.execution_application import (
     ReservationExecutionDependencies,
     ReservationExecutionTarget,
@@ -225,9 +226,7 @@ async def test_not_found_or_inconclusive_remains_an_ambiguous_fence() -> None:
 
 
 async def test_korail_confirmation_preserves_all_reservation_progress_stages() -> None:
-    progress_times = tuple(
-        datetime(2026, 8, 10, 10, 0, second, tzinfo=UTC) for second in range(4)
-    )
+    progress_times = tuple(datetime(2026, 8, 10, 10, 0, second, tzinfo=UTC) for second in range(4))
     progress_stages = tuple(
         ReservationProgressStage(stage=stage, occurred_at=occurred_at)
         for stage, occurred_at in zip(
@@ -258,6 +257,7 @@ async def test_korail_confirmation_preserves_all_reservation_progress_stages() -
         credential_version=3,
         official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
         progress_stages=progress_stages,
+        reserved_seats=(ReservedSeat(car_number="4", seat_number="8A"),),
     )
 
     confirmed = await confirm_provider_reservation_result(
@@ -271,6 +271,7 @@ async def test_korail_confirmation_preserves_all_reservation_progress_stages() -
     assert adapter.calls == 1
     assert confirmed.outcome is ReservationOutcome.PAYMENT_REQUIRED
     assert confirmed.result.progress_stages == progress_stages
+    assert confirmed.result.reserved_seats == result.reserved_seats
     assert tuple(stage.occurred_at for stage in confirmed.result.progress_stages) == progress_times
     assert all(stage.occurred_at.tzinfo is UTC for stage in confirmed.result.progress_stages)
 
@@ -423,6 +424,69 @@ async def test_claim_is_committed_before_provider_io_and_episode_runs_exactly_on
         )
         assert len(attempts) == 1
         assert len(claim_events) == 1
+
+
+async def test_cancel_during_provider_io_is_rejected_and_result_is_preserved(app, client) -> None:
+    target = await _persist_actionable_mock_target(app.state.test_session_factory)
+
+    class CancelDuringReservationAdapter:
+        calls = 0
+
+        async def reserve_once(self, _request) -> ReservationResult:
+            self.calls += 1
+            cancelled = await client.post(f"/api/v1/watches/{target.watch_id}/cancel")
+            assert cancelled.status_code == 409
+            assert cancelled.json()["detail"] == (
+                "예매 요청이 이미 시작되었거나 결제가 필요한 예약이 있어 대기를 취소할 수 "
+                "없습니다. 공식 예약 내역을 확인해 주세요."
+            )
+            return ReservationResult(
+                outcome=ReservationOutcome.PAYMENT_REQUIRED,
+                source="mock",
+                observed_at=datetime.now(UTC),
+                payment_deadline=datetime.now(UTC) + timedelta(minutes=10),
+                official_handoff_url="https://example.invalid/mock-booking",
+            )
+
+        async def confirm_reservation(self, _target):
+            raise AssertionError("mock results must not be confirmed")
+
+    adapter = CancelDuringReservationAdapter()
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.calls == 1
+    async with app.state.test_session_factory() as session:
+        watch = await session.get(Watch, target.watch_id)
+        candidate = await session.get(WatchCandidate, target.candidate_id)
+        attempt = await session.scalar(
+            select(ReservationAttempt).where(ReservationAttempt.candidate_id == target.candidate_id)
+        )
+        assert watch is not None
+        assert candidate is not None
+        assert attempt is not None
+        assert (watch.status, candidate.state, attempt.outcome) == (
+            WatchStatus.PAYMENT_REQUIRED,
+            "payment_required",
+            ReservationOutcome.PAYMENT_REQUIRED,
+        )
+        assert watch.payment_deadline is not None
+        assert attempt.payment_deadline is not None
+        result_events = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent).where(
+                        OutboxEvent.aggregate_id == target.watch_id,
+                        OutboxEvent.event_type == "watch.reservation_result",
+                    )
+                )
+            ).all()
+        )
+        assert len(result_events) == 1
 
 
 class ResultWriteFailure(Exception):
@@ -791,6 +855,59 @@ class ProgressReportingKorailAdapter:
         raise AssertionError("FAILED must not trigger a confirmation read")
 
 
+class ConfirmedSeatKorailAdapter:
+    async def reserve_once(self, request) -> ReservationResult:
+        return ReservationResult(
+            outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            source="korail-pydoll-reservation",
+            observed_at=datetime.now(UTC),
+            credential_version=request.expected_credential_version,
+            official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
+            reserved_seats=(ReservedSeat(car_number="4", seat_number="8A"),),
+        )
+
+    async def confirm_reservation(self, target) -> ReservationConfirmationResult:
+        return ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            source="korail-same-session-detail",
+            observed_at=datetime.now(UTC),
+            official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
+        )
+
+
+async def test_confirmed_reserved_seat_reaches_attempt_outbox_and_watch_read(
+    app,
+    client,
+) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+
+    await execute_reservation(
+        ConfirmedSeatKorailAdapter(),
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    expected = [{"car_number": "4", "seat_number": "8A"}]
+    async with app.state.test_session_factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_id == target.watch_id,
+                OutboxEvent.event_type == "watch.reservation_result",
+            )
+        )
+        assert attempt is not None
+        assert attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+        assert attempt.reserved_seats == expected
+        assert event is not None and event.payload["reserved_seats"] == expected
+
+    response = await client.get(f"/api/v1/watches/{target.watch_id}")
+    assert response.status_code == 200, response.text
+    latest = response.json()["candidates"][0]["latest_reservation_attempt"]
+    assert latest["reserved_seats"] == expected
+
+
 async def test_korail_progress_callback_persists_cumulative_idempotent_snapshots(app) -> None:
     target = await _persist_actionable_korail_target(app.state.test_session_factory)
     adapter = ProgressReportingKorailAdapter()
@@ -825,9 +942,7 @@ async def test_korail_progress_callback_persists_cumulative_idempotent_snapshots
         assert len(events) == 4
         for index, event in enumerate(events):
             expected = adapter.reported[index]
-            assert event.dedupe_key == (
-                f"reservation-progress:{attempt.id}:{expected.stage}"
-            )
+            assert event.dedupe_key == (f"reservation-progress:{attempt.id}:{expected.stage}")
             assert event.payload["watch_id"] == target.watch_id
             assert event.payload["candidate_id"] == target.candidate_id
             assert event.payload["attempt_id"] == attempt.id

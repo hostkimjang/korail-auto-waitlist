@@ -276,7 +276,7 @@ VAPID 키 쌍은 일반 배포나 앱 업데이트 때 회전하지 않습니다
 
 Web Push는 Chrome·Edge·설치된 모바일 PWA마다 별도의 구독으로 연결합니다. 연결되지 않은 기기에서는 인증 뒤 모든 화면에 비차단 `OS 알림 켜기` 행동을 표시합니다. 사용자가 이 버튼을 누르면 설정 화면을 거치지 않고 브라우저 권한 요청, 서비스 워커 준비, 구독과 서버 채널 저장을 순서대로 진행합니다. 브라우저가 권한과 새 Push 구독에 직접 사용자 행동을 요구하므로 페이지 load effect에서 승인창을 강제로 열지 않습니다. 권한이 차단된 경우에는 코드로 반복 요청하지 않고 사이트 권한 변경을 안내합니다. 앱에서 현재 기기의 OS 알림을 명시적으로 끄면 그 브라우저 구독과 대응하는 서버 채널만 비활성화·해제하고 전역 연결 안내도 억제하며, 다른 기기의 활성 구독은 유지합니다. 설정 화면은 현재 기기의 연결 상태와 전체 활성 기기 수를 구분해 표시합니다. 설정 화면의 `시험`은 현재 기기 한 곳으로 보내고, 실제 대기 상태 변화는 연결된 모든 활성 기기로 각각 보냅니다. 한 push endpoint가 만료되어 영구 실패하더라도 해당 기기 채널만 비활성화하고 다른 기기의 발송은 계속합니다.
 
-Web Push 알림을 누르면 외부 철도사 주소가 아니라 동일 출처의 레일웨잇 PWA를 우선 찾습니다. 실행 중인 창이 있으면 앞으로 가져오고, 종료 중인 창의 focus가 실패하거나 창이 없으면 PWA 범위의 시작 화면을 엽니다. 온라인 navigation은 새 `index.html`을 먼저 받아 같은 배포의 해시 bundle과 함께 열고, 네트워크가 실제로 실패할 때만 캐시된 app shell을 사용합니다. `/assets/`의 존재하지 않는 이전 해시 파일은 SPA 문서로 대체하지 않고 404로 처리합니다. 로그인 상태와 최신 대기 데이터는 항상 API 응답을 기다립니다. 앱이 화면에 떠 있을 때 Push가 도착하면 서비스 워커가 비밀값 없는 힌트만 전달하고, 화면은 API의 최신 대기 상태를 다시 읽은 뒤 `실시간 알림`을 갱신합니다.
+Web Push 알림을 누르면 외부 철도사 주소가 아니라 동일 출처의 레일웨잇 PWA를 우선 찾습니다. 실행 중인 창이 있으면 focus하고, 백그라운드 창이 전면에 보이지 않으면 PWA 범위의 시작 화면으로 navigate한 뒤 다시 focus합니다. navigate가 성공해도 재초점한 창이 visible이 아니면 성공으로 오인하지 않고 `openWindow`로 PWA를 다시 전면 전환합니다. 종료 중인 창의 focus·navigate가 실패하거나 창이 없는 경우도 같은 열기 경로를 사용합니다. 온라인 navigation은 새 `index.html`을 먼저 받아 같은 배포의 해시 bundle과 함께 열고, 네트워크가 실제로 실패할 때만 캐시된 app shell을 사용합니다. `/assets/`의 존재하지 않는 이전 해시 파일은 SPA 문서로 대체하지 않고 404로 처리합니다. 로그인 상태와 최신 대기 데이터는 항상 API 응답을 기다립니다. 앱이 화면에 떠 있을 때 Push가 도착하면 서비스 워커가 비밀값 없는 힌트만 전달하고, 화면은 API의 최신 대기 상태를 다시 읽은 뒤 `실시간 알림`을 갱신합니다.
 
 2026년 8월 7일 Android 16/API 36 에뮬레이터에서는 설치형 PWA를 백그라운드로 두고 Android 설정 앱을 연 상태에서 서비스 워커 합성 알림을 눌렀을 때 기존 `SameTaskWebApkActivity`가 전면으로 복귀하는 것을 확인했습니다. 이는 `notificationclick`의 기존-client 복귀 경로 검증이며, 실제 push service 전달·완전 종료된 PWA 콜드 실행·갤럭시 폴드7 제조사 동작은 별도 실기기 항목으로 남깁니다.
 
@@ -400,7 +400,16 @@ Windows 드라이브(`/mnt/c` 등)의 저장소에서 `failed to xattr ... .tmp-
 - KORAIL 예매 카드가 `자동 예매 요청 시작`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed` outbox 생성 여부를 먼저 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다. Pydoll의 `Page load timeout ... LOAD_EVENT_FIRED` 뒤 `KORAIL direct navigation load signal timed out; validating current DOM`이 남으면 로드 완료 신호만 늦은 상태를 현재 DOM·정확 열차 검증으로 이어간 것입니다. 후속 진행 또는 결과 이벤트를 함께 확인하세요.
 - provider 호출, rail worker 또는 외부 알림 발송이 멈춰도 시작 후 5분이 지난 `PENDING`은 전용 `maintenance-worker`가 다음 30초 주기 안에 `UNKNOWN`과 수동 확인 상태로 닫습니다. 5분 30초가 지나도 진행 카드가 유지되면 scheduler의 `recover-stale-reservation-attempts`, `maintenance-worker`의 `maintenance` 큐 수신 상태, `watch.reservation_result_requires_manual_check` outbox를 확인합니다. 이 복구는 예약 POST를 다시 보내지 않으며, 새로고침 뒤에도 확인된 단계와 수동 확인 카드를 canonical REST에서 복원합니다. 출발시간 경과로 감시가 끝났다면 카드도 감시 재개를 주장하지 않고 종료 상태와 공식 결과 수동 확인을 표시합니다.
 - sidecar의 `/v1/reserve-once/stream` 연결이 terminal frame 전에 끊긴 경우 예약 POST를 재전송하지 않습니다. sidecar는 이미 시작한 예약 task를 종료까지 보존하고, main API는 불확실 결과를 `UNKNOWN`으로 기록해 자동 재예매를 차단합니다. 이때 공식 예약 목록과 reconciliation 결과를 확인한 뒤에만 후속 조치합니다.
+- 결제보류 종료 뒤 `자동 예매 다시 시도`가 보이지 않으면 watch가 `WATCHING`, 자동 예매 정책, 출발 전 상태인지와 최신 attempt의 `manual_rearm_available`을 확인합니다. 확인 요청이 409이면 진행 중 예약·미종료 보류·철도 계정 인증·provider capability를 먼저 점검합니다. 성공 시 candidate의 `manual_rearm_source_attempt_id`와 `manual_rearm_authorized_at`, `watch.manual_reservation_rearmed` outbox, 즉시 예약된 관측 작업을 순서대로 확인합니다. 버튼 성공만으로 provider 예약 호출이 생겨서는 안 되며 승인 시각 뒤의 공식 행동 가능 관측과 고유 manual episode가 있어야 한 번 실행됩니다.
 - iPhone·iPad에서 OS 알림 연결이 보이지 않으면 iOS·iPadOS 16.4 이상인지와 홈 화면에서 PWA로 실행했는지 확인합니다. Safari 일반 탭의 상태를 설치형 PWA 수신 성공으로 기록하지 않습니다.
+
+### 대기를 취소할 수 없음
+
+`진행 중인 예매 요청은 취소할 수 없습니다` 또는 결제가 필요한 예약 안내가 나오면 운영사 요청이나 임시 예약이
+이미 시작된 상태입니다. 외부 요청을 소급 취소하거나 로컬 기록을 먼저 지우지 말고, 화면에 남은 결과와 공식
+예약 내역을 확인해 직접 결제 또는 취소합니다. 일반 감시 상태에서 취소가 성공했다면 이후 관측 결과는 저장·
+자동예매 근거로 사용되지 않습니다. `내 예약`의 기록 삭제는 감시 취소와 별도이며 종료되지 않은 대기는 먼저
+안전하게 취소해야 합니다.
 
 ### 보호 안내 또는 호출 제한
 

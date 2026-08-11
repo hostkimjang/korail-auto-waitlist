@@ -14,6 +14,7 @@ KorailReservationConfirmationRequest = _contracts.KorailReservationConfirmationR
 KorailReservationConfirmationResult = _contracts.KorailReservationConfirmationResult
 KorailReservationOutcomeValue = _contracts.KorailReservationOutcomeValue
 KorailReservationSeatClassValue = _contracts.KorailReservationSeatClassValue
+KorailReservedSeat = _contracts.KorailReservedSeat
 KorailReserveOnceRequest = _contracts.KorailReserveOnceRequest
 KorailReserveOnceResult = _contracts.KorailReserveOnceResult
 KorailSessionActorStateValue = _contracts.KorailSessionActorStateValue

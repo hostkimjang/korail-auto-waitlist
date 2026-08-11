@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -228,6 +228,10 @@ async def process_due_pipeline(
                             Watch.status.in_(OBSERVATION_WATCH_STATUSES),
                             Watch.next_check_at.is_not(None),
                             Watch.next_check_at <= now,
+                            or_(
+                                Watch.observation_in_flight_until.is_(None),
+                                Watch.observation_in_flight_until <= now,
+                            ),
                         )
                         .order_by(Watch.created_at)
                     )

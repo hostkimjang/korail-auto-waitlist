@@ -19,5 +19,6 @@ KorailReservationOutcome = _owner.KorailReservationOutcome
 KorailReservationProgressStage = _owner.KorailReservationProgressStage
 KorailReservationProgress = _owner.KorailReservationProgress
 KorailReservationProgressCallback = _owner.KorailReservationProgressCallback
+KorailReservedSeat = _owner.KorailReservedSeat
 KorailReservationRequest = _owner.KorailReservationRequest
 KorailReservationResult = _owner.KorailReservationResult

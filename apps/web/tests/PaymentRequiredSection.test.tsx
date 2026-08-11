@@ -26,6 +26,30 @@ function paymentWatch(id: string, deadline: string | null): PaymentRequiredViewM
 }
 
 describe("payment required section", () => {
+  it("shows only provider-confirmed train type and assigned seats", () => {
+    const confirmed: PaymentRequiredViewModel = {
+      ...paymentWatch("193", null),
+      train: "193",
+      trainType: "KTX-산천",
+      seatClassLabel: "일반실",
+      reservedSeats: [
+        { carNumber: "5", seatNumber: "8A" },
+        { carNumber: "5호차", seatNumber: "8B" },
+      ],
+    };
+    const unconfirmed = paymentWatch("unknown-seat", null);
+    render(
+      <PaymentRequiredSection
+        watches={[confirmed, unconfirmed]}
+        onOpenPayment={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("KTX-산천 · 193")).toBeTruthy();
+    expect(screen.getByText("예약 좌석 5호차 8A, 5호차 8B")).toBeTruthy();
+    expect(screen.getAllByText(/예약 좌석/)).toHaveLength(1);
+  });
+
   it("shows every urgent payment row and orders actual provider deadlines first", () => {
     const later = paymentWatch("later", "2099-08-02T10:20:00+09:00");
     const unknown = paymentWatch("unknown", null);

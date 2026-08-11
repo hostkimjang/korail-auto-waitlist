@@ -389,6 +389,7 @@ async def test_due_pipeline_queries_real_db_with_exact_predicates_and_order(
         provider: Provider = Provider.SRT,
         status: WatchStatus = WatchStatus.WATCHING,
         next_check_at: datetime | None = None,
+        observation_in_flight_until: datetime | None = None,
         created_at: datetime = NOW,
     ) -> Watch:
         return Watch(
@@ -403,6 +404,7 @@ async def test_due_pipeline_queries_real_db_with_exact_predicates_and_order(
             mode="official",
             dedupe_key=f"dedupe-{identifier}",
             next_check_at=next_check_at,
+            observation_in_flight_until=observation_in_flight_until,
             created_at=created_at,
         )
 
@@ -450,6 +452,12 @@ async def test_due_pipeline_queries_real_db_with_exact_predicates_and_order(
         next_check_at=NOW,
         created_at=NOW - timedelta(minutes=10),
     )
+    due_watch_with_expired_claim = watch(
+        "due-watch-expired-claim",
+        next_check_at=NOW - timedelta(seconds=1),
+        observation_in_flight_until=NOW,
+        created_at=NOW - timedelta(minutes=5),
+    )
     excluded_watches = [
         watch(
             "excluded-status",
@@ -458,6 +466,11 @@ async def test_due_pipeline_queries_real_db_with_exact_predicates_and_order(
         ),
         watch("excluded-null-next-check"),
         watch("excluded-future", next_check_at=NOW + timedelta(minutes=1)),
+        watch(
+            "excluded-active-claim",
+            next_check_at=NOW - timedelta(minutes=1),
+            observation_in_flight_until=NOW + timedelta(seconds=1),
+        ),
     ]
 
     reconciliation_watches = [
@@ -520,6 +533,7 @@ async def test_due_pipeline_queries_real_db_with_exact_predicates_and_order(
             [
                 due_watch_early,
                 due_watch_late,
+                due_watch_with_expired_claim,
                 *excluded_watches,
                 *reconciliation_watches,
                 *attempts,
@@ -550,6 +564,10 @@ async def test_due_pipeline_queries_real_db_with_exact_predicates_and_order(
         reservation_reconciliation_due_clause=_reservation_reconciliation_due_clause,
     )
 
-    assert await process_due_pipeline([], dependencies=dependencies) == 2
-    assert selected_watch_groups == [["due-watch-early"], ["due-watch-late"]]
+    assert await process_due_pipeline([], dependencies=dependencies) == 3
+    assert selected_watch_groups == [
+        ["due-watch-early"],
+        ["due-watch-late"],
+        ["due-watch-expired-claim"],
+    ]
     assert selected_attempts == ["reconcile-early", "reconcile-late"]

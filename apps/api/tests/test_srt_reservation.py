@@ -59,6 +59,8 @@ class FakeTrain:
 @dataclass
 class FakeTicket:
     seat_type_code: str = "1"
+    car: str = "4"
+    seat: str = "8A"
 
 
 @dataclass
@@ -164,10 +166,28 @@ async def test_exact_available_train_is_reserved_once_and_returns_real_deadline(
     assert result.outcome is ReservationOutcome.PAYMENT_REQUIRED
     assert result.payment_deadline == datetime(2099, 12, 31, 23, 59, tzinfo=KOREA)
     assert str(result.official_handoff_url).startswith("https://etk.srail.kr/")
+    assert [seat.model_dump() for seat in result.reserved_seats] == [
+        {"car_number": "4", "seat_number": "8A"}
+    ]
     assert second.outcome is ReservationOutcome.PAYMENT_REQUIRED
     assert factory_calls == 1
     assert client.reserve_calls == 2
     assert client.seat_types == [SeatType.GENERAL_ONLY, SeatType.SPECIAL_ONLY]
+
+
+async def test_unverified_srt_seat_metadata_fails_closed_without_losing_payment_hold() -> None:
+    class ResultClient(FakeClient):
+        def reserve(self, _train, *, passengers, special_seat, window_seat=None):
+            self.reserve_calls += 1
+            return FakeReservation(tickets=[FakeTicket(car="", seat="8A")])
+
+    client = ResultClient()
+    executor = SrtReservationExecutor(lambda _login_id, _password: client)
+
+    result = await executor.reserve_once(request(), Credentials())
+
+    assert result.outcome is ReservationOutcome.PAYMENT_REQUIRED
+    assert result.reserved_seats == ()
 
 
 @pytest.mark.parametrize(

@@ -57,6 +57,7 @@ COLUMN_ORDERS = {
         "status",
         "dedupe_key",
         "next_check_at",
+        "observation_in_flight_until",
         "cooldown_until",
         "payment_deadline",
         "reservation_attempted",
@@ -85,6 +86,8 @@ COLUMN_ORDERS = {
         "registration_evidence_id",
         "state",
         "suppressed_by_candidate_id",
+        "manual_rearm_source_attempt_id",
+        "manual_rearm_authorized_at",
     ),
     "SeatObservation": (
         "id",
@@ -115,6 +118,7 @@ COLUMN_ORDERS = {
         "next_reconcile_at",
         "post_deadline_reconciled_at",
         "progress_stages",
+        "reserved_seats",
     ),
     "WatchTransitionHistory": (
         "id",
@@ -131,6 +135,7 @@ NULLABLE_COLUMNS = {
         "origin_node_id",
         "destination_node_id",
         "next_check_at",
+        "observation_in_flight_until",
         "cooldown_until",
         "payment_deadline",
         "official_booking_url",
@@ -145,6 +150,8 @@ NULLABLE_COLUMNS = {
         "arrival_at",
         "registration_evidence_id",
         "suppressed_by_candidate_id",
+        "manual_rearm_source_attempt_id",
+        "manual_rearm_authorized_at",
     },
     "SeatObservation": {"error_category"},
     "ReservationAttempt": {
@@ -180,6 +187,11 @@ INDEXES = {
             ("suppressed_by_candidate_id",),
         ),
         ("ix_watch_candidates_watch_state", False, ("watch_id", "state")),
+        (
+            "ix_watch_candidates_manual_rearm_source_attempt_id",
+            False,
+            ("manual_rearm_source_attempt_id",),
+        ),
     },
     "SeatObservation": {
         (
@@ -257,6 +269,12 @@ CHECK_CONSTRAINTS = {
         ),
         "ck_watch_candidate_not_self_suppressed": (
             "suppressed_by_candidate_id IS NULL OR suppressed_by_candidate_id <> id"
+        ),
+        "ck_watch_candidate_manual_rearm_shape": (
+            "(manual_rearm_source_attempt_id IS NULL AND "
+            "manual_rearm_authorized_at IS NULL) OR "
+            "(manual_rearm_source_attempt_id IS NOT NULL AND "
+            "manual_rearm_authorized_at IS NOT NULL)"
         ),
         "ck_watch_candidate_operational_provenance_absent_shape": (
             "operational_source IS NOT NULL OR "
@@ -345,6 +363,7 @@ NON_ENUM_TYPE_SIGNATURES = {
         "focused_observation_interval_seconds": ("Integer", None, None),
         "dedupe_key": ("String", 64, None),
         "next_check_at": ("DateTime", None, True),
+        "observation_in_flight_until": ("DateTime", None, True),
         "cooldown_until": ("DateTime", None, True),
         "payment_deadline": ("DateTime", None, True),
         "reservation_attempted": ("Boolean", None, None),
@@ -371,6 +390,8 @@ NON_ENUM_TYPE_SIGNATURES = {
         "registration_evidence_id": ("String", 36, None),
         "state": ("String", 32, None),
         "suppressed_by_candidate_id": ("String", 36, None),
+        "manual_rearm_source_attempt_id": ("String", 36, None),
+        "manual_rearm_authorized_at": ("DateTime", None, True),
     },
     "SeatObservation": {
         "id": ("String", 36, None),
@@ -398,6 +419,7 @@ NON_ENUM_TYPE_SIGNATURES = {
         "next_reconcile_at": ("DateTime", None, True),
         "post_deadline_reconciled_at": ("DateTime", None, True),
         "progress_stages": ("JSON", None, None),
+        "reserved_seats": ("JSON", None, None),
     },
     "WatchTransitionHistory": {
         "id": ("String", 36, None),
@@ -479,6 +501,7 @@ CLIENT_DEFAULT_COLUMNS = {
         "outcome",
         "reconciliation_attempt_count",
         "progress_stages",
+        "reserved_seats",
     },
     "WatchTransitionHistory": {"id", "created_at"},
 }
@@ -500,6 +523,7 @@ SERVER_DEFAULTS = {
         "episode_key": "legacy",
         "reconciliation_attempt_count": "0",
         "progress_stages": "[]",
+        "reserved_seats": "[]",
     },
     "WatchTransitionHistory": {},
 }
@@ -756,6 +780,10 @@ def test_watch_graph_callable_defaults_keep_behavior() -> None:
     second_progress = attempt_table.c.progress_stages.default.arg(None)
     assert first_progress == second_progress == []
     assert first_progress is not second_progress
+    first_seats = attempt_table.c.reserved_seats.default.arg(None)
+    second_seats = attempt_table.c.reserved_seats.default.arg(None)
+    assert first_seats == second_seats == []
+    assert first_seats is not second_seats
 
     departure = datetime(2026, 8, 7, 12, tzinfo=UTC)
 

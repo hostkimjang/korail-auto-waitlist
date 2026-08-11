@@ -41,12 +41,14 @@ function mappedWatch(overrides: Partial<ProjectedWatch> = {}): ProjectedWatch {
     officialBookingUrl: "https://www.korail.com/ticket/search/general",
     operational: null,
     latestReservationAttempt: null,
+    paymentRequiredReservedSeats: [],
     seatFoundObservation: null,
     reservationCandidateContexts: {},
     reservationPolicy: "notify_only",
     seatObservationMode: "balanced",
     focusedObservationIntervalSeconds: 25,
     nextCheckAt: null,
+    observationExecutionState: "idle",
     ...overrides,
   };
 }
@@ -104,8 +106,8 @@ describe("active watch view model", () => {
 
   it("keeps hold-end, provider-blocked, and policy switch fail-closed presentation", () => {
     const endedHold = presentActiveWatchRow(activeWatch({
-      status: "seat_found",
-      statusLabel: "좌석 발견",
+      status: "watching",
+      statusLabel: "감시 중",
       reservationPolicy: "reserve_once_before_payment",
       latestReservationAttempt: {
         outcome: "payment_required",
@@ -115,6 +117,7 @@ describe("active watch view model", () => {
         manualCheckRequired: false,
         retryCondition: "new_availability_episode",
         paymentHoldEndedAt: "2026-08-08T13:02:00Z",
+        manualRearmAvailable: true,
       },
     }), false);
     const blocked = presentActiveWatchRow(mapActiveWatch(mappedWatch({
@@ -123,10 +126,11 @@ describe("active watch view model", () => {
     }), "provider_blocked"), false);
     const reserving = presentActiveWatchRow(activeWatch({ status: "reserving" }), false);
 
-    expect(endedHold.statusLabel).toBe("이전 결제 보류 종료 · 매진 후 재발견 대기");
+    expect(endedHold.statusLabel).toBe("이전 예약 미결제 · 감시 중");
     expect(endedHold.reservationAttemptLabel).toBe(
-      "결제 보류 종료 확인 · 감시 계속 · 22:02:00 · 매진 후 좌석이 다시 열리면 자동 예매",
+      "이전 예약을 결제하지 않았습니다 · 22:02:00 · 다시 시도하려면 사용자 확인 필요",
     );
+    expect(endedHold.canManualRearmReservation).toBe(true);
     expect(blocked).toMatchObject({
       statusLabel: "운영사 제한 · 자동 재확인 대기",
       authSummary: "저장된 계정으로 운영사 세션을 자동 재확인 중",
@@ -152,5 +156,42 @@ describe("active watch view model", () => {
         observedLabel: "최근 확인 12:00",
       },
     }), false).canRenderSeatFoundAction).toBe(true);
+
+    expect(presentActiveWatchRow(activeWatch({
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "payment_required",
+        startedAt: "2026-08-08T13:00:00Z",
+        finishedAt: "2026-08-08T13:01:00Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: "2026-08-08T13:02:00Z",
+        manualRearmAvailable: true,
+      },
+      seatFoundObservation: {
+        kind: "official_provider",
+        observedAt: "2026-08-08T13:02:01Z",
+        observedLabel: "최근 확인 22:02",
+      },
+    }), false)).toMatchObject({
+      canRenderSeatFoundAction: true,
+      canManualRearmReservation: true,
+    });
+  });
+
+  it("shows an explicit observation state instead of exposing the internal claim as an ETA", () => {
+    const inProgress = presentActiveWatchRow(activeWatch({
+      nextCheckAt: "2026-08-08T03:01:00Z",
+      observationExecutionState: "in_progress",
+    }), false);
+    const idle = presentActiveWatchRow(activeWatch({
+      nextCheckAt: "2026-08-08T03:00:02Z",
+      observationExecutionState: "idle",
+    }), false);
+
+    expect(inProgress.nextCheckLabel).toBe("좌석 관측 중");
+    expect(idle.nextCheckLabel).toBe("다음 좌석 관측 목표 12:00:02");
   });
 });

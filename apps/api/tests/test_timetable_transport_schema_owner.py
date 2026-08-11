@@ -162,7 +162,7 @@ def test_timetable_literal_contracts_are_unchanged() -> None:
         ),
         (
             canonical.TimetableItem,
-            "76e920981a216210e9a480ff15f73400e526070b64d3106152948fac6d4b1fb9",
+            "724293b4c2dc692f3da55ab796d1c7adf79c882f3f5868646f948a79b0201a82",
         ),
     ],
 )

@@ -30,6 +30,20 @@ function result(overrides: Partial<ReservationRecoveryResult>): ReservationRecov
 }
 
 describe("reservation recovery toast", () => {
+  it("adds confirmed seat assignments to a payment notice and omits absent values", () => {
+    const confirmed = buildWatchActionToast({
+      ...transition,
+      status: "payment_required",
+      reservedSeats: [{ carNumber: "3", seatNumber: "12A" }],
+    });
+    const absent = buildWatchActionToast({ ...transition, status: "payment_required" });
+
+    expect(confirmed.meta).toContain("예약 좌석 3호차 12A");
+    expect(confirmed.description).toContain("예약 좌석 3호차 12A");
+    expect(absent.meta).not.toContain("예약 좌석");
+    expect(absent.description).not.toContain("예약 좌석");
+  });
+
   it("uses actual result timestamps for clear deltas and the completed total", () => {
     const toast = buildWatchActionToast({
       ...transition,

@@ -9,6 +9,7 @@ from sqlalchemy.dialects import postgresql
 
 from rail_waitlist.domain import (
     Provider,
+    ProviderCircuitState,
     ReservationPolicy,
     SeatClass,
     SeatObservationStatus,
@@ -19,9 +20,13 @@ from rail_waitlist.observations.group_application import (
     ObservationGroupDependencies,
     ObservationTarget,
     _locked_deferred_watches_query,
+    apply_current_circuit_to_watch,
+    defer_watch_group_observation,
+    prepare_watch,
     process_watch_group_observation,
 )
 from rail_waitlist.provider_account_management.models import RailProviderAccount
+from rail_waitlist.provider_circuit.models import ProviderCircuit
 from rail_waitlist.schemas import ProviderCapabilities, SeatObservationResult
 from rail_waitlist.services import (
     add_outbox_event,
@@ -87,6 +92,15 @@ def test_deferred_group_uses_deterministic_postgresql_lock_order() -> None:
 
     assert "ORDER BY watches.id" in sql
     assert sql.endswith("FOR UPDATE")
+
+
+def test_prepared_deferred_group_locks_only_rows_with_an_observation_claim() -> None:
+    query = _locked_deferred_watches_query(["watch-b", "watch-a"], None)
+    sql = str(query.compile(dialect=postgresql.dialect()))
+
+    assert "watches.observation_in_flight_until IS NOT NULL" in sql
+    assert "AND watches.next_check_at" not in sql
+    assert "ORDER BY watches.id" in sql
 
 
 def dependencies(session_factory, reserved: list[ObservationTarget], *, locked=True):
@@ -188,7 +202,161 @@ async def test_group_deduplicates_provider_request_and_persists_each_watch(app) 
         watches = list((await session.scalars(select(Watch))).all())
         observation_count = await session.scalar(select(func.count()).select_from(SeatObservation))
         assert {watch.status for watch in watches} == {WatchStatus.WATCHING}
+        assert all(watch.observation_in_flight_until is None for watch in watches)
         assert observation_count == 2
+
+
+async def test_prepare_uses_an_expiring_claim_without_rewriting_the_due_schedule(app) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="separate-observation-claim",
+        now=now,
+    )
+    adapter = RecordingObservationAdapter(SeatObservationStatus.SOLD_OUT)
+    group_dependencies = dependencies(session_factory, [])
+
+    targets = await prepare_watch(
+        watch_id,
+        now,
+        adapter=adapter,
+        lease_grant=None,
+        dependencies=group_dependencies,
+    )
+    duplicate_targets = await prepare_watch(
+        watch_id,
+        now + timedelta(seconds=1),
+        adapter=adapter,
+        lease_grant=None,
+        dependencies=group_dependencies,
+    )
+
+    assert len(targets) == 1
+    assert duplicate_targets == []
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.next_check_at is not None
+        assert watch.next_check_at.replace(tzinfo=UTC) == now - timedelta(seconds=1)
+        assert watch.observation_in_flight_until is not None
+        assert watch.observation_in_flight_until.replace(tzinfo=UTC) == now + timedelta(minutes=1)
+
+
+async def test_prepare_preserves_the_deferred_operational_retry_fallback(app) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    scheduled_departure = now - timedelta(minutes=1)
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="deferred-operational-retry",
+        now=now,
+    )
+    async with session_factory() as session:
+        candidate = await session.scalar(
+            select(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
+        )
+        assert candidate is not None
+        candidate.departure_at = scheduled_departure
+        candidate.scheduled_departure_at = scheduled_departure
+        await session.commit()
+
+    targets = await prepare_watch(
+        watch_id,
+        now,
+        adapter=RecordingObservationAdapter(SeatObservationStatus.SOLD_OUT),
+        lease_grant=None,
+        dependencies=dependencies(session_factory, []),
+    )
+
+    assert targets
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.next_check_at.replace(tzinfo=UTC) == scheduled_departure + timedelta(
+            minutes=15
+        )
+        assert watch.observation_in_flight_until is not None
+        assert watch.observation_in_flight_until.replace(tzinfo=UTC) == now + timedelta(minutes=1)
+
+
+async def test_prepared_cooldown_replaces_schedule_and_clears_claim(app) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    deferred_until = now + timedelta(minutes=5)
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="prepared-cooldown-clears-claim",
+        now=now,
+    )
+    group_dependencies = dependencies(session_factory, [])
+    targets = await prepare_watch(
+        watch_id,
+        now,
+        adapter=RecordingObservationAdapter(SeatObservationStatus.ERROR),
+        lease_grant=None,
+        dependencies=group_dependencies,
+    )
+    assert targets
+
+    await defer_watch_group_observation(
+        [watch_id],
+        deferred_until,
+        now,
+        lease_grant=None,
+        prepared=True,
+        dependencies=group_dependencies,
+    )
+
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.next_check_at.replace(tzinfo=UTC) == deferred_until
+        assert watch.cooldown_until.replace(tzinfo=UTC) == deferred_until
+        assert watch.observation_in_flight_until is None
+
+
+async def test_current_circuit_transition_clears_prepared_claim(app) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    cooldown_until = now + timedelta(minutes=5)
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="circuit-clears-observation-claim",
+        now=now,
+    )
+    group_dependencies = dependencies(session_factory, [])
+    targets = await prepare_watch(
+        watch_id,
+        now,
+        adapter=RecordingObservationAdapter(SeatObservationStatus.SOLD_OUT),
+        lease_grant=None,
+        dependencies=group_dependencies,
+    )
+    assert targets
+    async with session_factory() as session:
+        circuit = await session.scalar(
+            select(ProviderCircuit).where(ProviderCircuit.provider == Provider.MOCK)
+        )
+        assert circuit is not None
+        circuit.state = ProviderCircuitState.OPEN
+        circuit.opened_at = now
+        circuit.cooldown_until = cooldown_until
+        circuit.manual_resume_required = False
+        await session.commit()
+
+    await apply_current_circuit_to_watch(
+        watch_id,
+        lease_grant=None,
+        dependencies=group_dependencies,
+    )
+
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.status is WatchStatus.COOLDOWN
+        assert watch.next_check_at.replace(tzinfo=UTC) == cooldown_until
+        assert watch.observation_in_flight_until is None
 
 
 @pytest.mark.parametrize("provider", [Provider.KORAIL, Provider.SRT])
@@ -232,16 +400,14 @@ async def test_blocked_provider_account_stops_notify_only_observation_without_re
 
     assert adapter.observe_calls == 0
     async with session_factory() as session:
-        watches = list(
-            (
-                await session.scalars(select(Watch).where(Watch.id.in_(watch_ids)))
-            ).all()
-        )
+        watches = list((await session.scalars(select(Watch).where(Watch.id.in_(watch_ids)))).all())
         assert len(watches) == 2
         assert {watch.status for watch in watches} == {WatchStatus.AUTH_REQUIRED}
         assert all(watch.next_check_at is None for watch in watches)
         assert all(watch.cooldown_until is None for watch in watches)
-        observations_before_retry = await session.scalar(select(func.count()).select_from(SeatObservation))
+        observations_before_retry = await session.scalar(
+            select(func.count()).select_from(SeatObservation)
+        )
 
     await process_watch_group_observation(
         watch_ids,
@@ -254,7 +420,9 @@ async def test_blocked_provider_account_stops_notify_only_observation_without_re
 
     assert adapter.observe_calls == 0
     async with session_factory() as session:
-        observations_after_retry = await session.scalar(select(func.count()).select_from(SeatObservation))
+        observations_after_retry = await session.scalar(
+            select(func.count()).select_from(SeatObservation)
+        )
         assert observations_after_retry == observations_before_retry == 0
 
 
@@ -395,6 +563,47 @@ async def test_actionable_result_delegates_one_episode_bound_winner(app) -> None
     assert reserved[0].reservation_episode_key.startswith("availability:")
 
 
+async def test_cancel_during_acquired_observation_fences_automatic_reservation(
+    app,
+    client,
+) -> None:
+    session_factory = app.state.test_session_factory
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="cancel-during-acquired-observation",
+    )
+
+    class CancelDuringObservationAdapter(RecordingObservationAdapter):
+        async def observe_seats(self, request) -> list[SeatObservationResult]:
+            cancelled = await client.post(f"/api/v1/watches/{watch_id}/cancel")
+            assert cancelled.status_code == 200
+            assert cancelled.json()["status"] == "expired"
+            return await super().observe_seats(request)
+
+    adapter = CancelDuringObservationAdapter(
+        SeatObservationStatus.AVAILABLE,
+        reservation_once=True,
+    )
+    reserved: list[ObservationTarget] = []
+
+    await process_watch_group_observation(
+        [watch_id],
+        datetime.now(UTC),
+        provider=Provider.MOCK,
+        adapter=adapter,
+        lease_grant=None,
+        dependencies=dependencies(session_factory, reserved),
+    )
+
+    assert adapter.observe_calls == 1
+    assert reserved == []
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.status is WatchStatus.EXPIRED
+        assert await session.scalar(select(func.count()).select_from(SeatObservation)) == 0
+
+
 async def test_lost_locked_lease_fences_prepare_before_watch_mutation(app) -> None:
     session_factory = app.state.test_session_factory
     watch_id = await persist_due_watch(session_factory, dedupe_key="group-locked-fence")
@@ -446,5 +655,9 @@ async def test_persistence_failure_rolls_back_observation_and_summary_atomically
             select(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
         )
         assert watch is not None and watch.status is WatchStatus.WATCHING
+        assert watch.next_check_at is not None
+        assert watch.next_check_at.replace(tzinfo=UTC) < datetime.now(UTC)
+        assert watch.observation_in_flight_until is not None
+        assert watch.observation_in_flight_until.replace(tzinfo=UTC) > datetime.now(UTC)
         assert candidate is not None and candidate.state == "active"
         assert await session.scalar(select(func.count()).select_from(SeatObservation)) == 0

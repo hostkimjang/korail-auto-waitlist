@@ -45,6 +45,7 @@ function watch(
     officialBookingUrl: null,
     operational: null,
     latestReservationAttempt: null,
+    paymentRequiredReservedSeats: [],
     seatFoundObservation: null,
     reservationCandidateContexts: {},
     reservationPolicy: "notify_only",
@@ -52,6 +53,7 @@ function watch(
     seatObservationMode: "balanced",
     focusedObservationIntervalSeconds: 10,
     nextCheckAt: null,
+    observationExecutionState: "idle",
     ...extra,
   };
 }
@@ -63,13 +65,15 @@ function options(
     demo: false,
     watches: [watch("watch-1"), watch("watch-2")],
     commitWatches: vi.fn(),
+    commitWatchDeletion: vi.fn(),
     pushToast: vi.fn(),
-    beginReservationPolicyMutation: vi.fn(),
-    endReservationPolicyMutation: vi.fn(),
+    beginWatchMutation: vi.fn(),
+    endWatchMutation: vi.fn(),
     requestWatchesRefresh: vi.fn(),
     pauseWatchRequest: vi.fn().mockResolvedValue(watch("watch-1", "paused")),
     startWatchRequest: vi.fn().mockResolvedValue(watch("watch-1", "watching")),
     cancelWatchRequest: vi.fn().mockResolvedValue(watch("watch-1", "expired")),
+    rearmReservationRequest: vi.fn().mockResolvedValue(watch("watch-1", "watching")),
     updateWatchRequest: vi.fn().mockResolvedValue(watch("watch-1", "watching", {
       reservationPolicy: "reserve_once_before_payment",
     })),
@@ -88,6 +92,10 @@ function renderMutationHarness(overrides: Partial<UseWatchMutationsOptions> = {}
       ...dependencies,
       watches,
       commitWatches,
+      commitWatchDeletion: (watchId) => {
+        dependencies.commitWatchDeletion(watchId);
+        commitWatches((items) => items.filter((item) => item.id !== watchId));
+      },
     });
     return { watches, controller };
   });
@@ -138,6 +146,101 @@ describe("useWatchMutations", () => {
     await act(() => result.current.controller.resumeWatch("watch-1"));
     expect(startWatchRequest).toHaveBeenCalledWith("watch-1");
     expect(result.current.watches[0]).toBe(resumed);
+  });
+
+  it("blocks overlapping mutations for one watch until the first response settles", async () => {
+    let resolvePause: ((value: WatchMutationRecord) => void) | undefined;
+    const pauseResponse = new Promise<WatchMutationRecord>((resolve) => {
+      resolvePause = resolve;
+    });
+    const paused = watch("watch-1", "paused", { statusLabel: "일시정지" });
+    const pauseWatchRequest = vi.fn(() => pauseResponse);
+    const startWatchRequest = vi.fn().mockResolvedValue(
+      watch("watch-1", "watching", { statusLabel: "감시 중" }),
+    );
+    const pushToast = vi.fn();
+    const { result } = renderMutationHarness({
+      pauseWatchRequest,
+      startWatchRequest,
+      pushToast,
+    });
+    let pauseTask: Promise<void> | undefined;
+
+    act(() => {
+      pauseTask = result.current.controller.pauseWatch("watch-1");
+    });
+    expect(result.current.controller.watchMutationPendingIds.has("watch-1")).toBe(true);
+
+    await act(() => result.current.controller.resumeWatch("watch-1"));
+    expect(startWatchRequest).not.toHaveBeenCalled();
+    expect(pushToast).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePause?.(paused);
+      await pauseTask;
+    });
+
+    expect(result.current.watches[0]).toBe(paused);
+    expect(result.current.controller.watchMutationPendingIds.has("watch-1")).toBe(false);
+    expect(pushToast).toHaveBeenCalledOnce();
+    expect(pushToast).toHaveBeenCalledWith("대기를 일시정지했습니다.");
+  });
+
+  it("keeps mutation guards independent between watches", async () => {
+    let resolvePause: ((value: WatchMutationRecord) => void) | undefined;
+    const pauseResponse = new Promise<WatchMutationRecord>((resolve) => {
+      resolvePause = resolve;
+    });
+    const pauseWatchRequest = vi.fn(() => pauseResponse);
+    const cancelled = watch("watch-2", "expired", { statusLabel: "만료" });
+    const cancelWatchRequest = vi.fn().mockResolvedValue(cancelled);
+    const { result } = renderMutationHarness({ pauseWatchRequest, cancelWatchRequest });
+    let pauseTask: Promise<void> | undefined;
+
+    act(() => {
+      pauseTask = result.current.controller.pauseWatch("watch-1");
+    });
+    let cancelResult: WatchCancellationResult | undefined;
+    await act(async () => {
+      cancelResult = await result.current.controller.cancelWatch("watch-2");
+    });
+
+    expect(cancelWatchRequest).toHaveBeenCalledWith("watch-2");
+    expect(cancelResult).toBe(cancelled);
+    expect(result.current.controller.watchMutationPendingIds.has("watch-1")).toBe(true);
+    expect(result.current.controller.watchMutationPendingIds.has("watch-2")).toBe(false);
+
+    await act(async () => {
+      resolvePause?.(watch("watch-1", "paused"));
+      await pauseTask;
+    });
+  });
+
+  it("keeps the resume response ahead of canonical refresh after the success toast", async () => {
+    const order: string[] = [];
+    const resumed = watch("watch-1", "watching", { statusLabel: "감시 중" });
+    const { result } = renderMutationHarness({
+      watches: [watch("watch-1", "paused", { statusLabel: "일시정지" })],
+      beginWatchMutation: vi.fn(() => order.push("begin")),
+      startWatchRequest: vi.fn(async () => {
+        order.push("request");
+        return resumed;
+      }),
+      pushToast: vi.fn((message) => order.push(`toast:${message}`)),
+      endWatchMutation: vi.fn(() => order.push("end")),
+      requestWatchesRefresh: vi.fn(() => order.push("refresh")),
+    });
+
+    await act(() => result.current.controller.resumeWatch("watch-1"));
+
+    expect(result.current.watches[0]).toBe(resumed);
+    expect(order).toEqual([
+      "begin",
+      "request",
+      "toast:대기를 재개했습니다.",
+      "end",
+      "refresh",
+    ]);
   });
 
   it("swallows pause, resume, and delete errors after forwarding their messages", async () => {
@@ -238,6 +341,7 @@ describe("useWatchMutations", () => {
     const live = renderMutationHarness({ deleteWatchRequest });
     await act(() => live.result.current.controller.deleteWatchRecord("watch-1"));
     expect(deleteWatchRequest).toHaveBeenCalledWith("watch-1");
+    expect(live.dependencies.commitWatchDeletion).toHaveBeenCalledWith("watch-1");
     expect(live.result.current.watches.map((item) => item.id)).toEqual(["watch-2"]);
     expect(live.dependencies.pushToast).toHaveBeenLastCalledWith("대기 기록을 삭제했습니다.");
   });
@@ -254,8 +358,8 @@ describe("useWatchMutations", () => {
       reservationPolicy: "reserve_once_before_payment",
     });
     const { result, dependencies } = renderMutationHarness({
-      beginReservationPolicyMutation: vi.fn(() => order.push("begin")),
-      endReservationPolicyMutation: vi.fn(() => order.push("end")),
+      beginWatchMutation: vi.fn(() => order.push("begin")),
+      endWatchMutation: vi.fn(() => order.push("end")),
       requestWatchesRefresh: vi.fn(() => order.push("refresh")),
       pushToast: vi.fn((message) => order.push(`toast:${message}`)),
       updateWatchRequest,
@@ -287,16 +391,61 @@ describe("useWatchMutations", () => {
       "end",
       "refresh",
     ]);
-    expect(dependencies.endReservationPolicyMutation).toHaveBeenCalledOnce();
+    expect(dependencies.endWatchMutation).toHaveBeenCalledOnce();
     expect(dependencies.requestWatchesRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("rearms an ended payment hold with one guarded live mutation", async () => {
+    const order: string[] = [];
+    const updated = watch("watch-1", "watching", {
+      reservationPolicy: "reserve_once_before_payment",
+    });
+    const rearmReservationRequest = vi.fn(async () => {
+      order.push("request");
+      return updated;
+    });
+    const { result } = renderMutationHarness({
+      beginWatchMutation: vi.fn(() => order.push("begin")),
+      endWatchMutation: vi.fn(() => order.push("end")),
+      requestWatchesRefresh: vi.fn(() => order.push("refresh")),
+      pushToast: vi.fn((message) => order.push(`toast:${message}`)),
+      rearmReservationRequest,
+    });
+
+    await act(() => result.current.controller.rearmReservation("watch-1"));
+
+    expect(rearmReservationRequest).toHaveBeenCalledOnce();
+    expect(rearmReservationRequest).toHaveBeenCalledWith("watch-1");
+    expect(result.current.watches[0]).toBe(updated);
+    expect(order).toEqual([
+      "begin",
+      "request",
+      "toast:자동 예매 재시작을 확인했습니다. 좌석을 다시 관측한 뒤 가능하면 한 번 시도합니다.",
+      "end",
+      "refresh",
+    ]);
+  });
+
+  it("rejects a failed rearm after forwarding the server message", async () => {
+    const failure = new Error("현재 자동 예매를 다시 시작할 수 없습니다.");
+    const pushToast = vi.fn();
+    const { result } = renderMutationHarness({
+      pushToast,
+      rearmReservationRequest: vi.fn().mockRejectedValue(failure),
+    });
+
+    await expect(result.current.controller.rearmReservation("watch-1")).rejects.toBe(failure);
+
+    expect(pushToast).toHaveBeenCalledWith(failure.message);
+    expect(result.current.controller.watchMutationPendingIds.size).toBe(0);
   });
 
   it("always ends the policy guard, refreshes, and clears the updating id after errors", async () => {
     const order: string[] = [];
     const pushToast = vi.fn((message) => order.push(`toast:${message}`));
     const { result } = renderMutationHarness({
-      beginReservationPolicyMutation: vi.fn(() => order.push("begin")),
-      endReservationPolicyMutation: vi.fn(() => order.push("end")),
+      beginWatchMutation: vi.fn(() => order.push("begin")),
+      endWatchMutation: vi.fn(() => order.push("end")),
       requestWatchesRefresh: vi.fn(() => order.push("refresh")),
       pushToast,
       updateWatchRequest: vi.fn().mockRejectedValue(new Error("policy failed")),

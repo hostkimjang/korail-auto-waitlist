@@ -234,9 +234,7 @@ async def test_same_day_morning_query_starts_at_requested_future_hour_in_kst() -
     result = browser_result().model_copy(
         update={
             "travel_date": service_date,
-            "trains": [
-                browser_result().trains[0].model_copy(update={"departure_at": departure})
-            ],
+            "trains": [browser_result().trains[0].model_copy(update={"departure_at": departure})],
         }
     )
     transport = FakeTransport(result)
@@ -543,9 +541,7 @@ async def test_coupled_cheongryong_auxiliary_number_exact_matches_midnight_query
         "standing_plus_seat",
         "sold_out",
     }
-    assert {seat.provenance.kind for seat in result[0].seat_classes} == {
-        "official_provider"
-    }
+    assert {seat.provenance.kind for seat in result[0].seat_classes} == {"official_provider"}
     assert transport.requests[0].departure_from == time(0, 0)
 
 
@@ -555,9 +551,7 @@ async def test_identity_mismatch_remains_unknown() -> None:
     result = await source(transport).overlay([timetable_item()], **overlay_arguments())
 
     assert {seat.status for seat in result[0].seat_classes} == {"unknown"}
-    assert {seat.provenance.reason for seat in result[0].seat_classes} == {
-        "no_exact_match"
-    }
+    assert {seat.provenance.reason for seat in result[0].seat_classes} == {"no_exact_match"}
 
 
 async def test_response_route_identity_mismatch_is_rejected_before_overlay() -> None:
@@ -567,9 +561,7 @@ async def test_response_route_identity_mismatch_is_rejected_before_overlay() -> 
     result = await source(transport).overlay([timetable_item()], **overlay_arguments())
 
     assert {seat.status for seat in result[0].seat_classes} == {"unknown"}
-    assert {seat.provenance.reason for seat in result[0].seat_classes} == {
-        "source_unavailable"
-    }
+    assert {seat.provenance.reason for seat in result[0].seat_classes} == {"source_unavailable"}
 
 
 async def test_multi_passenger_request_fails_closed_without_browser_call() -> None:
@@ -589,12 +581,8 @@ async def test_singleflight_and_ttl_cache_issue_one_sidecar_request() -> None:
     transport = FakeTransport()
     transport.gate.clear()
     seat_source = source(transport)
-    first = asyncio.create_task(
-        seat_source.overlay([timetable_item()], **overlay_arguments())
-    )
-    second = asyncio.create_task(
-        seat_source.overlay([timetable_item()], **overlay_arguments())
-    )
+    first = asyncio.create_task(seat_source.overlay([timetable_item()], **overlay_arguments()))
+    second = asyncio.create_task(seat_source.overlay([timetable_item()], **overlay_arguments()))
     await asyncio.sleep(0)
     transport.gate.set()
 
@@ -605,9 +593,7 @@ async def test_singleflight_and_ttl_cache_issue_one_sidecar_request() -> None:
 
 
 async def test_protection_cooldown_blocks_second_sidecar_request() -> None:
-    transport = FakeTransport(
-        error=_AdapterFailure("provider_access_restricted", protection=True)
-    )
+    transport = FakeTransport(error=_AdapterFailure("provider_access_restricted", protection=True))
     cooldown = MemoryCooldownStore(lambda: 100.0)
     seat_source = source(transport, cooldown_store=cooldown)
 
@@ -666,9 +652,7 @@ async def test_empty_today_failure_does_not_block_a_different_service_date() -> 
         update={
             "travel_date": tomorrow,
             "trains": [
-                browser_result().trains[0].model_copy(
-                    update={"departure_at": tomorrow_departure}
-                )
+                browser_result().trains[0].model_copy(update={"departure_at": tomorrow_departure})
             ],
         }
     )
@@ -764,9 +748,7 @@ async def test_same_hour_observations_share_one_search_and_exact_match_train_cla
     assert standard[0].status == "available"
     assert first[0].seat_class == "first"
     assert first[0].status == "limited"
-    assert {standard[0].source, first[0].source} == {
-        "korail-official-page-browser"
-    }
+    assert {standard[0].source, first[0].source} == {"korail-official-page-browser"}
 
 
 async def test_observation_identity_mismatch_and_transport_failure_fail_closed() -> None:

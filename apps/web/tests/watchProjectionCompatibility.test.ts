@@ -40,6 +40,7 @@ const legacySnakeOnlyFixture: MappedWatch = {
   officialBookingUrl: null,
   operational: null,
   latestReservationAttempt: null,
+  paymentRequiredReservedSeats: [],
   seatFoundObservation: null,
   reservationCandidateContexts: {},
   reservationPolicy: "notify_only",

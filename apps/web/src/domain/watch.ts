@@ -17,6 +17,7 @@ export type WatchStatus =
   | "expired"
   | "failed";
 export type WatchObservationMode = "balanced" | "focused";
+export type WatchObservationExecutionState = "idle" | "in_progress";
 
 const WATCH_STATUSES: readonly WatchStatus[] = [
   "draft",
@@ -49,4 +50,18 @@ export function isWatchStatus(value: unknown): value is WatchStatus {
 
 export function isWatchSeatClass(value: unknown): value is WatchSeatClass {
   return value === "standard" || value === "first" || value === "any";
+}
+
+export function normalizeWatchObservationExecutionState(
+  value: unknown,
+): WatchObservationExecutionState {
+  return value === "in_progress" ? "in_progress" : "idle";
+}
+
+export function formatTrainIdentity(trainType: string | null | undefined, train: string): string {
+  const normalizedType = trainType?.trim() ?? "";
+  if (!normalizedType) return train;
+  const comparableType = normalizedType.replace(/[\s-]/g, "").toLocaleLowerCase("ko-KR");
+  const comparableTrain = train.replace(/[\s-]/g, "").toLocaleLowerCase("ko-KR");
+  return comparableTrain.startsWith(comparableType) ? train : `${normalizedType} · ${train}`;
 }

@@ -183,17 +183,17 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     schema = production_app.openapi()
     encoded = json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
 
-    assert len(schema["paths"]) == 35
-    assert len(schema["components"]["schemas"]) == 70
+    assert len(schema["paths"]) == 36
+    assert len(schema["components"]["schemas"]) == 71
     assert schema["components"]["schemas"]["HealthResponse"] == (
         canonical.HealthResponse.model_json_schema()
     )
     assert schema["paths"]["/health"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/HealthResponse"}
-    assert len(encoded) == 83500
+    assert len(encoded) == 85566
     assert hashlib.sha256(encoded).hexdigest() == (
-        "a3bfcc336b728ed8fe3641a8139a6abbcc8475dc85e3f42b012fa4747c6aa662"
+        "f8ccf6a54711b19c01d22121afe95d662fe2d213221ac33548bd3671702f54cd"
     )
 
 

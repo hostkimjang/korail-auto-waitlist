@@ -9,6 +9,8 @@ import {
   createWatch,
   fetchWatches,
   mapWatch,
+  pauseWatch,
+  rearmWatchReservation,
   startWatch,
   updateWatch,
   type MappedWatch,
@@ -260,10 +262,12 @@ describe("watch API boundary", () => {
     expect(mapped.candidates).toEqual([{
       id: "candidate-2",
       trainNumber: "KTX 002",
+      trainType: null,
       departureAt: "2026-08-08T10:00:00+09:00",
       arrivalAt: "2026-08-08T13:00:00+09:00",
       seatClass: "standard",
       train_number: "KTX 002",
+      train_type: null,
       departure_at: "2026-08-08T10:00:00+09:00",
       arrival_at: "2026-08-08T13:00:00+09:00",
       seat_class: "standard",
@@ -401,7 +405,7 @@ describe("watch API boundary", () => {
     ]);
   });
 
-  it("uses stable evidence/watch idempotency keys and maps mutation responses", async () => {
+  it("uses stable create/cancel keys and a distinct start episode key", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockImplementation(async () => jsonResponse(WATCH_DTO, 201));
     vi.stubGlobal("fetch", fetchMock);
@@ -411,13 +415,12 @@ describe("watch API boundary", () => {
     await startWatch(WATCH_DTO.id);
     await cancelWatch(WATCH_DTO.id);
 
-    expect(fetchMock.mock.calls.map(([, options]) => (
+    const keys = fetchMock.mock.calls.map(([, options]) => (
       new Headers(options?.headers).get("Idempotency-Key")
-    ))).toEqual([
-      `watch-create:${evidenceId}`,
-      `watch-start:${WATCH_DTO.id}`,
-      `watch-cancel:${WATCH_DTO.id}`,
-    ]);
+    ));
+    expect(keys[0]).toBe(`watch-create:${evidenceId}`);
+    expect(keys[1]).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(keys[2]).toBe(`watch-cancel:${WATCH_DTO.id}`);
     expect(fetchMock.mock.calls.every(([, options]) => (
       options?.credentials === "include"
     ))).toBe(true);
@@ -571,7 +574,9 @@ describe("watch API boundary", () => {
       manualCheckRequired: false,
       retryCondition: "new_availability_episode",
       paymentHoldEndedAt: null,
+      manualRearmAvailable: false,
       progressStages: [],
+      reservedSeats: [],
     });
     expect(mapWatch({
       ...apiWatch,
@@ -598,6 +603,80 @@ describe("watch API boundary", () => {
         },
       }],
     }).latestReservationAttempt).toBeNull();
+  });
+
+  it("maps confirmed train type and reserved seats without deriving missing details", () => {
+    const mapped = mapWatch({
+      ...WATCH_DTO,
+      status: "payment_required",
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        state: "payment_required",
+        train_type: " KTX-청룡 ",
+        latest_reservation_attempt: {
+          outcome: "payment_required",
+          started_at: "2026-08-08T01:00:00Z",
+          finished_at: "2026-08-08T01:00:03Z",
+          retryable: false,
+          manual_check_required: false,
+          retry_condition: null,
+          reserved_seats: [
+            { car_number: "3", seat_number: "12A" },
+            { car_number: "3", seat_number: "12B" },
+          ],
+        },
+      }],
+    });
+
+    expect(mapped.trainType).toBe("KTX-청룡");
+    expect(mapped.candidates[0]).toMatchObject({
+      trainType: "KTX-청룡",
+      train_type: "KTX-청룡",
+    });
+    expect(mapped.latestReservationAttempt?.reservedSeats).toEqual([
+      { carNumber: "3", seatNumber: "12A" },
+      { carNumber: "3", seatNumber: "12B" },
+    ]);
+
+    const malformed = mapWatch({
+      ...WATCH_DTO,
+      status: "payment_required",
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        state: "payment_required",
+        train_type: { guessed: "KTX-산천" },
+        latest_reservation_attempt: {
+          outcome: "payment_required",
+          started_at: "2026-08-08T01:00:00Z",
+          finished_at: "2026-08-08T01:00:03Z",
+          retryable: false,
+          manual_check_required: false,
+          retry_condition: null,
+          reserved_seats: [{ car_number: "3" }],
+        },
+      }],
+    });
+    expect(malformed.trainType).toBeNull();
+    expect(malformed.latestReservationAttempt?.reservedSeats).toEqual([]);
+
+    const invalidIdentifiers = mapWatch({
+      ...WATCH_DTO,
+      status: "payment_required",
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        state: "payment_required",
+        latest_reservation_attempt: {
+          outcome: "payment_required",
+          started_at: "2026-08-08T01:00:00Z",
+          finished_at: "2026-08-08T01:00:03Z",
+          retryable: false,
+          manual_check_required: false,
+          retry_condition: null,
+          reserved_seats: [{ car_number: "3호차", seat_number: "12 A" }],
+        },
+      }],
+    });
+    expect(invalidIdentifiers.latestReservationAttempt?.reservedSeats).toEqual([]);
   });
 
   it("keeps the newest attempt and its candidate context after monitoring resumes", () => {
@@ -651,6 +730,7 @@ describe("watch API boundary", () => {
       confirmation_outcome: "not_found",
       post_deadline_reconciled_at: "2026-08-02T08:24:00Z",
       payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
+      manual_rearm_available: true,
     };
     const mapAttempt = (overrides: Record<string, unknown> = {}) => mapWatch({
       ...apiWatch,
@@ -665,9 +745,11 @@ describe("watch API boundary", () => {
       outcome: "payment_required",
       paymentHoldEndedAt: "2026-08-02T08:24:00Z",
       paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
+      manualRearmAvailable: true,
     });
     expect(mapAttempt({ confirmation_outcome: "inconclusive" })).toMatchObject({
       paymentHoldEndedAt: null,
+      manualRearmAvailable: false,
     });
     expect(mapAttempt({ post_deadline_reconciled_at: null })).toMatchObject({
       paymentHoldEndedAt: null,
@@ -1029,7 +1111,7 @@ describe("watch API boundary", () => {
     expect(headers.get("Idempotency-Key")).toBeTruthy();
   });
 
-  it("reuses evidence-bound create and watch-bound start keys after a lost response", async () => {
+  it("keeps create retries stable but rotates start keys across logical episodes", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockImplementation(async () => jsonResponse(apiWatch, 201));
     vi.stubGlobal("fetch", fetchMock);
@@ -1049,12 +1131,147 @@ describe("watch API boundary", () => {
     const keys = fetchMock.mock.calls.map(([, options]) => (
       new Headers(options?.headers).get("Idempotency-Key")
     ));
-    expect(keys).toEqual([
+    expect(keys.slice(0, 2)).toEqual([
       `watch-create:${evidenceId}`,
       `watch-create:${evidenceId}`,
-      `watch-start:${apiWatch.id}`,
-      `watch-start:${apiWatch.id}`,
     ]);
+    expect(keys[2]).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(keys[3]).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(keys[2]).not.toBe(keys[3]);
+  });
+
+  it("normalizes the explicit observation execution state without trusting lookalikes", () => {
+    expect(mapWatch({
+      ...apiWatch,
+      next_check_at: "2026-08-08T03:01:00Z",
+      observation_execution_state: "in_progress",
+    })).toMatchObject({
+      nextCheckAt: "2026-08-08T03:01:00Z",
+      observationExecutionState: "in_progress",
+    });
+
+    for (const value of [undefined, null, true, "processing", "IN_PROGRESS"]) {
+      expect(mapWatch({
+        ...apiWatch,
+        observation_execution_state: value,
+      }).observationExecutionState).toBe("idle");
+    }
+  });
+
+  it("keeps a fresh official handoff visible after an ended hold returns to watching", () => {
+    const mapped = mapWatch({
+      ...WATCH_DTO,
+      status: "watching",
+      reservation_policy: "reserve_once_before_payment",
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        latest_observation: {
+          status: "available",
+          source: "korail-pydoll-reservation",
+          observed_at: "2030-08-08T00:00:00Z",
+          fresh_until: "2030-08-08T00:05:00Z",
+        },
+        latest_reservation_attempt: {
+          outcome: "payment_required",
+          started_at: "2026-08-02T08:20:00Z",
+          finished_at: "2026-08-02T08:22:00Z",
+          retryable: false,
+          manual_check_required: false,
+          retry_condition: null,
+          confirmation_outcome: "not_found",
+          post_deadline_reconciled_at: "2026-08-02T08:24:00Z",
+          payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
+          manual_rearm_available: true,
+        },
+      }],
+    });
+
+    expect(mapped.status).toBe("watching");
+    expect(mapped.latestReservationAttempt).toMatchObject({
+      paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+      manualRearmAvailable: true,
+    });
+    expect(mapped.seatFoundObservation).toMatchObject({
+      kind: "official_provider",
+      source: "korail-pydoll-reservation",
+    });
+  });
+
+  it("keeps the ended-hold attempt, train, seat class, and observation on one candidate", () => {
+    const endedAttempt = {
+      outcome: "payment_required",
+      started_at: "2026-08-02T08:20:00Z",
+      finished_at: "2026-08-02T08:22:00Z",
+      retryable: false,
+      manual_check_required: false,
+      retry_condition: null,
+      confirmation_outcome: "not_found",
+      post_deadline_reconciled_at: "2026-08-02T08:24:00Z",
+      payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
+      manual_rearm_available: true,
+    };
+    const mapped = mapWatch({
+      ...WATCH_DTO,
+      status: "watching",
+      reservation_policy: "reserve_once_before_payment",
+      candidates: [
+        {
+          ...WATCH_DTO.candidates[0],
+          id: "priority-sold-out",
+          train_number: "KTX 001",
+          seat_class: "standard",
+          priority: 1,
+          latest_observation: {
+            status: "sold_out",
+            source: "korail-pydoll-reservation",
+            observed_at: "2030-08-08T00:00:00Z",
+            fresh_until: "2030-08-08T00:05:00Z",
+          },
+        },
+        {
+          ...WATCH_DTO.candidates[0],
+          id: "ended-hold-first",
+          train_number: "KTX 003",
+          seat_class: "first",
+          priority: 2,
+          latest_reservation_attempt: endedAttempt,
+          latest_observation: {
+            status: "available",
+            source: "korail-pydoll-reservation",
+            observed_at: "2030-08-08T00:00:01Z",
+            fresh_until: "2030-08-08T00:05:01Z",
+          },
+        },
+      ],
+    });
+
+    expect(mapped).toMatchObject({
+      train: "KTX 003",
+      seatClass: "first",
+      latestReservationAttemptCandidateId: "ended-hold-first",
+      seatFoundObservation: { source: "korail-pydoll-reservation" },
+    });
+  });
+
+  it("uses a fresh start episode key when a paused watch is resumed", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ ...WATCH_DTO, status: "scheduled" }))
+      .mockResolvedValueOnce(jsonResponse({ ...WATCH_DTO, status: "paused" }))
+      .mockResolvedValueOnce(jsonResponse({ ...WATCH_DTO, status: "scheduled" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startWatch(WATCH_DTO.id);
+    await pauseWatch(WATCH_DTO.id);
+    const resumed = await startWatch(WATCH_DTO.id);
+
+    const firstStartKey = new Headers(fetchMock.mock.calls[0]?.[1]?.headers)
+      .get("Idempotency-Key");
+    const resumedStartKey = new Headers(fetchMock.mock.calls[2]?.[1]?.headers)
+      .get("Idempotency-Key");
+    expect(firstStartKey).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(resumedStartKey).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(resumedStartKey).not.toBe(firstStartKey);
+    expect(resumed.status).toBe("scheduled");
   });
 
   it("updates an existing watch reservation policy through the patch contract", async () => {
@@ -1077,6 +1294,19 @@ describe("watch API boundary", () => {
     expect(JSON.parse(String(options?.body))).toEqual({
       reservation_policy: "reserve_once_before_payment",
     });
+  });
+
+  it("posts a manual reservation rearm with a fresh idempotency key", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(apiWatch));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await rearmWatchReservation(apiWatch.id);
+
+    const [url, options] = fetchMock.mock.calls[0] ?? [];
+    const headers = new Headers(options?.headers);
+    expect(String(url)).toContain(`/watches/${apiWatch.id}/reservation-rearm`);
+    expect(options?.method).toBe("POST");
+    expect(headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
 });

@@ -1,4 +1,5 @@
 import type { ToastProgressStep } from "../../shared/ui/AppToast";
+import { formatReservedSeats } from "../../domain/reservationAttempt";
 import type { AppNotificationInput } from "./notificationCenter";
 import type {
   ReservationProgressStageName,
@@ -248,6 +249,7 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
     ...lifecycleFields(transition),
     ...journeyFields(transition),
   };
+  const reservedSeatLabel = formatReservedSeats(transition.reservedSeats ?? []);
   switch (transition.status) {
     case "reserving": {
       const knownProgress = knownReservingProgressSteps(transition);
@@ -271,11 +273,14 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
     case "payment_required":
       return {
         ...base,
+        ...(reservedSeatLabel === null
+          ? {}
+          : { meta: `${base.meta} · 예약 좌석 ${reservedSeatLabel}` }),
         kind: "payment_required" as const,
         sortAt: transition.paymentDeadline ?? null,
         tone: "success",
         title: "결제 직전까지 예매되었습니다",
-        description: `${base.description} · 공식 플랫폼에서 결제해 주세요.`,
+        description: `${base.description}${reservedSeatLabel === null ? "" : ` · 예약 좌석 ${reservedSeatLabel}`} · 공식 플랫폼에서 결제해 주세요.`,
         autoCloseMs: null,
         steps: [
           ...(detailedResultSteps(transition, "payment_required") ?? [

@@ -210,6 +210,38 @@ def test_reservation_result_accepts_only_unique_chronological_progress_evidence(
             )
 
 
+def test_reservation_result_rejects_unactionable_duplicate_and_excess_seats() -> None:
+    base = {
+        "source": "korail-pydoll-reservation",
+        "observed_at": "2026-08-01T00:00:03Z",
+    }
+    with pytest.raises(ValidationError, match="seat data"):
+        ReservationResult(
+            **base,
+            outcome="not_available",
+            reserved_seats=[{"car_number": "4", "seat_number": "8A"}],
+        )
+    with pytest.raises(ValidationError, match="unique"):
+        ReservationResult(
+            **base,
+            outcome="payment_required",
+            official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
+            reserved_seats=[
+                {"car_number": "4", "seat_number": "8A"},
+                {"car_number": "4", "seat_number": "8a"},
+            ],
+        )
+    with pytest.raises(ValidationError):
+        ReservationResult(
+            **base,
+            outcome="payment_required",
+            official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
+            reserved_seats=[
+                {"car_number": str(index), "seat_number": "8A"} for index in range(1, 11)
+            ],
+        )
+
+
 def test_latest_reservation_attempt_read_is_typed_and_normalizes_sqlite_datetimes():
     attempt = WatchCandidateLatestReservationAttemptRead(
         outcome=ReservationOutcome.NOT_AVAILABLE,
@@ -431,6 +463,40 @@ def test_timetable_rejects_insecure_official_booking_url():
         )
 
 
+@pytest.mark.parametrize("train_type", ["", "   ", "\t\n"])
+def test_timetable_rejects_blank_train_type(train_type: str) -> None:
+    with pytest.raises(ValidationError, match="train_type"):
+        TimetableItem(
+            provider="korail",
+            train_number="101",
+            train_type=train_type,
+            origin="서울",
+            destination="부산",
+            departure_at="2026-08-01T09:00:00+09:00",
+            arrival_at="2026-08-01T11:30:00+09:00",
+            timetable_source="TAGO",
+            timetable_retrieved_at="2026-07-29T00:00:00Z",
+            official_booking_url="https://www.korail.com/ticket/search",
+        )
+
+
+def test_timetable_normalizes_verified_train_type_spacing() -> None:
+    item = TimetableItem(
+        provider="korail",
+        train_number="101",
+        train_type="  KTX   청룡  ",
+        origin="서울",
+        destination="부산",
+        departure_at="2026-08-01T09:00:00+09:00",
+        arrival_at="2026-08-01T11:30:00+09:00",
+        timetable_source="TAGO",
+        timetable_retrieved_at="2026-07-29T00:00:00Z",
+        official_booking_url="https://www.korail.com/ticket/search",
+    )
+
+    assert item.train_type == "KTX 청룡"
+
+
 def test_timetable_rejects_non_provider_official_hosts_for_booking_and_actions():
     timetable = {
         "provider": "korail",
@@ -450,16 +516,18 @@ def test_timetable_rejects_non_provider_official_hosts_for_booking_and_actions()
         TimetableItem(
             **timetable,
             official_booking_url="https://www.korail.com/ticket/search",
-            seat_classes=[{
-                "seat_class": "standard",
-                "status": "available",
-                "provenance": {
-                    "kind": "official_provider",
-                    "source": "authorized-test",
-                    "observed_at": "2026-07-29T00:00:00Z",
-                },
-                "actions": [{"kind": "official_check", "url": "https://evil.example/ticket"}],
-            }],
+            seat_classes=[
+                {
+                    "seat_class": "standard",
+                    "status": "available",
+                    "provenance": {
+                        "kind": "official_provider",
+                        "source": "authorized-test",
+                        "observed_at": "2026-07-29T00:00:00Z",
+                    },
+                    "actions": [{"kind": "official_check", "url": "https://evil.example/ticket"}],
+                }
+            ],
         )
 
 

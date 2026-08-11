@@ -76,6 +76,9 @@ class Watch(Base):
     )
     dedupe_key: Mapped[str] = mapped_column(String(64), index=True)
     next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    observation_in_flight_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payment_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -157,6 +160,12 @@ class WatchCandidate(Base):
             "suppressed_by_candidate_id IS NULL OR suppressed_by_candidate_id <> id",
             name="ck_watch_candidate_not_self_suppressed",
         ),
+        CheckConstraint(
+            "(manual_rearm_source_attempt_id IS NULL AND manual_rearm_authorized_at IS NULL) OR "
+            "(manual_rearm_source_attempt_id IS NOT NULL "
+            "AND manual_rearm_authorized_at IS NOT NULL)",
+            name="ck_watch_candidate_manual_rearm_shape",
+        ),
         Index("ix_watch_candidates_watch_state", "watch_id", "state"),
     )
 
@@ -211,6 +220,12 @@ class WatchCandidate(Base):
         nullable=True,
         index=True,
     )
+    manual_rearm_source_attempt_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    manual_rearm_authorized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     watch: Mapped[Watch] = relationship(back_populates="candidates")
     registration_evidence: Mapped[TimetableSeatEvidence | None] = relationship(lazy="joined")
     suppressed_by_candidate: Mapped[WatchCandidate | None] = relationship(
@@ -249,6 +264,15 @@ class WatchCandidate(Base):
         self.reservation_attempts.clear()
         if value is not None:
             self.reservation_attempts.append(value)
+
+    @property
+    def train_type(self) -> str | None:
+        """Expose only the subtype captured by immutable registration evidence."""
+        return (
+            self.registration_evidence.train_type
+            if self.registration_evidence is not None
+            else None
+        )
 
 
 class SeatObservation(Base):
@@ -402,6 +426,11 @@ class ReservationAttempt(Base):
         DateTime(timezone=True), nullable=True
     )
     progress_stages: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON,
+        default=list,
+        server_default="[]",
+    )
+    reserved_seats: Mapped[list[dict[str, str]]] = mapped_column(
         JSON,
         default=list,
         server_default="[]",

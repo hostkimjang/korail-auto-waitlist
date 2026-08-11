@@ -171,9 +171,7 @@ async def record_reservation_progress(
                         select(OutboxEvent)
                         .where(
                             OutboxEvent.event_type == "watch.reservation_progressed",
-                            OutboxEvent.dedupe_key.like(
-                                f"reservation-progress:{attempt_id}:%"
-                            ),
+                            OutboxEvent.dedupe_key.like(f"reservation-progress:{attempt_id}:%"),
                         )
                         .order_by(OutboxEvent.created_at, OutboxEvent.id)
                         .with_for_update()

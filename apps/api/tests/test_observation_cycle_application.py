@@ -160,6 +160,7 @@ async def test_finish_cycle_uses_default_or_admin_observation_interval(
 
     async with factory() as session:
         watch = make_watch()
+        watch.observation_in_flight_until = now + timedelta(minutes=1)
         watch.candidates.append(make_candidate(1))
         session.add(watch)
         if interval_seconds is not None:
@@ -175,6 +176,7 @@ async def test_finish_cycle_uses_default_or_admin_observation_interval(
         await finish_observation_cycle(session, watch, None, now)
 
         assert watch.unchanged_runs == 0
+        assert watch.observation_in_flight_until is None
         assert watch.next_check_at == now + timedelta(seconds=interval_seconds or 5)
 
 
@@ -216,12 +218,14 @@ async def test_terminal_cycle_clears_next_check_without_owning_commit(db_engine)
     async with factory() as session:
         watch = make_watch(status=WatchStatus.EXPIRED)
         watch.next_check_at = now + timedelta(minutes=1)
+        watch.observation_in_flight_until = now + timedelta(minutes=1)
         session.add(watch)
         await session.flush()
 
         await finish_observation_cycle(session, watch, None, now)
 
         assert watch.next_check_at is None
+        assert watch.observation_in_flight_until is None
 
 
 @pytest.mark.parametrize("commit_cycle", [True, False])

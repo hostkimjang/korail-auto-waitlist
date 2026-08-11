@@ -374,6 +374,18 @@ Windows 드라이브(`/mnt/c` 등)의 저장소에서 `failed to xattr ... .tmp-
 
 `git status --short --untracked-files=all`로 해당 경로가 Git 비추적 임시 디렉터리인지 확인한 뒤 그 경로만 Windows에서 권한을 복구하거나 저장소 밖으로 이동하세요. 접근 거부로 정리할 수 없으면 WSL 내부 파일시스템(`~/...`)의 clean clone에서 설치 절차를 다시 실행합니다. 이 문제를 고치기 위해 Compose volume을 삭제하거나 `down -v`를 실행하지 마세요.
 
+### 제한적인 umask 뒤 Git 갱신 파일의 읽기 권한 오류
+
+Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱신으로 새로 쓰인 tracked 파일이
+`0600`으로 만들어질 수 있습니다. Docker build context가 이 권한을 보존하면 비루트 migration·API 사용자가
+새 모듈을 읽지 못해 `Permission denied`와 함께 migration이 중단될 수 있습니다.
+
+먼저 작업 트리가 clean이고 오류 경로가 방금 갱신된 tracked 파일인지 확인하세요. 해당 파일만 Git index의
+일반 파일 모드(`0644`) 또는 실행 파일 모드(`0755`)로 복원한 뒤 `config --quiet`와 공식 운영 스크립트를
+처음부터 다시 실행합니다. `.env`, `secrets/`, `logs/`, Compose volume에는 이 복구를 적용하지 않습니다.
+저장소 전체에 `chmod -R`을 실행하거나 `down -v`, volume 삭제로 복구하지 마세요. 이 환경 차이를 자동으로
+정규화하는 배포 전 검사는 아직 구현하지 않았습니다.
+
 ### 로그인할 수 없음
 
 - 최초 관리자 등록이 이미 끝났는지 확인합니다.

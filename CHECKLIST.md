@@ -56,6 +56,7 @@
 - [x] OCI ARM64 네이티브 환경의 KORAIL Chromium 이미지 빌드와 외부 요청 없는 151개 fixture 검증
 - [x] OCI ARM64 첫 전체 배포의 전체 이미지 빌드·migration 성공과 seccomp 사용자 네임스페이스 거부에 따른 adapter readiness 실패 확인
 - [x] Linux Bash 운영 진입점, 무파괴 stop·복구·profile·복원 계약 테스트와 WSL2 Ubuntu 전체 프로필 재빌드·재생성·health 확인
+- [ ] OCI 운영 서버의 제한적 `umask`에서도 Git 갱신 파일을 비루트 컨테이너가 읽도록 배포 전 tracked 권한 자동 정규화
 - [x] API 검증 진입점의 Python 3.12·고정 lock·test/browser 의존성 고정과 Make·Bash·PowerShell 품질 gate 일치
 - [x] Windows PowerShell 5.1 호환 필수 비밀값 생성 절차에서 다섯 값의 이름·고유성·48바이트 길이 검증
 - [x] Web Push VAPID Docker 생성 명령의 P-256 키 쌍 검증과 subject·키 보존·교체 시 재구독·HTTPS 조건 문서화

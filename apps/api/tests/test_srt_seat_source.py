@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from rail_waitlist.provider_adapters.srt_seat_source import (
     SrtLiveSeatSource,
     SrtLiveTimetableUnavailable,
     _AccountlessSrtClient,
+    _default_client_factory,
     map_srt_seat_state,
     normalize_srt_time,
     normalize_srt_train_number,
@@ -316,7 +318,9 @@ async def test_observe_timeout_and_protection_fail_closed_and_open_cooldown():
     await timeout.drain_pending_calls()
 
 
-async def test_timeout_keeps_upstream_owned_until_drain_finishes():
+async def test_timeout_keeps_upstream_owned_until_drain_finishes(
+    caplog: pytest.LogCaptureFixture,
+):
     started = threading.Event()
     release = threading.Event()
 
@@ -333,7 +337,12 @@ async def test_timeout_keeps_upstream_owned_until_drain_finishes():
         client_factory=BlockingClient,
     )
 
-    timed_out = await source.observe(observation_request(), origin="수서", destination="부산")
+    caplog.set_level(logging.INFO, logger="rail_waitlist.srt_provider_adapter")
+    timed_out = await source.observe(
+        observation_request(),
+        origin="수서",
+        destination="부산",
+    )
     assert started.is_set()
     assert timed_out[0].error_category == "timeout"
 
@@ -343,6 +352,48 @@ async def test_timeout_keeps_upstream_owned_until_drain_finishes():
 
     release.set()
     await asyncio.wait_for(drain_task, timeout=1)
+    await asyncio.sleep(0)
+
+    assert "SRT 운영사 조회를 시작합니다" in caplog.text
+    assert "event=provider_call_timed_out" in caplog.text
+    assert "upstream_still_running=true" in caplog.text
+    assert "event=provider_call_finished_after_timeout outcome=success" in caplog.text
+
+
+async def test_timeout_logs_late_failure_without_exposing_provider_exception(
+    caplog: pytest.LogCaptureFixture,
+):
+    started = threading.Event()
+    release = threading.Event()
+
+    class FailingClient:
+        def search_train(self, *args, **kwargs):
+            started.set()
+            assert release.wait(timeout=2)
+            raise RuntimeError("raw-provider-secret")
+
+    source = SrtLiveSeatSource(
+        enabled=True,
+        cache_ttl_seconds=30,
+        timeout_seconds=0.01,
+        client_factory=FailingClient,
+    )
+    caplog.set_level(logging.INFO, logger="rail_waitlist.srt_provider_adapter")
+
+    timed_out = await source.observe(
+        observation_request(),
+        origin="수서",
+        destination="부산",
+    )
+    assert started.is_set()
+    assert timed_out[0].error_category == "timeout"
+
+    release.set()
+    await source.drain_pending_calls()
+    await asyncio.sleep(0)
+
+    assert "event=provider_call_finished_after_timeout outcome=failed" in caplog.text
+    assert "raw-provider-secret" not in caplog.text
 
 
 async def test_observe_rate_limit_opens_cooldown_without_exposing_raw_error():
@@ -365,6 +416,25 @@ async def test_observe_rate_limit_opens_cooldown_without_exposing_raw_error():
     assert calls == ["rate-limited"]
     assert first[0].error_category == second[0].error_category == "provider_unavailable"
     assert "raw response" not in first[0].model_dump_json()
+
+
+async def test_non_string_vendor_error_still_opens_fail_closed_cooldown():
+    class NonStringMessageError(RuntimeError):
+        def __str__(self):
+            return object()
+
+    cooldown = MemoryCooldownStore()
+    source = SrtLiveSeatSource(
+        enabled=True,
+        cache_ttl_seconds=30,
+        cooldown_store=cooldown,
+    )
+
+    await source._open_cooldown("source_unavailable", NonStringMessageError())
+
+    active = await cooldown.get("srt")
+    assert active is not None
+    assert active.reason == "source_unavailable"
 
 
 async def test_source_cooldown_preflight_defers_without_an_upstream_call():
@@ -563,6 +633,13 @@ def test_default_accountless_client_passes_cross_operation_codes_to_srtrain():
             "use_netfunnel_cache": True,
         }
     ]
+
+
+def test_default_accountless_client_injects_observable_netfunnel_helper():
+    client = _default_client_factory()
+
+    assert client._client.netfunnel_helper.__class__.__name__ == "LoggingNetFunnelHelper"
+    assert client._client.netfunnel_helper._flow == "accountless"
 
 
 async def test_timetable_search_reuses_singleflight_and_cache_for_exact_window():

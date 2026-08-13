@@ -699,6 +699,8 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
 - 소비 경계: App은 `timetableRefreshIntervalSeconds` 하나를 watch collection polling과 새 대기 시간표
   refresh에 함께 전달하고, 전체 preferences·saving·save는 Settings에 전달합니다. 서버에 저장하는
   `seatObservationIntervalSeconds`를 클라이언트 polling 주기로 잘못 사용하지 않습니다.
+- 후속 현재 계약: 화면 갱신 초 입력은 제거했습니다. App과 새 대기는 사용자 preference 대신 내부 고정
+  5초 reconciliation 주기를 사용하고, 설정은 이벤트 기반 `실시간` 상태와 좌석 관측 간격만 표시합니다.
 - 행동 보존: 기본값은 화면 5초·좌석 관측 5초·epoch 시각이며 인증 전과 demo에서는 GET을 호출하지
   않습니다. live GET의 늦은 성공·오류는 effect cleanup 뒤 폐기하고, 저장은 live PATCH 또는 demo local
   timestamp 결과를 상태·반환값으로 사용합니다. 성공 toast, 원본 오류 rethrow와 finally saving 해제를
@@ -1533,9 +1535,10 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   reservations → timetableRefreshSettings → officialHandoff → officialSeatConfirmation → responsive`
   열한 경계로 확장했습니다. owner 시작·desktop selector exact order·760px media 종료·legacy 잔존 0과
   원본 행 단위 동등성을 구조 테스트로 고정했습니다.
-- 실화면 회귀: 기본 responsive E2E가 `설정 → 화면 동작`을 열어 card·fields·actions·두 input wrapper와
-  input control·저장 행동의 viewport/내부 overflow를 1,440px·320px·720px 두 브라우저 프로젝트에서
-  확인합니다. input wrapper와 저장 행동은 44px 이상을 직접 검증합니다.
+- 실화면 회귀: 이 슬라이스 당시 기본 responsive E2E는 `설정 → 화면 동작`을 열어 card·fields·actions·두
+  input wrapper와 input control·저장 행동의 viewport/내부 overflow를 1,440px·320px·720px 두 브라우저
+  프로젝트에서 확인했습니다. 이후 화면 갱신 초 입력을 읽기 전용 `실시간` 상태로 바꾼 현재 계약에서는
+  좌석 관측 input 하나와 저장 행동의 44px 영역을 직접 검증합니다.
 - 확인된 검증: focused Vitest 4개 파일·23건, 전체 Vitest 81개 파일·579건, ESLint 오류 0개·고정
   legacy warning 12개, strict typecheck, production build, Sites 4건, responsive E2E 6건과 기본 E2E
   14건, self-review P0~P3 없음과 `git diff --check`를 통과했습니다. 기존 500 kB 초과 chunk 경고만

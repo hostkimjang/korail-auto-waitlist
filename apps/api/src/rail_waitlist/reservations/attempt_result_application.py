@@ -12,7 +12,11 @@ from ..watch_management.models import ReservationAttempt, SeatObservation, Watch
 from .attempt_timing_application import latest_candidate_seat_detected_at
 from .contracts import ReservationResult
 from .domain import ReservationAttemptResultPolicy
-from .provider_confirmation.contracts import ReservationConfirmationResult
+from .provider_confirmation.contracts import (
+    ReservationConfirmationOutcome,
+    ReservationConfirmationResult,
+)
+from .reconciliation_policy import RESERVATION_RECONCILIATION_INTERVAL
 
 
 class ReservationAttemptAlreadyCompleted(Exception):
@@ -111,6 +115,21 @@ async def complete_reservation_attempt(
         dependencies.record_reservation_confirmation(attempt, confirmation)
     completed_at = dependencies.now()
     attempt.finished_at = max(result.observed_at, completed_at)
+    if (
+        result.outcome is ReservationOutcome.UNKNOWN
+        and confirmation is not None
+        and confirmation.outcome
+        in {
+            ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationConfirmationOutcome.NOT_FOUND,
+        }
+    ):
+        # An immediate official-list miss can race the provider's list propagation.
+        # Require one delayed read before exact absence may unlock the bounded
+        # confirmed-absent recovery episode.
+        attempt.next_reconcile_at = (
+            max(completed_at, confirmation.observed_at) + RESERVATION_RECONCILIATION_INTERVAL
+        )
     attempt.payment_deadline = result.payment_deadline
     attempt.official_handoff_url = (
         str(result.official_handoff_url) if result.official_handoff_url is not None else None

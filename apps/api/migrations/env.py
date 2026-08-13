@@ -13,7 +13,10 @@ from rail_waitlist.database import Base
 
 config = context.config
 if config.config_file_name:
-    fileConfig(config.config_file_name)
+    # Alembic runs in API/worker processes and in the same interpreter as unit tests.
+    # The fileConfig default disables every pre-existing application logger that is
+    # absent from alembic.ini, leaving provider lifecycle logs silent after a migration.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 # ConfigParser는 URL의 percent-encoding까지 보간식으로 해석하므로 literal `%`를 이스케이프한다.
 database_url = (get_settings().database_url or "").replace("%", "%%")
 config.set_main_option("sqlalchemy.url", database_url)

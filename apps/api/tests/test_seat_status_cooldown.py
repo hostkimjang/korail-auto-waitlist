@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from rail_waitlist.seat_status_cooldown import RedisCooldownStore
+from rail_waitlist.seat_status_cooldown import (
+    KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+    RedisCooldownStore,
+)
 
 
 class FakePipeline:
@@ -58,3 +61,17 @@ async def test_unknown_redis_reason_is_ignored_fail_closed() -> None:
     redis.values["rail-waitlist:seat-status:cooldown:korail"] = "raw-provider-body"
     redis.ttls["rail-waitlist:seat-status:cooldown:korail"] = 30
     assert await RedisCooldownStore(redis).get("korail") is None
+
+
+async def test_korail_outage_hold_is_visible_to_a_new_store_instance() -> None:
+    redis = FakeRedis()
+
+    await RedisCooldownStore(redis).set(
+        KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+        "source_unavailable",
+        300,
+    )
+    recovered = await RedisCooldownStore(redis).get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
+
+    assert recovered is not None
+    assert (recovered.reason, recovered.retry_after_seconds) == ("source_unavailable", 300)

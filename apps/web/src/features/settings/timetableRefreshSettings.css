@@ -34,7 +34,8 @@
   gap: 12px;
 }
 
-.refresh-preference-fields > label {
+.refresh-preference-fields > label,
+.refresh-preference-live {
   display: grid;
   grid-template-rows: auto minmax(36px, auto) auto auto;
   align-content: start;
@@ -48,7 +49,8 @@
   font-weight: 750;
 }
 
-.refresh-preference-fields > label > span:first-child {
+.refresh-preference-fields > label > span:first-child,
+.refresh-preference-live > span:first-child {
   color: var(--ink);
   font-size: 13px;
   font-weight: 850;
@@ -56,6 +58,21 @@
 
 .refresh-preference-fields small {
   line-height: 1.45;
+}
+
+.refresh-preference-live > strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  width: fit-content;
+  padding: 0 18px;
+  color: #176a61;
+  background: #edf8f6;
+  border: 1px solid #c9e5e1;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 850;
 }
 
 .refresh-preference-input {
@@ -166,7 +183,8 @@
     grid-template-columns: 1fr;
   }
 
-  .refresh-preference-fields > label {
+  .refresh-preference-fields > label,
+  .refresh-preference-live {
     grid-template-rows: auto auto auto auto;
   }
 

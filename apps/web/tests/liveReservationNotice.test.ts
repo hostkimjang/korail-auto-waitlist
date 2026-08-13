@@ -439,6 +439,105 @@ describe("live reservation notices", () => {
     ))).toBe(false);
   });
 
+  it("builds a fixed completion notice from a typed paid event and preserves its revision", () => {
+    const paymentRequiredWatch: WatchLifecycleSnapshot = {
+      ...watch,
+      status: "payment_required",
+      latestReservationAttemptCandidateId: "candidate",
+      latestReservationAttempt: {
+        outcome: "payment_required",
+        startedAt: "2026-08-03T12:09:45.851Z",
+        finishedAt: "2026-08-03T12:09:48.250Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        progressStages: [
+          { stage: "authenticated_session_ready", occurredAt: "2026-08-03T12:09:46.100Z" },
+          { stage: "target_rechecked", occurredAt: "2026-08-03T12:09:47.900Z" },
+          { stage: "seat_selected", occurredAt: "2026-08-03T12:09:48.000Z" },
+          { stage: "reservation_requested", occurredAt: "2026-08-03T12:09:48.100Z" },
+        ],
+        paymentHoldEndedAt: null,
+      },
+      updatedAt: "2026-08-03T12:09:48.250Z",
+    };
+    const notice = buildLiveReservationNotice({
+      id: "payment-completed-event",
+      event_type: "watch.payment_completed",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:21:01.250Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        terminal: true,
+        status: "completed",
+        from: "payment_required",
+        to: "completed",
+        automatic_reservation_retry: false,
+        reason: "raw-provider-reason",
+        message: "원문 메시지는 표시하지 않습니다.",
+      },
+    }, [paymentRequiredWatch]);
+
+    expect(notice).toMatchObject({
+      subjectKey: `watch:${watch.id}`,
+      revisionKey: `watch:${watch.id}:payment-completed-event`,
+      revisionAt: "2026-08-03T12:21:01.250Z",
+      occurredAt: "2026-08-03T12:21:01.250Z",
+      kind: "recovery",
+      tone: "success",
+      title: "결제가 완료되었습니다",
+      meta: "KORAIL · 9248 · 일반실",
+      startedAt: "2026-08-03T12:09:45.851Z",
+      durationMs: 2_399,
+    });
+    expect(notice?.description).toContain("공식 예약 내역에서 결제 완료를 확인했습니다");
+    expect(notice?.description).not.toContain("원문 메시지");
+    expect(notice?.steps?.find((step) => step.label === "검색 결과·열차 재확인"))
+      .toMatchObject({ occurredAt: "2026-08-03T12:09:47.900Z", state: "completed" });
+    expect(notice?.steps?.find((step) => step.label === "좌석 임시 확보"))
+      .toMatchObject({ occurredAt: "2026-08-03T12:09:48.250Z", state: "completed" });
+    expect(notice?.steps?.at(-1)).toMatchObject({
+      label: "공식 결제 완료 확인",
+      occurredAt: "2026-08-03T12:21:01.250Z",
+      state: "completed",
+    });
+
+    const malformed = buildLiveReservationNotice({
+      id: "malformed-payment-completed-event",
+      event_type: "watch.payment_completed",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:21:02Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        terminal: true,
+        status: "completed",
+        from: "payment_required",
+        to: "completed",
+        automatic_reservation_retry: true,
+      },
+    }, [paymentRequiredWatch]);
+    expect(malformed).toBeNull();
+
+    const missingAttemptContext = buildLiveReservationNotice({
+      id: "payment-completed-without-attempt",
+      event_type: "watch.payment_completed",
+      aggregate_id: watch.id,
+      created_at: "2026-08-03T12:21:02Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        terminal: true,
+        status: "completed",
+        from: "payment_required",
+        to: "completed",
+        automatic_reservation_retry: false,
+      },
+    }, [watch]);
+    expect(missingAttemptContext).toBeNull();
+  });
+
   it("rejects a seat detection time after the automatic request started", () => {
     const notice = buildLiveReservationNotice({
       id: "attempt-with-future-detection",

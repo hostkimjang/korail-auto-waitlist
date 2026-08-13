@@ -11,6 +11,13 @@ import {
   type WatchSnapshot,
 } from "../src/features/app/watchSnapshots";
 import type { WatchLifecycleSnapshot } from "../src/features/app/watchLifecycleSnapshot";
+import { buildWatchActionToast } from "../src/features/app/reservationToast";
+import {
+  createInitialNotificationCenterState,
+  initialNotificationCenterState,
+  notificationCenterReducer,
+  pushNotifications,
+} from "../src/features/app/notificationCenter";
 
 function attempt(
   values: Partial<LatestReservationAttempt>,
@@ -204,6 +211,89 @@ describe("watch snapshot reconciliation", () => {
     expect(detectWatchActionTransitions(previous, next)).toEqual([]);
   });
 
+  it("projects a durable not-available result even when the watch status stays watching", () => {
+    const previousWatching = watch("canonical-result", "watching");
+    const previousReserving: WatchLifecycleSnapshot = {
+      ...watch("canonical-result", "reserving"),
+      latestReservationAttempt: attempt({
+        startedAt: "2026-08-03T12:09:45Z",
+      }),
+    };
+    const recovered: WatchLifecycleSnapshot = {
+      ...watch("canonical-result", "watching"),
+      latestReservationAttempt: attempt({
+        outcome: "not_available",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:09:48Z",
+        retryable: true,
+        retryCondition: "new_availability_episode",
+        progressStages: [{
+          stage: "target_rechecked",
+          occurredAt: "2026-08-03T12:09:47Z",
+        }],
+      }),
+      latestReservationAttemptCandidateId: "candidate-result",
+      reservationCandidateContexts: {
+        "candidate-result": {
+          train: "KTX 053",
+          seatClassLabel: "일반실",
+          date: "8월 13일 (목)",
+          departure: "17:58",
+          arrival: "18:57",
+        },
+      },
+    };
+
+    for (const previous of [previousWatching, previousReserving]) {
+      const transitions = detectWatchActionTransitions([previous], [recovered]);
+      expect(transitions).toMatchObject([{
+        status: "monitoring_resumed",
+        revisionAt: "2026-08-03T12:09:48Z",
+        revision: expect.stringContaining("candidate-result"),
+        train: "KTX 053",
+        monitoringResumed: true,
+        reservationResult: {
+          outcome: "not_available",
+          retryable: true,
+          manualCheckRequired: false,
+          retryCondition: "new_availability_episode",
+        },
+      }]);
+      const progressState = pushNotifications(initialNotificationCenterState, [{
+        subjectKey: `watch:${recovered.id}`,
+        revisionKey: `watch:${recovered.id}:progress-before-result-loss`,
+        revisionAt: "2026-08-03T12:09:47Z",
+        kind: "reserving",
+        title: "예매를 진행하고 있습니다",
+      }]);
+      const recoveryNotice = transitions[0];
+      if (recoveryNotice === undefined) throw new Error("canonical recovery transition missing");
+      const recoveredState = pushNotifications(progressState, [
+        buildWatchActionToast(recoveryNotice),
+      ]);
+      expect(recoveredState.notices).toMatchObject([{
+        subjectKey: `watch:${recovered.id}`,
+        kind: "recovery",
+        persistence: "timed",
+        title: "좌석이 사라져 다시 감시 중입니다",
+      }]);
+    }
+    expect(detectWatchActionTransitions([recovered], [recovered])).toEqual([]);
+
+    const expired = { ...recovered, status: "expired" as const };
+    const expiredTransition = detectWatchActionTransitions([previousReserving], [expired])[0];
+    if (expiredTransition === undefined) throw new Error("expired recovery transition missing");
+    const expiredToast = buildWatchActionToast(expiredTransition);
+    expect(expiredToast).toMatchObject({
+      kind: "recovery",
+      title: "좌석을 확보하지 못해 작업이 종료되었습니다",
+    });
+    expect(expiredToast.steps).toContainEqual(expect.objectContaining({
+      label: "작업 종료",
+      state: "completed",
+    }));
+  });
+
   it("replaces and rehydrates reserving only with a durable unknown manual-check result", () => {
     const previous = [watch("resume", "reserving")];
     const recovered: WatchLifecycleSnapshot = {
@@ -238,8 +328,12 @@ describe("watch snapshot reconciliation", () => {
     }]);
     expect(hydrateCurrentWatchActionTransitions([recovered])).toMatchObject([{
       status: "monitoring_resumed",
-      revision: "monitoring_resumed:2026-08-03T12:10:15Z",
+      revision: expect.stringContaining("candidate-two"),
       monitoringResumed: true,
+      reservationResult: {
+        outcome: "unknown",
+        manualCheckRequired: true,
+      },
     }]);
 
     const expired = { ...recovered, status: "expired" as const };
@@ -247,6 +341,80 @@ describe("watch snapshot reconciliation", () => {
       status: "monitoring_resumed",
       monitoringResumed: false,
     }]);
+  });
+
+  it("replaces a same-attempt manual check with a later reconciled payment action", () => {
+    const finishedAt = "2026-08-03T12:10:15Z";
+    const reconciledAt = "2026-08-03T12:12:30Z";
+    const manualCheck: WatchLifecycleSnapshot = {
+      ...watch("reconciled-payment", "watching"),
+      updatedAt: finishedAt,
+      latestReservationAttemptCandidateId: "candidate-payment",
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt,
+        manualCheckRequired: true,
+      }),
+      reservationCandidateContexts: {
+        "candidate-payment": {
+          train: "KTX 326",
+          seatClassLabel: "일반실",
+          date: "8월 12일 (수)",
+          departure: "12:15",
+          arrival: "13:08",
+        },
+      },
+    };
+    const paymentRequired: WatchLifecycleSnapshot = {
+      ...manualCheck,
+      status: "payment_required",
+      updatedAt: reconciledAt,
+      paymentDeadline: "2026-08-03T12:30:00Z",
+      latestReservationAttempt: attempt({
+        outcome: "payment_required",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt,
+      }),
+    };
+    const manualTransition = hydrateCurrentWatchActionTransitions([manualCheck])[0];
+    const paymentTransition = detectWatchActionTransitions([manualCheck], [paymentRequired])[0];
+    if (manualTransition === undefined || paymentTransition === undefined) {
+      throw new Error("reconciliation transitions were not created");
+    }
+    expect(paymentTransition).toMatchObject({
+      status: "payment_required",
+      revision: `payment_required:${reconciledAt}`,
+      revisionAt: reconciledAt,
+      finishedAt,
+    });
+
+    const manualState = pushNotifications(initialNotificationCenterState, [
+      buildWatchActionToast(manualTransition),
+    ]);
+    expect(manualState.notices[0]?.kind).toBe("manual_check");
+    const activeReplacement = pushNotifications(manualState, [
+      buildWatchActionToast(paymentTransition),
+    ]);
+    expect(activeReplacement.notices[0]).toMatchObject({
+      kind: "payment_required",
+      revisionAt: reconciledAt,
+    });
+
+    const manualNoticeId = manualState.notices[0]?.id;
+    if (manualNoticeId === undefined) throw new Error("manual-check notice was not created");
+    const dismissed = notificationCenterReducer(manualState, {
+      type: "dismiss",
+      id: manualNoticeId,
+    });
+    const remounted = createInitialNotificationCenterState(dismissed.dismissalLedger);
+    const hydratedPayment = hydrateCurrentWatchActionTransitions([paymentRequired])[0];
+    if (hydratedPayment === undefined) throw new Error("payment hydration transition was not created");
+    const reopened = pushNotifications(remounted, [buildWatchActionToast(hydratedPayment)]);
+    expect(reopened.notices[0]).toMatchObject({
+      kind: "payment_required",
+      revisionAt: reconciledAt,
+    });
   });
 
   it("reconciles durable progress and manual-check evidence without a status edge", () => {
@@ -349,5 +517,22 @@ describe("watch snapshot reconciliation", () => {
       automaticReservationRetry: false,
       revisionAt: holdEndedAt,
     }]);
+  });
+
+  it("turns a canonical paid completion edge into a terminal notification transition", () => {
+    const previous = [watch("paid", "payment_required")];
+    const completedAt = "2026-08-03T12:21:01Z";
+    const completed: WatchLifecycleSnapshot = {
+      ...watch("paid", "completed"),
+      updatedAt: completedAt,
+    };
+
+    expect(detectWatchActionTransitions(previous, [completed])).toMatchObject([{
+      id: "paid",
+      status: "payment_completed",
+      revision: `payment_completed:${completedAt}`,
+      revisionAt: completedAt,
+    }]);
+    expect(detectWatchActionTransitions([completed], [completed])).toEqual([]);
   });
 });

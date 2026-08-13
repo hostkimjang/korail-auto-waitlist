@@ -191,9 +191,9 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     assert schema["paths"]["/health"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/HealthResponse"}
-    assert len(encoded) == 85566
+    assert len(encoded) == 86391
     assert hashlib.sha256(encoded).hexdigest() == (
-        "f8ccf6a54711b19c01d22121afe95d662fe2d213221ac33548bd3671702f54cd"
+        "edc953c6b851fa39460f2cdb14687bd4fb2bafa040c39598ea894ed793fda184"
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
 import httpx
@@ -24,6 +24,7 @@ from .contracts import (
 )
 
 ReservationProgressCallback = Callable[[ReservationProgressStage], Awaitable[None]]
+FailureCooldownScope = Literal["query", "provider"]
 
 
 class BrowserAdapterTransport(Protocol):
@@ -58,12 +59,16 @@ class _AdapterFailure(RuntimeError):
         *,
         rate_limited: bool = False,
         protection: bool = False,
+        cooldown_scope: FailureCooldownScope = "query",
+        retry_after_seconds: int | None = None,
         reservation_command_uncertain: bool = False,
         progress_stages: tuple[ReservationProgressStage, ...] = (),
     ) -> None:
         self.reason = reason
         self.rate_limited = rate_limited
         self.protection = protection
+        self.cooldown_scope = cooldown_scope
+        self.retry_after_seconds = retry_after_seconds
         self.reservation_command_uncertain = reservation_command_uncertain
         self.progress_stages = progress_stages
         super().__init__(reason)
@@ -125,6 +130,25 @@ class HttpBrowserAdapterTransport:
             raise _AdapterFailure("provider_access_restricted", rate_limited=True)
         if response.status_code in {403, 423}:
             raise _AdapterFailure("provider_access_restricted", protection=True)
+        provider_retry_after: int | None = None
+        raw_retry_after = (
+            response.headers.get("retry-after") if response.status_code == 503 else None
+        )
+        if raw_retry_after is not None and raw_retry_after.isascii() and raw_retry_after.isdigit():
+            candidate = int(raw_retry_after)
+            if 1 <= candidate <= 86400:
+                try:
+                    provider_payload = response.json()
+                except ValueError:
+                    provider_payload = None
+                if provider_payload == {"detail": {"reason": "source_unavailable"}}:
+                    provider_retry_after = candidate
+        if provider_retry_after is not None:
+            raise _AdapterFailure(
+                "source_unavailable",
+                cooldown_scope="provider",
+                retry_after_seconds=provider_retry_after,
+            )
         if response.status_code != 200:
             raise _AdapterFailure("source_unavailable")
         try:

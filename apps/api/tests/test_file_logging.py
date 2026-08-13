@@ -1,7 +1,12 @@
 import json
 import logging
+from io import StringIO
 
-from rail_waitlist.file_logging import ServiceFileHandler, configure_service_file_logging
+from rail_waitlist.file_logging import (
+    ServiceFileHandler,
+    configure_service_console_logging,
+    configure_service_file_logging,
+)
 
 
 def test_service_file_handler_redacts_secrets_and_query_strings(
@@ -83,3 +88,36 @@ def test_configure_service_file_logging_enables_application_info_events(
     assert payload["level"] == "INFO"
     assert payload["logger"] == "rail_waitlist.korail_pydoll_browser"
     assert "event=search_succeeded" in payload["message"]
+
+
+def test_configure_service_console_logging_is_sanitized_and_idempotent(monkeypatch) -> None:
+    monkeypatch.setenv("APP_LOG_SERVICE", "srt-provider-adapter")
+    monkeypatch.setenv("APP_LOG_LEVEL", "INFO")
+    monkeypatch.setenv("SRT_PROVIDER_ADAPTER_TOKEN", "srt-console-secret")
+    stream = StringIO()
+    logger = logging.getLogger("test.file_logging.console")
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    logger.handlers.clear()
+    logger.propagate = False
+
+    try:
+        configure_service_console_logging(logger, stream=stream)
+        configure_service_console_logging(logger, stream=stream)
+        logger.info(
+            "SRT queue released token=visible-token configured=%s",
+            "srt-console-secret",
+        )
+    finally:
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
+        logger.handlers.clear()
+
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["service"] == "srt-provider-adapter"
+    assert payload["level"] == "INFO"
+    assert "srt-console-secret" not in payload["message"]
+    assert "visible-token" not in payload["message"]
+    assert "token=[REDACTED]" in payload["message"]

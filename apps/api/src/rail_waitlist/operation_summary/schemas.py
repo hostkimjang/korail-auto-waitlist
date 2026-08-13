@@ -10,6 +10,7 @@ from ..domain import (
     Provider,
     ProviderCircuitState,
     ReservationOutcome,
+    SeatClass,
     SeatObservationStatus,
     WatchStatus,
 )
@@ -25,6 +26,21 @@ OperationEntryKind = Literal[
     "provider_circuit",
 ]
 OperationEntryLevel = Literal["info", "warning", "error"]
+OperationEntryReasonCode = Literal[
+    "reservation_pending",
+    "reservation_payment_required",
+    "reservation_reserved",
+    "reservation_not_available",
+    "reservation_auth_required",
+    "reservation_provider_blocked",
+    "reservation_failed",
+    "reservation_unknown",
+    "payment_completed",
+    "payment_deadline_elapsed_monitoring_resumed",
+    "payment_hold_no_longer_present_monitoring_resumed",
+    "payment_deadline_elapsed_one_off_expired",
+    "payment_hold_no_longer_present_one_off_expired",
+]
 OperationErrorCategory = Literal[
     "timeout",
     "schema_mismatch",
@@ -122,6 +138,10 @@ class OperationEntry(ApiModel):
     )
     error_category: OperationErrorCategory | None = None
     provider: Provider | None = None
+    train_number: str | None = Field(default=None, min_length=1, max_length=40)
+    departure_at: datetime | None = None
+    seat_class: SeatClass | None = None
+    reason_code: OperationEntryReasonCode | None = None
 
 
 class OperationsSummary(ApiModel):

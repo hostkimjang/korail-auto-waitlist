@@ -122,6 +122,46 @@ describe("notification center lifecycle", () => {
     expect(lateProgress.seenRevisionKeys).toContain("watch:one:progress:unseen-old");
   });
 
+  it("keeps dismissed revisions authoritative after transient revision history rotates", () => {
+    const terminal = pushNotifications(initialNotificationCenterState, [notice({
+      title: "공식 결과 확인 필요",
+      revisionKey: "watch:one:manual:rotated",
+      revisionAt: "2026-08-03T12:10:00Z",
+      kind: "manual_check",
+    })]);
+    const terminalId = terminal.notices[0]?.id;
+    expect(terminalId).toBeDefined();
+    if (terminalId === undefined) throw new Error("terminal notice was not created");
+    const dismissed = notificationCenterReducer(terminal, { type: "dismiss", id: terminalId });
+    const rotated = pushNotifications(dismissed, Array.from(
+      { length: 240 },
+      (_, index) => notice({
+        title: `일반 알림 ${index}`,
+        subjectKey: `generic:${index}`,
+        revisionKey: `generic:${index}:revision`,
+        revisionAt: `2026-08-04T12:${String(index % 60).padStart(2, "0")}:00Z`,
+        kind: "generic",
+      }),
+    ));
+
+    const replayed = pushNotifications(rotated, [
+      notice({
+        title: "같은 공식 결과",
+        revisionKey: "watch:one:manual:rotated",
+        revisionAt: "2026-08-03T12:10:00Z",
+        kind: "manual_check",
+      }),
+      notice({
+        title: "더 오래된 예매 진행",
+        revisionKey: "watch:one:progress:rotated-old",
+        revisionAt: "2026-08-03T12:09:00Z",
+        kind: "reserving",
+      }),
+    ]);
+
+    expect(replayed.notices.some((item) => item.subjectKey === "watch:one")).toBe(false);
+  });
+
   it.each(["payment_required", "manual_check", "auth_required", "recovery"] as const)(
     "does not let equal-time late progress replace %s terminal state",
     (terminalKind) => {

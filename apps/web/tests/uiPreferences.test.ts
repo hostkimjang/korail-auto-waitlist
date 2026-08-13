@@ -37,7 +37,6 @@ describe("UI preferences API boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchUiPreferences()).resolves.toEqual({
-      timetableRefreshIntervalSeconds: 1,
       seatObservationIntervalSeconds: 1,
       updatedAt: "2026-07-31T06:00:00Z",
     });
@@ -53,10 +52,8 @@ describe("UI preferences API boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(updateUiPreferences({
-      timetableRefreshIntervalSeconds: 45,
       seatObservationIntervalSeconds: 5,
     })).resolves.toMatchObject({
-      timetableRefreshIntervalSeconds: 45,
       seatObservationIntervalSeconds: 5,
     });
 
@@ -65,7 +62,6 @@ describe("UI preferences API boundary", () => {
       credentials: "include",
       cache: "no-store",
       body: JSON.stringify({
-        timetable_refresh_interval_seconds: 45,
         observation_interval_seconds: 5,
       }),
     }));

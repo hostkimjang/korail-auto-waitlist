@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging as _logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ from .srt_identity import normalize_srt_time as normalize_srt_time
 from .srt_identity import (
     normalize_srt_train_number as normalize_srt_train_number,
 )
+from .srt_netfunnel_logging import LoggingNetFunnelHelper as _LoggingNetFunnelHelper
 from .srt_station_roster import (
     SrtStationRosterUnavailable,
     load_srt_station_roster,
@@ -42,6 +44,7 @@ from .srt_station_roster import (
 
 SOURCE_NAME = "srtrain-2.6.7-accountless"
 KOREA = ZoneInfo("Asia/Seoul")
+_LOGGER = _logging.getLogger("rail_waitlist.srt_provider_adapter")
 
 
 class SrtLiveTimetableUnavailable(RuntimeError):
@@ -176,7 +179,15 @@ def _default_client_factory() -> _SrtClient:
 
     # Search is intentionally accountless. Constructing a fresh client per upstream query
     # keeps NetFunnel lifecycle inside SRTrain's normal issue/wait/complete implementation.
-    return _AccountlessSrtClient(SRT("", "", auto_login=False, verbose=False))
+    return _AccountlessSrtClient(
+        SRT(
+            "",
+            "",
+            auto_login=False,
+            verbose=False,
+            netfunnel_helper=_LoggingNetFunnelHelper(flow="accountless"),
+        )
+    )
 
 
 def map_srt_seat_state(value: object) -> SeatAvailabilityStatus:
@@ -701,6 +712,22 @@ class SrtLiveSeatSource:
                     snapshots=snapshots,
                 )
             return snapshots
+        except TimeoutError:
+            upstream_still_running = not upstream_task.done()
+            _LOGGER.warning(
+                "SRT 운영사 조회 작업 제한 시간을 초과했습니다 "
+                "event=provider_call_timed_out timeout_seconds=%s upstream_still_running=%s",
+                self.timeout_seconds,
+                str(upstream_still_running).lower(),
+            )
+            if upstream_still_running:
+                started_at = self._monotonic()
+
+                def log_completion(completed: asyncio.Task[list[_SrtTrain]]) -> None:
+                    self._log_completion_after_timeout(completed, timeout_at=started_at)
+
+                upstream_task.add_done_callback(log_completion)
+            raise
         finally:
             async with self._state_lock:
                 if self._inflight.get(key) is current_task:
@@ -731,14 +758,32 @@ class SrtLiveSeatSource:
         # Keep the provider-wide permit until the real thread returns, even if the
         # observation coroutine has already reported a timeout to its caller.
         async with self._provider_gate:
-            return await asyncio.to_thread(
-                self._search_sync,
-                origin,
-                destination,
-                departure_date,
-                departure_from,
-                departure_to,
+            started_at = self._monotonic()
+            _LOGGER.info("SRT 운영사 조회를 시작합니다 event=provider_query_started")
+            try:
+                trains = await asyncio.to_thread(
+                    self._search_sync,
+                    origin,
+                    destination,
+                    departure_date,
+                    departure_from,
+                    departure_to,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "SRT 운영사 조회를 마쳤습니다 "
+                    "event=provider_query_completed outcome=failed elapsed_ms=%s",
+                    max(0, round((self._monotonic() - started_at) * 1000)),
+                )
+                raise
+            _LOGGER.info(
+                "SRT 운영사 조회를 마쳤습니다 "
+                "event=provider_query_completed outcome=success "
+                "train_count=%s elapsed_ms=%s",
+                len(trains),
+                max(0, round((self._monotonic() - started_at) * 1000)),
             )
+            return trains
 
     def _release_upstream_task(self, task: asyncio.Task[list[_SrtTrain]]) -> None:
         self._upstream_tasks.discard(task)
@@ -748,13 +793,38 @@ class SrtLiveSeatSource:
         # observation already returned a categorized timeout or provider error.
         task.exception()
 
+    def _log_completion_after_timeout(
+        self,
+        task: asyncio.Task[list[_SrtTrain]],
+        *,
+        timeout_at: float,
+    ) -> None:
+        if task.cancelled():
+            outcome = "cancelled"
+        elif task.exception() is None:
+            outcome = "success"
+        else:
+            outcome = "failed"
+        _LOGGER.info(
+            "SRT 운영사 조회가 호출자 시간 초과 뒤 종료되었습니다 "
+            "event=provider_call_finished_after_timeout "
+            "outcome=%s elapsed_after_timeout_ms=%s",
+            outcome,
+            max(0, round((self._monotonic() - timeout_at) * 1000)),
+        )
+
     async def _open_cooldown(
         self,
         reason: SeatAvailabilityNotObservedReason,
         error: Exception | None = None,
     ) -> None:
         self._failure_count += 1
-        text = str(error or "").casefold()
+        try:
+            text = str(error or "").casefold()
+        except (TypeError, ValueError):
+            # Some third-party exceptions retain a non-string provider error as their
+            # message. Classification must remain fail-closed without rendering it.
+            text = ""
         if reason == "provider_access_restricted":
             duration = self.protection_cooldown_seconds
         elif "429" in text:
@@ -762,6 +832,12 @@ class SrtLiveSeatSource:
         else:
             duration = min(30 * (2 ** (self._failure_count - 1)), 600)
         await self._cooldown_store.set("srt", reason, duration)
+        _LOGGER.warning(
+            "SRT 운영사 요청을 일시 중단합니다 "
+            "event=provider_cooldown_opened reason=%s duration_seconds=%s",
+            reason,
+            duration,
+        )
 
     def _search_sync(
         self,

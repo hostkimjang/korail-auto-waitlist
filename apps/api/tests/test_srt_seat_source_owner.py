@@ -168,7 +168,7 @@ def test_owner_has_the_exact_definition_and_import_boundary() -> None:
     }
 
     assert definitions == OWNER_DEFINITIONS
-    assert direct_imports == {"asyncio", "time"}
+    assert direct_imports == {"asyncio", "logging", "time"}
     assert imports_from == {
         ("__future__", 0),
         ("collections.abc", 0),
@@ -185,6 +185,7 @@ def test_owner_has_the_exact_definition_and_import_boundary() -> None:
         ("seat_status_cooldown", 2),
         ("timetable_management.schemas", 2),
         ("srt_identity", 1),
+        ("srt_netfunnel_logging", 1),
         ("srt_station_roster", 1),
     }
 

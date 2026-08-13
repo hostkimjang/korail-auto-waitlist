@@ -24,7 +24,13 @@ from .reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome as ReservationConfirmationOutcome,
 )
 from .reservations.provider_confirmation.contracts import (
+    ReservationConfirmationPurpose as ReservationConfirmationPurpose,
+)
+from .reservations.provider_confirmation.contracts import (
     ReservationConfirmationResult as ReservationConfirmationResult,
+)
+from .reservations.provider_confirmation.contracts import (
+    ReservationConfirmationSeat as ReservationConfirmationSeat,
 )
 from .reservations.provider_confirmation.contracts import (
     ReservationConfirmationTarget as ReservationConfirmationTarget,

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
+from .file_logging import configure_service_console_logging as _configure_service_console_logging
 from .file_logging import configure_service_file_logging
 from .korail_sidecar.http import AdapterHttpDependencies as _AdapterHttpDependencies
 from .korail_sidecar.http import create_adapter_app as _create_adapter_http_app
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 configure_service_file_logging()
+_configure_service_console_logging(logging.getLogger("rail_waitlist"))
 
 _integer_setting = integer_setting
 

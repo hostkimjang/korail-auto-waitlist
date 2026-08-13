@@ -6,12 +6,17 @@ import re
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Protocol
+from datetime import time as clock_time
+from typing import Any, Literal, Protocol, cast
 
 from ..browser_contracts import BrowserSourceUnavailable
 from ..browser_protection import protection_trigger_from_text
+from ..browser_service_availability import provider_unavailable_trigger_from_page
 from .page_contracts import (
+    PydollIssuedTicketListSnapshot,
+    PydollIssuedTicketSummary,
     PydollPageSnapshot,
+    PydollReservationListSnapshot,
     PydollSeatBox,
     PydollTrainRow,
 )
@@ -492,7 +497,17 @@ class PydollSearchDomDriver:
         last = await self._port._snapshot()
         while self._monotonic() < deadline:
             trigger = protection_trigger_from_text(last.body_text)
-            if trigger is not None or last.rows or last.network_responses:
+            unavailable_trigger = provider_unavailable_trigger_from_page(
+                last.url,
+                last.body_text,
+                has_result_rows=bool(last.rows),
+            )
+            if (
+                trigger is not None
+                or unavailable_trigger is not None
+                or last.rows
+                or last.network_responses
+            ):
                 return last
             if re.search(r"조회\s*결과(?:가)?\s*(?:없|0건)", last.body_text):
                 raise BrowserSourceUnavailable("wait_result")
@@ -640,3 +655,475 @@ class PydollSearchDomDriver:
                 for row in value["rows"]
             ),
         )
+
+    async def issued_ticket_snapshot(self) -> PydollIssuedTicketListSnapshot:
+        """Read only redacted, card-scoped MyTicket fields from the current page."""
+
+        script = r"""
+            (() => {
+              const normalized = (value) => (value || '').replace(/\s+/g, ' ').trim();
+              const visible = (element) => {
+                if (!element) return false;
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden'
+                  && rect.width > 0 && rect.height > 0;
+              };
+              const serviceDate = (value) => {
+                const match = normalized(value).match(
+                  /(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일/
+                );
+                if (!match) return null;
+                return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+              };
+              const serviceTime = (value) => {
+                const match = normalized(value).match(/(?:^|\s)(\d{1,2}):(\d{2})(?:\s|$)/);
+                if (!match) return null;
+                const hour = Number(match[1]);
+                const minute = Number(match[2]);
+                if (hour > 23 || minute > 59) return null;
+                return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+              };
+              const station = (element) => normalized(element?.innerText).replace(/역$/, '');
+              const cards = Array.from(
+                document.querySelectorAll('.tck_info-wrap.type_default')
+              ).filter(visible);
+              const tickets = cards.map((card) => {
+                const journeys = Array.from(card.querySelectorAll('.train_list-wrap'))
+                  .filter(visible);
+                const seatLists = Array.from(card.querySelectorAll(
+                  'ul.list-table[data-krl-name="ticketSeatInfo"]'
+                )).filter(visible);
+                if (journeys.length !== 1 || seatLists.length !== 1) return null;
+                const journey = journeys[0];
+                const trainText = normalized(
+                  journey.querySelector('.my-ticket__trn-ticket-trn-name')?.innerText
+                );
+                const trainMatch = trainText.match(/\d{1,5}/);
+                const seatText = normalized(seatLists[0].innerText);
+                const carMatch = seatText.match(
+                  /(?:호차번호|호차)\s*[:：]?\s*(\d{1,3})(?:\s*호차)?/
+                ) || seatText.match(/(?:^|\s)(\d{1,3})\s*호차(?:\s|$)/);
+                const seatMatch = seatText.match(
+                  /(?:좌석번호|좌석)\s*[:：]?\s*(\d{1,3}\s*[A-D])(?:\s|$)/i
+                );
+                const ticketCountText = normalized(
+                  card.querySelector('.my-ticket__trn-ticket-ticket-num .data')?.innerText
+                );
+                const groupText = normalized(
+                  card.querySelector('.tck_group-count')?.innerText
+                );
+                const passengerMatch = ticketCountText.match(/^(\d{1,2})(?:\s*(?:명|매|석))?$/)
+                  || groupText.match(/(\d{1,2})\s*(?:명|매|석)/);
+                const routeText = normalized(
+                  journey.querySelector('.route_wrap')?.innerText
+                );
+                const seatClass = routeText.includes('특실')
+                  ? 'first'
+                  : (routeText.includes('일반실') ? 'standard' : null);
+                const cardText = normalized(card.innerText);
+                const transferred = (
+                  card.querySelector('.tit_wrap .gift') !== null
+                  || /받은\s*승차권/.test(cardText)
+                  || /(?:전송|전달)\s*(?:받은|된)\s*승차권/.test(cardText)
+                  || /승차권을\s*(?:전송|전달)\s*받/.test(cardText)
+                );
+                return {
+                  serviceDate: serviceDate(card.querySelector('.tit_wrap .date')?.innerText),
+                  trainNumber: trainMatch ? trainMatch[0] : null,
+                  origin: station(journey.querySelector('.top_box .st_box strong.name')),
+                  destination: station(journey.querySelector('.top_box .en_box strong.name')),
+                  departureTime: serviceTime(
+                    journey.querySelector('.top_box .st_box strong.time')?.innerText
+                  ),
+                  arrivalTime: serviceTime(
+                    journey.querySelector('.top_box .en_box strong.time')?.innerText
+                  ),
+                  seatClass,
+                  passengerCount: passengerMatch ? Number(passengerMatch[1]) : null,
+                  carNumber: carMatch ? carMatch[1] : null,
+                  seatNumber: seatMatch ? seatMatch[1].replace(/\s+/g, '').toUpperCase() : null,
+                  returned: /반환\s*완료/.test(cardText),
+                  operationStopped: /운행\s*중지/.test(cardText),
+                  transferred,
+                };
+              });
+              const pageText = document.body?.innerText || '';
+              const protectionDetected = (
+                /code\s*:?\s*-?\s*(?:8002|8003|1405)|macro_err1|captcha|netfunnel/i.test(
+                  pageText
+                )
+                || /비정상\s*접근|미허가\s*도구/i.test(pageText)
+              );
+              return {
+                url: window.location.href,
+                cardCount: cards.length,
+                emptyStateVisible: Array.from(document.querySelectorAll(
+                  '.tck_confirm_no-data .wrapTop .tit'
+                )).filter(visible).some((item) => (
+                  normalized(item.innerText) === '발권하신 승차권이 없습니다.'
+                )),
+                protectionDetected,
+                tickets,
+              };
+            })()
+        """
+        response = await self._execute_script(script, return_by_value=True)
+        return _issued_ticket_snapshot_from_script_response(
+            response,
+            network_responses=tuple(self._network_responses()),
+        )
+
+    async def reservation_list_snapshot(self) -> PydollReservationListSnapshot:
+        """Read every visible reservation card through a redacted completeness boundary."""
+
+        script = r"""
+            (() => {
+              const normalized = (value) => (value || '').replace(/\s+/g, ' ').trim();
+              const visible = (element) => {
+                if (!element) return false;
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden'
+                  && rect.width > 0 && rect.height > 0;
+              };
+              const identityBearing = (element) => {
+                const text = normalized(element?.innerText);
+                const controls = Array.from(element?.querySelectorAll?.('button,a') || [])
+                  .filter(visible).map((item) => normalized(item.innerText));
+                return /(?:→|->)/.test(text)
+                  && /20\d{2}(?:년|[-./])/.test(text)
+                  && (text.match(/(?<!\d)\d{1,2}:\d{2}(?!\d)/g) || []).length >= 2
+                  && (
+                    /(?:KTX(?:-[가-힣A-Za-z]+)?|ITX-[가-힣A-Za-z]+|새마을|무궁화|누리로)\s*0*\d{1,5}/i
+                      .test(text)
+                    || ['예약취소', '예약변경', '결제/발권']
+                      .some((label) => controls.includes(label))
+                  );
+              };
+              const allIdentityElements = Array.from(document.querySelectorAll(
+                '.tck_info-wrap, li, article, [role="listitem"], section, div'
+              )).filter(visible).filter(identityBearing);
+              const seeds = allIdentityElements.filter((element) => (
+                !allIdentityElements.some((candidate) => (
+                  candidate !== element && element.contains(candidate)
+                ))
+              ));
+              const cards = seeds.map((seed) => {
+                let current = seed;
+                for (let depth = 0; current?.parentElement && depth < 9; depth += 1) {
+                  const parent = current.parentElement;
+                  const containedSeedCount = seeds.filter((candidate) => (
+                    parent.contains(candidate)
+                  )).length;
+                  if (containedSeedCount !== 1) break;
+                  const controls = Array.from(parent.querySelectorAll('button,a'))
+                    .filter(visible).map((item) => normalized(item.innerText));
+                  if (identityBearing(parent) && ['예약취소', '예약변경', '결제/발권']
+                    .every((label) => controls.includes(label))) {
+                    current = parent;
+                    break;
+                  }
+                  if (!identityBearing(parent)) break;
+                  current = parent;
+                }
+                return current;
+              }).filter((card, index, values) => values.indexOf(card) === index);
+              const redact = (card) => {
+                const text = normalized(card.innerText);
+                const train = text.match(
+                  /(?:KTX(?:-[가-힣A-Za-z]+)?|ITX-[가-힣A-Za-z]+|새마을|무궁화|누리로)\s*0*\d{1,5}/i
+                );
+                const route = text.match(
+                  /([가-힣A-Za-z0-9().-]{1,30})역?\s*(?:→|->)\s*([가-힣A-Za-z0-9().-]{1,30})역?/
+                );
+                const serviceDate = text.match(
+                  /20\d{2}(?:년\s*\d{1,2}월\s*\d{1,2}일|[-./]\s*\d{1,2}[-./]\s*\d{1,2})/
+                );
+                const times = text.match(/(?<!\d)\d{1,2}:\d{2}(?!\d)/g) || [];
+                const passenger = text.match(/\d{1,2}\s*(?:명|매)/);
+                if (!train || !route || !serviceDate || times.length < 2 || !passenger) {
+                  return null;
+                }
+                const controls = Array.from(card.querySelectorAll('button,a'))
+                  .filter(visible).map((item) => normalized(item.innerText));
+                const actions = ['예약취소', '예약변경', '결제/발권']
+                  .filter((label) => controls.includes(label));
+                const deadline = text.match(
+                  /결제\s*(?:기한|마감)\s*[:：]?\s*20\d{2}[-./년]\s*\d{1,2}[-./월]\s*\d{1,2}일?(?:\s*[.]\s*|\s+)\d{1,2}:\d{2}/
+                );
+                return [
+                  train[0], `${route[1]} → ${route[2]}`, serviceDate[0],
+                  `${times[0].trim()} → ${times[1].trim()}`, passenger[0],
+                  ...actions, ...(deadline ? [deadline[0]] : []),
+                ].join(' ');
+              };
+              const pageText = document.body?.innerText || '';
+              const visibleTexts = Array.from(document.querySelectorAll('h1,h2,h3,p,div,li'))
+                .filter(visible).map((item) => normalized(item.innerText));
+              return {
+                url: window.location.href,
+                cardCount: cards.length,
+                rows: cards.map(redact),
+                pageMarkerVisible: visibleTexts.some((text) => (
+                  /예약\s*승차권\s*조회|승차권\s*예약\s*조회/.test(text)
+                )),
+                explicitEmptyVisible: visibleTexts.some((text) => (
+                  /예약(?:된|\s*승차권|\s*내역).{0,20}(?:없어요|없습니다|없음)|조회된\s*예약.{0,20}없/.test(text)
+                )),
+                loadingVisible: Array.from(document.querySelectorAll(
+                  '[aria-busy="true"],[role="progressbar"],.loading,.spinner,.skeleton'
+                )).some(visible),
+                protectionDetected: (
+                  /code\s*:?\s*-?\s*(?:8002|8003|1405)|macro_err1|captcha|netfunnel/i
+                    .test(pageText)
+                ),
+              };
+            })()
+        """
+        response = await self._execute_script(script, return_by_value=True)
+        return _reservation_list_snapshot_from_script_response(
+            response,
+            network_responses=tuple(self._network_responses()),
+        )
+
+
+_ISSUED_TICKET_FIELDS = frozenset(
+    {
+        "serviceDate",
+        "trainNumber",
+        "origin",
+        "destination",
+        "departureTime",
+        "arrivalTime",
+        "seatClass",
+        "passengerCount",
+        "carNumber",
+        "seatNumber",
+        "returned",
+        "operationStopped",
+        "transferred",
+    }
+)
+_REDACTED_RESERVATION_ROW = re.compile(
+    r"^(?:KTX(?:-[가-힣A-Za-z]+)?|ITX-[가-힣A-Za-z]+|새마을|무궁화|누리로)\s*0*\d{1,5} "
+    r"[가-힣A-Za-z0-9().-]{1,30}\s*→\s*[가-힣A-Za-z0-9().-]{1,30} "
+    r"20\d{2}(?:년\s*\d{1,2}월\s*\d{1,2}일|[-./]\s*\d{1,2}[-./]\s*\d{1,2}) "
+    r"\d{1,2}:\d{2}\s*→\s*\d{1,2}:\d{2} \d{1,2}\s*(?:명|매)"
+    r"(?: 예약취소)?(?: 예약변경)?(?: 결제/발권)?"
+    r"(?: 결제\s*(?:기한|마감)\s*[:：]?\s*20\d{2}[-./년]\s*\d{1,2}"
+    r"[-./월]\s*\d{1,2}일?(?:\s*[.]\s*|\s+)\d{1,2}:\d{2})?$"
+)
+
+
+def _reservation_list_snapshot_from_script_response(
+    response: object,
+    *,
+    network_responses: tuple[tuple[int, str], ...],
+) -> PydollReservationListSnapshot:
+    if not isinstance(response, Mapping):
+        raise TypeError("reservation-list script response is not a mapping")
+    try:
+        value = response["result"]["result"]["value"]
+    except (KeyError, TypeError) as error:
+        raise TypeError("reservation-list script response has an invalid shape") from error
+    if not isinstance(value, Mapping) or set(value) != {
+        "url",
+        "cardCount",
+        "rows",
+        "pageMarkerVisible",
+        "explicitEmptyVisible",
+        "loadingVisible",
+        "protectionDetected",
+    }:
+        raise TypeError("reservation-list script value has an invalid shape")
+    url = value.get("url")
+    card_count = value.get("cardCount")
+    raw_rows = value.get("rows")
+    flags = tuple(
+        value.get(name)
+        for name in (
+            "pageMarkerVisible",
+            "explicitEmptyVisible",
+            "loadingVisible",
+            "protectionDetected",
+        )
+    )
+    if not isinstance(url, str) or len(url) > 2048:
+        raise TypeError("reservation-list URL is invalid")
+    if isinstance(card_count, bool) or not isinstance(card_count, int) or card_count < 0:
+        raise TypeError("reservation-list card count is invalid")
+    if not isinstance(raw_rows, list) or len(raw_rows) != card_count:
+        raise TypeError("reservation-list rows are invalid")
+    if any(not isinstance(flag, bool) for flag in flags):
+        raise TypeError("reservation-list page flags are invalid")
+    rows = tuple(
+        row
+        for row in raw_rows
+        if isinstance(row, str)
+        and len(row) <= 500
+        and _REDACTED_RESERVATION_ROW.fullmatch(row) is not None
+    )
+    malformed_card_count = card_count - len(rows)
+    page_marker_visible, explicit_empty_visible, loading_visible, protection_detected = flags
+    assert isinstance(page_marker_visible, bool)
+    assert isinstance(explicit_empty_visible, bool)
+    assert isinstance(loading_visible, bool)
+    assert isinstance(protection_detected, bool)
+    return PydollReservationListSnapshot(
+        url=url,
+        reservation_rows=rows,
+        rendered_card_count=card_count,
+        malformed_card_count=malformed_card_count,
+        page_marker_visible=page_marker_visible,
+        explicit_empty_visible=explicit_empty_visible,
+        loading_visible=loading_visible,
+        protection_detected=protection_detected,
+        network_responses=network_responses,
+    )
+
+
+def _issued_ticket_snapshot_from_script_response(
+    response: object,
+    *,
+    network_responses: tuple[tuple[int, str], ...],
+) -> PydollIssuedTicketListSnapshot:
+    if not isinstance(response, Mapping):
+        raise TypeError("issued-ticket script response is not a mapping")
+    outer = response.get("result")
+    if not isinstance(outer, Mapping):
+        raise TypeError("issued-ticket script result is not a mapping")
+    inner = outer.get("result")
+    if not isinstance(inner, Mapping):
+        raise TypeError("issued-ticket script inner result is not a mapping")
+    value = inner.get("value")
+    if not isinstance(value, Mapping) or set(value) != {
+        "url",
+        "cardCount",
+        "emptyStateVisible",
+        "protectionDetected",
+        "tickets",
+    }:
+        raise TypeError("issued-ticket script value has an invalid shape")
+
+    url = value.get("url")
+    card_count = value.get("cardCount")
+    empty_state_visible = value.get("emptyStateVisible")
+    protection_detected = value.get("protectionDetected")
+    raw_tickets = value.get("tickets")
+    if not isinstance(url, str) or len(url) > 2048:
+        raise TypeError("issued-ticket URL is invalid")
+    if isinstance(card_count, bool) or not isinstance(card_count, int) or card_count < 0:
+        raise TypeError("issued-ticket card count is invalid")
+    if not isinstance(empty_state_visible, bool) or not isinstance(protection_detected, bool):
+        raise TypeError("issued-ticket page flags are invalid")
+    if not isinstance(raw_tickets, list) or len(raw_tickets) != card_count:
+        raise TypeError("issued-ticket cards are invalid")
+
+    tickets: list[PydollIssuedTicketSummary] = []
+    malformed_card_count = 0
+    for item in raw_tickets:
+        parsed = _issued_ticket_from_value(item)
+        if parsed is None:
+            malformed_card_count += 1
+        else:
+            tickets.append(parsed)
+    if malformed_card_count:
+        tickets = []
+        malformed_card_count = card_count
+    return PydollIssuedTicketListSnapshot(
+        url=url,
+        tickets=tuple(tickets),
+        rendered_card_count=card_count,
+        malformed_card_count=malformed_card_count,
+        empty_state_visible=empty_state_visible,
+        protection_detected=protection_detected,
+        network_responses=network_responses,
+    )
+
+
+def _issued_ticket_from_value(value: object) -> PydollIssuedTicketSummary | None:
+    if not isinstance(value, Mapping) or set(value) != _ISSUED_TICKET_FIELDS:
+        return None
+    string_fields = {
+        name: value.get(name)
+        for name in (
+            "serviceDate",
+            "trainNumber",
+            "origin",
+            "destination",
+            "departureTime",
+            "arrivalTime",
+            "seatClass",
+            "carNumber",
+            "seatNumber",
+        )
+    }
+    if any(not isinstance(field, str) for field in string_fields.values()):
+        return None
+    passenger_count = value.get("passengerCount")
+    flags = (
+        value.get("returned"),
+        value.get("operationStopped"),
+        value.get("transferred"),
+    )
+    if (
+        isinstance(passenger_count, bool)
+        or not isinstance(passenger_count, int)
+        or any(not isinstance(flag, bool) for flag in flags)
+    ):
+        return None
+    try:
+        service_date_text = string_fields["serviceDate"]
+        departure_time_text = string_fields["departureTime"]
+        arrival_time_text = string_fields["arrivalTime"]
+        train_number = string_fields["trainNumber"]
+        origin = string_fields["origin"]
+        destination = string_fields["destination"]
+        seat_class = string_fields["seatClass"]
+        car_number = string_fields["carNumber"]
+        seat_number = string_fields["seatNumber"]
+        assert isinstance(service_date_text, str)
+        assert isinstance(departure_time_text, str)
+        assert isinstance(arrival_time_text, str)
+        assert isinstance(train_number, str)
+        assert isinstance(origin, str)
+        assert isinstance(destination, str)
+        assert isinstance(seat_class, str)
+        assert isinstance(car_number, str)
+        assert isinstance(seat_number, str)
+        if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", service_date_text) is None:
+            return None
+        if (
+            re.fullmatch(r"\d{2}:\d{2}", departure_time_text) is None
+            or re.fullmatch(r"\d{2}:\d{2}", arrival_time_text) is None
+        ):
+            return None
+        if re.fullmatch(r"\d{1,5}", train_number) is None:
+            return None
+        if seat_class not in {"standard", "first"}:
+            return None
+        returned, operation_stopped, transferred = flags
+        if (
+            not isinstance(returned, bool)
+            or not isinstance(operation_stopped, bool)
+            or not isinstance(transferred, bool)
+        ):
+            return None
+        return PydollIssuedTicketSummary(
+            service_date=date.fromisoformat(service_date_text),
+            train_number=train_number,
+            origin=origin.strip(),
+            destination=destination.strip(),
+            departure_time=clock_time.fromisoformat(departure_time_text),
+            arrival_time=clock_time.fromisoformat(arrival_time_text),
+            seat_class=cast(Literal["standard", "first"], seat_class),
+            passenger_count=passenger_count,
+            car_number=car_number.strip(),
+            seat_number=seat_number.strip().upper(),
+            returned=returned,
+            operation_stopped=operation_stopped,
+            transferred=transferred,
+        )
+    except (TypeError, ValueError):
+        return None

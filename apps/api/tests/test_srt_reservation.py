@@ -134,6 +134,26 @@ def test_login_verification_only_creates_authenticated_client():
     assert client.reserve_calls == 0
 
 
+def test_default_authenticated_client_injects_observable_netfunnel_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    client = FakeClient()
+
+    def fake_srt(login_id: str, password: str, **kwargs: object) -> FakeClient:
+        captured.update({"login_id": login_id, "password": password, **kwargs})
+        return client
+
+    monkeypatch.setattr(srt_reservation_module, "SRT", fake_srt)
+
+    created = srt_reservation_module._default_client_factory("member-id", "member-password")
+
+    assert created is client
+    helper = captured["netfunnel_helper"]
+    assert helper.__class__.__name__ == "LoggingNetFunnelHelper"
+    assert helper._flow == "authenticated"
+
+
 def request(seat_class: SeatClass = SeatClass.STANDARD) -> ReservationRequest:
     return ReservationRequest(
         provider=Provider.SRT,

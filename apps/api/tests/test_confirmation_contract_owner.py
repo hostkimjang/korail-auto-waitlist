@@ -47,7 +47,9 @@ LEGACY_OUTCOME_PICKLE = (
 SEMANTIC_SYMBOLS = {
     "ReservationConfirmationAdapter",
     "ReservationConfirmationOutcome",
+    "ReservationConfirmationPurpose",
     "ReservationConfirmationResult",
+    "ReservationConfirmationSeat",
     "ReservationConfirmationTarget",
     "require_official_handoff_url",
 }
@@ -57,7 +59,9 @@ LEGACY_PUBLIC_SURFACE = {
     "Provider",
     "ReservationConfirmationAdapter",
     "ReservationConfirmationOutcome",
+    "ReservationConfirmationPurpose",
     "ReservationConfirmationResult",
+    "ReservationConfirmationSeat",
     "ReservationConfirmationTarget",
     "SeatClass",
     "StrEnum",
@@ -129,9 +133,13 @@ def test_confirmation_classes_are_canonical_frozen_slot_contracts() -> None:
         "passenger_count",
         "credential_version",
         "arrival_at",
+        "purpose",
+        "reserved_seats",
     ]
-    assert [field.default for field in target_fields[:-1]] == [MISSING] * 10
-    assert target_fields[-1].default is None
+    assert [field.default for field in target_fields[:10]] == [MISSING] * 10
+    assert target_fields[10].default is None
+    assert target_fields[11].default is canonical.ReservationConfirmationPurpose.INITIAL
+    assert target_fields[12].default == ()
     assert [field.name for field in result_fields] == [
         "provider",
         "outcome",
@@ -259,6 +267,8 @@ def test_canonical_and_pre_move_legacy_pickles_restore_exact_contract_objects() 
     assert isinstance(legacy_target, canonical.ReservationConfirmationTarget)
     assert legacy_target.attempt_id == "attempt-legacy"
     assert legacy_target.provider is Provider.KORAIL
+    assert legacy_target.purpose is canonical.ReservationConfirmationPurpose.INITIAL
+    assert legacy_target.reserved_seats == ()
     assert isinstance(legacy_result, canonical.ReservationConfirmationResult)
     assert legacy_result.outcome is canonical.ReservationConfirmationOutcome.NOT_FOUND
     assert legacy_outcome is canonical.ReservationConfirmationOutcome.NOT_FOUND

@@ -6,6 +6,7 @@ import {
 import type {
   ReservedSeat,
   ReservationProgressStage,
+  ReservationRetryCondition,
 } from "../../domain/reservationAttempt";
 
 export type { LegacyWatchSnapshot as WatchSnapshot } from "./watchLifecycleSnapshot";
@@ -36,10 +37,20 @@ export interface SeatFoundTransition {
 
 export type SeatAvailabilityLostTransition = SeatFoundTransition;
 
+export type ReservationResultOutcome = "failed" | "not_available" | "unknown";
+
+export interface ReservationRecoveryResult {
+  outcome: ReservationResultOutcome;
+  retryable: boolean;
+  manualCheckRequired: boolean;
+  retryCondition: ReservationRetryCondition | null;
+}
+
 export interface WatchActionTransition extends SeatFoundTransition {
   status:
     | "reserving"
     | "payment_required"
+    | "payment_completed"
     | "payment_hold_ended"
     | "auth_required"
     | "authentication_recovered"
@@ -47,6 +58,7 @@ export interface WatchActionTransition extends SeatFoundTransition {
     | "monitoring_resumed";
   automaticReservationRetry?: boolean;
   monitoringResumed?: boolean;
+  reservationResult?: ReservationRecoveryResult;
   paymentHoldEndReason?:
     | "confirmed_payment_deadline_elapsed"
     | "confirmed_payment_hold_no_longer_present";
@@ -61,6 +73,23 @@ function attemptTimestamp(
   const attempt = watch.latestReservationAttempt;
   if (attempt === null) return undefined;
   return attempt[field] ?? undefined;
+}
+
+function latestLifecycleTimestamp(
+  ...values: ReadonlyArray<string | null | undefined>
+): string | undefined {
+  let latest: string | undefined;
+  let latestInstant = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const instant = Date.parse(value);
+    if (!Number.isFinite(instant)) continue;
+    if (instant > latestInstant) {
+      latest = value;
+      latestInstant = instant;
+    }
+  }
+  return latest ?? values.find((value): value is string => value !== null && value !== undefined);
 }
 
 function attemptPaymentHoldEndReason(
@@ -87,7 +116,20 @@ function transitionRevisionAt(
       ?? watch.updatedAt
       ?? undefined;
   }
-  if (["payment_required", "auth_required", "failed", "monitoring_resumed"].includes(stage)) {
+  if (stage === "payment_completed") {
+    return watch.updatedAt
+      ?? attemptTimestamp(watch, "finishedAt")
+      ?? undefined;
+  }
+  if (stage === "payment_required") {
+    return latestLifecycleTimestamp(
+      attemptTimestamp(watch, "finishedAt"),
+      watch.updatedAt,
+    )
+      ?? attemptTimestamp(watch, "startedAt")
+      ?? undefined;
+  }
+  if (["auth_required", "failed", "monitoring_resumed"].includes(stage)) {
     return attemptTimestamp(watch, "finishedAt")
       ?? attemptTimestamp(watch, "startedAt")
       ?? watch.updatedAt
@@ -226,19 +268,55 @@ const hydratableActionStatuses: ReadonlySet<WatchActionTransition["status"]> = n
   "auth_required",
 ]);
 
-function hasCanonicalManualCheckResult(watch: WatchLifecycleSnapshot): boolean {
+function canonicalRecoveryResult(
+  watch: WatchLifecycleSnapshot,
+): ReservationRecoveryResult | null {
   const attempt = watch.latestReservationAttempt;
-  return (watch.status === "watching" || watch.status === "expired")
-    && attempt?.outcome === "unknown"
-    && attempt.manualCheckRequired
-    && attempt.finishedAt !== null;
+  if (
+    (watch.status !== "watching" && watch.status !== "expired")
+    || attempt === null
+    || attempt.finishedAt === null
+    || (
+      attempt.outcome !== "failed"
+      && attempt.outcome !== "not_available"
+      && attempt.outcome !== "unknown"
+    )
+  ) return null;
+  return {
+    outcome: attempt.outcome,
+    retryable: attempt.retryable,
+    manualCheckRequired: attempt.manualCheckRequired,
+    retryCondition: attempt.retryCondition,
+  };
 }
 
-function manualCheckTransition(watch: WatchLifecycleSnapshot): WatchActionTransition {
+function canonicalRecoveryRevision(watch: WatchLifecycleSnapshot): string | null {
+  const attempt = watch.latestReservationAttempt;
+  const result = canonicalRecoveryResult(watch);
+  if (attempt === null || attempt.finishedAt === null || result === null) return null;
+  return [
+    "monitoring_resumed",
+    watch.latestReservationAttemptCandidateId ?? "candidate-unknown",
+    attempt.startedAt ?? "start-unknown",
+    attempt.finishedAt,
+    result.outcome,
+    result.retryable ? "retryable" : "not-retryable",
+    result.manualCheckRequired ? "manual-check" : "automatic",
+    result.retryCondition ?? "no-retry-condition",
+  ].join(":");
+}
+
+function recoveryTransition(
+  watch: WatchLifecycleSnapshot,
+  result: ReservationRecoveryResult,
+  revision: string,
+): WatchActionTransition {
   return {
     ...transitionContext(watch, "monitoring_resumed"),
     status: "monitoring_resumed",
+    revision,
     monitoringResumed: watch.status === "watching",
+    reservationResult: result,
   };
 }
 
@@ -246,8 +324,14 @@ function hydrateCurrentWatchActionLifecycleTransitions(
   watches: ReadonlyArray<WatchLifecycleSnapshot>,
 ): WatchActionTransition[] {
   return watches.flatMap((watch) => {
-    if (hasCanonicalManualCheckResult(watch)) {
-      return [manualCheckTransition(watch)];
+    const recoveryResult = canonicalRecoveryResult(watch);
+    const recoveryRevision = canonicalRecoveryRevision(watch);
+    if (
+      recoveryResult?.outcome === "unknown"
+      && recoveryResult.manualCheckRequired
+      && recoveryRevision !== null
+    ) {
+      return [recoveryTransition(watch, recoveryResult, recoveryRevision)];
     }
     const status = watch.status as WatchActionTransition["status"];
     if (!hydratableActionStatuses.has(status)) return [];
@@ -285,17 +369,14 @@ function detectWatchActionLifecycleTransitions(
   return next.flatMap((watch) => {
     const previousWatch = previousById.get(watch.id);
     if (previousWatch === undefined) return [];
-    const currentManualCheck = hasCanonicalManualCheckResult(watch);
-    const previousManualCheck = hasCanonicalManualCheckResult(previousWatch);
+    const recoveryResult = canonicalRecoveryResult(watch);
+    const recoveryRevision = canonicalRecoveryRevision(watch);
     if (
-      currentManualCheck
-      && (
-        !previousManualCheck
-        || transitionRevisionAt(previousWatch, "monitoring_resumed")
-          !== transitionRevisionAt(watch, "monitoring_resumed")
-      )
+      recoveryResult !== null
+      && recoveryRevision !== null
+      && recoveryRevision !== canonicalRecoveryRevision(previousWatch)
     ) {
-      return [manualCheckTransition(watch)];
+      return [recoveryTransition(watch, recoveryResult, recoveryRevision)];
     }
     if (previousWatch.status === watch.status) {
       if (
@@ -312,6 +393,12 @@ function detectWatchActionLifecycleTransitions(
     }
     const holdEndedAt = attemptTimestamp(watch, "paymentHoldEndedAt");
     const holdEndReason = attemptPaymentHoldEndReason(watch);
+    if (previousWatch.status === "payment_required" && watch.status === "completed") {
+      return [{
+        ...transitionContext(watch, "payment_completed"),
+        status: "payment_completed" as const,
+      }];
+    }
     if (
       previousWatch.status === "payment_required"
       && (watch.status === "watching" || watch.status === "expired")

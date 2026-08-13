@@ -41,6 +41,7 @@ SCHEMA_ALIASES = {
     "OperationEntry",
     "OperationEntryKind",
     "OperationEntryLevel",
+    "OperationEntryReasonCode",
     "OperationFreshness",
     "OperationProviderCircuit",
     "OperationRate",
@@ -158,7 +159,7 @@ def test_central_schemas_is_an_exact_definition_free_alias_hub() -> None:
     assert assignments == SCHEMA_ALIASES
     assert imports == SCHEMA_IMPORTS
     assert not hasattr(legacy, "__all__")
-    assert len({name for name in vars(legacy) if not name.startswith("_")}) == 103
+    assert len({name for name in vars(legacy) if not name.startswith("_")}) == 104
     assert {
         name for name in vars(legacy) if name.startswith("_") and not name.startswith("__")
     } == set()

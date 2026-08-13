@@ -6,13 +6,12 @@ import { TimetableRefreshSettings } from "../src/features/settings/TimetableRefr
 import type { UiPreferences } from "../src/api/uiPreferences";
 
 const preferences: UiPreferences = {
-  timetableRefreshIntervalSeconds: 5,
   seatObservationIntervalSeconds: 5,
   updatedAt: "2026-08-04T00:00:00Z",
 };
 
 describe("TimetableRefreshSettings", () => {
-  it("shows one global seat observation interval with a five second default", () => {
+  it("shows live display synchronization and one configurable seat observation interval", () => {
     render(
       <TimetableRefreshSettings
         preferences={preferences}
@@ -21,7 +20,10 @@ describe("TimetableRefreshSettings", () => {
       />,
     );
 
-    expect((screen.getByRole("spinbutton", { name: /화면 표시 갱신/ }) as HTMLInputElement).value).toBe("5");
+    expect(screen.getByText("화면 표시 갱신")).toBeTruthy();
+    expect(screen.getByText("실시간")).toBeTruthy();
+    expect(screen.getByText(/이벤트를 놓치면 내부 자동 조회/)).toBeTruthy();
+    expect(screen.queryByRole("spinbutton", { name: /화면 표시 갱신/ })).toBeNull();
     expect((screen.getByRole("spinbutton", { name: /좌석 관측 간격/ }) as HTMLInputElement).value).toBe("5");
     expect(screen.queryByText("균형 관측 간격")).toBeNull();
     expect(screen.queryByText("집중 관측 간격")).toBeNull();
@@ -29,11 +31,10 @@ describe("TimetableRefreshSettings", () => {
     expect(screen.getByText(/provider lease, 캐시, 백오프, 쿨다운/)).toBeTruthy();
   });
 
-  it("accepts one second for both display and observation intervals", async () => {
+  it("accepts one second for the seat observation interval", async () => {
     const user = userEvent.setup();
     const saved: UiPreferences = {
       ...preferences,
-      timetableRefreshIntervalSeconds: 1,
       seatObservationIntervalSeconds: 1,
     };
     const onSave = vi.fn(async () => saved);
@@ -41,33 +42,21 @@ describe("TimetableRefreshSettings", () => {
       <TimetableRefreshSettings preferences={preferences} saving={false} onSave={onSave} />,
     );
 
-    const displayInput = screen.getByRole("spinbutton", { name: /화면 표시 갱신/ });
     const observationInput = screen.getByRole("spinbutton", { name: /좌석 관측 간격/ });
     await user.clear(observationInput);
     await user.type(observationInput, "0");
-    await user.click(screen.getByRole("button", { name: "간격 저장" }));
+    await user.click(screen.getByRole("button", { name: "관측 간격 저장" }));
     expect(screen.getByRole("alert").textContent).toContain("좌석 관측 간격은 1~600초 사이의 정수");
     expect(onSave).not.toHaveBeenCalled();
 
-    await user.clear(displayInput);
-    await user.type(displayInput, "0");
     await user.clear(observationInput);
     await user.type(observationInput, "1");
-    await user.click(screen.getByRole("button", { name: "간격 저장" }));
-    expect(screen.getByRole("alert").textContent).toContain("화면 표시 갱신은 1~300초 사이의 정수");
-    expect(onSave).not.toHaveBeenCalled();
-
-    await user.clear(displayInput);
-    await user.type(displayInput, "1");
-    await user.clear(observationInput);
-    await user.type(observationInput, "1");
-    await user.click(screen.getByRole("button", { name: "간격 저장" }));
+    await user.click(screen.getByRole("button", { name: "관측 간격 저장" }));
 
     expect(onSave).toHaveBeenCalledWith({
-      timetableRefreshIntervalSeconds: 1,
       seatObservationIntervalSeconds: 1,
     });
-    expect(screen.getByRole("status").textContent).toContain("활성 작업의 다음 관측부터");
+    expect(screen.getByRole("status").textContent).toContain("활성 작업의 다음 좌석 관측부터");
   });
 
   it("disables editing while saving and restores the previous values after a failure", async () => {
@@ -80,13 +69,14 @@ describe("TimetableRefreshSettings", () => {
     );
 
     expect((screen.getByRole("button", { name: "저장 중…" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByRole("spinbutton").every((input) => input.hasAttribute("disabled"))).toBe(true);
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(1);
+    expect(screen.getByRole("spinbutton").hasAttribute("disabled")).toBe(true);
     rerender(<TimetableRefreshSettings preferences={preferences} saving={false} onSave={onSave} />);
 
     const observationInput = screen.getByRole("spinbutton", { name: /좌석 관측 간격/ });
     await user.clear(observationInput);
     await user.type(observationInput, "120");
-    await user.click(screen.getByRole("button", { name: "간격 저장" }));
+    await user.click(screen.getByRole("button", { name: "관측 간격 저장" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain("서버 저장 실패");
     expect((observationInput as HTMLInputElement).value).toBe("5");

@@ -4,6 +4,9 @@ from .reservations.provider_confirmation.korail import (
     KORAIL_CONFIRMATION_SOURCE as KORAIL_CONFIRMATION_SOURCE,
 )
 from .reservations.provider_confirmation.korail import (
+    KORAIL_ISSUED_TICKET_LIST_SOURCE as KORAIL_ISSUED_TICKET_LIST_SOURCE,
+)
+from .reservations.provider_confirmation.korail import (
     KORAIL_RESERVATION_HANDOFF_URL as KORAIL_RESERVATION_HANDOFF_URL,
 )
 from .reservations.provider_confirmation.korail import (
@@ -24,6 +27,7 @@ from .reservations.provider_confirmation.korail import (
 
 __all__ = (
     "KORAIL_CONFIRMATION_SOURCE",
+    "KORAIL_ISSUED_TICKET_LIST_SOURCE",
     "KORAIL_RESERVATION_HANDOFF_URL",
     "KORAIL_RESERVATION_LIST_SOURCE",
     "KorailSameSessionDetailConfirmationAdapter",

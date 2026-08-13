@@ -137,11 +137,12 @@ describe("AppNotificationCenter", () => {
     vi.useRealTimers();
   });
 
-  it("hides only the foreground preview without dismissing its persistent notice", async () => {
+  it("dismisses the persistent notice from the foreground preview close button", async () => {
     const onDismiss = vi.fn();
+    const state = centerState();
     render(
       <AppNotificationCenter
-        state={centerState()}
+        state={state}
         expanded={false}
         onExpandedChange={vi.fn()}
         onDismiss={onDismiss}
@@ -151,12 +152,12 @@ describe("AppNotificationCenter", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", {
-      name: "첫 번째 좌석 알림 미리보기 숨기기",
+      name: "첫 번째 좌석 알림 닫기",
     }));
 
     expect(document.querySelector(".notification-center-peek")).toBeNull();
-    expect(onDismiss).not.toHaveBeenCalled();
-    expect(screen.getByText("실시간 알림").nextElementSibling?.textContent).toBe("4건");
+    expect(onDismiss).toHaveBeenCalledOnce();
+    expect(onDismiss).toHaveBeenCalledWith(state.notices[0]?.id);
   });
 
   it("keeps expanded notifications non-blocking while a real modal owns the scroll lock", () => {

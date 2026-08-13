@@ -13,7 +13,9 @@ from ..provider_account_management.contracts import ProviderCredentials
 from ..reservations.contracts import ReservationRequest, ReservationResult
 from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 from ..timetable_management.schemas import TimetableItem
@@ -226,6 +228,8 @@ class SrtReservationConfirmationTarget(SrtProviderAdapterModel):
     seat_class: Literal[SeatClass.STANDARD, SeatClass.FIRST]
     passenger_count: int = Field(ge=1, le=9)
     credential_version: int = Field(ge=1)
+    purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL
+    reserved_seats: tuple[ReservationConfirmationSeat, ...] = ()
 
     @model_validator(mode="after")
     def validate_domain_target(self) -> SrtReservationConfirmationTarget:
@@ -252,6 +256,8 @@ class SrtReservationConfirmationTarget(SrtProviderAdapterModel):
             ),
             passenger_count=target.passenger_count,
             credential_version=target.credential_version,
+            purpose=target.purpose,
+            reserved_seats=target.reserved_seats,
         )
 
     def to_domain(self) -> ReservationConfirmationTarget:
@@ -267,6 +273,8 @@ class SrtReservationConfirmationTarget(SrtProviderAdapterModel):
             seat_class=self.seat_class,
             passenger_count=self.passenger_count,
             credential_version=self.credential_version,
+            purpose=self.purpose,
+            reserved_seats=self.reserved_seats,
         )
 
 

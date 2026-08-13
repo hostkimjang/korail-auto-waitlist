@@ -76,7 +76,7 @@ function panelContent(summary: ServerSeatStatusSummary): { title: string; descri
   if (summary.state === "restricted") {
     return {
       title: "공식 좌석 조회가 제한되었습니다",
-      description: "보호 대기 시간 동안 서버는 운영사에 다시 요청하지 않습니다. 좌석은 미확인 상태로 유지되며 예매·대기 행동을 제공하지 않습니다.",
+      description: "조회 대기 시간 동안 서버는 운영사에 다시 요청하지 않습니다. 좌석은 미확인 상태로 유지되며 예매·대기 행동을 제공하지 않습니다.",
     };
   }
   if (summary.state === "elapsed") {

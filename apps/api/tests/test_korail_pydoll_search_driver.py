@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -12,6 +13,7 @@ import rail_waitlist.korail_sidecar.pydoll.search_driver as search_driver_module
 from rail_waitlist.korail_browser_automation import BrowserSourceUnavailable
 from rail_waitlist.korail_pydoll_browser import _PydollSession
 from rail_waitlist.korail_pydoll_contracts import PydollPageSnapshot, PydollTrainRow
+from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollReservationListSnapshot
 
 
 class _ClickControl:
@@ -77,6 +79,109 @@ async def test_search_driver_resolves_snapshot_and_readback_seams_after_construc
 
     assert result.network_responses == ((403, "document"),)
     assert snapshot_reader.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_search_driver_returns_maintenance_snapshot_without_waiting_for_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    outage = PydollPageSnapshot(
+        body_text="점검 안내",
+        rows=(),
+        url="https://www.korail.com/rejectservice_job.html",
+    )
+    snapshot_reader = AsyncMock(return_value=outage)
+    monkeypatch.setattr(session, "_snapshot", snapshot_reader)
+
+    assert await session.wait_for_result() == outage
+    snapshot_reader.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_session_open_returns_initial_maintenance_page_before_control_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    session._tab = SimpleNamespace(go_to=AsyncMock())
+    outage = PydollPageSnapshot(
+        body_text="점검 안내",
+        rows=(),
+        url="https://www.korail.com/rejectservice_job.html",
+    )
+    snapshot_reader = AsyncMock(return_value=outage)
+    wait_for_control = AsyncMock()
+    monkeypatch.setattr(session, "_snapshot", snapshot_reader)
+    monkeypatch.setattr(session, "_wait_for_exact_text", wait_for_control)
+
+    assert await session.open() == outage
+    wait_for_control.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_session_open_classifies_maintenance_dom_after_load_signal_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_load_timeout = type("PageLoadTimeout", (Exception,), {"__module__": "pydoll.exceptions"})
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    session._tab = SimpleNamespace(go_to=AsyncMock(side_effect=page_load_timeout()))
+    outage = PydollPageSnapshot(
+        body_text="점검 안내",
+        rows=(),
+        url="https://www.korail.com/rejectservice_job.html",
+    )
+    snapshot_reader = AsyncMock(return_value=outage)
+    wait_for_control = AsyncMock()
+    monkeypatch.setattr(session, "_snapshot", snapshot_reader)
+    monkeypatch.setattr(session, "_wait_for_exact_text", wait_for_control)
+
+    assert await session.open() == outage
+    snapshot_reader.assert_awaited_once_with()
+    wait_for_control.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reservation_list_reader_waits_past_loading_until_explicit_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    session._tab = SimpleNamespace(go_to=AsyncMock())
+    loading = PydollReservationListSnapshot(
+        url="https://www.korail.com/ticket/reservation/list",
+        page_marker_visible=True,
+        explicit_empty_visible=True,
+        loading_visible=True,
+    )
+    ready = PydollReservationListSnapshot(
+        url="https://www.korail.com/ticket/reservation/list",
+        page_marker_visible=True,
+        explicit_empty_visible=True,
+    )
+    reader = AsyncMock(side_effect=[loading, ready, ready])
+    monkeypatch.setattr(session._search_driver, "reservation_list_snapshot", reader)
+
+    result = await session.read_reservation_list()
+
+    assert result.stable_observation is True
+    assert result.official_read_completed is True
+    assert reader.await_count == 3
+    session._tab.go_to.assert_awaited_once()
 
 
 @pytest.mark.asyncio

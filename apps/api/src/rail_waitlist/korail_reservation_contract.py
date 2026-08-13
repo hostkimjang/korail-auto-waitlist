@@ -6,6 +6,7 @@ BaseModel = _contracts.BaseModel
 ConfigDict = _contracts.ConfigDict
 Field = _contracts.Field
 KorailCredentialRequest = _contracts.KorailCredentialRequest
+KorailConfirmationPurposeValue = _contracts.KorailConfirmationPurposeValue
 KorailLoginMethodValue = _contracts.KorailLoginMethodValue
 KorailLoginVerificationOutcomeValue = _contracts.KorailLoginVerificationOutcomeValue
 KorailLoginVerifyRequest = _contracts.KorailLoginVerifyRequest

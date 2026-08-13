@@ -15,6 +15,7 @@ from rail_waitlist.korail_http_replay import (
     HttpReplayInvalidResponse,
     HttpReplayLeaseInvalid,
     HttpReplayProtectionDetected,
+    HttpReplayProviderUnavailable,
     HttpReplayRateLimited,
     HttpReplaySessionInvalid,
     HttpReplaySourceUnavailable,
@@ -500,6 +501,60 @@ async def test_only_clear_same_origin_session_redirects_trigger_cold_reinit(
     )
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(error_type):
+            await client.search(_request())
+
+
+async def test_official_maintenance_redirect_is_provider_unavailable() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            302,
+            headers={"location": "/rejectservice_job.html"},
+        )
+    )
+    async with KorailHttpReplayClient(_plan(), transport=transport) as client:
+        with pytest.raises(HttpReplayProviderUnavailable) as raised:
+            await client.search(_request())
+
+    assert raised.value.trigger == "maintenance_page"
+
+
+async def test_official_maintenance_html_is_provider_unavailable() -> None:
+    body = "서비스를 일시중지합니다. 승차권 예약 및 발매서비스".encode()
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=body,
+        )
+    )
+    async with KorailHttpReplayClient(_plan(), transport=transport) as client:
+        with pytest.raises(HttpReplayProviderUnavailable) as raised:
+            await client.search(_request())
+
+    assert raised.value.trigger == "service_outage_page"
+
+
+async def test_official_service_unavailable_html_is_provider_unavailable() -> None:
+    body = "서비스를 일시중지합니다. 승차권 예약 및 발매서비스".encode("cp949")
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            503,
+            headers={"content-type": "text/html; charset=euc-kr"},
+            content=body,
+        )
+    )
+    async with KorailHttpReplayClient(_plan(), transport=transport) as client:
+        with pytest.raises(HttpReplayProviderUnavailable) as raised:
+            await client.search(_request())
+
+    assert raised.value.trigger == "service_outage_page"
+
+
+async def test_unmarked_service_unavailable_response_stays_query_local() -> None:
+    transport = httpx.MockTransport(lambda _request: httpx.Response(503, content=b"unavailable"))
+
+    async with KorailHttpReplayClient(_plan(), transport=transport) as client:
+        with pytest.raises(HttpReplaySourceUnavailable):
             await client.search(_request())
 
 

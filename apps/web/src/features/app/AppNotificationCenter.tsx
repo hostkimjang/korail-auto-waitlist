@@ -156,8 +156,11 @@ export function AppNotificationCenter({
             <button
               type="button"
               className="notification-center-peek-dismiss"
-              aria-label={`${peekNotice.title} 알림 미리보기 숨기기`}
-              onClick={() => setPeekNoticeId(null)}
+              aria-label={`${peekNotice.title} 알림 닫기`}
+              onClick={() => {
+                onDismiss(peekNotice.id);
+                setPeekNoticeId(null);
+              }}
             >
               <X size={18} aria-hidden="true" />
             </button>

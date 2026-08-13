@@ -5,6 +5,7 @@ from datetime import timedelta
 RESERVATION_RECONCILIATION_MAX_ATTEMPTS = 3
 RESERVATION_RECONCILIATION_INTERVAL = timedelta(seconds=30)
 UNKNOWN_RECONCILIATION_MAX_ATTEMPTS = 6
+PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS = 6
 
 _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS = {
     1: RESERVATION_RECONCILIATION_INTERVAL,
@@ -14,8 +15,24 @@ _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS = {
     5: timedelta(minutes=60),
 }
 
+_PAYMENT_HOLD_RECONCILIATION_INTERVALS = {
+    1: RESERVATION_RECONCILIATION_INTERVAL,
+    2: RESERVATION_RECONCILIATION_INTERVAL,
+    3: timedelta(minutes=2),
+    4: timedelta(minutes=5),
+    5: timedelta(minutes=10),
+}
+
 
 def unknown_reconciliation_retry_interval(completed_attempt_count: int) -> timedelta | None:
     """Return the bounded delay after one completed inconclusive UNKNOWN read."""
 
     return _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS.get(completed_attempt_count)
+
+
+def payment_hold_reconciliation_retry_interval(
+    completed_attempt_count: int,
+) -> timedelta | None:
+    """Return the bounded delay for checking whether an official hold was paid."""
+
+    return _PAYMENT_HOLD_RECONCILIATION_INTERVALS.get(completed_attempt_count)

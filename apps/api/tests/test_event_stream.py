@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rail_waitlist.event_stream import http as event_http
 from rail_waitlist.models import OutboxEvent
@@ -48,6 +49,12 @@ class FakeSession:
     async def get(self, _model, _identity):
         return self.previous
 
+    async def scalar(self, query):
+        self.queries.append(query)
+        if self.error is not None:
+            raise self.error
+        return self.rows[0] if self.rows else None
+
     async def scalars(self, query):
         self.queries.append(query)
         if self.error is not None:
@@ -75,9 +82,17 @@ async def collect_stream(stream) -> list[str]:
 
 
 async def test_event_stream_uses_fresh_history_and_poll_sessions(monkeypatch) -> None:
-    cursor_time = datetime.now(timezone.utc)
+    cursor_time = datetime.now(UTC)
     history_session = FakeSession(previous=SimpleNamespace(created_at=cursor_time))
-    poll_session = FakeSession()
+    next_event = OutboxEvent(
+        id="event-after-previous",
+        aggregate_type="watch",
+        aggregate_id="watch-1",
+        event_type="watch.reservation_result",
+        payload={"watch_id": "watch-1", "outcome": "not_available"},
+        created_at=cursor_time + timedelta(microseconds=1),
+    )
+    poll_session = FakeSession(rows=[next_event])
     factory = FakeSessionFactory(history_session, poll_session)
     monkeypatch.setattr(event_http, "SessionFactory", factory)
     monkeypatch.setattr(event_http.asyncio, "sleep", no_sleep)
@@ -91,7 +106,7 @@ async def test_event_stream_uses_fresh_history_and_poll_sessions(monkeypatch) ->
         event_http._stream_events(DisconnectAfterPolls(), "previous-event")
     )
 
-    assert items == [": keepalive\n\n"]
+    assert items == [event_http.event_wire(next_event)]
     assert factory.created == [history_session, poll_session]
     assert all(session.entered and session.exited for session in factory.created)
     query_text = str(poll_session.queries[0])
@@ -106,10 +121,12 @@ async def test_event_stream_emits_wire_events_and_closes_poll_session(monkeypatc
         aggregate_id="watch-1",
         event_type="watch.updated",
         payload={"watch_id": "watch-1"},
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
+    baseline_session = FakeSession()
     poll_session = FakeSession(rows=[event])
-    monkeypatch.setattr(event_http, "SessionFactory", FakeSessionFactory(poll_session))
+    factory = FakeSessionFactory(baseline_session, poll_session)
+    monkeypatch.setattr(event_http, "SessionFactory", factory)
     monkeypatch.setattr(event_http.asyncio, "sleep", no_sleep)
     monkeypatch.setattr(
         event_http,
@@ -122,12 +139,148 @@ async def test_event_stream_emits_wire_events_and_closes_poll_session(monkeypatc
     assert items == [event_http.event_wire(event)]
     assert items[0].startswith("id: event-1\nevent: watch.updated\ndata: ")
     assert items[0].endswith("\n\n")
+    assert baseline_session.exited is True
     assert poll_session.exited is True
 
 
+async def test_event_stream_without_cursor_starts_after_the_current_outbox_tail(
+    monkeypatch,
+) -> None:
+    now = datetime.now(UTC)
+    historical = OutboxEvent(
+        id="event-historical",
+        aggregate_type="watch",
+        aggregate_id="watch-1",
+        event_type="watch.updated",
+        payload={"watch_id": "watch-1"},
+        created_at=now,
+    )
+    current = OutboxEvent(
+        id="event-current",
+        aggregate_type="watch",
+        aggregate_id="watch-1",
+        event_type="watch.reservation_result",
+        payload={"watch_id": "watch-1", "outcome": "not_available"},
+        created_at=now + timedelta(microseconds=1),
+    )
+    baseline_session = FakeSession(rows=[historical])
+    poll_session = FakeSession(rows=[current])
+    factory = FakeSessionFactory(baseline_session, poll_session)
+    monkeypatch.setattr(event_http, "SessionFactory", factory)
+    monkeypatch.setattr(event_http.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        event_http,
+        "get_settings",
+        lambda: SimpleNamespace(sse_poll_seconds=0),
+    )
+
+    items = await collect_stream(event_http._stream_events(DisconnectAfterPolls(), None))
+
+    assert items == [event_http.event_wire(current)]
+    baseline_query = str(baseline_session.queries[0])
+    assert "ORDER BY outbox_events.created_at DESC, outbox_events.id DESC" in baseline_query
+    poll_query = str(poll_session.queries[0])
+    assert "outbox_events.created_at >" in poll_query
+    assert "outbox_events.id >" in poll_query
+
+
+async def test_event_stream_receives_an_event_committed_after_the_tail_snapshot(
+    db_engine,
+    monkeypatch,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    historical = OutboxEvent(
+        id="event-before-connection",
+        aggregate_type="watch",
+        aggregate_id="watch-1",
+        event_type="watch.reservation_progressed",
+        payload={"watch_id": "watch-1"},
+        dedupe_key="event-before-connection",
+        created_at=datetime(2026, 8, 12, 13, 56, 23, tzinfo=UTC),
+    )
+    current = OutboxEvent(
+        id="event-after-connection",
+        aggregate_type="watch",
+        aggregate_id="watch-1",
+        event_type="watch.reservation_result",
+        payload={"watch_id": "watch-1", "outcome": "not_available"},
+        dedupe_key="event-after-connection",
+        created_at=datetime(2026, 8, 12, 13, 56, 24, tzinfo=UTC),
+    )
+    async with factory() as session:
+        session.add(historical)
+        await session.commit()
+
+    class CommitAfterTailSnapshot:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def is_disconnected(self) -> bool:
+            self.calls += 1
+            if self.calls != 1:
+                return True
+            async with factory() as session:
+                session.add(current)
+                await session.commit()
+            return False
+
+    monkeypatch.setattr(event_http, "SessionFactory", factory)
+    monkeypatch.setattr(event_http.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        event_http,
+        "get_settings",
+        lambda: SimpleNamespace(sse_poll_seconds=0),
+    )
+
+    items = await collect_stream(event_http._stream_events(CommitAfterTailSnapshot(), None))
+
+    assert len(items) == 1
+    assert items[0].startswith(
+        "id: event-after-connection\nevent: watch.reservation_result\ndata: "
+    )
+    assert "event-before-connection" not in items[0]
+
+
+async def test_event_stream_with_unknown_cursor_also_starts_at_the_current_tail(
+    monkeypatch,
+) -> None:
+    tail = OutboxEvent(
+        id="event-tail",
+        aggregate_type="watch",
+        aggregate_id="watch-1",
+        event_type="watch.updated",
+        payload={"watch_id": "watch-1"},
+        created_at=datetime.now(UTC),
+    )
+    baseline_session = FakeSession(rows=[tail])
+    poll_session = FakeSession()
+    factory = FakeSessionFactory(baseline_session, poll_session)
+    monkeypatch.setattr(event_http, "SessionFactory", factory)
+    monkeypatch.setattr(event_http.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        event_http,
+        "get_settings",
+        lambda: SimpleNamespace(sse_poll_seconds=0),
+    )
+
+    items = await collect_stream(
+        event_http._stream_events(DisconnectAfterPolls(), "event-no-longer-retained")
+    )
+
+    assert items == [": keepalive\n\n"]
+    assert len(baseline_session.queries) == 1
+    poll_query = str(poll_session.queries[0])
+    assert "outbox_events.created_at >" in poll_query
+
+
 async def test_event_stream_closes_fresh_session_when_polling_fails(monkeypatch) -> None:
+    baseline_session = FakeSession()
     poll_session = FakeSession(error=RuntimeError("database unavailable"))
-    monkeypatch.setattr(event_http, "SessionFactory", FakeSessionFactory(poll_session))
+    monkeypatch.setattr(
+        event_http,
+        "SessionFactory",
+        FakeSessionFactory(baseline_session, poll_session),
+    )
 
     with pytest.raises(RuntimeError, match="database unavailable"):
         await anext(event_http._stream_events(DisconnectAfterPolls(), None))
@@ -138,8 +291,9 @@ async def test_event_stream_closes_fresh_session_when_polling_fails(monkeypatch)
 
 
 async def test_event_stream_opens_and_closes_a_fresh_session_for_every_poll(monkeypatch) -> None:
+    baseline_session = FakeSession()
     poll_sessions = [FakeSession(), FakeSession(), FakeSession()]
-    factory = FakeSessionFactory(*poll_sessions)
+    factory = FakeSessionFactory(baseline_session, *poll_sessions)
     monkeypatch.setattr(event_http, "SessionFactory", factory)
     monkeypatch.setattr(event_http.asyncio, "sleep", no_sleep)
     monkeypatch.setattr(
@@ -151,7 +305,7 @@ async def test_event_stream_opens_and_closes_a_fresh_session_for_every_poll(monk
     items = await collect_stream(event_http._stream_events(DisconnectAfterPolls(3), None))
 
     assert items == [": keepalive\n\n"] * 3
-    assert factory.created == poll_sessions
+    assert factory.created == [baseline_session, *poll_sessions]
     assert all(session.entered and session.exited for session in poll_sessions)
     assert all(len(session.queries) == 1 for session in poll_sessions)
 

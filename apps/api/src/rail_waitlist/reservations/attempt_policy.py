@@ -10,6 +10,13 @@ CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
 PAYMENT_HOLD_RETRY_EPISODE_PREFIX = "availability-after-hold:"
 MANUAL_PAYMENT_HOLD_REARM_EPISODE_PREFIX = "manual-after-hold:"
 
+CONFIRMED_ABSENT_RETRY_OBSERVATIONS = frozenset(
+    {
+        SeatObservationStatus.AVAILABLE,
+        SeatObservationStatus.LIMITED,
+    }
+)
+
 RESERVATION_RETRY_EDGE_OBSERVATIONS = frozenset(
     {
         SeatObservationStatus.UNAVAILABLE,
@@ -75,13 +82,20 @@ class ConfirmedAbsentRetrySource(Protocol):
     confirmation_outcome: ReservationConfirmationOutcome | None
     confirmation_observed_at: datetime | None
     episode_key: str
+    last_reconciled_at: datetime | None
+    next_reconcile_at: datetime | None
     outcome: ReservationOutcome
     payment_deadline: datetime | None
     post_deadline_reconciled_at: datetime | None
+    reconciliation_attempt_count: int
 
 
 def is_confirmed_absent_retry_source(attempt: ConfirmedAbsentRetrySource) -> bool:
     """Return whether exact negative evidence can safely re-arm one attempt.
+
+    UNKNOWN may re-arm once only after a bounded reconciliation persisted an exact
+    official NOT_FOUND result. The retry episode prefix prevents an ambiguous retry
+    from recursively authorizing another provider command.
 
     Older PAYMENT_REQUIRED rows may predate persisted payment deadlines and the
     post-deadline marker. They would otherwise remain fenced forever even after an
@@ -95,6 +109,12 @@ def is_confirmed_absent_retry_source(attempt: ConfirmedAbsentRetrySource) -> boo
         or attempt.episode_key.startswith(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
     ):
         return False
+    if attempt.outcome is ReservationOutcome.UNKNOWN:
+        return (
+            (attempt.reconciliation_attempt_count or 0) >= 1
+            and attempt.last_reconciled_at is not None
+            and attempt.next_reconcile_at is None
+        )
     return (
         attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
         and attempt.payment_deadline is None

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
@@ -20,12 +20,17 @@ from ..provider_execution.lease_application import lock_execution_lease_current
 from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
 from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 from .reconciliation_policy import (
+    PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
+    RESERVATION_RECONCILIATION_INTERVAL,
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
+    payment_hold_reconciliation_retry_interval,
     unknown_reconciliation_retry_interval,
 )
 from .reconciliation_state_application import (
@@ -94,6 +99,56 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _confirmation_purpose(
+    watch: Watch,
+    attempt: ReservationAttempt,
+) -> ReservationConfirmationPurpose:
+    if (
+        watch.status is WatchStatus.PAYMENT_REQUIRED
+        and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+        and attempt.confirmation_outcome
+        not in {
+            ReservationConfirmationOutcome.AUTH_REQUIRED,
+            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+            ReservationConfirmationOutcome.CONFIRMED_PAID,
+        }
+    ):
+        return ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+    return ReservationConfirmationPurpose.INITIAL
+
+
+def _persisted_confirmation_seats(
+    value: object,
+    *,
+    max_count: int,
+) -> tuple[ReservationConfirmationSeat, ...]:
+    """Validate database JSON before it crosses the provider confirmation boundary."""
+
+    if not isinstance(value, list) or len(value) > max_count:
+        return ()
+    seats: list[ReservationConfirmationSeat] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {"car_number", "seat_number"}:
+            return ()
+        car_number = item.get("car_number")
+        seat_number = item.get("seat_number")
+        if not isinstance(car_number, str) or not isinstance(seat_number, str):
+            return ()
+        try:
+            seats.append(
+                ReservationConfirmationSeat(
+                    car_number=car_number,
+                    seat_number=seat_number,
+                )
+            )
+        except ValueError:
+            return ()
+    seat_keys = tuple((seat.car_number, seat.seat_number) for seat in seats)
+    if len(seat_keys) != len(set(seat_keys)):
+        return ()
+    return tuple(seats)
+
+
 def _reservation_reconciliation_due_clause(now: datetime):
     """Select bounded initial checks and legacy/stale payment holds needing refresh."""
 
@@ -119,14 +174,66 @@ def _reservation_reconciliation_due_clause(now: datetime):
             ),
         ),
         and_(
+            Watch.status == WatchStatus.PAYMENT_REQUIRED,
+            ReservationAttempt.outcome == ReservationOutcome.PAYMENT_REQUIRED,
+            or_(
+                ReservationAttempt.confirmation_outcome.is_(None),
+                ReservationAttempt.confirmation_outcome.in_(
+                    [
+                        ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+                        ReservationConfirmationOutcome.INCONCLUSIVE,
+                        ReservationConfirmationOutcome.NOT_FOUND,
+                    ]
+                ),
+            ),
+            ReservationAttempt.reconciliation_attempt_count > 0,
+            ReservationAttempt.reconciliation_attempt_count
+            < PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
+            or_(
+                ReservationAttempt.next_reconcile_at <= now,
+                and_(
+                    ReservationAttempt.next_reconcile_at.is_(None),
+                    ReservationAttempt.last_reconciled_at.is_not(None),
+                    or_(
+                        and_(
+                            ReservationAttempt.reconciliation_attempt_count.in_([1, 2]),
+                            ReservationAttempt.last_reconciled_at
+                            <= now - RESERVATION_RECONCILIATION_INTERVAL,
+                        ),
+                        and_(
+                            ReservationAttempt.reconciliation_attempt_count == 3,
+                            ReservationAttempt.last_reconciled_at <= now - timedelta(minutes=2),
+                        ),
+                        and_(
+                            ReservationAttempt.reconciliation_attempt_count == 4,
+                            ReservationAttempt.last_reconciled_at <= now - timedelta(minutes=5),
+                        ),
+                        and_(
+                            ReservationAttempt.reconciliation_attempt_count == 5,
+                            ReservationAttempt.last_reconciled_at <= now - timedelta(minutes=10),
+                        ),
+                    ),
+                ),
+            ),
+            Watch.payment_deadline.is_not(None),
+            Watch.payment_deadline > now,
+        ),
+        and_(
             ReservationAttempt.outcome == ReservationOutcome.UNKNOWN,
-            ReservationAttempt.confirmation_outcome == ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationAttempt.confirmation_outcome.in_(
+                [
+                    ReservationConfirmationOutcome.INCONCLUSIVE,
+                    ReservationConfirmationOutcome.NOT_FOUND,
+                ]
+            ),
             ReservationAttempt.reconciliation_attempt_count
             >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
             ReservationAttempt.reconciliation_attempt_count < UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
             or_(
                 ReservationAttempt.next_reconcile_at <= now,
                 and_(
+                    ReservationAttempt.confirmation_outcome
+                    == ReservationConfirmationOutcome.INCONCLUSIVE,
                     ReservationAttempt.next_reconcile_at.is_(None),
                     ReservationAttempt.last_reconciled_at.is_not(None),
                     or_(
@@ -151,6 +258,16 @@ def _reservation_reconciliation_due_clause(now: datetime):
             ReservationAttempt.reconciliation_attempt_count
             >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
             ReservationAttempt.outcome == ReservationOutcome.PAYMENT_REQUIRED,
+            or_(
+                ReservationAttempt.confirmation_outcome.is_(None),
+                ReservationAttempt.confirmation_outcome.not_in(
+                    [
+                        ReservationConfirmationOutcome.AUTH_REQUIRED,
+                        ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+                        ReservationConfirmationOutcome.CONFIRMED_PAID,
+                    ]
+                ),
+            ),
             or_(
                 ReservationAttempt.post_deadline_reconciled_at.is_(None),
                 and_(
@@ -193,6 +310,35 @@ def _reservation_reconciliation_is_due(
             and attempt.last_reconciled_at is not None
             and _as_utc(attempt.last_reconciled_at) + retry_interval <= now
         )
+    bounded_payment_confirmation_due = (
+        watch.status is WatchStatus.PAYMENT_REQUIRED
+        and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+        and attempt.confirmation_outcome
+        not in {
+            ReservationConfirmationOutcome.AUTH_REQUIRED,
+            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+            ReservationConfirmationOutcome.CONFIRMED_PAID,
+        }
+        and 0 < attempt.reconciliation_attempt_count < PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS
+        and (
+            (attempt.next_reconcile_at is not None and _as_utc(attempt.next_reconcile_at) <= now)
+            or (
+                attempt.next_reconcile_at is None
+                and attempt.last_reconciled_at is not None
+                and (
+                    retry_interval := payment_hold_reconciliation_retry_interval(
+                        attempt.reconciliation_attempt_count
+                    )
+                )
+                is not None
+                and _as_utc(attempt.last_reconciled_at) + retry_interval <= now
+            )
+        )
+        and watch.payment_deadline is not None
+        and _as_utc(watch.payment_deadline) > now
+    )
+    if bounded_payment_confirmation_due:
+        return True
     if attempt.reconciliation_attempt_count >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS:
         legacy_expired_hold_cleanup_due = (
             attempt.reconciliation_attempt_count == RESERVATION_RECONCILIATION_MAX_ATTEMPTS
@@ -205,6 +351,12 @@ def _reservation_reconciliation_is_due(
         return (
             watch.status is WatchStatus.PAYMENT_REQUIRED
             and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+            and attempt.confirmation_outcome
+            not in {
+                ReservationConfirmationOutcome.AUTH_REQUIRED,
+                ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+                ReservationConfirmationOutcome.CONFIRMED_PAID,
+            }
             and (attempt.post_deadline_reconciled_at is None or legacy_expired_hold_cleanup_due)
             and watch.payment_deadline is not None
             and _as_utc(watch.payment_deadline) <= now
@@ -262,6 +414,15 @@ async def reconcile_reservation_attempt(
         if account_version != attempt.credential_version:
             return 0
         owner_watch_id = watch.id
+        purpose = _confirmation_purpose(watch, attempt)
+        reserved_seats = (
+            _persisted_confirmation_seats(
+                attempt.reserved_seats,
+                max_count=watch.passenger_count,
+            )
+            if purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+            else ()
+        )
         target = ReservationConfirmationTarget(
             attempt_id=attempt.id,
             candidate_id=candidate.id,
@@ -276,6 +437,8 @@ async def reconcile_reservation_attempt(
             seat_class=SeatClass(candidate.seat_class),
             passenger_count=watch.passenger_count,
             credential_version=attempt.credential_version,
+            purpose=purpose,
+            reserved_seats=reserved_seats,
         )
 
     provider = target.provider

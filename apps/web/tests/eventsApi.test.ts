@@ -57,6 +57,20 @@ describe("live event transport boundary", () => {
     if (source === undefined) throw new Error("EventSource was not created");
     expect(source.url).toBe("/api/v1/events");
     expect(source.options).toEqual({ withCredentials: true });
+    expect(LIVE_EVENT_TYPES).toEqual([
+      "watch.created",
+      "watch.updated",
+      "watch.status_changed",
+      "watch.seat_observed",
+      "watch.reservation_attempted",
+      "watch.reservation_progressed",
+      "watch.reservation_result",
+      "watch.reservation_result_requires_manual_check",
+      "watch.payment_hold_ended_monitoring_resumed",
+      "watch.payment_hold_ended_one_off_expired",
+      "watch.payment_completed",
+      "notification.dispatch_requested",
+    ]);
     expect([...source.listeners.keys()]).toEqual(LIVE_EVENT_TYPES);
     expect(source.onmessage).toBeTypeOf("function");
     expect(source.onerror).toBe(onError);

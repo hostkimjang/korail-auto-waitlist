@@ -20,13 +20,18 @@
 - [x] pause·resume·cancel·정책 변경과 교차한 이전 목록 응답 폐기, mutation 후 canonical 재조회와 삭제 tombstone
 - [x] 홈 대기 취소와 예약 claim의 row-lock 직렬화, 관찰 중 취소 fence와 예매·결제 시작 뒤 409·공식 확인 보존
 - [x] 대기 후보에 시간표의 실제 열차 종류를 보존하고 `GET /watches`로 전달해 홈에서 열차번호와 함께 표시
-- [x] 공식 예약 결과에서 확인한 호차·좌석번호를 예약 시도에 보존하고 결제 필요 카드·실시간 알림에만 fail-closed 표시
+- [x] 공식 예약 결과에서 확인한 호차·좌석번호를 예약 시도에 보존하고 결제 필요 카드·실시간 알림에만 fail-closed 표시(KORAIL은 예약 성공 `reservation.jrny_infos`의 단일 여정·단일 좌석만 허용하고 검색 입력·전체 본문 추출 금지)
 - [x] 같은 가용성 구간의 자동 예매 1회 DB fence와 판매 불가→재가용 관측 뒤에만 여는 다음 에피소드
 - [x] 예약 목록 부재·공식 결제기한 경과 두 결제보류 종료 경로의 감시 복귀와 비가용→재가용 뒤 재예매 계약
 - [x] 결제보류 종료 뒤 사용자 확인으로 공식 좌석을 즉시 다시 관측하고, 새 행동 가능 관측에서만 한 번 여는 자동 예매 재시작 계약
 - [x] 불확실·좌석 미확보 결과의 자동 반복 차단과 공식 확인·감시 복귀 외부 알림
-- [x] 화면 갱신 1~300초·전역 좌석 관측 1~600초의 일관된 API 응답·DB 제약·저장 계약
+- [x] 결제 필요 상태의 bounded 공식 내역 재확인, 확정 결제 완료의 `COMPLETED` 전이·결제 안내 종료와 완료 알림의 과거 결제기한 제거
+- [x] SRT의 유일 exact paid 예약과 KORAIL 동일 세션의 유일 발권 승차권 결제완료 계약: KORAIL은 persisted 호차·좌석 exact 일치를 필수로 하고 무좌석 기존 시도·중복·malformed를 fail-closed
+- [x] 화면 갱신 초 설정 제거, SSE·Push 즉시 반영과 visible 탭 고정 5초 복구 조회, 전역 좌석 관측 1~600초 저장 계약
+- [x] 좌석 관측 1초 목표 하한과 실제 provider I/O가 worker·단일 실행 gate·cache·backoff·cooldown에 따라 늦어질 수 있는 비보장 계약
 - [x] 홈의 다음 좌석 관측 목표와 내부 실행 claim 분리, 실제 관측 중 상태의 명시적 표시
+- [x] 운행·예매 projection 유무·freshness와 독립된 활성 오류·cooldown·30초 초과 지연 판정, 정상 관측 숨김, 비활성 경고 제거와 종단 사실 보존, 홈 최근 확인 초 단위 표시
+- [x] 최근 진행 기록에서 반복 정상 좌석 관측을 제외하고 조회 오류·확인 불가·자료 만료, 인증·보호 상태와 상태 전이·예매·알림·결제보류 종료·결제완료 활동을 최신 20건으로 표시하며 전체 관측 집계는 유지
 - [x] hidden 탭의 SSE·수동 갱신 요청 단일 pending 접기와 결제기한·철도계정 polling 중단·복귀 즉시 갱신
 - [x] 브라우저 푸시·Telegram·Discord·Webhook 설정 화면
 - [x] 브라우저·설치 PWA별 Web Push 구독 저장과 모든 활성 기기 동시 발송, 현재 기기 연결·해제 계약
@@ -37,10 +42,17 @@
 - [x] 중요 상태·시험 Web Push의 높은 전달 우선순위와 진동 힌트, `reserving` 긴급 갱신 계약
 - [x] 상태 전이 알림의 실제 후보 열차·운행일·출도착시각·좌석등급·인원과 예약 단계 구조화, 근거 없는 후보 추정 금지
 - [x] Android·Apple 공통 foreground 8초 상단 간략 알림과 비차단 접힘·펼침 동작
+- [x] foreground 미리보기 X와 카드·그룹 닫기의 실제 알림 제거, 같은 origin 재접속의 동일·과거 sticky revision 억제와 새 revision 허용
 - [x] 재접속 시 canonical 예매 진행·결제·인증 상태 복원과 진행 카드의 결과 revision 전 유지
+- [x] terminal SSE 유실과 동일 `WATCHING` 상태에서도 완료된 canonical attempt로 진행 카드를 결과로 교체하고, 신규 SSE는 outbox tail에서 시작하는 복구 계약
 - [x] SSE 진행 시각과 미래 REST 관측·다른 attempt 혼합 방지, 역순 단계 fail-closed 처리
 - [x] 실제 좌석 감지→예매 시작 시각만 사용하는 대기시간과 감지시각 누락 시 합성 0초 금지, 공식 확인 재투영 뒤에도 provider 단계 시각 보존·이전 단계 대비·전체 처리시간 회고 표시
 - [x] KORAIL 실제 브라우저 단계의 인증된 NDJSON 진행 스트림, 단계별 durable outbox·누적 SSE 갱신, 최종 결과 우선과 stream 불확실 종료의 무재전송·`UNKNOWN` 처리
+- [x] KORAIL 예약 click 성공 뒤에만 요청 완료 단계를 기록하고, 비밀값 없는 stream terminal·공식 확인 결과 로그로 불확실 분기를 사후 구분
+- [x] `UNKNOWN`의 최초 공식 확인 뒤 최소 30초 reconciliation에서도 대상 부재를 확인하고 새 공식 `AVAILABLE`·`LIMITED` 관측 뒤 단 한 번만 복구하는 DB episode fence
+- [x] 2026년 8월 13일 240편 운영 사례에서 새 배포 뒤 복구 episode 1회만 실행, `action_required/official_action_required + NOT_FOUND` 구조화 로그와 3차 시도 차단 확인
+- [x] KORAIL `official_action_required` 대화상자의 공식 번들 기반 닫힌 유형 fixture, 기본 허용 목록의 정확한 단일 `확인`과 명시적 운영 동의가 필요한 공식 구조 단일 `확인`·정확한 예약 `이용안내/네`·지연승낙 `네`의 예매 전후 단계·유형별 1회 처리와 최신 화면 재판정, 비활성 버튼·기존예약 선택·다중·구조불명 대화상자 무클릭 및 비밀값 없는 유형 로그
+- [ ] KORAIL 지연동의·기존예약 선택·미확인 dialog의 닫힌 유형을 provider-neutral attempt/API에 보존하고 유형별 사용자 안내로 표시
 - [x] 예매 진행 카드의 확인된 단계만 실시간 표시, progressed 이벤트의 전체 대기 재조회 생략, 활성 spinner 반복과 reduced-motion 정지
 - [x] provider·알림 worker 중단과 독립된 전용 maintenance stale recovery, 표준 수동 확인 result, 새로고침·동일 상태 갱신의 누적 단계·실제 후보·만료 상태 복원, terminal 이후 늦은 progress 차단
 - [x] iOS·iPadOS 홈 화면 PWA의 사용자 행동 안에서 시작하는 Web Push 권한 요청 계약
@@ -52,6 +64,10 @@
 - [x] PostgreSQL·Redis·Celery·FastAPI 기반 백엔드
 - [x] Docker Compose 실행과 health check
 - [x] `.env.example` 기반 KORAIL·SRT 좌석 조회·감시 기본 활성화, 예약 gate 분리, 300초 호출 제한·60초 보호 cooldown과 숫자형 설정 범위 문서화
+- [x] SRT 공식 접속 대기 진입·통과와 caller timeout 뒤 provider 종료를 구분하고, KORAIL 실제 조회 시작·성공·보호·호출 제한·source 실패를 분류하는 secret-free 구조화 로그
+- [x] 2026년 8월 13일 KORAIL 정기점검 중 `source_unavailable` 관측을 좌석 발견으로 오인하지 않고 01:30~02:17 KST 신규 예약 시도 0건으로 닫은 fail-closed 운영 확인
+- [x] KORAIL `rejectservice_job.html`·서비스 중단 HTML을 내부 전용 상태로 분류하고 Pydoll·Playwright·HTTP replay, 서로 다른 queued query·이전 좌석 cache와 API Redis hold까지 provider-wide cooldown으로 차단하는 fixture·경쟁조건 회귀 및 experimental profile 재배포
+- [ ] KORAIL 점검 종료와 기존 cooldown 해제 뒤 읽기 조회 1회에서 fresh `official_provider` 관측·성공 lifecycle·신규 예약 시도 0건 확인
 - [x] KORAIL Chromium 이미지의 `linux/amd64`·`linux/arm64`별 Chrome 패키지 선택과 미지원 아키텍처 fail-fast 빌드 계약
 - [x] OCI ARM64 네이티브 환경의 KORAIL Chromium 이미지 빌드와 외부 요청 없는 151개 fixture 검증
 - [x] OCI ARM64 첫 전체 배포의 전체 이미지 빌드·migration 성공과 seccomp 사용자 네임스페이스 거부에 따른 adapter readiness 실패 확인
@@ -74,7 +90,7 @@
 - [x] KORAIL Pydoll 시간 picker window·disabled·선택 완료 순수 상태 policy owner 분리와 browser private alias·pickle 보존
 - [x] KORAIL Pydoll visible element 수집·live DOM control 상태 owner 분리와 browser alias·pickle·late wrapper 보존
 - [x] KORAIL Pydoll current-tab value/text·exact/visible/dialog polling DOM interaction owner 분리와 secret-free 실패 로그·wrapper·pickle 보존
-- [ ] KORAIL Pydoll 알 수 없는 `aria-disabled` 값을 enabled로 해석하지 않도록 fail-closed 정책 보강
+- [x] KORAIL Pydoll 알 수 없는 `aria-disabled` 값을 enabled로 해석하지 않는 fail-closed 판정과 예약 dialog 이중 차단
 - [x] KORAIL Pydoll 시간 carousel mouse/CDP·keyboard input owner 분리와 browser wrapper·pickle·현재 tab 조회 보존
 - [x] KORAIL Pydoll 시간 carousel candidate·window 안정화·animation·bounded diagnostic observation owner 분리와 wrapper·pickle 보존
 - [x] KORAIL Pydoll 날짜·시간 선택 commit readback owner 분리와 exact marker·timeout·wrapper·pickle 보존
@@ -151,7 +167,12 @@
 - [x] 코레일+ `view=ticket`의 `나의 티켓` 오인계를 분리하고 `view=bookedTicket`이 `예약 승차권 조회 · 취소` 화면을 여는지 API 36에서 확인
 - [ ] 실제 결제 직전 예약이 있는 상태에서 코레일+ `bookedTicket` 첫 화면에 해당 예약이 표시되는지 확인
 - [ ] 실제 KORAIL·SRT 결제 대기 예약에서 레일웨잇의 호차·좌석번호가 공식 예약 내역과 일치하는지 확인
+- [x] 실제 로그인된 KORAIL `/ticket/myticket/list`에서 일반 승차권 수·여정·객실·호차·좌석·받은 승차권 DOM selector를 민감정보 원문 수집 없이 확인
+- [ ] 실제 KORAIL 결제·발권 1건에서 결제완료 전이와 결제 필요 카드 자동 종료, 승차권번호·PNR·QR 비수집을 끝까지 확인
+- [ ] 구 판정기로 재확인 한도를 소진했거나 이미 `WATCHING`으로 복귀한 KORAIL 결제 건을 fresh 발권 근거가 있을 때만 1회 보정하는 잠금·후속 예약 차단·멱등 전이 경로
+- [ ] 실제 SRT 결제 1건에서 유일 exact paid 예약이 결제완료로 전이되고 결제 필요 카드가 자동 종료되는지 확인
 - [ ] 실제 KORAIL·SRT 결제보류 종료 건에서 사용자 확인 재시작이 공식 좌석 재관측 뒤 한 번만 예매하고, 중복 클릭·매진 관측에서는 호출하지 않는지 확인
+- [ ] 실제 KORAIL 예매의 자연 재발에서 기본 허용 목록의 `이용안내/확인`·`안내메세지/확인`과 전역 운영 동의를 켠 공식 구조 단일 `확인`·정확한 `이용안내/네`·지연승낙 `네`를 예매 전후 단계·유형별 한 번만 처리하고 결제 상세 또는 공식 목록 결과로 닫히는지, 동의를 끈 경우의 추가 유형과 비활성 버튼·기존예약 선택·다중·구조불명 대화상자에서는 자동 동작하지 않는지 확인
 - [ ] 실제 KORAIL 계정에서 보호 응답 뒤 900초 backoff 동안 로그인·좌석 관측 provider 요청이 0건이고, 단일 인증 복구 성공 뒤 감시가 자동 재개되는지 확인
 - [x] SRT 2.0.41 매니페스트의 `srapp://main` BROWSABLE resolver와 실제 승차권 예매 홈 확인
 - [x] SRT 2.0.41 설치 APK의 고정 문자열 extra `btnNo=2` 처리와 실제 `승차권 확인`·비로그인 안내 화면 확인
@@ -170,6 +191,7 @@
 - [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
+- [ ] 실제 SRT 혼잡 시간대에 접속 대기 진입→통과→조회 재개 또는 caller timeout→late 종료 로그 순서와 비밀값 미노출 확인
 - [x] Playwright v1.55.0 Chromium seccomp 프로필과 최소 `SYS_CHROOT` capability를 KORAIL adapter에만 적용하고 `pwuser`·읽기 전용 루트·`cap_drop: ALL`·`no-new-privileges`를 보존한 재배포 확인
 - [x] OCI ARM64 네이티브 환경에서 KORAIL sidecar `/readyz`와 보호 응답 뒤 HTTP 423 cooldown·fail-closed 동작 확인
 - [x] OCI ARM64 네이티브 환경의 Pydoll GUI/non-headless 1회 읽기 조회에서 서울→부산 열차 13개와 좌석 상태 판독, page·desktop 캡처 확인

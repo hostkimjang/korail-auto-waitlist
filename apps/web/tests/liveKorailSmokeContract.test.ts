@@ -89,6 +89,19 @@ describe("KORAIL live smoke contract", () => {
       cause: "provider_access_restricted",
       retryAfterSeconds: 13,
     });
+    expect(parseLiveKorailPreflight([
+      {
+        provider: "korail",
+        source: "korail_browser",
+        state: "cooldown",
+        cause: "source_unavailable",
+        retry_after_seconds: 300,
+      },
+    ])).toEqual({
+      state: "cooldown",
+      cause: "source_unavailable",
+      retryAfterSeconds: 300,
+    });
     expect(() => parseLiveKorailPreflight([])).toThrow("invalid_status_response");
     expect(() => parseLiveKorailPreflight([
       {

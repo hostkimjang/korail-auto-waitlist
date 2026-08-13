@@ -484,7 +484,7 @@ test("KORAIL 공식 조회 제한 결과는 두 좌석을 미확인으로 유지
   await expect(restricted.getByRole("button")).toHaveCount(0);
   await expect(page.getByText("공식 좌석 조회가 제한되었습니다", { exact: true })).toBeVisible();
   await expect(page.getByText(
-    "보호 대기 시간 동안 서버는 운영사에 다시 요청하지 않습니다. 좌석은 미확인 상태로 유지되며 예매·대기 행동을 제공하지 않습니다.",
+    "조회 대기 시간 동안 서버는 운영사에 다시 요청하지 않습니다. 좌석은 미확인 상태로 유지되며 예매·대기 행동을 제공하지 않습니다.",
   )).toBeVisible();
   await expect(page.getByRole("button", { name: "서버에서 좌석 상태 다시 조회" })).toHaveCount(0);
 });

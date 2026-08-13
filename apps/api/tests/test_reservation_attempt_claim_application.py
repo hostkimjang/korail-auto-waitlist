@@ -321,6 +321,86 @@ async def test_claim_rejects_same_availability_retry_even_if_caller_marks_it_aut
         assert candidate.state == "seat_found"
 
 
+async def test_claim_revalidates_reconciled_unknown_retry_and_consumes_it_once(
+    db_engine,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    confirmed_at = datetime.now(UTC)
+    async with factory() as session:
+        watch = make_watch()
+        candidate = make_candidate()
+        watch.candidates.append(candidate)
+        session.add(watch)
+        await session.flush()
+        previous = ReservationAttempt(
+            candidate_id=candidate.id,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key="confirmed-absent-unknown:first",
+            outcome=ReservationOutcome.UNKNOWN,
+            confirmation_outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            confirmation_source="srtrain-reservation-list",
+            confirmation_observed_at=confirmed_at,
+            last_reconciled_at=confirmed_at,
+            reconciliation_attempt_count=1,
+        )
+        non_official = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.AVAILABLE,
+            source="authorized-provider",
+            observed_at=confirmed_at + timedelta(seconds=1),
+            fresh_until=confirmed_at + timedelta(minutes=1),
+        )
+        session.add_all([previous, non_official])
+        await session.flush()
+        episode_key = f"confirmed-absent-retry:{previous.id}"
+
+        blocked, created = await begin_reservation_attempt(
+            session,
+            watch,
+            candidate,
+            "confirmed-absent-unknown:blocked",
+            episode_key=episode_key,
+            retry_authorized=True,
+        )
+        assert blocked is previous
+        assert created is False
+
+        session.add(
+            SeatObservation(
+                candidate=candidate,
+                status=SeatObservationStatus.LIMITED,
+                source="srtrain-2.6.7-accountless",
+                observed_at=confirmed_at + timedelta(seconds=2),
+                fresh_until=confirmed_at + timedelta(minutes=1),
+            )
+        )
+        await session.flush()
+
+        retry, created = await begin_reservation_attempt(
+            session,
+            watch,
+            candidate,
+            "confirmed-absent-unknown:retry",
+            episode_key=episode_key,
+            retry_authorized=True,
+        )
+        replayed, replay_created = await begin_reservation_attempt(
+            session,
+            watch,
+            candidate,
+            "confirmed-absent-unknown:replay",
+            episode_key=episode_key,
+            retry_authorized=True,
+        )
+
+        assert created is True
+        assert retry.attempt_sequence == 2
+        assert retry.episode_key == episode_key
+        assert replayed is retry
+        assert replay_created is False
+
+
 async def test_services_wrapper_assembles_dependencies_from_current_module_globals(
     monkeypatch,
 ) -> None:

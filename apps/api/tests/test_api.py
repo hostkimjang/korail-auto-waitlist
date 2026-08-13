@@ -1279,6 +1279,51 @@ async def test_seat_status_source_status_exposes_only_safe_cooldown_metadata(app
     }
 
 
+async def test_seat_status_source_status_exposes_korail_outage_as_source_unavailable(
+    app,
+    client,
+):
+    from rail_waitlist.seat_status_cooldown import (
+        KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+        MemoryCooldownStore,
+    )
+
+    cooldown_store = MemoryCooldownStore()
+    await cooldown_store.set(
+        KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+        "source_unavailable",
+        300,
+    )
+    app.state.seat_status_cooldown_store = cooldown_store
+
+    response = await client.get("/api/v1/seat-status/status")
+
+    assert response.status_code == 200
+    korail = response.json()[0]
+    assert korail["state"] == "cooldown"
+    assert korail["cause"] == "source_unavailable"
+    assert 0 < korail["retry_after_seconds"] <= 300
+
+
+async def test_seat_status_source_status_uses_the_longest_active_korail_hold(app, client):
+    from rail_waitlist.seat_status_cooldown import (
+        KORAIL_BROWSER_COOLDOWN_KEY,
+        KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+        MemoryCooldownStore,
+    )
+
+    cooldown_store = MemoryCooldownStore()
+    await cooldown_store.set(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY, "source_unavailable", 120)
+    await cooldown_store.set(KORAIL_BROWSER_COOLDOWN_KEY, "provider_access_restricted", 300)
+    app.state.seat_status_cooldown_store = cooldown_store
+
+    response = await client.get("/api/v1/seat-status/status")
+
+    korail = response.json()[0]
+    assert korail["cause"] == "provider_access_restricted"
+    assert 120 < korail["retry_after_seconds"] <= 300
+
+
 async def test_timetable_rejects_invalid_passenger_count(client):
     response = await client.get(
         "/api/v1/timetables",

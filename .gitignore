@@ -23,6 +23,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .test-tmp/
+.test-tmp-*/
 .tmp-pytest-*/
 .idea/
 .vscode/

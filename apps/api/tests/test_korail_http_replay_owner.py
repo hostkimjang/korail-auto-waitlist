@@ -29,6 +29,7 @@ PUBLIC_SYMBOLS = {
     "HttpReplayLeaseInvalid",
     "HttpReplayPlan",
     "HttpReplayProtectionDetected",
+    "HttpReplayProviderUnavailable",
     "HttpReplayRateLimited",
     "HttpReplayRequest",
     "HttpReplaySessionInvalid",
@@ -41,6 +42,7 @@ PUBLIC_SYMBOLS = {
     "KorailHttpReplayLeaseInvalid",
     "KorailHttpReplayPlan",
     "KorailHttpReplayProtectionDetected",
+    "KorailHttpReplayProviderUnavailable",
     "KorailHttpReplayRateLimited",
     "KorailHttpReplaySessionInvalid",
     "KorailHttpReplaySourceUnavailable",
@@ -174,7 +176,7 @@ def test_legacy_http_replay_is_an_assignment_only_exact_facade() -> None:
 
     assert definitions == set()
     assert imports == {("korail_sidecar", 1, "http_replay", "_owner")}
-    assert len(PUBLIC_SYMBOLS) == 60
+    assert len(PUBLIC_SYMBOLS) == 62
     assert len(PRIVATE_SYMBOLS) == 34
     assert set(assignments) == PUBLIC_SYMBOLS | PRIVATE_SYMBOLS
     assert {name for name in vars(legacy) if not name.startswith("_")} == PUBLIC_SYMBOLS

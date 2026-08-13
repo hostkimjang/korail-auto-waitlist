@@ -37,14 +37,10 @@ vi.mock("../src/api/events", async (importOriginal) => {
 });
 
 vi.mock("../src/api/uiPreferences", () => ({
-  DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS: 5,
   DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS: 5,
-  MIN_TIMETABLE_REFRESH_INTERVAL_SECONDS: 1,
-  MAX_TIMETABLE_REFRESH_INTERVAL_SECONDS: 300,
   MIN_SEAT_OBSERVATION_INTERVAL_SECONDS: 1,
   MAX_SEAT_OBSERVATION_INTERVAL_SECONDS: 600,
   fetchUiPreferences: vi.fn().mockResolvedValue({
-    timetableRefreshIntervalSeconds: 5,
     seatObservationIntervalSeconds: 5,
     updatedAt: "2026-07-31T00:00:00Z",
   }),
@@ -62,6 +58,7 @@ import { App } from "../src/App";
 describe("App live data synchronization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     liveApi.getAuthStatus.mockResolvedValue({
       configured: true,
       authenticated: true,

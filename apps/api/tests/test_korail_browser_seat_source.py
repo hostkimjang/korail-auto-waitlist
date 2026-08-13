@@ -36,7 +36,10 @@ from rail_waitlist.schemas import (
     SeatObservationRequest,
     TimetableItem,
 )
-from rail_waitlist.seat_status_cooldown import MemoryCooldownStore
+from rail_waitlist.seat_status_cooldown import (
+    KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+    MemoryCooldownStore,
+)
 
 KOREA = ZoneInfo("Asia/Seoul")
 
@@ -674,6 +677,117 @@ async def test_empty_today_failure_does_not_block_a_different_service_date() -> 
         "sold_out",
     }
     assert await cooldown.get("korail-browser") is None
+
+
+async def test_explicit_provider_outage_defers_different_service_dates_globally() -> None:
+    transport = FakeTransport(
+        error=_AdapterFailure(
+            "source_unavailable",
+            cooldown_scope="provider",
+            retry_after_seconds=300,
+        )
+    )
+    cooldown = MemoryCooldownStore(lambda: 100.0)
+    seat_source = source(transport, cooldown_store=cooldown)
+
+    first = await seat_source.overlay([timetable_item()], **overlay_arguments())
+    transport.error = None
+    tomorrow_item = timetable_item().model_copy(
+        update={
+            "departure_at": datetime(2026, 8, 4, 15, 45, tzinfo=KOREA),
+            "arrival_at": datetime(2026, 8, 4, 18, 30, tzinfo=KOREA),
+        }
+    )
+    second = await seat_source.overlay(
+        [tomorrow_item],
+        **{
+            **overlay_arguments(),
+            "departure_from": datetime(2026, 8, 4, 14, tzinfo=KOREA),
+            "departure_to": datetime(2026, 8, 4, 18, tzinfo=KOREA),
+        },
+    )
+
+    active = await cooldown.get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
+    assert active is not None
+    assert (active.reason, active.retry_after_seconds) == ("source_unavailable", 300)
+    assert await seat_source.observation_deferred_until() is not None
+    assert seat_source._query_cooldowns == {}
+    assert transport.calls == 1
+    assert {seat.provenance.reason for item in (*first, *second) for seat in item.seat_classes} == {
+        "source_unavailable"
+    }
+
+
+async def test_explicit_provider_outage_preempts_a_cached_different_query() -> None:
+    transport = FakeTransport()
+    cooldown = MemoryCooldownStore(lambda: 100.0)
+    seat_source = source(transport, cooldown_store=cooldown)
+    cached_request = BrowserSeatSearchRequest(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 3),
+        departure_from=time(0),
+        departure_to=time(18),
+    )
+    await seat_source._search(cached_request)
+    transport.error = _AdapterFailure(
+        "source_unavailable",
+        cooldown_scope="provider",
+        retry_after_seconds=300,
+    )
+    outage_request = cached_request.model_copy(update={"travel_date": date(2026, 8, 4)})
+
+    with pytest.raises(RuntimeError):
+        await seat_source._search(outage_request)
+    with pytest.raises(RuntimeError):
+        await seat_source._search(cached_request)
+
+    assert transport.calls == 2
+    assert seat_source._query_cooldowns == {}
+
+
+async def test_provider_outage_stops_a_different_query_waiting_for_sidecar() -> None:
+    class BlockingOutageTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+            self.calls += 1
+            self.requests.append(request)
+            self.started.set()
+            await self.release.wait()
+            raise _AdapterFailure(
+                "source_unavailable",
+                cooldown_scope="provider",
+                retry_after_seconds=300,
+            )
+
+    transport = BlockingOutageTransport()
+    cooldown = MemoryCooldownStore(lambda: 100.0)
+    seat_source = source(transport, cooldown_store=cooldown)
+    first_request = BrowserSeatSearchRequest(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 3),
+        departure_from=time(0),
+        departure_to=time(18),
+    )
+    second_request = first_request.model_copy(update={"travel_date": date(2026, 8, 4)})
+    first = asyncio.create_task(seat_source._search(first_request))
+    await transport.started.wait()
+    second = asyncio.create_task(seat_source._search(second_request))
+    await asyncio.sleep(0)
+    transport.release.set()
+
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert all(isinstance(item, RuntimeError) for item in results)
+    assert transport.calls == 1
+    active = await cooldown.get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
+    assert active is not None
+    assert active.retry_after_seconds == 300
 
 
 async def test_legacy_shared_source_failure_does_not_block_a_new_query() -> None:

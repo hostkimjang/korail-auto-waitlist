@@ -23,6 +23,7 @@ KorailReservationProgressStageValue = Literal[
     "seat_selected",
     "reservation_requested",
 ]
+KorailConfirmationPurposeValue = Literal["initial", "payment_follow_up"]
 KorailLoginVerificationOutcomeValue = Literal[
     "authenticated",
     "auth_required",
@@ -68,6 +69,11 @@ class KorailSessionStateResult(_InternalModel):
     locally_reusable: bool
 
 
+class KorailReservedSeat(_InternalModel):
+    car_number: str = Field(min_length=1, max_length=10, pattern=r"^[0-9]+$")
+    seat_number: str = Field(min_length=2, max_length=10, pattern=r"^[0-9]+[A-D]$")
+
+
 class KorailReservationConfirmationRequest(_InternalModel):
     attempt_id: str = Field(min_length=1, max_length=100)
     candidate_id: str = Field(min_length=1, max_length=100)
@@ -79,6 +85,8 @@ class KorailReservationConfirmationRequest(_InternalModel):
     seat_class: Literal["standard", "first"]
     passenger_count: Literal[1]
     credential_version: int = Field(ge=1)
+    purpose: KorailConfirmationPurposeValue = "initial"
+    reserved_seats: list[KorailReservedSeat] = Field(default_factory=list, max_length=1)
 
     @field_validator("departure_at", "arrival_at")
     @classmethod
@@ -93,18 +101,25 @@ class KorailReservationConfirmationRequest(_InternalModel):
             raise ValueError("origin and destination must differ")
         if self.arrival_at is not None and self.arrival_at <= self.departure_at:
             raise ValueError("arrival_at must be later than departure_at")
+        if self.purpose == "initial" and self.reserved_seats:
+            raise ValueError("only payment follow-up may carry reserved seats")
         return self
 
 
 class KorailReservationConfirmationResult(_InternalModel):
     outcome: Literal[
         "confirmed_payment_required",
+        "confirmed_paid",
         "not_found",
         "auth_required",
         "provider_blocked",
         "inconclusive",
     ]
-    source: Literal["korail-same-session-detail", "korail-reservation-list"]
+    source: Literal[
+        "korail-same-session-detail",
+        "korail-reservation-list",
+        "korail-issued-ticket-list",
+    ]
     observed_at: datetime
     payment_deadline: datetime | None = None
     official_handoff_url: str | None = None
@@ -123,6 +138,8 @@ class KorailReservationConfirmationResult(_InternalModel):
             raise ValueError("only confirmed payment holds may contain a handoff URL")
         if not confirmed and self.payment_deadline is not None:
             raise ValueError("only confirmed payment holds may contain a payment deadline")
+        if self.outcome == "confirmed_paid" and self.source != "korail-issued-ticket-list":
+            raise ValueError("confirmed paid requires issued-ticket evidence")
         return self
 
 
@@ -162,11 +179,6 @@ class KorailReserveOnceRequest(_InternalModel):
         if self.departure_time == self.arrival_time:
             raise ValueError("departure_time and arrival_time must differ")
         return self
-
-
-class KorailReservedSeat(_InternalModel):
-    car_number: str = Field(min_length=1, max_length=10, pattern=r"^[0-9]+$")
-    seat_number: str = Field(min_length=2, max_length=10, pattern=r"^[0-9]+[A-D]$")
 
 
 class KorailReserveOnceResult(_InternalModel):

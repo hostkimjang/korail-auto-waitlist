@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac as _hmac
+import logging as _logging
 import os as _os
 import time as _time
 from collections.abc import Callable as _Callable
@@ -69,6 +70,7 @@ SrtTimetableSearchResult = _contracts.SrtTimetableSearchResult
 SrtTimetableTrain = _contracts.SrtTimetableTrain
 
 configure_service_file_logging()
+_file_logging.configure_service_console_logging(_logging.getLogger("rail_waitlist"))
 
 
 def _bounded_number(name: str, default: float, minimum: float, maximum: float) -> float:

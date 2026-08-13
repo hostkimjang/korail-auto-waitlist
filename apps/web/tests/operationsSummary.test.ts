@@ -52,14 +52,68 @@ export function operationsPayload() {
       updated_at: "2026-07-29T03:25:00Z",
       manual_resume_required: false,
     }],
-    recent_entries: [{
-      occurred_at: "2026-07-29T03:29:00Z",
-      kind: "notification_delivery",
-      level: "info",
-      status: "sent",
-      error_category: null,
-      provider: null,
-    }],
+    recent_entries: [
+      {
+        occurred_at: "2026-07-29T03:29:00Z",
+        kind: "notification_delivery",
+        level: "info",
+        status: "sent",
+        error_category: null,
+        provider: null,
+        train_number: null,
+        departure_at: null,
+        seat_class: null,
+        reason_code: null,
+      },
+      {
+        occurred_at: "2026-07-29T03:28:00Z",
+        kind: "reservation_attempt",
+        level: "info",
+        status: "not_available",
+        error_category: null,
+        provider: "korail",
+        train_number: "123",
+        departure_at: "2026-08-15T04:57:00Z",
+        seat_class: "standard",
+        reason_code: "reservation_not_available",
+      },
+      {
+        occurred_at: "2026-07-29T03:27:00Z",
+        kind: "watch_transition",
+        level: "info",
+        status: "completed",
+        error_category: null,
+        provider: "srt",
+        train_number: "307",
+        departure_at: "2026-08-15T01:58:00Z",
+        seat_class: "first",
+        reason_code: "payment_completed",
+      },
+      {
+        occurred_at: "2026-07-29T03:26:00Z",
+        kind: "seat_observation",
+        level: "error",
+        status: "error",
+        error_category: "timeout",
+        provider: "korail",
+        train_number: "382",
+        departure_at: "2026-09-04T00:35:00Z",
+        seat_class: "first",
+        reason_code: null,
+      },
+      {
+        occurred_at: "2026-07-29T03:25:00Z",
+        kind: "reservation_attempt",
+        level: "warning",
+        status: "auth_required",
+        error_category: null,
+        provider: "srt",
+        train_number: "374",
+        departure_at: "2026-08-13T13:52:00Z",
+        seat_class: "standard",
+        reason_code: "reservation_auth_required",
+      },
+    ],
     limitations: [
       "http_and_process_errors_are_not_durably_recorded",
       "worker_and_scheduler_health_require_durable_heartbeats",
@@ -88,6 +142,27 @@ describe("operations summary API contract", () => {
     expect(result.currentCounts.watchesByStatus).toEqual([{ status: "watching", count: 2 }]);
     expect(result.sourceFreshness[0]).toMatchObject({ source: "notification_delivery", status: "fresh" });
     expect(result.recentEntries[0]).toMatchObject({ kind: "notification_delivery", level: "info" });
+    expect(result.recentEntries[1]).toMatchObject({
+      trainNumber: "123",
+      departureAt: "2026-08-15T04:57:00Z",
+      seatClass: "standard",
+      reasonCode: "reservation_not_available",
+    });
+    expect(result.recentEntries[2]).toMatchObject({
+      status: "completed",
+      trainNumber: "307",
+      seatClass: "first",
+      reasonCode: "payment_completed",
+    });
+    expect(result.recentEntries[3]).toMatchObject({
+      kind: "seat_observation",
+      status: "error",
+      errorCategory: "timeout",
+    });
+    expect(result.recentEntries[4]).toMatchObject({
+      status: "auth_required",
+      reasonCode: "reservation_auth_required",
+    });
   });
 
   it("fails closed for unknown enums and malformed timestamps", () => {
@@ -110,7 +185,11 @@ describe("operations summary API contract", () => {
       level: "debug",
       status: "sent",
       error_category: null,
-      provider: null,
+      provider: "rogue-provider",
+      train_number: "contains\u0000control",
+      departure_at: "2026-08-15T04:57:00",
+      seat_class: "vip",
+      reason_code: "raw_provider_reason",
     };
 
     const result = mapOperationsSummary(payload);
@@ -118,6 +197,13 @@ describe("operations summary API contract", () => {
     expect(result.services[0]).toMatchObject({ status: "unknown", observedAt: null });
     expect(result.providerCircuits[0]?.state).toBe("unknown");
     expect(result.recentEntries[0]?.level).toBe("warning");
+    expect(result.recentEntries[0]).toMatchObject({
+      trainNumber: null,
+      departureAt: null,
+      seatClass: null,
+      reasonCode: null,
+      provider: null,
+    });
     expect(result.isPartial).toBe(true);
   });
 

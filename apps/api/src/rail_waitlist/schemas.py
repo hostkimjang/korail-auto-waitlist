@@ -66,6 +66,7 @@ OperationCurrentCounts = operation_summary_schemas.OperationCurrentCounts
 OperationEntry = operation_summary_schemas.OperationEntry
 OperationEntryKind = operation_summary_schemas.OperationEntryKind
 OperationEntryLevel = operation_summary_schemas.OperationEntryLevel
+OperationEntryReasonCode = operation_summary_schemas.OperationEntryReasonCode
 OperationFreshness = operation_summary_schemas.OperationFreshness
 OperationProviderCircuit = operation_summary_schemas.OperationProviderCircuit
 OperationRate = operation_summary_schemas.OperationRate

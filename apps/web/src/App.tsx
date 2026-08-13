@@ -56,6 +56,7 @@ import {
   DEMO_CAPTURE_RESERVATION_LIFECYCLE,
   DEMO_MODE,
 } from "./shared/lib/runtimeConfig";
+import { LIVE_DATA_RECONCILIATION_INTERVAL_SECONDS } from "./shared/lib/liveDataSynchronization";
 import { OfficialHandoff } from "./features/official-handoff/OfficialHandoff";
 import type { WatchReadModel } from "./api/watches";
 import {
@@ -146,7 +147,7 @@ export function App(): ReactElement {
     authenticated: auth.authenticated,
     demo: auth.demo,
     initialWatches: initialWatchCollection,
-    pollIntervalSeconds: uiPreferences.timetableRefreshIntervalSeconds,
+    pollIntervalSeconds: LIVE_DATA_RECONCILIATION_INTERVAL_SECONDS,
     loadWatches: fetchWatches,
     snapshotOf: mapWatchLifecycleSnapshot,
     onAuthenticationExpired: markUnauthenticated,
@@ -291,7 +292,7 @@ export function App(): ReactElement {
         </>}
       >
         {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={async (watchId) => { await cancelWatchItem(watchId); }} onChangeReservationPolicy={changeWatchReservationPolicy} onManualReservationRearm={rearmReservation} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} watchMutationPendingIds={watchMutationPendingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
-        {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} refreshIntervalSeconds={uiPreferences.timetableRefreshIntervalSeconds} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
+        {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
         {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
         {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={onSettingsSectionChange} onLogout={signOut} initialSection={settingsInitialSection} />}
       </AppShell>

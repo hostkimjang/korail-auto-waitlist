@@ -525,6 +525,423 @@ async def test_session_recognizes_exact_payment_required_screen(
 
 
 @pytest.mark.asyncio
+async def test_session_acknowledges_exact_pre_request_information_then_reserves_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    dialog = FakeElement("이용안내 운행 관련 안내입니다. 확인")
+    title = FakeElement("이용안내")
+    message = FakeElement("운행 관련 안내입니다.")
+    acknowledge = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog] if acknowledge.clicks == 0 else []
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        if selector == "button.reservbtn":
+            return [reserve] if acknowledge.clicks == 1 else []
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if reserve.clicks == 0 or acknowledge.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        return PydollPageSnapshot(
+            "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reservation_clicked is True
+    assert seat.clicks == acknowledge.clicks == reserve.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_session_waits_for_pre_request_information_to_settle_before_reserving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    dialog = FakeElement("이용안내 운행 관련 안내입니다. 확인")
+    title = FakeElement("이용안내")
+    message = FakeElement("운행 관련 안내입니다.")
+    acknowledge = FakeElement("확인")
+    dialog_reads = [0]
+    reserve_queried_while_dialog_visible = [False]
+    monotonic = [10.0]
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            dialog_reads[0] += 1
+            return [dialog] if dialog_reads[0] <= 2 else []
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        if selector == "button.reservbtn":
+            if dialog_reads[0] <= 2:
+                reserve_queried_while_dialog_visible[0] = True
+            return [reserve]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if reserve.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        return PydollPageSnapshot(
+            "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    async def sleep(delay: float) -> None:
+        monotonic[0] += delay
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: monotonic[0])
+    monkeypatch.setattr(session._reservation_driver, "_sleep", sleep)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert reserve_queried_while_dialog_visible == [False]
+    assert seat.clicks == acknowledge.clicks == reserve.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_session_acknowledges_exact_post_request_notice_then_reads_fresh_payment_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    dialog = FakeElement("안내메세지 결제기한 안내입니다. 확인")
+    title = FakeElement("안내메세지")
+    message = FakeElement("결제기한 안내입니다.")
+    acknowledge = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog] if reserve.clicks == 1 and acknowledge.clicks == 0 else []
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if reserve.clicks == 0 or acknowledge.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        return PydollPageSnapshot(
+            "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reservation_clicked is True
+    assert seat.clicks == reserve.clicks == acknowledge.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_session_acknowledges_post_click_information_before_provider_request_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    dialog = FakeElement("이용안내 운행 관련 안내입니다. 확인")
+    title = FakeElement("이용안내")
+    message = FakeElement("운행 관련 안내입니다.")
+    acknowledge = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog] if reserve.clicks == 1 and acknowledge.clicks == 0 else []
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if reserve.clicks == 0 or acknowledge.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        return PydollPageSnapshot(
+            "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reservation_clicked is True
+    assert seat.clicks == reserve.clicks == acknowledge.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_session_accepts_delay_consent_then_reads_fresh_payment_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+        auto_handle_dialogs=True,
+    )
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    dialog = FakeElement("지연승낙 안내 지연배상 계속 진행하시겠습니까? 네 아니오")
+    title = FakeElement("지연승낙 안내")
+    message = FakeElement("지연배상을 하지 않습니다. 계속 진행하시겠습니까?")
+    decline = FakeElement("아니오")
+    proceed = FakeElement("네")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog] if reserve.clicks == 1 and proceed.clicks == 0 else []
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [decline, proceed]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if proceed.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        return PydollPageSnapshot(
+            "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reservation_clicked is True
+    assert seat.clicks == reserve.clicks == proceed.clicks == 1
+    assert decline.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_session_allows_information_then_result_notice_without_repeating_either(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    information_dialog = FakeElement("이용안내 운행 안내입니다. 확인")
+    information_title = FakeElement("이용안내")
+    information_message = FakeElement("운행 안내입니다.")
+    information_ack = FakeElement("확인")
+    result_dialog = FakeElement("안내메세지 결제기한 안내입니다. 확인")
+    result_title = FakeElement("안내메세지")
+    result_message = FakeElement("결제기한 안내입니다.")
+    result_ack = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            if reserve.clicks == 1 and information_ack.clicks == 0:
+                return [information_dialog]
+            if information_ack.clicks == 1 and result_ack.clicks == 0:
+                return [result_dialog]
+            return []
+        if selector == ".tit_wrap h1.tit" and scope is information_dialog:
+            return [information_title]
+        if selector == ".confirm_message" and scope is information_dialog:
+            return [information_message]
+        if selector == "button,a,[role='button']" and scope is information_dialog:
+            return [information_ack]
+        if selector == ".tit_wrap h1.tit" and scope is result_dialog:
+            return [result_title]
+        if selector == ".confirm_message" and scope is result_dialog:
+            return [result_message]
+        if selector == "button,a,[role='button']" and scope is result_dialog:
+            return [result_ack]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if result_ack.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        return PydollPageSnapshot(
+            "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reservation_clicked is True
+    assert seat.clicks == reserve.clicks == information_ack.clicks == result_ack.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_session_allows_one_information_notice_before_and_after_reservation_click(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    pre_dialog = FakeElement("이용안내 선택 안내입니다. 확인")
+    pre_title = FakeElement("이용안내")
+    pre_message = FakeElement("선택 안내입니다.")
+    pre_ack = FakeElement("확인")
+    post_dialog = FakeElement("이용안내 예약 전 안내입니다. 확인")
+    post_title = FakeElement("이용안내")
+    post_message = FakeElement("예약 전 안내입니다.")
+    post_ack = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve] if pre_ack.clicks == 1 else []
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            if pre_ack.clicks == 0:
+                return [pre_dialog]
+            if reserve.clicks == 1 and post_ack.clicks == 0:
+                return [post_dialog]
+            return []
+        if selector == ".tit_wrap h1.tit" and scope is pre_dialog:
+            return [pre_title]
+        if selector == ".confirm_message" and scope is pre_dialog:
+            return [pre_message]
+        if selector == "button,a,[role='button']" and scope is pre_dialog:
+            return [pre_ack]
+        if selector == ".tit_wrap h1.tit" and scope is post_dialog:
+            return [post_title]
+        if selector == ".confirm_message" and scope is post_dialog:
+            return [post_message]
+        if selector == "button,a,[role='button']" and scope is post_dialog:
+            return [post_ack]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if post_ack.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        return PydollPageSnapshot(
+            "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reservation_clicked is True
+    assert seat.clicks == reserve.clicks == pre_ack.clicks == post_ack.clicks == 1
+
+
+@pytest.mark.asyncio
 async def test_session_logs_in_place_after_seat_then_reserves_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -735,7 +1152,7 @@ async def test_session_fails_closed_when_in_place_login_loses_exact_selection(
 
 
 @pytest.mark.asyncio
-async def test_session_preserves_reservation_click_latch_when_click_raises(
+async def test_session_does_not_report_reservation_requested_when_click_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
@@ -769,12 +1186,18 @@ async def test_session_preserves_reservation_click_latch_when_click_raises(
         ),
     )
 
-    result = await session.reserve_once(reservation_request())
+    progress = []
+    result = await session.reserve_once(
+        reservation_request(),
+        on_progress=progress.append,
+    )
 
     assert result.outcome is KorailReservationOutcome.FAILED
     assert result.reason.startswith("reservation_result_unknown")
     assert result.seat_clicked is True
-    assert result.reservation_clicked is True
+    assert result.reservation_clicked is False
+    assert result.reservation_requested_at is None
+    assert [item.stage for item in progress] == ["target_rechecked", "seat_selected"]
     assert seat.clicks == reserve.clicks == 1
 
 
@@ -1483,7 +1906,7 @@ async def test_post_submit_auth_keeps_observing_login_url_until_exact_detail(
 
     assert detail is not None
     assert detail.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
-    assert [(seat.car_number, seat.seat_number) for seat in detail.reserved_seats] == [("4", "8A")]
+    assert detail.reserved_seats == ()
     assert official_session_probe.await_count == 2
 
 
@@ -1637,18 +2060,30 @@ async def test_has_exact_visible_awaits_live_element_text_without_async_generato
 
 
 @pytest.mark.asyncio
-async def test_terminal_probe_stops_at_delay_consent_without_clicking_controls(
+async def test_terminal_probe_accepts_exact_delay_consent_once_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
-    dialog = FakeElement("지연승낙 안내 계속 진행하시겠습니까")
+    session._reservation_driver._auto_handle_dialogs = True
+    dialog = FakeElement(
+        "지연승낙 안내 선택하신 열차는 지연 열차입니다. "
+        "지연배상을 하지 않습니다. 계속 진행하시겠습니까?"
+    )
+    title = FakeElement("지연승낙 안내")
+    message = FakeElement(
+        "선택하신 열차는 지연 열차입니다. 지연배상을 하지 않습니다. 계속 진행하시겠습니까?"
+    )
     decline = FakeElement("아니오")
     proceed = FakeElement("네")
 
     async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
         if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
             return [dialog]
-        if selector == "button,a" and scope is dialog:
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
             return [decline, proceed]
         return []
 
@@ -1665,11 +2100,802 @@ async def test_terminal_probe_stops_at_delay_consent_without_clicking_controls(
         ),
     )
 
-    result = await session._probe_reservation_terminal(reservation_request())
+    attempt = _ReservationAttemptState(reservation_clicked=True)
+    result = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert result is None
+    assert decline.clicks == 0
+    assert proceed.clicks == 1
+    assert attempt.post_dialog_action_followup_deadline is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "control_state",
+    [
+        SimpleNamespace(
+            enabled=False,
+            aria_disabled="false",
+            disabled_attribute=True,
+            read_error=False,
+        ),
+        SimpleNamespace(
+            enabled=False,
+            aria_disabled="read_error",
+            disabled_attribute=False,
+            read_error=True,
+        ),
+    ],
+    ids=("disabled", "unreadable"),
+)
+async def test_terminal_probe_never_clicks_unavailable_delay_consent_target(
+    monkeypatch: pytest.MonkeyPatch,
+    control_state: SimpleNamespace,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+        auto_handle_dialogs=True,
+    )
+    dialog = FakeElement("지연승낙 안내 지연배상 계속 진행하시겠습니까? 네 아니오")
+    title = FakeElement("지연승낙 안내")
+    message = FakeElement("지연배상을 하지 않습니다. 계속 진행하시겠습니까?")
+    decline = FakeElement("아니오")
+    proceed = FakeElement("네")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [decline, proceed]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "지연승낙 안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        session._reservation_driver,
+        "_read_control_state",
+        AsyncMock(return_value=control_state),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert result.reason == "official_dialog_action_target_unavailable"
+    assert decline.clicks == proceed.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_keeps_delay_consent_manual_when_not_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement(
+        "지연승낙 안내 선택하신 열차는 지연 열차입니다. "
+        "지연배상을 하지 않습니다. 계속 진행하시겠습니까?"
+    )
+    title = FakeElement("지연승낙 안내")
+    message = FakeElement(
+        "선택하신 열차는 지연 열차입니다. 지연배상을 하지 않습니다. 계속 진행하시겠습니까?"
+    )
+    decline = FakeElement("아니오")
+    proceed = FakeElement("네")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [proceed, decline]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "지연승낙 안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
 
     assert result is not None
     assert result.outcome is KorailReservationOutcome.CONSENT_REQUIRED
     assert decline.clicks == proceed.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_accepts_exact_post_request_information_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+        auto_handle_dialogs=True,
+    )
+    dialog = FakeElement("이용안내 운행 안내입니다. 계속 진행하시겠습니까? 네 아니오")
+    title = FakeElement("이용안내")
+    message = FakeElement("운행 안내입니다. 계속 진행하시겠습니까?")
+    decline = FakeElement("아니오")
+    proceed = FakeElement("네")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [decline, proceed]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "이용안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is None
+    assert decline.clicks == 0
+    assert proceed.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_never_retries_uncertain_delay_consent_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingConsent(FakeElement):
+        async def click(self) -> None:
+            self.clicks += 1
+            raise RuntimeError("opaque click failure")
+
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    session._reservation_driver._auto_handle_dialogs = True
+    dialog = FakeElement("지연승낙 안내 지연배상 계속 진행하시겠습니까? 네 아니오")
+    title = FakeElement("지연승낙 안내")
+    message = FakeElement("지연배상을 하지 않습니다. 계속 진행하시겠습니까?")
+    decline = FakeElement("아니오")
+    proceed = FailingConsent("네")
+    attempt = _ReservationAttemptState(reservation_clicked=True)
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [decline, proceed]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "지연승낙 안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    first = await session._probe_reservation_terminal(reservation_request(), attempt)
+    monotonic = session._reservation_driver._monotonic
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: monotonic() + 1.0)
+    second = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert first is not None
+    assert first.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert first.reason == "delay_consent_accept_result_unknown"
+    assert second is not None
+    assert second.reason == "delay_consent_persisted"
+    assert decline.clicks == 0
+    assert proceed.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_types_existing_reservation_choice_without_clicking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement("안내메세지 예약내역확인 다른여정예약")
+    title = FakeElement("안내메세지")
+    message = FakeElement("기존 예약을 확인해 주세요.")
+    history = FakeElement("예약내역확인")
+    another = FakeElement("다른여정예약")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [another, history]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "기존 예약 안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert result.reason == "existing_reservation_action_required"
+    assert history.clicks == another.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_dismisses_each_known_notice_phase_at_most_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement("안내메세지 서버 안내입니다. 확인")
+    title = FakeElement("안내메세지")
+    message = FakeElement("서버 안내입니다.")
+    acknowledge = FakeElement("확인")
+    attempt = _ReservationAttemptState(reservation_clicked=True)
+    monotonic = [10.0]
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: monotonic[0])
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "서버 안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    first = await session._probe_reservation_terminal(reservation_request(), attempt)
+    monotonic[0] = 10.5
+    second = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert first is None
+    assert second is not None
+    assert second.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert second.reason == "official_notice_persisted"
+    assert acknowledge.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_allows_a_dismissed_notice_to_settle_without_reclicking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement("안내메세지 서버 안내입니다. 확인")
+    title = FakeElement("안내메세지")
+    message = FakeElement("서버 안내입니다.")
+    acknowledge = FakeElement("확인")
+    attempt = _ReservationAttemptState(reservation_clicked=True)
+    monotonic = [10.0]
+    dialog_reads = [0]
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            dialog_reads[0] += 1
+            return [dialog] if dialog_reads[0] <= 2 else []
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: monotonic[0])
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            side_effect=(
+                PydollPageSnapshot(
+                    "서버 안내",
+                    (),
+                    url="https://www.korail.com/ticket/search/list",
+                ),
+                PydollPageSnapshot(
+                    "서버 안내",
+                    (),
+                    url="https://www.korail.com/ticket/search/list",
+                ),
+                PydollPageSnapshot(
+                    "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+                    (),
+                    url="https://www.korail.com/ticket/reservation/detail",
+                ),
+            )
+        ),
+    )
+
+    dismissed = await session._probe_reservation_terminal(reservation_request(), attempt)
+    monotonic[0] = 10.1
+    settling = await session._probe_reservation_terminal(reservation_request(), attempt)
+    monotonic[0] = 10.2
+    terminal = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert dismissed is None
+    assert settling is None
+    assert terminal is not None
+    assert terminal.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert acknowledge.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_bounds_fresh_recheck_after_post_request_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 25_000, True)
+    dialog = FakeElement("안내메세지 서버 안내입니다. 확인")
+    title = FakeElement("안내메세지")
+    message = FakeElement("서버 안내입니다.")
+    acknowledge = FakeElement("확인")
+    attempt = _ReservationAttemptState(reservation_clicked=True)
+    monotonic = [10.0]
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog] if acknowledge.clicks == 0 else []
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: monotonic[0])
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    dismissed = await session._probe_reservation_terminal(reservation_request(), attempt)
+    monotonic[0] = 34.9
+    settling = await session._probe_reservation_terminal(reservation_request(), attempt)
+    monotonic[0] = 35.0
+    unresolved = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert dismissed is None
+    assert settling is None
+    assert unresolved is not None
+    assert unresolved.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert unresolved.reason == "official_post_dialog_action_unresolved"
+    assert acknowledge.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_never_retries_an_uncertain_notice_dismissal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingAcknowledgement(FakeElement):
+        async def click(self) -> None:
+            self.clicks += 1
+            raise RuntimeError("opaque click failure")
+
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement("안내메세지 서버 안내입니다. 확인")
+    title = FakeElement("안내메세지")
+    message = FakeElement("서버 안내입니다.")
+    acknowledge = FailingAcknowledgement("확인")
+    attempt = _ReservationAttemptState(reservation_clicked=True)
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "서버 안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    first = await session._probe_reservation_terminal(reservation_request(), attempt)
+    monotonic = session._reservation_driver._monotonic
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: monotonic() + 1.0)
+    second = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert first is not None
+    assert first.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert first.reason == "official_notice_dismiss_result_unknown"
+    assert second is not None
+    assert second.reason == "official_notice_persisted"
+    assert acknowledge.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_never_dismisses_unknown_single_ack_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement("정책 확인 별도 조치가 필요합니다. 확인")
+    title = FakeElement("정책 확인")
+    message = FakeElement("별도 조치가 필요합니다.")
+    acknowledge = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "정책 확인",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(reservation_request())
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert result.reason == "official_action_required"
+    assert acknowledge.clicks == 0
+    assert (
+        "KORAIL reservation dialog phase=pre_request kind=unknown "
+        "control_shape=single_acknowledgement dialog_count=one action=none"
+    ) in caplog.text
+    assert "정책 확인" not in caplog.text
+    assert "별도 조치가 필요합니다" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_dismisses_structured_single_ack_with_auto_action_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+        auto_handle_dialogs=True,
+    )
+    dialog = FakeElement("운영 안내 별도 안내입니다. 확인")
+    title = FakeElement("운영 안내")
+    message = FakeElement("별도 안내입니다.")
+    acknowledge = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == ".tit_wrap h1.tit" and scope is dialog:
+            return [title]
+        if selector == ".confirm_message" and scope is dialog:
+            return [message]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "운영 안내",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is None
+    assert acknowledge.clicks == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_maps_detached_dialog_evidence_to_action_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement("안내메세지 서버 안내입니다. 확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if scope is dialog:
+            raise RuntimeError("detached")
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert result.reason == "official_action_required"
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_maps_dialog_collection_failure_to_action_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        del scope
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            raise RuntimeError("page changed")
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "열차 목록",
+                (),
+                url="https://www.korail.com/ticket/search/list",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert result.reason == "official_dialog_probe_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_exact_payment_detail_wins_over_a_coexisting_unknown_dialog_without_clicking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    dialog = FakeElement("정책 확인 별도 조치가 필요합니다. 확인")
+    acknowledge = FakeElement("확인")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+                (),
+                url="https://www.korail.com/ticket/reservation/detail",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert acknowledge.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_exact_payment_detail_wins_over_actionable_delay_consent_without_clicking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+        auto_handle_dialogs=True,
+    )
+    dialog = FakeElement("지연승낙 안내 지연배상 계속 진행하시겠습니까? 네 아니오")
+    proceed = FakeElement("네")
+    decline = FakeElement("아니오")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [dialog]
+        if selector == "button,a,[role='button']" and scope is dialog:
+            return [decline, proceed]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기",
+                (),
+                url="https://www.korail.com/ticket/reservation/detail",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(
+        reservation_request(),
+        _ReservationAttemptState(reservation_clicked=True),
+    )
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert decline.clicks == proceed.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_terminal_probe_fails_closed_when_login_shell_and_another_dialog_coexist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    login_shell = FakeElement("로그인")
+    warning = FakeElement("추가 안내 확인")
+    acknowledge = FakeElement("확인")
+    attempt = _ReservationAttemptState(
+        post_submit_check_attempted=True,
+        post_submit_authenticated=True,
+        reservation_clicked=True,
+    )
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "[role='dialog'], dialog[open], [aria-modal='true']":
+            return [login_shell, warning]
+        if selector == "button,a,[role='button']" and scope is login_shell:
+            return []
+        if selector == "button,a,[role='button']" and scope is warning:
+            return [acknowledge]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인",
+                (),
+                url="https://www.korail.com/ticket/login",
+            )
+        ),
+    )
+
+    result = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert result is not None
+    assert result.outcome is KorailReservationOutcome.ACTION_REQUIRED
+    assert result.reason == "official_dialog_ambiguous"
+    assert acknowledge.clicks == 0
 
 
 @pytest.mark.asyncio
@@ -2796,8 +4022,10 @@ def test_internal_reserve_endpoint_is_bearer_protected_and_returns_no_credential
 
 def test_internal_reserve_stream_emits_ordered_progress_then_one_terminal_result(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setenv("KORAIL_BROWSER_ENGINE", "pydoll")
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_adapter_service")
     app = create_adapter_app(
         automation=FakeAutomation(),
         reservation_client=StreamingFakeReservationClient(),
@@ -2823,6 +4051,12 @@ def test_internal_reserve_stream_emits_ordered_progress_then_one_terminal_result
     ]
     assert frames[-1]["type"] == "result"
     assert frames[-1]["result"]["outcome"] == "payment_required"
+    assert (
+        "KORAIL reserve-once stream completed outcome=payment_required "
+        "reason=reservation_pending_payment seat_clicked=true reservation_clicked=true"
+    ) in caplog.text
+    assert "fixture-login" not in caplog.text
+    assert "fixture-password" not in caplog.text
     assert app.state.pending_reservation_tasks == set()
 
 

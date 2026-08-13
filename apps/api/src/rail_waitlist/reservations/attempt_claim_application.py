@@ -11,6 +11,7 @@ from ..domain import ReservationOutcome, SeatObservationStatus, WatchStatus
 from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
 from .attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
+    CONFIRMED_ABSENT_RETRY_OBSERVATIONS,
     RESERVATION_RETRY_EDGE_OBSERVATIONS,
     official_seat_observation_source,
     parse_manual_payment_hold_rearm_episode_key,
@@ -197,7 +198,8 @@ async def begin_reservation_attempt(
     confirmed_absent_retry_authorized = False
     if (
         latest_attempt is not None
-        and latest_attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+        and latest_attempt.outcome
+        in {ReservationOutcome.PAYMENT_REQUIRED, ReservationOutcome.UNKNOWN}
         and normalized_episode_key.startswith(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
     ):
         expected_episode_key = f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
@@ -206,17 +208,34 @@ async def begin_reservation_attempt(
             retry_authorized
             and normalized_episode_key == expected_episode_key
             and dependencies.is_confirmed_absent_retry_source(latest_attempt)
+            and latest_attempt.confirmation_observed_at is not None
         ):
-            actionable_after_confirmation = await session.scalar(
-                select(SeatObservation.id)
-                .where(
-                    SeatObservation.candidate_id == candidate.id,
-                    SeatObservation.observed_at > latest_attempt.confirmation_observed_at,
-                    SeatObservation.status.in_(dependencies.actionable_seat_statuses),
+            observation_conditions = [
+                SeatObservation.candidate_id == candidate.id,
+                SeatObservation.observed_at > latest_attempt.confirmation_observed_at,
+                SeatObservation.status.in_(
+                    dependencies.actionable_seat_statuses
+                    if latest_attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+                    else CONFIRMED_ABSENT_RETRY_OBSERVATIONS
+                ),
+            ]
+            if latest_attempt.outcome is ReservationOutcome.UNKNOWN:
+                official_source = official_seat_observation_source(watch.provider)
+                if official_source is not None:
+                    observation_conditions.append(SeatObservation.source == official_source)
+                    actionable_after_confirmation = await session.scalar(
+                        select(SeatObservation.id)
+                        .where(*observation_conditions)
+                        .order_by(SeatObservation.observed_at, SeatObservation.id)
+                        .limit(1)
+                    )
+            else:
+                actionable_after_confirmation = await session.scalar(
+                    select(SeatObservation.id)
+                    .where(*observation_conditions)
+                    .order_by(SeatObservation.observed_at, SeatObservation.id)
+                    .limit(1)
                 )
-                .order_by(SeatObservation.observed_at, SeatObservation.id)
-                .limit(1)
-            )
         confirmed_absent_retry_authorized = actionable_after_confirmation is not None
     if latest_attempt is not None:
         provider_auth_retry_authorized = latest_attempt.outcome in {

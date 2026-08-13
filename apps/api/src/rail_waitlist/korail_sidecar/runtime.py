@@ -131,6 +131,10 @@ def build_browser_client(
         page_url=page_url,
         timeout_seconds=timeout_seconds,
         headless=not gui_enabled,
+        auto_handle_dialogs=boolean_setting(
+            "KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED",
+            False,
+        ),
         allow_fullstack_fixture=allow_fullstack_fixture,
         station_identity_resolver=(
             None
@@ -196,5 +200,11 @@ def build_automation(
         ),
         protection_cooldown_seconds=integer_setting(
             "SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 60, minimum=60, maximum=86400
+        ),
+        provider_unavailable_cooldown_seconds=integer_setting(
+            "SEAT_STATUS_PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS",
+            300,
+            minimum=60,
+            maximum=86400,
         ),
     )

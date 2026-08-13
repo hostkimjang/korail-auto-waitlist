@@ -26,6 +26,7 @@ export interface WatchCandidateReadDto {
   delay_minutes: unknown;
   estimated_departure_at: unknown;
   actual_departure_at: unknown;
+  operational_source: unknown;
   operational_observed_at: unknown;
   operational_fresh_until: unknown;
 }
@@ -52,6 +53,7 @@ export interface WatchReadDto {
   focused_observation_interval_seconds: unknown;
   next_check_at: unknown;
   observation_execution_state: unknown;
+  cooldown_until: unknown;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -120,6 +122,7 @@ export function parseWatchReadDto(value: unknown): WatchReadDto {
     focused_observation_interval_seconds: value.focused_observation_interval_seconds,
     next_check_at: value.next_check_at,
     observation_execution_state: value.observation_execution_state,
+    cooldown_until: value.cooldown_until,
   };
 }
 
@@ -159,6 +162,7 @@ export function parseWatchCandidateReadDto(value: unknown): WatchCandidateReadDt
     delay_minutes: value.delay_minutes,
     estimated_departure_at: value.estimated_departure_at,
     actual_departure_at: value.actual_departure_at,
+    operational_source: value.operational_source,
     operational_observed_at: value.operational_observed_at,
     operational_fresh_until: value.operational_fresh_until,
   };

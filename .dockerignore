@@ -13,6 +13,7 @@ node_modules
 **/.mypy_cache
 **/.ruff_cache
 **/.test-tmp
+**/.test-tmp-*
 **/.tmp-pytest-*
 **/dist
 **/.next

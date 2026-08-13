@@ -16,6 +16,7 @@ from ...provider_adapters.srt_identity import (
 from ...provider_registry.official_url_policy import require_official_handoff_url
 from .contracts import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
@@ -137,7 +138,23 @@ def normalize_srt_reservation_records(
             observed_at=evidence.observed_at,
         )
     matches = tuple(record for record in trip_matches if _matches_target(record, target))
-    if len(matches) != 1 or matches[0].paid:
+    if len(matches) != 1:
+        return ReservationConfirmationResult(
+            provider=target.provider,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            source=source,
+            observed_at=evidence.observed_at,
+        )
+    if matches[0].paid and target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP:
+        return ReservationConfirmationResult(
+            provider=target.provider,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+            source=source,
+            observed_at=evidence.observed_at,
+        )
+    if matches[0].paid:
+        # An initial probe cannot tie a paid row to the just-issued hold. Treat a
+        # same-itinerary historical ticket as ambiguous until a bounded follow-up.
         return ReservationConfirmationResult(
             provider=target.provider,
             outcome=ReservationConfirmationOutcome.INCONCLUSIVE,

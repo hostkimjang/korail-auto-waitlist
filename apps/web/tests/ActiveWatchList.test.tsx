@@ -191,7 +191,7 @@ describe("ActiveWatchList", () => {
       <ActiveWatchList
         watches={[{
           ...watch(1),
-          lastCheckedLabel: "최근 확인 14:02",
+          lastCheckedLabel: "최근 확인 14:02:07",
           nextCheckAt: "2026-08-08T05:03:58Z",
           observationExecutionState: "in_progress",
         }]}
@@ -203,7 +203,7 @@ describe("ActiveWatchList", () => {
       />,
     );
 
-    expect(screen.getByText("최근 확인 14:02")).toBeTruthy();
+    expect(screen.getByText("최근 확인 14:02:07")).toBeTruthy();
     expect(screen.getByText("좌석 관측 중")).toBeTruthy();
     expect(screen.queryByText(/다음 좌석 관측 목표/)).toBeNull();
     expect(screen.getByRole("article").getAttribute("aria-busy")).toBe("false");

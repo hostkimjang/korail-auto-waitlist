@@ -185,6 +185,8 @@ def _message_detail(
                 f"{local_deadline:%m월 %d일 %H:%M}까지 공식 플랫폼에서 결제해 주세요."
             )
         return "임시 예약이 완료되었습니다. 공식 플랫폼에서 결제기한을 확인하고 결제해 주세요."
+    if target == WatchStatus.COMPLETED and reason == "reservation_reconciliation_confirmed_paid":
+        return "공식 예약 내역에서 결제 완료를 확인했습니다. 결제 안내를 종료합니다."
     if target == WatchStatus.AUTH_REQUIRED:
         return (
             "예매 진행에 로그인 또는 사용자 확인이 필요합니다. "
@@ -285,8 +287,10 @@ async def add_watch_notifications(
     if not channel_ids:
         return
     candidate, attempt = await _notification_candidate_and_attempt(session, watch, observation)
-    payment_deadline = watch.payment_deadline or (
-        attempt.payment_deadline if attempt is not None else None
+    payment_deadline = (
+        None
+        if target is WatchStatus.COMPLETED
+        else watch.payment_deadline or (attempt.payment_deadline if attempt is not None else None)
     )
     detail = _message_detail(
         watch,

@@ -107,6 +107,68 @@ function candidateContext(
   return candidate ?? {};
 }
 
+interface ExistingPaymentAttemptContext {
+  startedAt: string;
+  finishedAt: string;
+  reservationProgress: ReadonlyArray<ReservationProgressStage>;
+  reservedSeats: NonNullable<WatchActionTransition["reservedSeats"]>;
+}
+
+function existingAttemptProgress(
+  value: ReadonlyArray<ReservationProgressStage> | undefined,
+  startedAt: string,
+  finishedAt: string,
+): ReadonlyArray<ReservationProgressStage> {
+  if (value === undefined || value.length === 0) return [];
+  const parsed: ReservationProgressStage[] = [];
+  let previousInstant = Date.parse(startedAt);
+  let previousOrder = -1;
+  const upperBound = Date.parse(finishedAt);
+  for (const item of value) {
+    const currentOrder = reservationProgressStageOrder.get(item.stage);
+    const occurredAt = eventInstant(item.occurredAt);
+    const currentInstant = occurredAt === null ? Number.NaN : Date.parse(occurredAt);
+    if (
+      currentOrder === undefined
+      || occurredAt === null
+      || !Number.isFinite(currentInstant)
+      || currentOrder <= previousOrder
+      || currentInstant < previousInstant
+      || currentInstant > upperBound
+    ) return [];
+    parsed.push({ stage: item.stage, occurredAt });
+    previousOrder = currentOrder;
+    previousInstant = currentInstant;
+  }
+  return parsed;
+}
+
+function existingPaymentAttemptContext(
+  watch: WatchLifecycleSnapshot,
+  candidateId: string,
+  revisionAt: string,
+): ExistingPaymentAttemptContext | null {
+  const attempt = watch.latestReservationAttempt;
+  if (attempt === null || watch.latestReservationAttemptCandidateId !== candidateId) return null;
+  const startedAt = eventTimeNoLaterThan(attempt.startedAt, revisionAt);
+  const finishedAt = eventTimeNoLaterThan(attempt.finishedAt, revisionAt);
+  if (
+    startedAt === null
+    || finishedAt === null
+    || Date.parse(finishedAt) < Date.parse(startedAt)
+  ) return null;
+  return {
+    startedAt,
+    finishedAt,
+    reservationProgress: existingAttemptProgress(
+      attempt.progressStages,
+      startedAt,
+      finishedAt,
+    ),
+    reservedSeats: attempt.reservedSeats ?? [],
+  };
+}
+
 function transitionFromEvent(
   event: LiveEventRecord,
   watches: ReadonlyArray<WatchLifecycleSnapshot>,
@@ -311,6 +373,42 @@ function buildLiveReservationNoticeFromLifecycle(
       ...transition,
       automaticReservationRetry: expectedAutomaticRetry,
       paymentHoldEndReason: reason,
+    });
+  }
+  if (eventType === "watch.payment_completed") {
+    const watchId = text(event.payload.watch_id);
+    const candidateId = text(event.payload.candidate_id);
+    const aggregateId = text(event.aggregate_id);
+    const eventId = text(event.id);
+    const revisionAt = eventInstant(event.created_at);
+    const watch = watchId === null
+      ? undefined
+      : watches.find((item) => item.id === watchId);
+    const attemptContext = watch === undefined || candidateId === null || revisionAt === null
+      ? null
+      : existingPaymentAttemptContext(watch, candidateId, revisionAt);
+    if (
+      watchId === null
+      || aggregateId !== watchId
+      || candidateId === null
+      || eventId === null
+      || revisionAt === null
+      || watch === undefined
+      || watch.reservationCandidateContexts[candidateId] === undefined
+      || attemptContext === null
+      || event.payload.terminal !== true
+      || text(event.payload.from) !== "payment_required"
+      || text(event.payload.to) !== "completed"
+      || text(event.payload.status) !== "completed"
+      || event.payload.automatic_reservation_retry !== false
+    ) return null;
+    const transition = transitionFromEvent(event, watches, "payment_completed");
+    return transition === null ? null : buildWatchActionToast({
+      ...transition,
+      startedAt: transition.startedAt ?? attemptContext.startedAt,
+      finishedAt: transition.finishedAt ?? attemptContext.finishedAt,
+      reservationProgress: transition.reservationProgress ?? attemptContext.reservationProgress,
+      reservedSeats: transition.reservedSeats ?? attemptContext.reservedSeats,
     });
   }
   if (eventType === "watch.reservation_result_requires_manual_check") {

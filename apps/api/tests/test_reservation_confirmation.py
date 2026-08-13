@@ -13,6 +13,7 @@ from rail_waitlist.korail_reservation_confirmation import (
 )
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationTarget,
     require_official_handoff_url,
 )
@@ -30,6 +31,7 @@ KOREA = ZoneInfo("Asia/Seoul")
 def target(
     provider: Provider = Provider.SRT,
     credential_version: int = 7,
+    purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
 ) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-1",
@@ -42,6 +44,7 @@ def target(
         seat_class=SeatClass.STANDARD,
         passenger_count=1,
         credential_version=credential_version,
+        purpose=purpose,
     )
 
 
@@ -123,16 +126,38 @@ def test_srt_not_found_never_authorizes_another_reservation(
     "records",
     [
         (srt_record(), srt_record()),
-        (srt_record(paid=True),),
     ],
 )
-def test_srt_ambiguous_or_paid_matches_fail_closed(
+def test_srt_ambiguous_matches_fail_closed(
     records: tuple[SrtReservationRecord, ...],
 ) -> None:
     result = normalize_srt_reservation_records(target(), evidence(records=records))
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     assert not result.permits_automatic_reservation_retry
+
+
+def test_srt_exact_paid_record_confirms_payment_completion() -> None:
+    result = normalize_srt_reservation_records(
+        target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP),
+        evidence(records=(srt_record(paid=True),)),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    assert result.payment_deadline is None
+    assert result.official_handoff_url is None
+    assert not result.permits_automatic_reservation_retry
+
+
+def test_srt_initial_probe_does_not_claim_historical_paid_row() -> None:
+    result = normalize_srt_reservation_records(
+        target(),
+        evidence(records=(srt_record(paid=True),)),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert result.payment_deadline is None
+    assert result.official_handoff_url is None
 
 
 @pytest.mark.parametrize(

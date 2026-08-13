@@ -317,7 +317,7 @@ def test_provider_failure_owner_move_does_not_change_openapi() -> None:
     assert len(schema["paths"]) == 36
     assert len(schema["components"]["schemas"]) == 71
     assert "ErrorPolicyResult" not in schema["components"]["schemas"]
-    assert len(encoded) == 85566
+    assert len(encoded) == 86391
     assert hashlib.sha256(encoded).hexdigest() == (
-        "f8ccf6a54711b19c01d22121afe95d662fe2d213221ac33548bd3671702f54cd"
+        "edc953c6b851fa39460f2cdb14687bd4fb2bafa040c39598ea894ed793fda184"
     )

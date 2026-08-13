@@ -24,9 +24,11 @@ from rail_waitlist.reservations.attempt_result_application import (
 )
 from rail_waitlist.reservations.payment_hold_application import _utc_instant
 from rail_waitlist.reservations.reconciliation_policy import (
+    PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
     RESERVATION_RECONCILIATION_INTERVAL,
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
+    payment_hold_reconciliation_retry_interval,
     unknown_reconciliation_retry_interval,
 )
 from rail_waitlist.reservations.reconciliation_state_application import (
@@ -167,6 +169,26 @@ def test_unknown_reconciliation_retry_policy_matrix(
 
 
 @pytest.mark.parametrize(
+    ("completed_count", "expected"),
+    [
+        (0, None),
+        (1, timedelta(seconds=30)),
+        (2, timedelta(seconds=30)),
+        (3, timedelta(minutes=2)),
+        (4, timedelta(minutes=5)),
+        (5, timedelta(minutes=10)),
+        (6, None),
+    ],
+)
+def test_payment_hold_reconciliation_retry_policy_is_bounded(
+    completed_count: int,
+    expected: timedelta | None,
+) -> None:
+    assert payment_hold_reconciliation_retry_interval(completed_count) == expected
+    assert PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS == 6
+
+
+@pytest.mark.parametrize(
     ("starting_count", "expected_interval"),
     [
         (0, timedelta(seconds=30)),
@@ -206,6 +228,135 @@ async def test_unknown_inconclusive_state_preserves_extended_bounded_schedule(
     )
 
 
+async def test_unknown_requires_two_official_absence_reads_before_terminal_fence() -> None:
+    attempt = make_attempt()
+    attempt.confirmation_outcome = ReservationConfirmationOutcome.INCONCLUSIVE
+    attempt.confirmation_source = "srt.owner-test"
+    attempt.confirmation_observed_at = NOW - timedelta(seconds=30)
+    first_not_found = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.NOT_FOUND,
+        source="srt.owner-test",
+        observed_at=NOW,
+    )
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        make_watch(),
+        make_candidate(),
+        attempt,
+        first_not_found,
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], []),
+    )
+
+    assert attempt.reconciliation_attempt_count == 1
+    assert attempt.next_reconcile_at == NOW + timedelta(seconds=30)
+
+    second_at = NOW + timedelta(seconds=30)
+    second_not_found = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.NOT_FOUND,
+        source="srt.owner-test",
+        observed_at=second_at,
+    )
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        make_watch(),
+        make_candidate(),
+        attempt,
+        second_not_found,
+        reconciled_at=second_at,
+        dependencies=make_dependencies([], []),
+    )
+
+    assert attempt.reconciliation_attempt_count == 2
+    assert attempt.next_reconcile_at is None
+
+
+async def test_unknown_initial_absence_and_delayed_absence_close_reconciliation() -> None:
+    attempt = make_attempt()
+    attempt.confirmation_outcome = ReservationConfirmationOutcome.NOT_FOUND
+    attempt.confirmation_source = "srt.owner-test"
+    attempt.confirmation_observed_at = NOW - timedelta(seconds=30)
+    confirmation = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.NOT_FOUND,
+        source="srt.owner-test",
+        observed_at=NOW,
+    )
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        make_watch(),
+        make_candidate(),
+        attempt,
+        confirmation,
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], []),
+    )
+
+    assert attempt.reconciliation_attempt_count == 1
+    assert attempt.next_reconcile_at is None
+
+
+@pytest.mark.parametrize(
+    ("starting_count", "expected_interval"),
+    [
+        (0, timedelta(seconds=30)),
+        (1, timedelta(seconds=30)),
+        (2, timedelta(minutes=2)),
+        (3, timedelta(minutes=5)),
+        (4, timedelta(minutes=10)),
+        (5, None),
+    ],
+)
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ReservationConfirmationOutcome.INCONCLUSIVE,
+        ReservationConfirmationOutcome.NOT_FOUND,
+    ],
+)
+async def test_known_future_payment_hold_keeps_six_read_schedule_after_uncertain_result(
+    starting_count: int,
+    expected_interval: timedelta | None,
+    outcome: ReservationConfirmationOutcome,
+) -> None:
+    watch = make_watch(status=WatchStatus.PAYMENT_REQUIRED)
+    watch.payment_deadline = NOW + timedelta(hours=1)
+    attempt = make_attempt(
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        reconciliation_count=starting_count,
+    )
+    attempt.payment_deadline = watch.payment_deadline
+    attempt.confirmation_outcome = ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    confirmation = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=outcome,
+        source="srt.payment-follow-up-owner-test",
+        observed_at=NOW,
+    )
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        watch,
+        make_candidate(),
+        attempt,
+        confirmation,
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], []),
+    )
+
+    assert attempt.confirmation_outcome is outcome
+    assert attempt.reconciliation_attempt_count == starting_count + 1
+    assert attempt.next_reconcile_at == (
+        NOW + expected_interval if expected_interval is not None else None
+    )
+    assert watch.status is WatchStatus.PAYMENT_REQUIRED
+    assert watch.payment_deadline == NOW + timedelta(hours=1)
+
+
 async def test_positive_confirmation_restores_handoff_and_suppresses_lower_candidate() -> None:
     transitions: list[tuple[WatchStatus, str | None]] = []
     events: list[dict[str, object]] = []
@@ -243,6 +394,7 @@ async def test_positive_confirmation_restores_handoff_and_suppresses_lower_candi
     assert watch.status is WatchStatus.PAYMENT_REQUIRED
     assert watch.payment_deadline == deadline
     assert watch.official_booking_url == handoff_url
+    assert attempt.next_reconcile_at == NOW + timedelta(seconds=30)
     assert transitions == [
         (
             WatchStatus.PAYMENT_REQUIRED,
@@ -265,6 +417,55 @@ async def test_positive_confirmation_restores_handoff_and_suppresses_lower_candi
             "dedupe_key": f"reservation-reconciled:attempt-1:{NOW.isoformat()}",
         }
     ]
+
+
+async def test_exact_paid_confirmation_completes_watch_and_clears_payment_prompt() -> None:
+    transitions: list[tuple[WatchStatus, str | None]] = []
+    events: list[dict[str, object]] = []
+    watch = make_watch(status=WatchStatus.PAYMENT_REQUIRED)
+    watch.payment_deadline = NOW + timedelta(minutes=8)
+    watch.official_booking_url = "https://etk.srail.kr/hpg/hra/02/selectReservationList.do"
+    watch.next_check_at = NOW + timedelta(seconds=30)
+    candidate = make_candidate()
+    candidate.state = "payment_required"
+    suppressed = make_candidate(candidate_id="candidate-2", priority=2)
+    suppressed.state = "suppressed_by_priority"
+    suppressed.suppressed_by_candidate_id = candidate.id
+    attempt = make_attempt(
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        reconciliation_count=2,
+    )
+    attempt.payment_deadline = watch.payment_deadline
+    attempt.official_handoff_url = watch.official_booking_url
+    confirmation = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+        source="srtrain-reservation-list",
+        observed_at=NOW,
+    )
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession([suppressed])),
+        watch,
+        candidate,
+        attempt,
+        confirmation,
+        reconciled_at=NOW,
+        dependencies=make_dependencies(transitions, events),
+    )
+
+    assert attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+    assert attempt.confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    assert attempt.next_reconcile_at is None
+    assert watch.status is WatchStatus.COMPLETED
+    assert watch.payment_deadline is None
+    assert watch.official_booking_url is None
+    assert watch.next_check_at is None
+    assert candidate.state == "expired"
+    assert suppressed.state == "expired"
+    assert transitions == [(WatchStatus.COMPLETED, "reservation_reconciliation_confirmed_paid")]
+    assert events[0]["event_type"] == "watch.payment_completed"
+    assert events[0]["dedupe_key"] == "payment-completed:attempt-1"
 
 
 @pytest.mark.parametrize(

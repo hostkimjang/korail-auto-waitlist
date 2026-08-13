@@ -323,6 +323,55 @@ async def test_latest_attempt_selects_its_candidate_and_preserves_cleared_deadli
         assert "08월 05일 13:00까지 공식 플랫폼에서 결제해 주세요." in event.payload["message"]
 
 
+async def test_completed_notification_never_reuses_historical_attempt_deadline(
+    db_engine,
+) -> None:
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    deadline = datetime(2026, 8, 5, 4, tzinfo=UTC)
+    async with factory() as session:
+        channel = make_channel("completed-channel")
+        watch = make_watch(status=WatchStatus.PAYMENT_REQUIRED)
+        candidate = WatchCandidate(
+            train_number="SRT-309",
+            departure_at=datetime(2026, 8, 5, 3, 45, tzinfo=UTC),
+            seat_class="standard",
+            priority=1,
+            state="expired",
+        )
+        watch.candidates.append(candidate)
+        session.add_all([channel, watch])
+        await session.flush()
+        session.add(
+            ReservationAttempt(
+                candidate_id=candidate.id,
+                attempt_sequence=2,
+                episode_key="availability:paid",
+                idempotency_key="notification-completed-attempt",
+                outcome=ReservationOutcome.PAYMENT_REQUIRED,
+                started_at=datetime(2026, 8, 5, 3, 1, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 5, 3, 1, 2, tzinfo=UTC),
+                payment_deadline=deadline,
+            )
+        )
+        await session.flush()
+
+        await add_watch_notifications(
+            session,
+            watch,
+            WatchStatus.COMPLETED,
+            "payment_required:completed:confirmed-paid",
+            reason="reservation_reconciliation_confirmed_paid",
+        )
+        event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == "notification.dispatch_requested")
+        )
+
+        assert event is not None
+        assert event.payload["status"] == "completed"
+        assert event.payload["payment_deadline"] is None
+        assert "결제 안내를 종료합니다" in event.payload["message"]
+
+
 async def test_latest_not_available_attempt_structures_monitoring_retry(db_engine) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:

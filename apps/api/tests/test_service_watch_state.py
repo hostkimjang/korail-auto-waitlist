@@ -582,11 +582,7 @@ async def test_reconciliation_negative_evidence_requires_exact_retry_episode(
         assert attempt.confirmation_observed_at == observed_at
         assert attempt.last_reconciled_at == observed_at + timedelta(seconds=1)
         assert attempt.reconciliation_attempt_count == 1
-        assert attempt.next_reconcile_at == (
-            None
-            if confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
-            else observed_at + timedelta(seconds=31)
-        )
+        assert attempt.next_reconcile_at == observed_at + timedelta(seconds=31)
         assert watch.status is WatchStatus.WATCHING
         assert candidate.state == "observed"
 

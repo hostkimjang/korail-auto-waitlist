@@ -1250,6 +1250,21 @@ async def test_enabled_control_uses_live_dom_state_instead_of_cached_attributes(
 
 
 @pytest.mark.asyncio
+async def test_unknown_aria_disabled_value_is_not_actionable() -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    control = DynamicControl(
+        "확인",
+        aria_disabled="mixed",
+        disabled_attribute=False,
+    )
+
+    state = await session._read_control_state(control)
+
+    assert state.aria_disabled == "other"
+    assert state.enabled is False
+
+
+@pytest.mark.asyncio
 async def test_pydoll_client_blocks_submit_when_visible_identity_differs() -> None:
     session = FixtureSession(_fixture_snapshot(), mismatch=True)
     client = PydollKorailBrowserClient(session_factory=FixtureSessionFactory(session))

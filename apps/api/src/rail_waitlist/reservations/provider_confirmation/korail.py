@@ -15,6 +15,7 @@ from ...domain import Provider
 from ...provider_registry.official_url_policy import require_official_handoff_url
 from .contracts import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
@@ -22,6 +23,7 @@ from .contracts import (
 KORAIL_RESERVATION_HANDOFF_URL = "https://www.korail.com/ticket/reservation/list"
 KORAIL_CONFIRMATION_SOURCE = "korail-same-session-detail"
 KORAIL_RESERVATION_LIST_SOURCE = "korail-reservation-list"
+KORAIL_ISSUED_TICKET_LIST_SOURCE = "korail-issued-ticket-list"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +47,7 @@ class KorailSameSessionDetailEvidence:
     official_list_target_absent: bool = False
     auth_required: bool = False
     provider_blocked: bool = False
+    issued_ticket_exact_match: bool = False
     payment_deadline: datetime | None = None
     source: str = KORAIL_CONFIRMATION_SOURCE
 
@@ -58,12 +61,22 @@ class KorailSameSessionDetailEvidence:
         if self.source not in {
             KORAIL_CONFIRMATION_SOURCE,
             KORAIL_RESERVATION_LIST_SOURCE,
+            KORAIL_ISSUED_TICKET_LIST_SOURCE,
         }:
             raise ValueError("unsupported KORAIL confirmation evidence source")
         if self.official_list_target_absent and (
             self.source != KORAIL_RESERVATION_LIST_SOURCE or not self.official_list_read_completed
         ):
             raise ValueError("official list target absence requires a completed official list read")
+        if self.issued_ticket_exact_match and (
+            self.source != KORAIL_ISSUED_TICKET_LIST_SOURCE
+            or not self.exact_identity_matched
+            or not self.seat_class_matched
+            or not self.passenger_count_matched
+            or self.payment_pending_markers_present
+            or self.payment_deadline is not None
+        ):
+            raise ValueError("issued-ticket match requires complete redacted paid evidence")
 
 
 class KorailSameSessionDetailProbe(Protocol):
@@ -99,6 +112,19 @@ def normalize_korail_same_session_detail(
         return ReservationConfirmationResult(
             provider=target.provider,
             outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            source=evidence.source,
+            observed_at=evidence.observed_at,
+        )
+    if (
+        evidence.source == KORAIL_ISSUED_TICKET_LIST_SOURCE
+        and evidence.issued_ticket_exact_match
+        and target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        and target.passenger_count == 1
+        and len(target.reserved_seats) == 1
+    ):
+        return ReservationConfirmationResult(
+            provider=target.provider,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
             source=evidence.source,
             observed_at=evidence.observed_at,
         )

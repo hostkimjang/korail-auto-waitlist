@@ -2,20 +2,14 @@ import type { ToastProgressStep } from "../../shared/ui/AppToast";
 import { formatReservedSeats } from "../../domain/reservationAttempt";
 import type { AppNotificationInput } from "./notificationCenter";
 import type {
+  ReservationRecoveryResult,
   ReservationProgressStageName,
   SeatAvailabilityLostTransition,
   WatchActionTransition,
 } from "./watchSnapshots";
 import { formatWatchIdentity, formatWatchSchedule } from "./watchJourney";
 
-export type ReservationResultOutcome = "failed" | "not_available" | "unknown";
-
-export interface ReservationRecoveryResult {
-  outcome: ReservationResultOutcome;
-  retryable: boolean;
-  manualCheckRequired: boolean;
-  retryCondition: "new_availability_episode" | "provider_account_reverified" | null;
-}
+export type { ReservationRecoveryResult, ReservationResultOutcome } from "./watchSnapshots";
 
 type StepTiming = Pick<
   ToastProgressStep,
@@ -86,6 +80,7 @@ function completedAttemptDurationMs(
 
 type ReservationTerminalStage =
   | "payment_required"
+  | "payment_completed"
   | "auth_required"
   | "not_available"
   | "manual_check"
@@ -193,6 +188,8 @@ function detailedResultSteps(
       };
   if (terminal === "auth_required" && !progressByStage.has("authenticated_session_ready")) {
     steps.push(failed("로그인 세션 확인", times.current));
+  } else if (terminal === "payment_completed") {
+    steps.push(completed("좌석 임시 확보", resultTiming));
   } else if (terminal === "payment_required" || terminal === "not_available") {
     steps.push(completed("공식 결과 확인", resultTiming));
   } else {
@@ -291,6 +288,20 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
           active("공식 결제 필요", times.current),
         ],
       };
+    case "payment_completed":
+      return {
+        ...base,
+        kind: "recovery" as const,
+        tone: "success",
+        title: "결제가 완료되었습니다",
+        description: `${base.description} · 공식 예약 내역에서 결제 완료를 확인했습니다. 결제 안내를 종료합니다.`,
+        steps: [
+          ...(detailedResultSteps(transition, "payment_completed") ?? [
+            completed("좌석 임시 확보", times.attempted),
+          ]),
+          completed("공식 결제 완료 확인", times.current),
+        ],
+      };
     case "payment_hold_ended": {
       const monitoringResumed = transition.automaticReservationRetry === true;
       const deadlineElapsed = transition.paymentHoldEndReason === "confirmed_payment_deadline_elapsed";
@@ -358,7 +369,7 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         ],
       };
     case "monitoring_resumed":
-      return buildReservationRecoveryToast(transition, {
+      return buildReservationRecoveryToast(transition, transition.reservationResult ?? {
         outcome: "unknown",
         retryable: false,
         manualCheckRequired: true,
@@ -401,18 +412,25 @@ export function buildReservationRecoveryToast(
     };
   }
   if (outcome === "not_available") {
+    const monitoringResumed = transition.monitoringResumed !== false;
     return {
       ...base,
       kind: "recovery",
-      title: "좌석이 사라져 다시 감시 중입니다",
-      description: `${base.description} · 예약된 좌석은 없습니다. 좌석이 다시 확인되면 예매를 다시 시도합니다.`,
+      title: monitoringResumed
+        ? "좌석이 사라져 다시 감시 중입니다"
+        : "좌석을 확보하지 못해 작업이 종료되었습니다",
+      description: monitoringResumed
+        ? `${base.description} · 예약된 좌석은 없습니다. 좌석이 다시 확인되면 예매를 다시 시도합니다.`
+        : `${base.description} · 예약된 좌석은 없습니다. 감시는 종료되었습니다.`,
       steps: [
         ...(detailedResultSteps(transition, "not_available") ?? [
           completed("좌석 발견", times.detected),
           completed("자동 예매 요청 시작", times.started),
           failed("좌석 재확인", times.attempted),
         ]),
-        active("감시·재예매 대기", times.current),
+        monitoringResumed
+          ? active("감시·재예매 대기", times.current)
+          : completed("작업 종료", times.current),
       ],
     };
   }

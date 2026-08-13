@@ -18,6 +18,7 @@ from ..browser_protection import (
     protection_trigger_from_http_response,
     protection_trigger_from_text,
 )
+from . import reservation_dialog_policy as _dialog_policy
 from .auth_contracts import KorailCredentialInput
 from .page_contracts import (
     KORAIL_ROUTE_HEADING,
@@ -84,6 +85,17 @@ class ReservationAttemptState:
     preserved_selection_checked: bool = False
     preserved_selection_matches: bool = False
     reservation_clicked: bool = False
+    dialog_actions_attempted: tuple[
+        tuple[_dialog_policy.ReservationDialogPhase, _dialog_policy.ReservationDialogKind], ...
+    ] = ()
+    dialog_settle_deadlines: (
+        dict[
+            tuple[_dialog_policy.ReservationDialogPhase, _dialog_policy.ReservationDialogKind],
+            float,
+        ]
+        | None
+    ) = None
+    post_dialog_action_followup_deadline: float | None = None
 
 
 class ReservationControlState(Protocol):
@@ -151,6 +163,12 @@ type CurrentSchedule = Callable[[], Awaitable[tuple[date, int]]]
 type ReadControlState = Callable[[Any], Awaitable[ReservationControlState]]
 
 
+def _control_state_allows_dialog_action(state: ReservationControlState | None) -> bool:
+    if state is None or state.read_error or not state.enabled or state.disabled_attribute:
+        return False
+    return state.aria_disabled.casefold() in {"", "false"}
+
+
 def _normalized_train_number(value: str) -> str:
     try:
         return normalize_korail_train_number(value)
@@ -198,14 +216,26 @@ def _reserved_seats_from_history_state(
     """Read the exact seat fields consumed by KORAIL's reservation-detail bundle."""
     if not isinstance(value, Mapping):
         return ()
+    required_train_fields = (
+        "trainNumber",
+        "departureDate",
+        "departureTime",
+        "arrivalTime",
+        "origin",
+        "destination",
+    )
+    if type(value.get("journeyCount")) is not int or value.get("journeyCount") != 1:
+        return ()
+    if any(not isinstance(value.get(field), str) for field in required_train_fields):
+        return ()
     try:
-        if _normalized_train_number(str(value.get("trainNumber", ""))) != (
+        if _normalized_train_number(value["trainNumber"]) != (
             _normalized_train_number(request.train_number)
         ):
             return ()
-        departure_date = str(value.get("departureDate", "")).strip()
-        departure_time = str(value.get("departureTime", "")).strip()
-        arrival_time = str(value.get("arrivalTime", "")).strip()
+        departure_date = value["departureDate"].strip()
+        departure_time = value["departureTime"].strip()
+        arrival_time = value["arrivalTime"].strip()
         if departure_date != request.travel_date.strftime("%Y%m%d"):
             return ()
         if re.fullmatch(r"[0-9]{4}(?:[0-9]{2})?", departure_time) is None:
@@ -216,11 +246,9 @@ def _reserved_seats_from_history_state(
             return ()
         if arrival_time[:4] != request.arrival_time.strftime("%H%M"):
             return ()
-        if normalize_korail_station(str(value.get("origin", ""))) != (
-            normalize_korail_station(request.origin)
-        ):
+        if normalize_korail_station(value["origin"]) != (normalize_korail_station(request.origin)):
             return ()
-        if normalize_korail_station(str(value.get("destination", ""))) != (
+        if normalize_korail_station(value["destination"]) != (
             normalize_korail_station(request.destination)
         ):
             return ()
@@ -234,10 +262,13 @@ def _reserved_seats_from_history_state(
     raw_seat = raw_seats[0]
     if not isinstance(raw_seat, Mapping):
         return ()
-    if str(raw_seat.get("seatClass", "")).strip() != request.seat_class.label:
+    required_seat_fields = ("seatClass", "carNumber", "seatNumber")
+    if any(not isinstance(raw_seat.get(field), str) for field in required_seat_fields):
         return ()
-    raw_car_number = str(raw_seat.get("carNumber", "")).strip()
-    raw_seat_number = str(raw_seat.get("seatNumber", "")).strip().upper()
+    if raw_seat["seatClass"].strip() != request.seat_class.label:
+        return ()
+    raw_car_number = raw_seat["carNumber"].strip()
+    raw_seat_number = raw_seat["seatNumber"].strip().upper()
     if re.fullmatch(r"0*[1-9][0-9]?", raw_car_number) is None:
         return ()
     seat_match = re.fullmatch(r"0*([1-9][0-9]{0,2})([A-D])", raw_seat_number)
@@ -271,6 +302,7 @@ class PydollReservationDomDriver:
         sleep: Callable[[float], Awaitable[None]],
         utc_now: Callable[[], datetime],
         event_logger: logging.Logger,
+        auto_handle_dialogs: bool = False,
     ) -> None:
         self._port = port
         self._timeout_ms = timeout_ms
@@ -283,6 +315,7 @@ class PydollReservationDomDriver:
         self._sleep = sleep
         self._utc_now = utc_now
         self._event_logger = event_logger
+        self._auto_handle_dialogs = auto_handle_dialogs
 
     async def reserve_once(
         self,
@@ -369,6 +402,22 @@ class PydollReservationDomDriver:
                     reservation_clicked=attempt.reservation_clicked,
                     reserved_seats=terminal.reserved_seats,
                 )
+            relevant_dialog_deadlines = tuple((attempt.dialog_settle_deadlines or {}).values()) + (
+                (attempt.post_dialog_action_followup_deadline,)
+                if attempt.post_dialog_action_followup_deadline is not None
+                else ()
+            )
+            if relevant_dialog_deadlines:
+                deadline = max(
+                    deadline,
+                    *(dialog_deadline + 0.1 for dialog_deadline in relevant_dialog_deadlines),
+                )
+            if any(
+                self._monotonic() < settle_deadline
+                for settle_deadline in (attempt.dialog_settle_deadlines or {}).values()
+            ):
+                await self._sleep(0.1)
+                continue
             if not attempt.reservation_clicked:
                 candidates = []
                 for control in await self._visible_elements("button.reservbtn"):
@@ -405,15 +454,6 @@ class PydollReservationDomDriver:
                             "reservation_control_disabled",
                             seat_clicked=True,
                         )
-                    attempt.reservation_clicked = True
-                    reservation_requested_at = self._utc_now()
-                    if on_progress is not None:
-                        on_progress(
-                            KorailReservationProgress(
-                                "reservation_requested",
-                                reservation_requested_at,
-                            )
-                        )
                     try:
                         await candidates[0].click()
                     except asyncio.CancelledError:
@@ -423,7 +463,15 @@ class PydollReservationDomDriver:
                             KorailReservationOutcome.FAILED,
                             "reservation_result_unknown:reservation_click_error",
                             seat_clicked=True,
-                            reservation_clicked=True,
+                        )
+                    attempt.reservation_clicked = True
+                    reservation_requested_at = self._utc_now()
+                    if on_progress is not None:
+                        on_progress(
+                            KorailReservationProgress(
+                                "reservation_requested",
+                                reservation_requested_at,
+                            )
                         )
                     deadline = self._monotonic() + self._timeout_seconds
                     continue
@@ -495,26 +543,47 @@ class PydollReservationDomDriver:
     ) -> tuple[KorailReservedSeat, ...]:
         script = """
             (() => {
+              const isPlainRecord = (value) => {
+                if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+                  return false;
+                }
+                const prototype = Object.getPrototypeOf(value);
+                return prototype === Object.prototype || prototype === null;
+              };
               const state = history.state?.state;
-              if (!state || typeof state !== 'object') return null;
-              if (!Array.isArray(state.reservedTrainList) ||
-                  state.reservedTrainList.length !== 1) return null;
-              const train = state.reservedTrainList[0];
-              if (!train || typeof train !== 'object') return null;
-              const seatInfo = train.seat_infos?.seat_info;
+              if (!isPlainRecord(state)) return null;
+              const reservation = state.reservation;
+              if (!isPlainRecord(reservation) || !isPlainRecord(reservation.jrny_infos)) {
+                return null;
+              }
+              const journeyInfo = reservation.jrny_infos.jrny_info;
+              if (!Array.isArray(journeyInfo) || journeyInfo.length !== 1) return null;
+              const train = journeyInfo[0];
+              if (!isPlainRecord(train) || !isPlainRecord(train.seat_infos)) return null;
+              const seatInfo = train.seat_infos.seat_info;
               if (!Array.isArray(seatInfo) || seatInfo.length !== 1) return null;
+              const seat = seatInfo[0];
+              if (!isPlainRecord(seat)) return null;
+              const trainLeaves = [
+                'h_trn_no', 'h_dpt_dt', 'h_dpt_tm', 'h_arv_tm',
+                'h_dpt_rs_stn_nm', 'h_arv_rs_stn_nm'
+              ];
+              const seatLeaves = ['h_psrm_cl_nm', 'h_srcar_no', 'h_seat_no'];
+              if (!trainLeaves.every((name) => typeof train[name] === 'string') ||
+                  !seatLeaves.every((name) => typeof seat[name] === 'string')) return null;
               return {
+                journeyCount: journeyInfo.length,
                 trainNumber: train.h_trn_no,
                 departureDate: train.h_dpt_dt,
                 departureTime: train.h_dpt_tm,
                 arrivalTime: train.h_arv_tm,
                 origin: train.h_dpt_rs_stn_nm,
                 destination: train.h_arv_rs_stn_nm,
-                seats: seatInfo.map((seat) => ({
-                  seatClass: seat?.h_psrm_cl_nm,
-                  carNumber: seat?.h_srcar_no,
-                  seatNumber: seat?.h_seat_no,
-                })),
+                seats: [{
+                  seatClass: seat.h_psrm_cl_nm,
+                  carNumber: seat.h_srcar_no,
+                  seatNumber: seat.h_seat_no,
+                }],
               };
             })()
         """
@@ -628,6 +697,72 @@ class PydollReservationDomDriver:
             and arrival == request.arrival_time.strftime("%H:%M")
         )
 
+    @staticmethod
+    async def _safe_element_text(element: Any) -> str:
+        try:
+            return " ".join(str(await element.text).split())
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- unreadable dialog evidence fails closed.
+            return ""
+
+    async def _reservation_dialog_decision(
+        self,
+        dialog: Any,
+        *,
+        phase: _dialog_policy.ReservationDialogPhase,
+    ) -> tuple[_dialog_policy.ReservationDialogDecision, list[Any]]:
+        try:
+            title_elements = await self._visible_elements(".tit_wrap h1.tit", scope=dialog)
+            message_elements = await self._visible_elements(".confirm_message", scope=dialog)
+            controls = await self._visible_elements("button,a,[role='button']", scope=dialog)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- detached dialog evidence fails closed.
+            return (
+                _dialog_policy.ReservationDialogDecision(
+                    _dialog_policy.ReservationDialogKind.UNKNOWN,
+                    _dialog_policy.ReservationDialogControlShape.OTHER,
+                ),
+                [],
+            )
+        title = await self._safe_element_text(title_elements[0]) if len(title_elements) == 1 else ""
+        message = (
+            await self._safe_element_text(message_elements[0]) if len(message_elements) == 1 else ""
+        )
+        evidence = _dialog_policy.ReservationDialogEvidence(
+            title=title,
+            message=message,
+            full_text=await self._safe_element_text(dialog),
+            control_labels=tuple([await self._safe_element_text(control) for control in controls]),
+            has_official_alert_structure=(len(title_elements) == 1 and len(message_elements) == 1),
+        )
+        return (
+            _dialog_policy.classify_reservation_dialog(
+                evidence,
+                phase=phase,
+                auto_handle_dialogs=self._auto_handle_dialogs,
+            ),
+            controls,
+        )
+
+    def _log_reservation_dialog(
+        self,
+        *,
+        phase: _dialog_policy.ReservationDialogPhase,
+        decision: _dialog_policy.ReservationDialogDecision,
+        dialog_count: str,
+        action: str,
+    ) -> None:
+        self._event_logger.info(
+            "KORAIL reservation dialog phase=%s kind=%s control_shape=%s dialog_count=%s action=%s",
+            phase.value,
+            decision.kind.value,
+            decision.control_shape.value,
+            dialog_count,
+            action,
+        )
+
     async def probe_reservation_terminal(
         self,
         request: KorailReservationRequest,
@@ -677,37 +812,6 @@ class PydollReservationDomDriver:
                 "KORAIL reservation marker stage=terminal_probe login_route_authenticated=true"
             )
 
-        dialogs = await self._visible_elements("[role='dialog'], dialog[open], [aria-modal='true']")
-        delay_dialogs = []
-        for dialog in dialogs:
-            text = " ".join(str(await dialog.text).split())
-            labels = {
-                " ".join(str(await control.text).split())
-                for control in await self._visible_elements("button,a", scope=dialog)
-            }
-            if "지연승낙 안내" in text and {"아니오", "네"}.issubset(labels):
-                delay_dialogs.append(dialog)
-        if len(delay_dialogs) == 1:
-            return KorailReservationResult(
-                KorailReservationOutcome.CONSENT_REQUIRED,
-                "delay_consent_required",
-            )
-        if len(delay_dialogs) > 1:
-            return KorailReservationResult(
-                KorailReservationOutcome.FAILED,
-                "delay_consent_ambiguous",
-            )
-        if dialogs and not authenticated_login_route:
-            return KorailReservationResult(
-                KorailReservationOutcome.ACTION_REQUIRED,
-                "official_action_required",
-            )
-        if dialogs:
-            self._event_logger.info(
-                "KORAIL reservation marker stage=terminal_probe "
-                "authenticated_login_shell_ignored=true"
-            )
-
         body = " ".join(snapshot.body_text.split())
         target_markers = (
             _has_exact_train_number_marker(body, request.train_number)
@@ -719,11 +823,219 @@ class PydollReservationDomDriver:
         pending_markers = all(marker in body for marker in ("예약취소", "장바구니", "결제하기"))
         if path.rstrip("/") == "/ticket/reservation/detail" and target_markers and pending_markers:
             reserved_seats = await self.reserved_seats_from_preserved_state(request)
-            if not reserved_seats:
-                reserved_seats = _single_reserved_seat(body)
             return KorailReservationResult(
                 KorailReservationOutcome.PAYMENT_REQUIRED,
                 "reservation_pending_payment",
                 reserved_seats=reserved_seats,
+            )
+
+        try:
+            dialogs = await self._visible_elements(
+                "[role='dialog'], dialog[open], [aria-modal='true']"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- a changing official dialog fails closed.
+            self._event_logger.info(
+                "KORAIL reservation dialog phase=%s kind=unknown control_shape=other "
+                "dialog_count=unknown action=none",
+                (
+                    _dialog_policy.ReservationDialogPhase.POST_REQUEST.value
+                    if attempt.reservation_clicked
+                    else _dialog_policy.ReservationDialogPhase.PRE_REQUEST.value
+                ),
+            )
+            return KorailReservationResult(
+                KorailReservationOutcome.ACTION_REQUIRED,
+                "official_dialog_probe_unavailable",
+            )
+        phase = (
+            _dialog_policy.ReservationDialogPhase.POST_REQUEST
+            if attempt.reservation_clicked
+            else _dialog_policy.ReservationDialogPhase.PRE_REQUEST
+        )
+        if len(dialogs) > 1:
+            ambiguous = _dialog_policy.ReservationDialogDecision(
+                _dialog_policy.ReservationDialogKind.UNKNOWN,
+                control_shape=(await self._reservation_dialog_decision(dialogs[0], phase=phase))[
+                    0
+                ].control_shape,
+            )
+            self._log_reservation_dialog(
+                phase=phase,
+                decision=ambiguous,
+                dialog_count="multiple",
+                action="none",
+            )
+            return KorailReservationResult(
+                KorailReservationOutcome.ACTION_REQUIRED,
+                "official_dialog_ambiguous",
+            )
+        if dialogs:
+            decision, controls = await self._reservation_dialog_decision(dialogs[0], phase=phase)
+            if (
+                decision.kind is _dialog_policy.ReservationDialogKind.AUTHENTICATED_LOGIN_SHELL
+                and authenticated_login_route
+            ):
+                self._log_reservation_dialog(
+                    phase=phase,
+                    decision=decision,
+                    dialog_count="one",
+                    action="ignored_authenticated_shell",
+                )
+            elif (
+                decision.kind is _dialog_policy.ReservationDialogKind.DELAY_CONSENT
+                and decision.action is _dialog_policy.ReservationDialogAction.NONE
+            ):
+                self._log_reservation_dialog(
+                    phase=phase,
+                    decision=decision,
+                    dialog_count="one",
+                    action="none",
+                )
+                return KorailReservationResult(
+                    KorailReservationOutcome.CONSENT_REQUIRED,
+                    "delay_consent_required",
+                )
+            elif decision.kind is _dialog_policy.ReservationDialogKind.EXISTING_RESERVATION_CHOICE:
+                self._log_reservation_dialog(
+                    phase=phase,
+                    decision=decision,
+                    dialog_count="one",
+                    action="none",
+                )
+                return KorailReservationResult(
+                    KorailReservationOutcome.ACTION_REQUIRED,
+                    "existing_reservation_action_required",
+                )
+            elif decision.action is not _dialog_policy.ReservationDialogAction.NONE:
+                is_consent_action = decision.action in {
+                    _dialog_policy.ReservationDialogAction.ACCEPT_DELAY_CONSENT,
+                    _dialog_policy.ReservationDialogAction.ACCEPT_RESERVATION_INFORMATION,
+                }
+                matching_controls = [
+                    control
+                    for control in controls
+                    if await self._safe_element_text(control) == decision.target_label
+                ]
+                if len(matching_controls) != 1:
+                    self._log_reservation_dialog(
+                        phase=phase,
+                        decision=decision,
+                        dialog_count="one",
+                        action="target_unavailable",
+                    )
+                    return KorailReservationResult(
+                        KorailReservationOutcome.ACTION_REQUIRED,
+                        "official_dialog_action_target_unavailable",
+                    )
+                try:
+                    target_state = await self._read_control_state(matching_controls[0])
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 -- unreadable official controls fail closed.
+                    target_state = None
+                if not _control_state_allows_dialog_action(target_state):
+                    self._log_reservation_dialog(
+                        phase=phase,
+                        decision=decision,
+                        dialog_count="one",
+                        action="target_unavailable",
+                    )
+                    return KorailReservationResult(
+                        KorailReservationOutcome.ACTION_REQUIRED,
+                        "official_dialog_action_target_unavailable",
+                    )
+                action_key = (phase, decision.kind)
+                if action_key in attempt.dialog_actions_attempted:
+                    if self._monotonic() < (attempt.dialog_settle_deadlines or {}).get(
+                        action_key,
+                        0.0,
+                    ):
+                        return None
+                    self._log_reservation_dialog(
+                        phase=phase,
+                        decision=decision,
+                        dialog_count="one",
+                        action="already_attempted",
+                    )
+                    return KorailReservationResult(
+                        KorailReservationOutcome.ACTION_REQUIRED,
+                        (
+                            "delay_consent_persisted"
+                            if decision.kind is _dialog_policy.ReservationDialogKind.DELAY_CONSENT
+                            else "reservation_information_consent_persisted"
+                            if is_consent_action
+                            else "official_notice_persisted"
+                        ),
+                    )
+                attempt.dialog_actions_attempted += (action_key,)
+                if attempt.dialog_settle_deadlines is None:
+                    attempt.dialog_settle_deadlines = {}
+                attempt.dialog_settle_deadlines[action_key] = self._monotonic() + min(
+                    self._timeout_seconds,
+                    0.5,
+                )
+                self._log_reservation_dialog(
+                    phase=phase,
+                    decision=decision,
+                    dialog_count="one",
+                    action=(
+                        "consent_accept_attempted" if is_consent_action else "dismiss_attempted"
+                    ),
+                )
+                try:
+                    await matching_controls[0].click()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 -- official dialog action result is uncertain.
+                    self._log_reservation_dialog(
+                        phase=phase,
+                        decision=decision,
+                        dialog_count="one",
+                        action=("consent_accept_failed" if is_consent_action else "dismiss_failed"),
+                    )
+                    return KorailReservationResult(
+                        KorailReservationOutcome.ACTION_REQUIRED,
+                        (
+                            "delay_consent_accept_result_unknown"
+                            if decision.kind is _dialog_policy.ReservationDialogKind.DELAY_CONSENT
+                            else "reservation_information_consent_accept_result_unknown"
+                            if is_consent_action
+                            else "official_notice_dismiss_result_unknown"
+                        ),
+                    )
+                self._log_reservation_dialog(
+                    phase=phase,
+                    decision=decision,
+                    dialog_count="one",
+                    action=(
+                        "consent_accept_succeeded" if is_consent_action else "dismiss_succeeded"
+                    ),
+                )
+                if phase is _dialog_policy.ReservationDialogPhase.POST_REQUEST:
+                    attempt.post_dialog_action_followup_deadline = (
+                        self._monotonic() + self._timeout_seconds
+                    )
+                return None
+            else:
+                self._log_reservation_dialog(
+                    phase=phase,
+                    decision=decision,
+                    dialog_count="one",
+                    action="none",
+                )
+                return KorailReservationResult(
+                    KorailReservationOutcome.ACTION_REQUIRED,
+                    "official_action_required",
+                )
+
+        if (
+            attempt.post_dialog_action_followup_deadline is not None
+            and self._monotonic() >= attempt.post_dialog_action_followup_deadline
+        ):
+            return KorailReservationResult(
+                KorailReservationOutcome.ACTION_REQUIRED,
+                "official_post_dialog_action_unresolved",
             )
         return None

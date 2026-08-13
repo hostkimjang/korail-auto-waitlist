@@ -127,6 +127,14 @@ def project_reservation_result(
         outcome = ReservationOutcome.PROVIDER_BLOCKED
     elif result.outcome == "unavailable":
         outcome = ReservationOutcome.NOT_AVAILABLE
+    elif (
+        result.outcome == "failed"
+        and result.reason == "reservation_result_unknown:reservation_click_error"
+    ):
+        # The browser control did not confirm that click dispatch completed. Keep the
+        # command behind the UNKNOWN/manual-confirmation fence without claiming that
+        # the provider request stage itself was completed.
+        outcome = ReservationOutcome.UNKNOWN
     elif result.reservation_clicked:
         # A final click with no authoritative terminal state is never replayed.
         outcome = ReservationOutcome.UNKNOWN

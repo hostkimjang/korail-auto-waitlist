@@ -2,6 +2,7 @@ import { ArrowsClockwise } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { delayUntilRefreshRotationEnds } from "../../shared/lib/refreshIndicator";
+import { LIVE_DATA_RECONCILIATION_INTERVAL_SECONDS } from "../../shared/lib/liveDataSynchronization";
 
 type RefreshTask = () => Promise<unknown> | unknown;
 
@@ -18,10 +19,8 @@ export interface StepThreeRefreshControlProps {
   lastSynchronizedAt?: Date | null;
 }
 
-const defaultIntervalSeconds = 5;
-
 export function StepThreeRefreshControl({
-  intervalSeconds = defaultIntervalSeconds,
+  intervalSeconds = LIVE_DATA_RECONCILIATION_INTERVAL_SECONDS,
   enabled = true,
   onManualRefresh,
   onAutomaticRefresh,
@@ -122,7 +121,9 @@ function useLatest<T>(value: T): { current: T } {
 }
 
 function normalizedInterval(value: number): number {
-  return Number.isFinite(value) && value > 0 ? value : defaultIntervalSeconds;
+  return Number.isFinite(value) && value > 0
+    ? value
+    : LIVE_DATA_RECONCILIATION_INTERVAL_SECONDS;
 }
 
 function documentIsVisible(): boolean {

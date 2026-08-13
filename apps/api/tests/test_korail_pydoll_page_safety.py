@@ -10,6 +10,9 @@ from rail_waitlist.korail_browser_automation import (
     BrowserProtectionDetected,
     BrowserRateLimited,
 )
+from rail_waitlist.korail_sidecar.browser_service_availability import (
+    BrowserProviderUnavailable,
+)
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import (
     PydollPageSnapshot,
     PydollTrainRow,
@@ -135,6 +138,28 @@ def test_page_safety_logs_only_sanitized_counts(
     assert "rows=0 visible_surfaces=1 marker_surfaces=0 network=((403, 'document'),)" in caplog.text
     assert "secret-body" not in caplog.text
     assert "secret-surface" not in caplog.text
+
+
+def test_page_safety_classifies_maintenance_without_logging_page_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger=EVENT_LOGGER.name)
+    snapshot = PydollPageSnapshot(
+        "서비스를 일시중지합니다 secret-body 승차권 예약 및 발매서비스",
+        (),
+        url="https://www.korail.com/rejectservice_job.html",
+    )
+
+    block = classify_pydoll_page_block(snapshot)
+    assert block is not None
+    assert (block.kind, block.trigger) == ("provider_unavailable", "maintenance_page")
+    with pytest.raises(BrowserProviderUnavailable) as raised:
+        assert_pydoll_response_allowed(snapshot, "wait_result", event_logger=EVENT_LOGGER)
+
+    assert raised.value.reason == "source_unavailable"
+    assert raised.value.stage == "wait_result"
+    assert "stage=wait_result trigger=maintenance_page rows=0 network_count=0" in caplog.text
+    assert "secret-body" not in caplog.text
 
 
 def test_page_safety_does_not_reverse_depend_on_browser_facade() -> None:

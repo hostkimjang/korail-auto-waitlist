@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import UTC, date, datetime, time
 from typing import Self
@@ -28,15 +29,33 @@ from rail_waitlist.korail_reservation_confirmation import (
     normalize_korail_same_session_detail,
 )
 from rail_waitlist.korail_reservation_contract import KorailReservationConfirmationResult
+from rail_waitlist.korail_sidecar.pydoll.page_contracts import (
+    PydollIssuedTicketListSnapshot,
+    PydollIssuedTicketSummary,
+    PydollReservationListSnapshot,
+)
+from rail_waitlist.korail_sidecar.pydoll.search_driver import (
+    PydollSearchDomDriver,
+    _issued_ticket_from_value,
+    _issued_ticket_snapshot_from_script_response,
+    _reservation_list_snapshot_from_script_response,
+)
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 
 KOREA = ZoneInfo("Asia/Seoul")
 
 
-def confirmation_target(*, credential_version: int = 7) -> ReservationConfirmationTarget:
+def confirmation_target(
+    *,
+    credential_version: int = 7,
+    purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
+    reserved_seats: tuple[ReservationConfirmationSeat, ...] = (),
+) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-fixture",
         candidate_id="candidate-fixture",
@@ -49,6 +68,8 @@ def confirmation_target(*, credential_version: int = 7) -> ReservationConfirmati
         seat_class=SeatClass.STANDARD,
         passenger_count=1,
         credential_version=credential_version,
+        purpose=purpose,
+        reserved_seats=reserved_seats,
     )
 
 
@@ -65,6 +86,8 @@ def confirmation_payload() -> dict[str, object]:
         "seat_class": target.seat_class.value,
         "passenger_count": target.passenger_count,
         "credential_version": target.credential_version,
+        "purpose": target.purpose.value,
+        "reserved_seats": [],
     }
 
 
@@ -73,12 +96,16 @@ class ReadOnlyDetailSession:
         self,
         snapshot: PydollPageSnapshot,
         *,
-        reservation_list_snapshot: PydollPageSnapshot | None = None,
+        reservation_list_snapshot: PydollReservationListSnapshot | None = None,
+        issued_ticket_snapshot: PydollIssuedTicketListSnapshot | None = None,
+        snapshot_error: Exception | None = None,
         officially_authenticated: bool = False,
         header_authenticated: bool = False,
     ) -> None:
         self.snapshot = snapshot
         self.reservation_list_snapshot = reservation_list_snapshot
+        self.issued_ticket_snapshot = issued_ticket_snapshot
+        self.snapshot_error = snapshot_error
         self.officially_authenticated = officially_authenticated
         self.header_authenticated = header_authenticated
         self.events: list[str] = []
@@ -101,6 +128,8 @@ class ReadOnlyDetailSession:
     async def _snapshot(self) -> PydollPageSnapshot:
         self.snapshot_started.set()
         self.events.append("snapshot")
+        if self.snapshot_error is not None:
+            raise self.snapshot_error
         return self.snapshot
 
     async def _probe_official_authenticated_session(self) -> bool:
@@ -111,11 +140,17 @@ class ReadOnlyDetailSession:
         self.events.append("auth_header")
         return self.header_authenticated
 
-    async def read_reservation_list(self) -> PydollPageSnapshot:
+    async def read_reservation_list(self) -> PydollReservationListSnapshot:
         self.events.append("reservation_list")
         if self.reservation_list_snapshot is None:
             raise RuntimeError("reservation list fixture not configured")
         return self.reservation_list_snapshot
+
+    async def read_issued_ticket_list(self) -> PydollIssuedTicketListSnapshot:
+        self.events.append("issued_ticket_list")
+        if self.issued_ticket_snapshot is None:
+            raise RuntimeError("issued ticket fixture not configured")
+        return self.issued_ticket_snapshot
 
 
 class BlockingTimetableSession:
@@ -182,13 +217,17 @@ class BlockingTimetableSession:
 async def detail_client(
     snapshot: PydollPageSnapshot,
     *,
-    reservation_list_snapshot: PydollPageSnapshot | None = None,
+    reservation_list_snapshot: PydollReservationListSnapshot | None = None,
+    issued_ticket_snapshot: PydollIssuedTicketListSnapshot | None = None,
+    snapshot_error: Exception | None = None,
     officially_authenticated: bool = False,
     header_authenticated: bool = False,
 ) -> tuple[PydollKorailBrowserClient, ReadOnlyDetailSession]:
     session = ReadOnlyDetailSession(
         snapshot,
         reservation_list_snapshot=reservation_list_snapshot,
+        issued_ticket_snapshot=issued_ticket_snapshot,
+        snapshot_error=snapshot_error,
         officially_authenticated=officially_authenticated,
         header_authenticated=header_authenticated,
     )
@@ -261,9 +300,7 @@ async def test_blocked_read_only_search_does_not_block_same_session_confirmation
     )
     await search.search_started.wait()
 
-    confirmation_task = asyncio.create_task(
-        client.read_reservation_detail(confirmation_target())
-    )
+    confirmation_task = asyncio.create_task(client.read_reservation_detail(confirmation_target()))
     await asyncio.wait_for(authenticated.snapshot_started.wait(), timeout=1)
     evidence = await confirmation_task
 
@@ -363,22 +400,100 @@ async def test_pydoll_confirmation_does_not_trust_transient_login_route_alone(
     ]
 
 
+def reservation_list_snapshot(
+    *rows: str,
+    url: str = "https://www.korail.com/ticket/reservation/list",
+    page_marker_visible: bool = True,
+    explicit_empty_visible: bool = False,
+    loading_visible: bool = False,
+    stable_observation: bool = True,
+    malformed_card_count: int = 0,
+    protection_detected: bool = False,
+) -> PydollReservationListSnapshot:
+    return PydollReservationListSnapshot(
+        url=url,
+        reservation_rows=rows,
+        rendered_card_count=len(rows) + malformed_card_count,
+        malformed_card_count=malformed_card_count,
+        page_marker_visible=page_marker_visible,
+        explicit_empty_visible=explicit_empty_visible,
+        loading_visible=loading_visible,
+        stable_observation=stable_observation,
+        protection_detected=protection_detected,
+    )
+
+
 def exact_reservation_list_snapshot(
     *,
     row: str | None = None,
     url: str = "https://www.korail.com/ticket/reservation/list",
-) -> PydollPageSnapshot:
+) -> PydollReservationListSnapshot:
     exact_row = row or (
         "승차권 예약 KTX 0043 서울역 → 부산역 "
         "2026년08월03일(월) 15:45 → 18:12 1매 "
         "예약취소 예약변경 결제/발권 결제기한: 2026. 08. 03 16:30"
     )
-    return PydollPageSnapshot(
-        body_text=f"예약 승차권 조회 {exact_row}",
-        rows=(),
-        url=url,
-        reservation_rows=(exact_row,),
+    return reservation_list_snapshot(exact_row, url=url)
+
+
+def test_reservation_list_script_boundary_tracks_completeness_without_raw_card_data() -> None:
+    redacted = (
+        "KTX 0043 서울역 → 부산역 2026년08월03일 15:45 → 18:12 1매 "
+        "예약취소 예약변경 결제/발권 결제기한: 2026. 08. 03 16:30"
     )
+    response = {
+        "result": {
+            "result": {
+                "value": {
+                    "url": "https://www.korail.com/ticket/reservation/list",
+                    "cardCount": 2,
+                    "rows": [redacted, None],
+                    "pageMarkerVisible": True,
+                    "explicitEmptyVisible": False,
+                    "loadingVisible": False,
+                    "protectionDetected": False,
+                }
+            }
+        }
+    }
+
+    snapshot = _reservation_list_snapshot_from_script_response(response, network_responses=())
+
+    assert snapshot.reservation_rows == (redacted,)
+    assert snapshot.rendered_card_count == 2
+    assert snapshot.malformed_card_count == 1
+    assert snapshot.page_ready is True
+    assert snapshot.official_read_completed is False
+
+    unsafe = {
+        **response,
+        "result": {
+            "result": {
+                "value": {
+                    **response["result"]["result"]["value"],
+                    "cardCount": 1,
+                    "rows": [f"{redacted} forbidden-transport-identifier"],
+                }
+            }
+        },
+    }
+    rejected = _reservation_list_snapshot_from_script_response(unsafe, network_responses=())
+    assert rejected.reservation_rows == ()
+    assert rejected.malformed_card_count == 1
+    assert "forbidden-transport-identifier" not in repr(rejected)
+
+
+def test_reservation_list_dom_contract_collects_identity_without_action_seed() -> None:
+    source = inspect.getsource(PydollSearchDomDriver.reservation_list_snapshot)
+
+    assert "allIdentityElements" in source
+    assert "identityBearing" in source
+    assert "containedSeedCount !== 1" in source
+    assert "(?:명|매)" not in source.split("const redact", maxsplit=1)[0]
+    assert "normalized(item.innerText) === '결제/발권'" not in source
+    assert "rows: cards.map(redact)" in source
+    assert "loadingVisible" in source
+    assert "explicitEmptyVisible" in source
 
 
 @pytest.mark.asyncio
@@ -409,9 +524,9 @@ async def test_pydoll_confirmation_falls_back_to_exact_official_reservation_list
     "row",
     [
         exact_reservation_list_snapshot().reservation_rows[0].replace("0043", "0047"),
-        exact_reservation_list_snapshot().reservation_rows[0].replace(
-            "2026년08월03일", "2026년08월04일", 1
-        ),
+        exact_reservation_list_snapshot()
+        .reservation_rows[0]
+        .replace("2026년08월03일", "2026년08월04일", 1),
         exact_reservation_list_snapshot().reservation_rows[0].replace("15:45", "15:55"),
         exact_reservation_list_snapshot().reservation_rows[0].replace("18:12", "18:22"),
         exact_reservation_list_snapshot().reservation_rows[0].replace("서울역", "서울숲"),
@@ -438,12 +553,7 @@ async def test_pydoll_reservation_list_rejects_every_inexact_identity(row: str) 
 async def test_pydoll_completed_empty_reservation_list_normalizes_to_not_found() -> None:
     client, _ = await detail_client(
         PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
-        reservation_list_snapshot=PydollPageSnapshot(
-            body_text="예약 승차권 조회 결제기한이 지난 목록은 자동 삭제됨",
-            rows=(),
-            url="https://www.korail.com/ticket/reservation/list",
-            reservation_rows=(),
-        ),
+        reservation_list_snapshot=reservation_list_snapshot(explicit_empty_visible=True),
     )
 
     evidence = await client.read_reservation_detail(confirmation_target())
@@ -457,15 +567,81 @@ async def test_pydoll_completed_empty_reservation_list_normalizes_to_not_found()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reservation_snapshot",
+    [
+        reservation_list_snapshot(explicit_empty_visible=True, loading_visible=True),
+        reservation_list_snapshot(malformed_card_count=1),
+        reservation_list_snapshot(),
+        reservation_list_snapshot(
+            explicit_empty_visible=True,
+            url="https://www.korail.com/ticket/search/general",
+        ),
+    ],
+)
+async def test_reservation_list_race_or_incomplete_render_never_proves_absence(
+    reservation_snapshot: PydollReservationListSnapshot,
+) -> None:
+    client, _ = await detail_client(
+        PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
+        reservation_list_snapshot=reservation_snapshot,
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+    result = normalize_korail_same_session_detail(confirmation_target(), evidence)
+
+    assert evidence.official_list_read_completed is False
+    assert evidence.official_list_target_absent is False
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+
+
+@pytest.mark.asyncio
+async def test_two_card_render_with_one_missing_identity_field_never_proves_absence() -> None:
+    other_row = exact_reservation_list_snapshot().reservation_rows[0].replace("0043", "0047")
+    client, _ = await detail_client(
+        PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
+        reservation_list_snapshot=reservation_list_snapshot(
+            other_row,
+            malformed_card_count=1,
+        ),
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+
+    assert evidence.official_list_read_completed is False
+    assert evidence.official_list_target_absent is False
+
+
+@pytest.mark.asyncio
+async def test_exact_reservation_row_without_pending_controls_is_not_absent() -> None:
+    exact_without_pending = (
+        exact_reservation_list_snapshot()
+        .reservation_rows[0]
+        .replace(
+            "예약취소 예약변경 결제/발권",
+            "승차권 확인",
+        )
+    )
+    client, _ = await detail_client(
+        PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
+        reservation_list_snapshot=reservation_list_snapshot(exact_without_pending),
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+    result = normalize_korail_same_session_detail(confirmation_target(), evidence)
+
+    assert evidence.official_list_read_completed is True
+    assert evidence.official_list_target_absent is False
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+
+
+@pytest.mark.asyncio
 async def test_pydoll_duplicate_exact_reservation_rows_remain_inconclusive() -> None:
     exact = exact_reservation_list_snapshot()
     client, _ = await detail_client(
         PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
-        reservation_list_snapshot=PydollPageSnapshot(
-            body_text=exact.body_text,
-            rows=(),
-            url=exact.url,
-            reservation_rows=(exact.reservation_rows[0], exact.reservation_rows[0]),
+        reservation_list_snapshot=reservation_list_snapshot(
+            exact.reservation_rows[0], exact.reservation_rows[0]
         ),
     )
 
@@ -487,11 +663,7 @@ async def test_pydoll_reservation_list_auth_and_protection_fail_closed() -> None
     )
     blocked_client, _ = await detail_client(
         PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
-        reservation_list_snapshot=PydollPageSnapshot(
-            body_text="CODE -8003",
-            rows=(),
-            url="https://www.korail.com/ticket/reservation/list",
-        ),
+        reservation_list_snapshot=reservation_list_snapshot(protection_detected=True),
     )
 
     login = await login_client.read_reservation_detail(confirmation_target())
@@ -499,6 +671,480 @@ async def test_pydoll_reservation_list_auth_and_protection_fail_closed() -> None
 
     assert login.auth_required is True
     assert blocked.provider_blocked is True
+
+
+def paid_follow_up_target(
+    *,
+    car_number: str = "4",
+    seat_number: str = "8A",
+) -> ReservationConfirmationTarget:
+    return confirmation_target(
+        purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+        reserved_seats=(
+            ReservationConfirmationSeat(
+                car_number=car_number,
+                seat_number=seat_number,
+            ),
+        ),
+    )
+
+
+def exact_issued_ticket(
+    **overrides: object,
+) -> PydollIssuedTicketSummary:
+    values: dict[str, object] = {
+        "service_date": date(2026, 8, 3),
+        "train_number": "0043",
+        "origin": "서울",
+        "destination": "부산",
+        "departure_time": time(15, 45),
+        "arrival_time": time(18, 12),
+        "seat_class": "standard",
+        "passenger_count": 1,
+        "car_number": "4",
+        "seat_number": "8A",
+    }
+    values.update(overrides)
+    return PydollIssuedTicketSummary(**values)
+
+
+def issued_ticket_list_snapshot(
+    *tickets: PydollIssuedTicketSummary,
+    url: str = "https://www.korail.com/ticket/myticket/list",
+    malformed_card_count: int = 0,
+    empty_state_visible: bool = False,
+    protection_detected: bool = False,
+) -> PydollIssuedTicketListSnapshot:
+    return PydollIssuedTicketListSnapshot(
+        url=url,
+        tickets=tickets,
+        rendered_card_count=len(tickets) + malformed_card_count,
+        malformed_card_count=malformed_card_count,
+        empty_state_visible=empty_state_visible,
+        protection_detected=protection_detected,
+    )
+
+
+def test_issued_ticket_script_boundary_redacts_sensitive_transport_fields() -> None:
+    sensitive = "must-not-cross-issued-ticket-boundary"
+    payload = {
+        "serviceDate": "2026-08-03",
+        "trainNumber": "0043",
+        "origin": "서울",
+        "destination": "부산",
+        "departureTime": "15:45",
+        "arrivalTime": "18:12",
+        "seatClass": "standard",
+        "passengerCount": 1,
+        "carNumber": "4",
+        "seatNumber": "8A",
+        "returned": False,
+        "operationStopped": False,
+        "transferred": False,
+    }
+    response = {
+        "result": {
+            "result": {
+                "value": {
+                    "url": "https://www.korail.com/ticket/myticket/list",
+                    "cardCount": 1,
+                    "emptyStateVisible": False,
+                    "protectionDetected": False,
+                    "tickets": [payload],
+                }
+            }
+        }
+    }
+
+    snapshot = _issued_ticket_snapshot_from_script_response(
+        response,
+        network_responses=(),
+    )
+
+    assert snapshot.tickets == (exact_issued_ticket(),)
+    assert sensitive not in repr(snapshot)
+    for forbidden in ("ticketNumber", "pnr", "qr", "rawText"):
+        invalid = {
+            **response,
+            "result": {
+                "result": {
+                    "value": {
+                        **response["result"]["result"]["value"],
+                        "tickets": [{**payload, forbidden: sensitive}],
+                    }
+                }
+            },
+        }
+        rejected = _issued_ticket_snapshot_from_script_response(
+            invalid,
+            network_responses=(),
+        )
+        assert rejected.tickets == ()
+        assert rejected.malformed_card_count == 1
+        assert sensitive not in repr(rejected)
+
+
+def test_issued_ticket_dom_contract_uses_official_count_before_fallback_and_blocks_gifts() -> None:
+    source = inspect.getsource(PydollSearchDomDriver.issued_ticket_snapshot)
+    official_count_selector = ".my-ticket__trn-ticket-ticket-num .data"
+    group_fallback_selector = ".tck_group-count"
+
+    assert source.index(official_count_selector) < source.index(group_fallback_selector)
+    assert "(?:\\s*(?:명|매|석))?" in source
+    assert "groupText.match(/(\\d{1,2})\\s*(?:명|매|석)/)" in source
+    assert "card.querySelector('.tit_wrap .gift')" in source
+    assert r"/받은\s*승차권/" in source
+
+
+@pytest.mark.parametrize("passenger_count", [None, True, 0, 10, "1"])
+def test_issued_ticket_parser_rejects_invalid_passenger_count(passenger_count: object) -> None:
+    payload = {
+        "serviceDate": "2026-08-03",
+        "trainNumber": "0043",
+        "origin": "서울",
+        "destination": "부산",
+        "departureTime": "15:45",
+        "arrivalTime": "18:12",
+        "seatClass": "standard",
+        "passengerCount": passenger_count,
+        "carNumber": "4",
+        "seatNumber": "8A",
+        "returned": False,
+        "operationStopped": False,
+        "transferred": False,
+    }
+
+    assert _issued_ticket_from_value(payload) is None
+
+
+@pytest.mark.asyncio
+async def test_payment_follow_up_exact_issued_ticket_overrides_stale_pending_detail() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(exact_issued_ticket()),
+    )
+    target = paid_follow_up_target()
+
+    evidence = await client.read_reservation_detail(target)
+    result = normalize_korail_same_session_detail(target, evidence)
+
+    assert evidence.source == "korail-issued-ticket-list"
+    assert evidence.issued_ticket_exact_match is True
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    assert result.payment_deadline is None
+    assert result.official_handoff_url is None
+    assert session.events == ["snapshot", "issued_ticket_list"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("issued_snapshot", "expected"),
+    [
+        (
+            issued_ticket_list_snapshot(exact_issued_ticket()),
+            ReservationConfirmationOutcome.CONFIRMED_PAID,
+        ),
+        (
+            issued_ticket_list_snapshot(url="https://www.korail.com/ticket/login"),
+            ReservationConfirmationOutcome.AUTH_REQUIRED,
+        ),
+        (
+            issued_ticket_list_snapshot(protection_detected=True),
+            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+        ),
+        (
+            issued_ticket_list_snapshot(empty_state_visible=True),
+            ReservationConfirmationOutcome.INCONCLUSIVE,
+        ),
+    ],
+)
+async def test_payment_follow_up_issued_probe_survives_detail_snapshot_failure(
+    issued_snapshot: PydollIssuedTicketListSnapshot,
+    expected: ReservationConfirmationOutcome,
+) -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_snapshot,
+        snapshot_error=RuntimeError("synthetic opaque detail read failure"),
+    )
+    target = paid_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is expected
+    assert session.events[:2] == ["snapshot", "issued_ticket_list"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reservation_snapshot", "expected"),
+    [
+        (
+            exact_reservation_list_snapshot(),
+            ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+        ),
+        (
+            reservation_list_snapshot(explicit_empty_visible=True),
+            ReservationConfirmationOutcome.NOT_FOUND,
+        ),
+    ],
+)
+async def test_payment_follow_up_uses_fresh_unpaid_list_after_no_issued_match(
+    reservation_snapshot: PydollReservationListSnapshot,
+    expected: ReservationConfirmationOutcome,
+) -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        reservation_list_snapshot=reservation_snapshot,
+        issued_ticket_snapshot=issued_ticket_list_snapshot(empty_state_visible=True),
+    )
+    target = paid_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is expected
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "issued_snapshot",
+    [
+        issued_ticket_list_snapshot(malformed_card_count=1),
+        issued_ticket_list_snapshot(exact_issued_ticket(), exact_issued_ticket()),
+        issued_ticket_list_snapshot(exact_issued_ticket(train_number="0047")),
+        issued_ticket_list_snapshot(
+            url="https://www.korail.com/ticket/reservation/list",
+        ),
+    ],
+)
+async def test_payment_follow_up_does_not_accept_unpaid_absence_after_unsafe_issued_probe(
+    issued_snapshot: PydollIssuedTicketListSnapshot,
+) -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        reservation_list_snapshot=reservation_list_snapshot(explicit_empty_visible=True),
+        issued_ticket_snapshot=issued_snapshot,
+    )
+    target = paid_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_payment_follow_up_snapshot_failure_still_uses_fresh_unpaid_list() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(empty_state_visible=True),
+        snapshot_error=RuntimeError("synthetic opaque detail read failure"),
+    )
+    target = paid_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_initial_confirmation_never_reads_issued_ticket_list() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(exact_issued_ticket()),
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+
+    assert evidence.source == "korail-same-session-detail"
+    assert evidence.payment_pending_markers_present is True
+    assert session.events == ["snapshot"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ticket",
+    [
+        exact_issued_ticket(service_date=date(2026, 8, 4)),
+        exact_issued_ticket(train_number="0047"),
+        exact_issued_ticket(origin="서울숲"),
+        exact_issued_ticket(destination="부산진"),
+        exact_issued_ticket(departure_time=time(15, 55)),
+        exact_issued_ticket(arrival_time=time(18, 22)),
+        exact_issued_ticket(seat_class="first"),
+        exact_issued_ticket(passenger_count=2),
+        exact_issued_ticket(car_number="5"),
+        exact_issued_ticket(seat_number="8B"),
+        exact_issued_ticket(returned=True),
+        exact_issued_ticket(operation_stopped=True),
+        exact_issued_ticket(transferred=True),
+    ],
+)
+async def test_payment_follow_up_rejects_every_inexact_or_invalidated_ticket(
+    ticket: PydollIssuedTicketSummary,
+) -> None:
+    client, _ = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(ticket),
+    )
+    target = paid_follow_up_target()
+
+    evidence = await client.read_reservation_detail(target)
+    result = normalize_korail_same_session_detail(target, evidence)
+
+    assert evidence.source != "korail-issued-ticket-list"
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        issued_ticket_list_snapshot(exact_issued_ticket(), exact_issued_ticket()),
+        issued_ticket_list_snapshot(malformed_card_count=1),
+        issued_ticket_list_snapshot(empty_state_visible=True),
+        issued_ticket_list_snapshot(
+            exact_issued_ticket(),
+            url="https://www.korail.com/ticket/reservation/list",
+        ),
+    ],
+)
+async def test_payment_follow_up_duplicate_malformed_empty_or_wrong_route_is_not_paid(
+    snapshot: PydollIssuedTicketListSnapshot,
+) -> None:
+    client, _ = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=snapshot,
+    )
+    target = paid_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+
+
+@pytest.mark.asyncio
+async def test_payment_follow_up_issued_login_and_protection_fail_closed() -> None:
+    login_client, _ = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(
+            url="https://www.korail.com/ticket/login"
+        ),
+    )
+    blocked_client, _ = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(
+            protection_detected=True,
+        ),
+    )
+    target = paid_follow_up_target()
+
+    login = normalize_korail_same_session_detail(
+        target,
+        await login_client.read_reservation_detail(target),
+    )
+    blocked = normalize_korail_same_session_detail(
+        target,
+        await blocked_client.read_reservation_detail(target),
+    )
+
+    assert login.outcome is ReservationConfirmationOutcome.AUTH_REQUIRED
+    assert blocked.outcome is ReservationConfirmationOutcome.PROVIDER_BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_no_seat_follow_up_keeps_issued_and_unpaid_absence_inconclusive() -> None:
+    target = confirmation_target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP)
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        reservation_list_snapshot=reservation_list_snapshot(explicit_empty_visible=True),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(exact_issued_ticket()),
+    )
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_without_seat_keeps_fresh_unpaid_hold_payment_required() -> None:
+    target = confirmation_target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP)
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(exact_issued_ticket()),
+    )
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_without_seat_does_not_combine_issued_core_with_loading_empty() -> None:
+    target = confirmation_target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP)
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        reservation_list_snapshot=reservation_list_snapshot(
+            explicit_empty_visible=True,
+            loading_visible=True,
+        ),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(exact_issued_ticket()),
+    )
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_without_seat_does_not_probe_issued_cards() -> None:
+    target = confirmation_target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP)
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(
+            exact_issued_ticket(),
+            exact_issued_ticket(car_number="5", seat_number="9B"),
+        ),
+    )
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert session.events == ["snapshot", "reservation_list"]
 
 
 def official_screenshot_target() -> ReservationConfirmationTarget:
@@ -546,12 +1192,7 @@ async def test_pydoll_reservation_list_accepts_real_pending_action_triplet() -> 
     row = official_screenshot_row()
     client, _ = await detail_client(
         PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
-        reservation_list_snapshot=PydollPageSnapshot(
-            body_text=f"예약 승차권 조회 {row}",
-            rows=(),
-            url="https://www.korail.com/ticket/reservation/list",
-            reservation_rows=(row,),
-        ),
+        reservation_list_snapshot=reservation_list_snapshot(row),
     )
 
     evidence = await client.read_reservation_detail(official_screenshot_target())
@@ -579,12 +1220,7 @@ async def test_pydoll_reservation_list_rejects_missing_action_or_ambiguous_rows(
 ) -> None:
     client, _ = await detail_client(
         PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
-        reservation_list_snapshot=PydollPageSnapshot(
-            body_text="예약 승차권 조회",
-            rows=(),
-            url="https://www.korail.com/ticket/reservation/list",
-            reservation_rows=rows,
-        ),
+        reservation_list_snapshot=reservation_list_snapshot(*rows),
     )
 
     evidence = await client.read_reservation_detail(official_screenshot_target())
@@ -654,6 +1290,10 @@ def test_confirmation_endpoint_requires_bearer_redacts_validation_and_sets_no_st
     assert accepted.headers["cache-control"] == "no-store"
     assert accepted.json()["outcome"] == "confirmed_payment_required"
     assert accepted.json()["source"] == "korail-reservation-list"
+    assert (
+        "KORAIL reservation confirmation completed purpose=initial "
+        "outcome=confirmed_payment_required source=korail-reservation-list"
+    ) in caplog.text
     assert secret not in rejected.text
     assert secret not in caplog.text
     assert reservation_client.targets == [confirmation_target()]
@@ -709,9 +1349,7 @@ async def test_source_preserves_exact_request_generation_and_protection_outcome(
     )
     result = await confirmation_source(transport).confirm_reservation(confirmation_target())
     blocked = await confirmation_source(
-        FakeConfirmationTransport(
-            _AdapterFailure("provider_access_restricted", protection=True)
-        )
+        FakeConfirmationTransport(_AdapterFailure("provider_access_restricted", protection=True))
     ).confirm_reservation(confirmation_target())
 
     request = transport.requests[0]

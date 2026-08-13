@@ -67,6 +67,7 @@ METHOD_INVENTORIES = {
         "expand_results",
         "reserve_once",
         "read_reservation_list",
+        "read_issued_ticket_list",
         "_snapshot",
         "_probe_official_authenticated_session",
         "_has_authenticated_header",
@@ -128,6 +129,7 @@ METHOD_INVENTORIES = {
         "navigate",
         "navigate_fresh",
         "read_reservation_list",
+        "read_issued_ticket_list",
         "_replace_tab",
         "_attach_network_listener",
         "_cleanup_tab_listener",
@@ -161,6 +163,7 @@ METHOD_INVENTORIES = {
         "_probe_reservation_terminal",
         "_wait_for_result_growth",
         "_snapshot",
+        "_issued_ticket_snapshot",
         "_evaluate_value",
         "_evaluate_text",
         "_wait_for_value",
@@ -203,6 +206,7 @@ IMPLEMENTATION_ISLANDS = {
         "navigate",
         "navigate_fresh",
         "read_reservation_list",
+        "read_issued_ticket_list",
         "export_http_replay_plan",
         "_on_response_received",
     },
@@ -383,7 +387,7 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    assert len(source.splitlines()) <= 1_384
+    assert len(source.splitlines()) <= 1_450
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

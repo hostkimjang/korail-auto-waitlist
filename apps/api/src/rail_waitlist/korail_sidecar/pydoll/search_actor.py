@@ -24,6 +24,7 @@ from ..browser_contracts import (
     BrowserSourceUnavailable,
     BrowserTrainSnapshot,
 )
+from ..browser_service_availability import BrowserProviderUnavailable
 from ..http_replay import KorailHttpReplayPlan
 from ..search_result_policy import (
     parse_expected_delay_minutes,
@@ -298,6 +299,10 @@ class PydollReadOnlySearchActor:
                         await self._discard_active_session()
                     raise
                 except (BrowserProtectionDetected, BrowserRateLimited):
+                    if lease is not None and lease.persistent:
+                        await self._discard_active_session()
+                    raise
+                except BrowserProviderUnavailable:
                     if lease is not None and lease.persistent:
                         await self._discard_active_session()
                     raise

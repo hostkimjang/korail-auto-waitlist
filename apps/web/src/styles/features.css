@@ -424,6 +424,7 @@
 .watch-state > .watch-last-checked {
   color: #718397;
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .watch-state > .watch-reservation-attempt {

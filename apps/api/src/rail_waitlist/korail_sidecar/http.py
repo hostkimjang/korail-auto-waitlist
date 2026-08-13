@@ -25,7 +25,9 @@ from ..korail_sidecar.browser_contracts import (
 )
 from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 from ..reservations.provider_confirmation.korail import (
@@ -36,6 +38,7 @@ from .browser_page_contracts import (
     FULLSTACK_E2E_PAGE_URL,
     OFFICIAL_KORAIL_SEARCH_URL,
 )
+from .browser_service_availability import BrowserProviderUnavailable
 from .contracts import (
     KorailLoginVerificationOutcomeValue,
     KorailLoginVerifyRequest,
@@ -393,16 +396,14 @@ def create_adapter_app(
         except BrowserRateLimited as error:
             raise HTTPException(429, {"reason": error.reason}, headers=NO_STORE_HEADERS) from None
         except BrowserProtectionDetected as error:
-            dependencies.logger.warning(
-                "KORAIL browser protection detected at stage=%s trigger=%s",
-                error.stage,
-                error.trigger,
-            )
             raise HTTPException(423, {"reason": error.reason}, headers=NO_STORE_HEADERS) from None
+        except BrowserProviderUnavailable as error:
+            retry_after = error.retry_after_seconds
+            headers = dict(NO_STORE_HEADERS)
+            if retry_after is not None:
+                headers["Retry-After"] = str(retry_after)
+            raise HTTPException(503, {"reason": error.reason}, headers=headers) from None
         except BrowserSourceUnavailable as error:
-            dependencies.logger.warning(
-                "KORAIL browser snapshot unavailable at stage=%s", error.stage
-            )
             raise HTTPException(503, {"reason": error.reason}, headers=NO_STORE_HEADERS) from None
         except BrowserAdapterError as error:
             status = 422 if error.reason == "passenger_count_not_supported" else 503
@@ -480,6 +481,14 @@ def create_adapter_app(
                     _ReserveOnceResult,
                     await client.reserve_once(internal_request, on_progress=emit_progress),
                 )
+                dependencies.logger.info(
+                    "KORAIL reserve-once stream completed outcome=%s reason=%s "
+                    "seat_clicked=%s reservation_clicked=%s",
+                    result.outcome.value,
+                    result.reason,
+                    str(result.seat_clicked).lower(),
+                    str(result.reservation_clicked).lower(),
+                )
                 terminal = public_reservation_result(result)
             except Exception:  # noqa: BLE001 -- redact browser and credential details.
                 dependencies.logger.error(
@@ -543,6 +552,14 @@ def create_adapter_app(
             seat_class=SeatClass(request.seat_class),
             passenger_count=request.passenger_count,
             credential_version=request.credential_version,
+            purpose=ReservationConfirmationPurpose(request.purpose),
+            reserved_seats=tuple(
+                ReservationConfirmationSeat(
+                    car_number=seat.car_number,
+                    seat_number=seat.seat_number,
+                )
+                for seat in request.reserved_seats
+            ),
         )
         try:
             confirmation = normalize_korail_same_session_detail(
@@ -559,10 +576,20 @@ def create_adapter_app(
                 source=KORAIL_CONFIRMATION_SOURCE,
                 observed_at=datetime.now(UTC),
             )
+        dependencies.logger.info(
+            "KORAIL reservation confirmation completed purpose=%s outcome=%s source=%s",
+            target.purpose.value,
+            confirmation.outcome.value,
+            confirmation.source,
+        )
         return KorailReservationConfirmationResult(
             outcome=confirmation.outcome.value,
             source=cast(
-                Literal["korail-same-session-detail", "korail-reservation-list"],
+                Literal[
+                    "korail-same-session-detail",
+                    "korail-reservation-list",
+                    "korail-issued-ticket-list",
+                ],
                 confirmation.source,
             ),
             observed_at=confirmation.observed_at,

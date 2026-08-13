@@ -33,7 +33,7 @@ CONTRACT_MODULE = "rail_waitlist.srt_sidecar.contracts"
 CLIENT_MODULE = "rail_waitlist.srt_sidecar.client"
 SESSION_MODULE = "rail_waitlist.srt_sidecar.session_contract"
 CREDENTIAL_MODULE = "rail_waitlist.provider_account_management.contracts"
-SCHEMA_SHA256 = "eb5fd68726db4de933a57ce03c6ed2d4f68ad36636b631523337dc7ce2eb7ced"
+SCHEMA_SHA256 = "d7aad4d2d76427f42ec96023bc7c85ccff436c10c2543d62a1a39cd63dfd9d58"
 
 CONTRACT_SYMBOLS = {
     "BaseModel",
@@ -343,6 +343,10 @@ def test_wire_models_keep_canonical_modules_and_schema_fingerprint() -> None:
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
+    target_fields = contract_owner.SrtReservationConfirmationTarget.model_fields
+    assert tuple(target_fields)[-2:] == ("purpose", "reserved_seats")
+    assert target_fields["purpose"].default is contract_owner.ReservationConfirmationPurpose.INITIAL
+    assert target_fields["reserved_seats"].default == ()
     assert hashlib.sha256(encoded).hexdigest() == SCHEMA_SHA256
     assert client_owner.SrtProviderAdapterClient.__module__ == CLIENT_MODULE
     assert client_owner.SrtProviderAdapterUnavailable.__module__ == CLIENT_MODULE
@@ -361,10 +365,38 @@ def test_srt_sidecar_openapi_shape_is_unchanged() -> None:
     ).encode()
 
     assert hashlib.sha256(encoded).hexdigest() == (
-        "f08b8f86b5d60ef62cbd5561a9aade75f681afe569bef3c2d5175dadd3760937"
+        "5dd359af2e41a296aa82242df12a774dbca80bbcfcdf200ec8e7bbfbd78e006a"
     )
     assert len(schema["paths"]) == 7
-    assert len(schema["components"]["schemas"]) == 36
+    assert len(schema["components"]["schemas"]) == 38
+    components = schema["components"]["schemas"]
+    assert components["ReservationConfirmationOutcome"]["enum"] == [
+        "confirmed_payment_required",
+        "confirmed_paid",
+        "not_found",
+        "auth_required",
+        "provider_blocked",
+        "inconclusive",
+    ]
+    assert components["ReservationConfirmationPurpose"]["enum"] == [
+        "initial",
+        "payment_follow_up",
+    ]
+    assert components["ReservationConfirmationSeat"]["required"] == [
+        "car_number",
+        "seat_number",
+    ]
+    target_properties = components["SrtReservationConfirmationTarget"]["properties"]
+    assert target_properties["purpose"] == {
+        "$ref": "#/components/schemas/ReservationConfirmationPurpose",
+        "default": "initial",
+    }
+    assert target_properties["reserved_seats"] == {
+        "default": [],
+        "items": {"$ref": "#/components/schemas/ReservationConfirmationSeat"},
+        "title": "Reserved Seats",
+        "type": "array",
+    }
 
 
 @pytest.mark.parametrize(

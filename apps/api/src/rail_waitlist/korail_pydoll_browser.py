@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass as dataclass
 from datetime import UTC, date, datetime
 from datetime import time as clock_time
-from typing import Any, Protocol, Self, cast
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 from urllib.parse import urlsplit
 
 from .korail_sidecar.browser_contracts import (
@@ -25,7 +25,6 @@ from .korail_sidecar.browser_page_contracts import (
 from .korail_sidecar.browser_protection import (
     is_rate_limit_response,
     protection_trigger_from_http_response,
-    protection_trigger_from_text,
 )
 from .korail_sidecar.http_replay import (
     HttpReplayInvalidCapture,
@@ -101,6 +100,7 @@ from .korail_sidecar.pydoll.page_safety import (
 )
 from .korail_sidecar.pydoll.page_safety import (
     assert_pydoll_response_allowed,
+    classify_pydoll_page_block,
 )
 from .korail_sidecar.pydoll.reservation_actor import (
     PydollReservationActor,
@@ -162,6 +162,12 @@ from .provider_registry.korail_search_url_policy import (
 from .provider_registry.korail_search_url_policy import validate_korail_general_search_url
 from .reservations.provider_confirmation.contracts import ReservationConfirmationTarget
 from .reservations.provider_confirmation.korail import KorailSameSessionDetailEvidence
+
+if TYPE_CHECKING:
+    from .korail_sidecar.pydoll.page_contracts import (
+        PydollIssuedTicketListSnapshot,
+        PydollReservationListSnapshot,
+    )
 
 _MAX_MORE_RESULT_ACTIONS = 19
 # Compatibility seam: focused tests patch this facade value before construction;
@@ -238,7 +244,9 @@ class PydollBrowserSession(Protocol):
         on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult: ...
 
-    async def read_reservation_list(self) -> PydollPageSnapshot: ...
+    async def read_reservation_list(self) -> PydollReservationListSnapshot: ...
+
+    async def read_issued_ticket_list(self) -> PydollIssuedTicketListSnapshot: ...
 
     async def _snapshot(self) -> PydollPageSnapshot: ...
 
@@ -265,8 +273,16 @@ def _default_pydoll_session_factory(
     page_url: str,
     timeout_ms: int,
     headless: bool,
+    auto_handle_dialogs: bool = False,
 ) -> PydollSessionContext:
-    return _PydollSessionContext(_PydollSession(page_url, timeout_ms, headless))
+    return _PydollSessionContext(
+        _PydollSession(
+            page_url,
+            timeout_ms,
+            headless,
+            auto_handle_dialogs=auto_handle_dialogs,
+        )
+    )
 
 
 class PydollKorailBrowserClient:
@@ -285,6 +301,7 @@ class PydollKorailBrowserClient:
         session_reuse_max_searches: int = 1,
         station_identity_resolver: KorailStationIdentityResolver | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        auto_handle_dialogs: bool = False,
     ) -> None:
         if session_reuse_ttl_seconds < 0:
             raise ValueError("session_reuse_ttl_seconds must be non-negative")
@@ -294,8 +311,13 @@ class PydollKorailBrowserClient:
         self.timeout_ms = int(timeout_seconds * 1000)
         self.headless = headless
         self._validate_page_url(allow_test_loopback, allow_fullstack_fixture)
-        self._session_factory: PydollSessionFactory = (
-            session_factory or _default_pydoll_session_factory
+        self._session_factory: PydollSessionFactory = session_factory or (
+            lambda page_url, timeout_ms, headless: _default_pydoll_session_factory(
+                page_url,
+                timeout_ms,
+                headless,
+                auto_handle_dialogs=auto_handle_dialogs,
+            )
         )
         self._session_reuse_ttl_seconds = session_reuse_ttl_seconds
         self._session_reuse_max_searches = session_reuse_max_searches
@@ -570,6 +592,7 @@ class PydollKorailBrowserClient:
 
 
 class _PydollSession:
+    _PAGE_LOAD_TIMEOUT_TYPE = ("pydoll.exceptions", "PageLoadTimeout")
     _evaluate_value_interaction = staticmethod(_dom_interaction_owner.evaluate_value)
     _evaluate_text_interaction = staticmethod(_dom_interaction_owner.evaluate_text)
     _wait_for_value_interaction = staticmethod(_dom_interaction_owner.wait_for_value)
@@ -627,7 +650,14 @@ class _PydollSession:
     _is_exact_selected_hour = staticmethod(_search_hour_policy_owner.is_exact_selected_hour)
     _control_state_log_value = staticmethod(_search_hour_policy_owner.control_state_log_value)
 
-    def __init__(self, page_url: str, timeout_ms: int, headless: bool) -> None:
+    def __init__(
+        self,
+        page_url: str,
+        timeout_ms: int,
+        headless: bool,
+        *,
+        auto_handle_dialogs: bool = False,
+    ) -> None:
         self.page_url = page_url
         self.timeout_ms = timeout_ms
         self.headless = headless
@@ -680,6 +710,7 @@ class _PydollSession:
             sleep=asyncio.sleep,
             utc_now=lambda: datetime.now(UTC),
             event_logger=logger,
+            auto_handle_dialogs=auto_handle_dialogs,
         )
         self._search_driver = PydollSearchDomDriver(
             port=self,
@@ -791,7 +822,15 @@ class _PydollSession:
         self._opened_once = True
         self._submitted = False
         self._network_responses.clear()
-        await self._tab.go_to(self.page_url, timeout=max(1, self.timeout_ms // 1000))
+        try:
+            await self._tab.go_to(self.page_url, timeout=max(1, self.timeout_ms // 1000))
+        except Exception as error:
+            if (type(error).__module__, type(error).__name__) != self._PAGE_LOAD_TIMEOUT_TYPE:
+                raise
+            logger.warning("KORAIL initial search load timed out; validating redacted DOM")
+        initial_snapshot = await self._snapshot()
+        if classify_pydoll_page_block(initial_snapshot) is not None:
+            return initial_snapshot
         await self._wait_for_exact_text("button", "열차 조회")
         return await self._snapshot()
 
@@ -804,11 +843,8 @@ class _PydollSession:
         self._network_responses.clear()
         try:
             await self._tab.go_to(url, timeout=max(1, self.timeout_ms // 1000))
-        except Exception as error:  # noqa: BLE001 -- Pydoll is an optional sidecar extra.
-            if (
-                type(error).__module__ != "pydoll.exceptions"
-                or type(error).__name__ != "PageLoadTimeout"
-            ):
+        except Exception as error:
+            if (type(error).__module__, type(error).__name__) != self._PAGE_LOAD_TIMEOUT_TYPE:
                 raise
             # Chromium can reach the result DOM while a non-essential resource keeps
             # Pydoll's LOAD_EVENT_FIRED wait open. The caller still runs the ordinary
@@ -834,12 +870,8 @@ class _PydollSession:
         self._opened_once = True
         return await self.navigate(url)
 
-    async def read_reservation_list(self) -> PydollPageSnapshot:
-        """Open the official reservation list and return a read-only snapshot.
-
-        This method deliberately performs navigation only.  It never selects a
-        reservation row or clicks payment/cancellation controls.
-        """
+    async def read_reservation_list(self) -> PydollReservationListSnapshot:
+        """Open the official list without selecting rows or clicking actions."""
 
         self._network_responses.clear()
         await self._tab.go_to(
@@ -847,15 +879,45 @@ class _PydollSession:
             timeout=max(1, self.timeout_ms // 1000),
         )
         deadline = time.monotonic() + min(self._timeout_seconds, 10)
-        last = await self._snapshot()
+        last = await self._search_driver.reservation_list_snapshot()
+        stable_complete: PydollReservationListSnapshot | None = None
         while time.monotonic() < deadline:
             path = urlsplit(last.url).path.rstrip("/")
-            if path in {"/ticket/login", "/ticket/reservation/list"}:
+            if path == "/ticket/login" or last.protection_detected:
                 return last
-            if protection_trigger_from_text(last.body_text) is not None:
+            if path == "/ticket/reservation/list" and last.render_complete:
+                if stable_complete == last:
+                    return last.with_stable_observation()
+                stable_complete = last
+            else:
+                stable_complete = None
+            await asyncio.sleep(0.2)
+            last = await self._search_driver.reservation_list_snapshot()
+        return last
+
+    async def read_issued_ticket_list(self) -> PydollIssuedTicketListSnapshot:
+        """Open MyTicket and return secret-free issued-ticket summaries only."""
+
+        self._network_responses.clear()
+        try:
+            await self._tab.go_to(
+                "https://www.korail.com/ticket/myticket/list",
+                timeout=max(1, self.timeout_ms // 1000),
+            )
+        except Exception as error:
+            if (type(error).__module__, type(error).__name__) != self._PAGE_LOAD_TIMEOUT_TYPE:
+                raise
+            logger.warning("KORAIL issued-ticket load timed out; validating redacted DOM")
+        deadline = time.monotonic() + min(self._timeout_seconds, 10)
+        last = await self._issued_ticket_snapshot()
+        while time.monotonic() < deadline:
+            path = urlsplit(last.url).path.rstrip("/")
+            if path == "/ticket/login" or last.protection_detected:
+                return last
+            if path == "/ticket/myticket/list" and last.page_ready:
                 return last
             await asyncio.sleep(0.2)
-            last = await self._snapshot()
+            last = await self._issued_ticket_snapshot()
         return last
 
     async def _replace_tab(self) -> None:
@@ -1054,6 +1116,9 @@ class _PydollSession:
 
     async def _snapshot(self) -> PydollPageSnapshot:
         return await self._search_driver.snapshot()
+
+    async def _issued_ticket_snapshot(self) -> PydollIssuedTicketListSnapshot:
+        return await self._search_driver.issued_ticket_snapshot()
 
     async def _evaluate_value(self, selector: str) -> object:
         return await self._evaluate_value_interaction(self._tab, selector)
@@ -1381,4 +1446,4 @@ del _live_dom_owner
 del _search_hour_carousel_input_owner
 del _search_hour_carousel_observation_owner
 del _search_hour_policy_owner
-del _search_schedule_commit_owner
+del _search_schedule_commit_owner, TYPE_CHECKING

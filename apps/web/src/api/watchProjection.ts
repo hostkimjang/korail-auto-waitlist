@@ -206,6 +206,16 @@ function dateLabel(value: string): string {
   }).format(parsed);
 }
 
+function koreaTimeWithSecondsLabel(value: string): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Seoul",
+  }).format(new Date(value));
+}
+
 interface LatestObservationMeta {
   status: string;
   source: string;
@@ -350,8 +360,13 @@ export function mapWatch(value: unknown): ProjectedWatch {
   const seatClassLabel = SEAT_CLASS_LABELS[seatClass];
   const lastCheckedAt = awareTimestamp(watch.last_checked_at) ? watch.last_checked_at : null;
   const lastCheckedLabel = lastCheckedAt
-    ? `최근 확인 ${timetableTimeLabel(lastCheckedAt)}`
+    ? `최근 확인 ${koreaTimeWithSecondsLabel(lastCheckedAt)}`
     : "최근 확인 기록 없음";
+  const nextCheckAt = optionalAwareTimestamp(watch.next_check_at);
+  const observationExecutionState = normalizeWatchObservationExecutionState(
+    watch.observation_execution_state,
+  );
+  const cooldownUntil = optionalAwareTimestamp(watch.cooldown_until);
   const normalizedProvider = watch.provider;
   const evidence = isRecord(candidate?.registration_evidence)
     ? candidate.registration_evidence
@@ -423,7 +438,13 @@ export function mapWatch(value: unknown): ProjectedWatch {
     seatClassLabel,
     normalizedProvider,
   );
-  const operational = mapOperationalCandidate(candidate);
+  const operational = mapOperationalCandidate(candidate, new Date(), {
+    provider: normalizedProvider,
+    watchStatus: watch.status,
+    nextCheckAt,
+    observationExecutionState,
+    cooldownUntil,
+  });
   const latestReservationAttempt = latestAttemptOwner?.attempt ?? null;
   if (currentObservation) seatEvidenceLabel = currentObservation.label;
   const paymentHoldEndedForSelectedCandidate = latestReservationAttempt?.paymentHoldEndedAt !== null
@@ -512,9 +533,7 @@ export function mapWatch(value: unknown): ProjectedWatch {
       && Number(watch.focused_observation_interval_seconds) <= 30
       ? Number(watch.focused_observation_interval_seconds)
       : 25,
-    nextCheckAt: awareTimestamp(watch.next_check_at) ? watch.next_check_at : null,
-    observationExecutionState: normalizeWatchObservationExecutionState(
-      watch.observation_execution_state,
-    ),
+    nextCheckAt,
+    observationExecutionState,
   };
 }

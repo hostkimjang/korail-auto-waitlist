@@ -7,6 +7,7 @@ from rail_waitlist.models import ReservationAttempt
 from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
 from rail_waitlist.reservations.attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
+    CONFIRMED_ABSENT_RETRY_OBSERVATIONS,
     RESERVATION_RETRY_EDGE_OBSERVATIONS,
     is_confirmed_absent_retry_source,
 )
@@ -26,8 +27,11 @@ def make_attempt(
         ReservationConfirmationOutcome.NOT_FOUND
     ),
     confirmation_observed_at: datetime | None = datetime(2026, 8, 5, tzinfo=UTC),
+    last_reconciled_at: datetime | None = None,
+    next_reconcile_at: datetime | None = None,
     payment_deadline: datetime | None = None,
     post_deadline_reconciled_at: datetime | None = None,
+    reconciliation_attempt_count: int = 0,
 ) -> ReservationAttempt:
     return ReservationAttempt(
         candidate_id="candidate-1",
@@ -38,8 +42,11 @@ def make_attempt(
         confirmation_outcome=confirmation_outcome,
         confirmation_source=("official-list" if confirmation_outcome is not None else None),
         confirmation_observed_at=confirmation_observed_at,
+        last_reconciled_at=last_reconciled_at,
+        next_reconcile_at=next_reconcile_at,
         payment_deadline=payment_deadline,
         post_deadline_reconciled_at=post_deadline_reconciled_at,
+        reconciliation_attempt_count=reconciliation_attempt_count,
     )
 
 
@@ -52,6 +59,25 @@ def test_exact_confirmed_absence_rearms_only_legacy_payment_hold_without_deadlin
     assert is_confirmed_absent_retry_source(make_attempt(ReservationOutcome.PAYMENT_REQUIRED))
 
 
+def test_reconciled_unknown_exact_absence_rearms_only_a_non_retry_episode() -> None:
+    reconciled_at = datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC)
+    assert is_confirmed_absent_retry_source(
+        make_attempt(
+            ReservationOutcome.UNKNOWN,
+            last_reconciled_at=reconciled_at,
+            reconciliation_attempt_count=1,
+        )
+    )
+    assert not is_confirmed_absent_retry_source(
+        make_attempt(
+            ReservationOutcome.UNKNOWN,
+            episode_key=f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}attempt-0",
+            last_reconciled_at=reconciled_at,
+            reconciliation_attempt_count=1,
+        )
+    )
+
+
 @pytest.mark.parametrize(
     "attempt",
     [
@@ -60,11 +86,25 @@ def test_exact_confirmed_absence_rearms_only_legacy_payment_hold_without_deadlin
         make_attempt(
             ReservationOutcome.UNKNOWN,
             confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            last_reconciled_at=datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC),
+            reconciliation_attempt_count=1,
         ),
-        make_attempt(ReservationOutcome.UNKNOWN, confirmation_observed_at=None),
         make_attempt(
             ReservationOutcome.UNKNOWN,
-            episode_key=f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}attempt-0",
+            confirmation_observed_at=None,
+            last_reconciled_at=datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC),
+            reconciliation_attempt_count=1,
+        ),
+        make_attempt(
+            ReservationOutcome.UNKNOWN,
+            last_reconciled_at=datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC),
+        ),
+        make_attempt(ReservationOutcome.UNKNOWN, reconciliation_attempt_count=1),
+        make_attempt(
+            ReservationOutcome.UNKNOWN,
+            last_reconciled_at=datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC),
+            next_reconcile_at=datetime(2026, 8, 5, 0, 0, 31, tzinfo=UTC),
+            reconciliation_attempt_count=1,
         ),
         make_attempt(
             ReservationOutcome.PAYMENT_REQUIRED,
@@ -90,4 +130,11 @@ def test_retry_edge_statuses_are_only_conclusive_non_actionable_observations() -
         SeatObservationStatus.NOT_OFFERED,
         SeatObservationStatus.DEPARTED,
         SeatObservationStatus.OUT_OF_SERVICE,
+    }
+
+
+def test_confirmed_absent_unknown_requires_fresh_bookable_seat_inventory() -> None:
+    assert CONFIRMED_ABSENT_RETRY_OBSERVATIONS == {
+        SeatObservationStatus.AVAILABLE,
+        SeatObservationStatus.LIMITED,
     }

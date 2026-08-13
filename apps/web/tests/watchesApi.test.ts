@@ -221,6 +221,89 @@ describe("watch API boundary", () => {
     expect(mock.seatFoundObservation).toMatchObject({ kind: "mock", source: "mock" });
   });
 
+  it("preserves operational provenance through the API DTO boundary", () => {
+    const mapped = mapWatch({
+      ...WATCH_DTO,
+      next_check_at: "2030-08-08T00:00:30Z",
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        operational_status: "scheduled",
+        booking_window_status: "open",
+        operational_source: "korail-pydoll-reservation",
+        operational_observed_at: "2030-08-08T00:00:00Z",
+        operational_fresh_until: "2030-08-08T00:05:00Z",
+      }],
+    });
+
+    expect(mapped.operational).toMatchObject({
+      status: "scheduled",
+      bookingWindowStatus: "open",
+      observedAt: "2030-08-08T00:00:00Z",
+      fresh: true,
+      label: "예매창 열림",
+    });
+    expect(mapWatch({
+      ...WATCH_DTO,
+      next_check_at: "2030-08-08T00:00:30Z",
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        operational_status: "scheduled",
+        booking_window_status: "open",
+        operational_observed_at: "2030-08-08T00:00:00Z",
+        operational_fresh_until: "2030-08-08T00:05:00Z",
+      }],
+    }).operational).toBeNull();
+  });
+
+  it("suppresses an expired operational chip during a healthy scheduled observation", () => {
+    const mapped = mapWatch({
+      ...WATCH_DTO,
+      status: "seat_found",
+      next_check_at: "2099-08-08T00:00:00Z",
+      observation_execution_state: "idle",
+      cooldown_until: null,
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        operational_status: "scheduled",
+        booking_window_status: "open",
+        operational_source: "korail-pydoll-reservation",
+        operational_observed_at: "2020-08-08T00:00:00Z",
+        operational_fresh_until: "2020-08-08T00:00:01Z",
+        latest_observation: {
+          status: "limited",
+          source: "korail-pydoll-reservation",
+          observed_at: "2020-08-08T00:00:00Z",
+          fresh_until: "2020-08-08T00:00:01Z",
+          error_category: null,
+        },
+      }],
+    });
+
+    expect(mapped.operational).toBeNull();
+    expect(mapped.seatFoundObservation).toBeNull();
+    expect(mapped.nextCheckAt).toBe("2099-08-08T00:00:00Z");
+    expect(mapped.observationExecutionState).toBe("idle");
+  });
+
+  it("preserves an explicit cooldown reason at the watch API boundary", () => {
+    const mapped = mapWatch({
+      ...WATCH_DTO,
+      next_check_at: "2099-08-08T00:00:00Z",
+      cooldown_until: "2099-08-08T00:00:00Z",
+      candidates: [{
+        ...WATCH_DTO.candidates[0],
+        operational_status: "scheduled",
+        booking_window_status: "open",
+        operational_source: "korail-pydoll-reservation",
+        operational_observed_at: "2020-08-08T00:00:00Z",
+        operational_fresh_until: "2020-08-08T00:00:01Z",
+      }],
+    });
+
+    expect(mapped.operational?.label).toContain("관측 일시 대기");
+    expect(mapped.operational?.label).toContain("재개 목표");
+  });
+
   it("ignores a priority-only malformed candidate before evidence and CTA projection", () => {
     const malformedCandidate = {
       priority: 1,
@@ -454,9 +537,9 @@ describe("watch API boundary", () => {
       seatFoundObservation: null,
       reservationPolicy: "notify_only",
     });
-    expect(mapWatch({ ...apiWatch, last_checked_at: "2026-07-31T03:45:00Z" })).toMatchObject({
-      lastCheckedAt: "2026-07-31T03:45:00Z",
-      lastCheckedLabel: "최근 확인 12:45",
+    expect(mapWatch({ ...apiWatch, last_checked_at: "2026-07-31T03:45:07Z" })).toMatchObject({
+      lastCheckedAt: "2026-07-31T03:45:07Z",
+      lastCheckedLabel: "최근 확인 12:45:07",
     });
     expect(mapWatch({ ...apiWatch, last_checked_at: "not-a-date" })).toMatchObject({
       lastCheckedAt: null,

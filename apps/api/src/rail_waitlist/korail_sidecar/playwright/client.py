@@ -37,6 +37,10 @@ from ..browser_protection import (
 from ..browser_protection import (
     protection_trigger_from_text as protection_trigger_from_text,
 )
+from ..browser_service_availability import (
+    BrowserProviderUnavailable,
+    provider_unavailable_trigger_from_page,
+)
 from ..direct_cdp import DirectCdpLaunchError, open_direct_cdp_browser
 from . import search_form as _search_form
 from .result_reader import ROUTE_HEADING as ROUTE_HEADING
@@ -153,11 +157,17 @@ class PlaywrightKorailBrowserClient:
                         ),
                     )
                     stage = "load_page"
-                    response = await page.goto(
-                        self.page_url,
-                        wait_until="domcontentloaded",
-                        timeout=self.timeout_ms,
-                    )
+                    try:
+                        response = await page.goto(
+                            self.page_url,
+                            wait_until="domcontentloaded",
+                            timeout=self.timeout_ms,
+                        )
+                    except PlaywrightTimeoutError:
+                        # A service-outage DOM can be complete even when a peripheral
+                        # resource prevents the navigation signal from settling.
+                        await self._assert_not_protected(page, blocked_responses, stage)
+                        raise
                     if response is not None and response.status == 429:
                         raise BrowserRateLimited()
                     if response is not None and response.status == 403:
@@ -323,6 +333,14 @@ class PlaywrightKorailBrowserClient:
             if trigger == "http_403_main":
                 raise BrowserProtectionDetected(trigger, stage)
         body_text = await page.locator("body").inner_text()
+        result_rows_present = await page.locator("li.tckList:visible").count() > 0
+        unavailable_trigger = provider_unavailable_trigger_from_page(
+            page.url,
+            body_text,
+            has_result_rows=result_rows_present,
+        )
+        if unavailable_trigger is not None:
+            raise BrowserProviderUnavailable(unavailable_trigger, stage)
         trigger = protection_trigger_from_text(body_text)
         if trigger is None:
             return
@@ -334,7 +352,7 @@ class PlaywrightKorailBrowserClient:
             surface_trigger = protection_trigger_from_text(await surfaces.nth(index).inner_text())
             if surface_trigger in GENERIC_PROTECTION_TRIGGERS:
                 raise BrowserProtectionDetected(surface_trigger, stage)
-        if await page.locator("li.tckList:visible").count() == 0:
+        if not result_rows_present:
             raise BrowserProtectionDetected(trigger, stage)
 
     async def _read_result(

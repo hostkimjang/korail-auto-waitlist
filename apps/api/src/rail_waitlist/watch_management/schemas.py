@@ -161,6 +161,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
     confirmation_outcome: (
         Literal[
             "confirmed_payment_required",
+            "confirmed_paid",
             "not_found",
             "auth_required",
             "provider_blocked",

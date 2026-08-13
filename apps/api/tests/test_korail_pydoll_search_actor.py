@@ -12,6 +12,9 @@ import pytest
 from rail_waitlist.korail_browser_automation import BrowserSeatSearchRequest
 from rail_waitlist.korail_pydoll_contracts import PydollPageSnapshot, PydollSeatBox, PydollTrainRow
 from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
+from rail_waitlist.korail_sidecar.browser_service_availability import (
+    BrowserProviderUnavailable,
+)
 from rail_waitlist.korail_sidecar.pydoll.search_actor import (
     KorailPydollReadOnlySearchSession,
     PydollReadOnlySearchActor,
@@ -221,3 +224,42 @@ async def test_search_actor_passes_the_primary_error_to_context_cleanup() -> Non
 
     assert raised.value.stage == "load_page"
     assert context.exit_exc_type is BrowserSourceUnavailable
+
+
+@pytest.mark.asyncio
+async def test_reused_search_session_does_not_cold_retry_explicit_provider_outage() -> None:
+    concrete_session = _ReadOnlySession(_snapshot())
+    context = _SessionContext(concrete_session)
+    load_checks = 0
+
+    def reject_second_loaded_page(_snapshot: PydollPageSnapshot, stage: str) -> None:
+        nonlocal load_checks
+        if stage != "load_page":
+            return
+        load_checks += 1
+        if load_checks == 2:
+            raise BrowserProviderUnavailable("maintenance_page", stage)
+
+    actor = PydollReadOnlySearchActor(
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_: context,
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=3,
+        station_identity_resolver=None,
+        monotonic=lambda: 0,
+        cleanup=_cleanup,
+        response_safety_guard=reject_second_loaded_page,
+        http_replay_client_factory=lambda *_args, **_kwargs: object(),
+        http_replay_route_cache_size=4,
+        event_logger=logging.getLogger(__name__),
+    )
+
+    await actor.search(_request())
+    with pytest.raises(BrowserProviderUnavailable) as raised:
+        await actor.search(_request())
+
+    assert raised.value.trigger == "maintenance_page"
+    assert concrete_session.events.count("open") == 2
+    assert actor.active_session is None

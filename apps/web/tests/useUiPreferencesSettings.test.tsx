@@ -22,19 +22,16 @@ const defaultHookProps: HookProps = {
 };
 
 const defaultPreferences: UiPreferences = {
-  timetableRefreshIntervalSeconds: 5,
   seatObservationIntervalSeconds: 5,
   updatedAt: "1970-01-01T00:00:00.000Z",
 };
 
 const savedPreferences: UiPreferences = {
-  timetableRefreshIntervalSeconds: 45,
   seatObservationIntervalSeconds: 10,
   updatedAt: "2026-08-05T00:00:00Z",
 };
 
 const saveInput: UpdateUiPreferencesInput = {
-  timetableRefreshIntervalSeconds: 45,
   seatObservationIntervalSeconds: 10,
 };
 
@@ -134,7 +131,7 @@ describe("useUiPreferencesSettings", () => {
     const { result, pushToast } = renderController(dependencies);
 
     await waitFor(() => expect(pushToast).toHaveBeenCalledWith(
-      "화면 갱신 설정을 불러오지 못했습니다.",
+      "화면 동작 설정을 불러오지 못했습니다.",
     ));
 
     expect(result.current.preferences).toEqual(defaultPreferences);
@@ -176,7 +173,6 @@ describe("useUiPreferencesSettings", () => {
     const dependencies = testDependencies();
     const staleLoad = deferred<UiPreferences>();
     const currentPreferences: UiPreferences = {
-      timetableRefreshIntervalSeconds: 30,
       seatObservationIntervalSeconds: 3,
       updatedAt: "2026-08-05T01:00:00Z",
     };
@@ -224,7 +220,7 @@ describe("useUiPreferencesSettings", () => {
     expect(result.current.preferences).toEqual(savedPreferences);
     expect(result.current.saving).toBe(false);
     expect(pushToast).toHaveBeenLastCalledWith(
-      "화면·좌석 관측 간격을 저장했습니다. 활성 작업의 다음 관측부터 적용됩니다.",
+      "좌석 관측 간격을 저장했습니다. 활성 작업의 다음 관측부터 적용됩니다.",
     );
   });
 
@@ -275,7 +271,7 @@ describe("useUiPreferencesSettings", () => {
     await expect(result.current.save(saveInput)).rejects.toBe("malformed failure");
 
     expect(result.current.saving).toBe(false);
-    expect(pushToast).toHaveBeenLastCalledWith("화면·좌석 관측 간격을 저장하지 못했습니다.");
+    expect(pushToast).toHaveBeenLastCalledWith("좌석 관측 간격을 저장하지 못했습니다.");
   });
 
   it("resets preferences and saving state to canonical defaults", async () => {

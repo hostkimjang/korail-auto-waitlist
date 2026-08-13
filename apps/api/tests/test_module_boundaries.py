@@ -4634,6 +4634,7 @@ def test_korail_confirmation_facade_is_an_exact_canonical_export_surface() -> No
     tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
     symbols = {
         "KORAIL_CONFIRMATION_SOURCE",
+        "KORAIL_ISSUED_TICKET_LIST_SOURCE",
         "KORAIL_RESERVATION_HANDOFF_URL",
         "KORAIL_RESERVATION_LIST_SOURCE",
         "KorailSameSessionDetailConfirmationAdapter",
@@ -5231,6 +5232,7 @@ def test_worker_celery_tasks_keep_the_isolated_cleanup_wrapper() -> None:
             3,
             {
                 "KORAIL_CONFIRMATION_SOURCE",
+                "KORAIL_ISSUED_TICKET_LIST_SOURCE",
                 "KORAIL_RESERVATION_LIST_SOURCE",
                 "KorailSameSessionDetailEvidence",
             },
@@ -5624,6 +5626,7 @@ def test_korail_reservation_contract_facade_exactly_aliases_sidecar_contracts() 
         "ConfigDict",
         "Field",
         "KorailCredentialRequest",
+        "KorailConfirmationPurposeValue",
         "KorailLoginMethodValue",
         "KorailLoginVerificationOutcomeValue",
         "KorailLoginVerifyRequest",
@@ -6284,7 +6287,9 @@ def test_top_level_confirmation_exactly_aliases_the_canonical_contracts() -> Non
     contract_symbols = {
         "ReservationConfirmationAdapter",
         "ReservationConfirmationOutcome",
+        "ReservationConfirmationPurpose",
         "ReservationConfirmationResult",
+        "ReservationConfirmationSeat",
         "ReservationConfirmationTarget",
     }
     local_definitions = [
@@ -10476,6 +10481,34 @@ def test_srt_session_contract_is_a_stdlib_only_leaf() -> None:
     assert definitions == {"SrtSessionActorState", "SrtSessionActorSnapshot"}
 
 
+def test_korail_reservation_dialog_policy_is_a_stdlib_only_leaf() -> None:
+    path = (
+        SOURCE_ROOT / "rail_waitlist" / "korail_sidecar" / "pydoll" / "reservation_dialog_policy.py"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imports = {
+        (node.module, node.level, alias.name, alias.asname)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    definitions = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
+
+    assert imports == {
+        ("__future__", 0, "annotations", None),
+        ("dataclasses", 0, "dataclass", None),
+        ("enum", 0, "StrEnum", None),
+    }
+    assert definitions == {
+        "ReservationDialogControlShape",
+        "ReservationDialogAction",
+        "ReservationDialogDecision",
+        "ReservationDialogEvidence",
+        "ReservationDialogKind",
+        "ReservationDialogPhase",
+    }
+
+
 @pytest.mark.parametrize(
     ("relative_path", "expected_imports", "expected_imports_from"),
     [
@@ -10536,6 +10569,7 @@ def test_srt_session_contract_is_a_stdlib_only_leaf() -> None:
                 ("SRT.errors", 0),
                 ("domain", 2),
                 ("provider_adapters.srt_identity", 2),
+                ("provider_adapters.srt_netfunnel_logging", 2),
                 ("provider_adapters.srt_station_roster", 2),
                 ("reservations.contracts", 2),
                 ("reservations.provider_confirmation.contracts", 2),
@@ -10653,7 +10687,19 @@ def test_srt_wire_owner_has_exact_definitions_and_no_runtime_reverse_dependency(
         (
             "reservations.provider_confirmation.contracts",
             2,
+            "ReservationConfirmationPurpose",
+            None,
+        ),
+        (
+            "reservations.provider_confirmation.contracts",
+            2,
             "ReservationConfirmationResult",
+            None,
+        ),
+        (
+            "reservations.provider_confirmation.contracts",
+            2,
+            "ReservationConfirmationSeat",
             None,
         ),
         (
@@ -11446,6 +11492,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
             protection_consumers.add(relative_name)
 
     assert contract_consumers == {
+        "rail_waitlist/korail_sidecar/browser_service_availability.py",
         "rail_waitlist/korail_browser_automation.py",
         "rail_waitlist/korail_browser_mode_smoke.py",
         "rail_waitlist/korail_browser_seat_source.py",
@@ -11605,7 +11652,7 @@ def test_production_and_scripts_do_not_reenter_legacy_korail_http_replay_core() 
         for target in node.targets
         if isinstance(target, ast.Name)
     }
-    assert len(symbols) == 94
+    assert len(symbols) == 96
 
     violations: list[str] = []
     roots = [SOURCE_ROOT / "rail_waitlist", SOURCE_ROOT.parent / "scripts"]

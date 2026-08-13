@@ -70,6 +70,16 @@ Linux의 `bash ./scripts/ops.sh down`은 모든 Compose 프로필을 대상으�
 - 모니터링: `GRAFANA_ADMIN_PASSWORD`
 - 암호화 백업: `BACKUP_AGE_IDENTITY`, `BACKUP_AGE_RECIPIENT`
 
+`KORAIL_RESERVATION_ONCE_ENABLED`는 KORAIL 단발 예매 전체 기능 스위치이며 지연승낙 동의를 대신하지
+않습니다. 정확한 `이용안내/확인`과 예약 결과의 `안내메세지/확인`은 기본 허용 목록으로 처리합니다. 그 밖의
+공식 구조 단일 `확인`을 닫고, 예매 버튼을 누른 뒤 나타난 정확한 `이용안내`·지연승낙에서 `네`를 자동으로
+선택하려면 개인 운영자가 예약 안내와 지연배상 제한을 수락한 뒤
+`KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED=true`를 설정합니다. 기본값은 `false`이고 사용자·대기별 값이
+아닌 이 인스턴스의 모든 KORAIL 예매 시도에 적용되는 sidecar 전역값입니다. 값을 바꾼 뒤 비밀값을 출력하지
+않는 `docker compose -f compose.yml --profile experimental-rail config --quiet`를 통과시키고 현재 프로필의
+전체 서비스를 운영 스크립트로 다시 빌드·생성합니다. 기존예약 선택, 다중 대화상자, 제목·본문·버튼 구조를
+확인할 수 없는 대화상자에는 이 설정을 적용하지 않습니다.
+
 공식 앱 인계는 일반 선택 기능과 달리 경로별 실기기 QA를 통과한 배포에서만 켭니다. 기본값은 모두 꺼져 있습니다.
 
 - 코레일+ 예매: `VITE_KORAIL_BOOKING_DEEPLINK_ENABLED`, `VITE_KORAIL_BOOKING_VALIDATED_VERSION`
@@ -280,7 +290,7 @@ Web Push 알림을 누르면 외부 철도사 주소가 아니라 동일 출처�
 
 2026년 8월 7일 Android 16/API 36 에뮬레이터에서는 설치형 PWA를 백그라운드로 두고 Android 설정 앱을 연 상태에서 서비스 워커 합성 알림을 눌렀을 때 기존 `SameTaskWebApkActivity`가 전면으로 복귀하는 것을 확인했습니다. 이는 `notificationclick`의 기존-client 복귀 경로 검증이며, 실제 push service 전달·완전 종료된 PWA 콜드 실행·갤럭시 폴드7 제조사 동작은 별도 실기기 항목으로 남깁니다.
 
-앱을 사용 중이면 Android·iPhone·iPad 모두 같은 `실시간 알림` surface가 safe area 아래에 8초간 간략 팝업으로 나타납니다. `자세히`를 누르면 전체 목록을 펼칩니다. 미리보기를 숨기거나 8초가 지나도 좌석 발견·현재 예매 진행·결제·인증처럼 직접 닫아야 하는 알림은 접힌 건수 안에 남고, 앱을 다시 열면 서버의 현재 예매 진행·결제·인증 상태를 복원합니다. 이 화면 알림은 modal이 아니므로 페이지 스크롤, 현재 입력과 가상 키보드, 하단 탐색을 잠그지 않습니다.
+앱을 사용 중이면 Android·iPhone·iPad 모두 같은 `실시간 알림` surface가 safe area 아래에 8초간 간략 팝업으로 나타납니다. `자세히`를 누르면 전체 목록을 펼칩니다. 8초가 지나면 간략 미리보기만 숨고 좌석 발견·현재 예매 진행·결제·인증처럼 직접 닫아야 하는 알림은 접힌 건수 안에 남습니다. 반면 미리보기의 X나 펼친 카드·그룹의 닫기는 해당 알림을 실제로 제거하고, 같은 브라우저에서 동일하거나 더 오래된 revision이 재접속 뒤 복원되지 않도록 제한된 ledger에 기록합니다. 사용자가 닫지 않은 현재 상태와 같은 작업의 더 최신 revision은 정상적으로 복원·표시합니다. 이 화면 알림은 modal이 아니므로 페이지 스크롤, 현재 입력과 가상 키보드, 하단 탐색을 잠그지 않습니다.
 
 iOS·iPadOS Web Push는 16.4 이상에서 사용자가 홈 화면에 설치한 PWA에 한해 지원됩니다. 어느 화면에서든 전역 `OS 알림 켜기` 버튼을 누른 사용자 행동 안에서 권한을 먼저 요청한 뒤 구독을 만들며, Apple Developer Program은 필요하지 않습니다. 홈 화면에 설치하지 않은 Safari 탭이나 기능 감지에 실패한 환경에서는 OS 알림 연결을 완료로 표시하지 않습니다.
 
@@ -315,10 +325,92 @@ docker compose -f compose.yml logs -f --tail=200
 특정 서비스만 볼 수도 있습니다.
 
 ```console
-docker compose -f compose.yml logs -f --tail=200 api worker maintenance-worker notification-worker
+docker compose -f compose.yml logs -f --tail=200 api worker maintenance-worker notification-worker srt-provider-adapter korail-browser-adapter
 ```
 
 서비스별 파일 로그는 `logs/<service>/current.log`에 기록됩니다. 파일은 자동으로 회전하며 `logs/README.md`만 Git에 포함됩니다.
+
+SRT의 `event=provider_queue_entered`는 SRTrain이 공식 접속 대기를 시작했다는 뜻이고,
+`event=provider_queue_released`는 대기 통과와 NetFunnel 완료 통지가 성공해 운영사 요청을 계속한다는
+뜻입니다. 다만 `event=provider_call_timed_out`가 먼저 기록되면 동기 provider 작업이 백그라운드에서
+마무리되더라도 그 결과는 이미 끝난 API 요청에 반영되지 않습니다. 이때
+`upstream_still_running=true`이면 실제 종료 여부를 `event=provider_call_finished_after_timeout`에서
+확인합니다. 로그에는 대기 인원·경과시간·고정된 결과 분류만 넣고 NetFunnel key와 응답 원문은 넣지
+않습니다. 이 제한시간에는 로컬 provider gate 대기도 포함되므로, 실제 운영사 I/O 시작 여부는 같은 구간의
+`event=provider_query_started`로 구분합니다.
+
+KORAIL은 SRT와 같은 공식 접속 대기를 기다려 통과하는 흐름이 아닙니다. 실제 cache-miss 조회는
+`event=provider_query_started`와 `event=provider_query_completed`로 경계를 확인합니다. NetFunnel 등
+보호 표면이 감지되면 `outcome=provider_access_restricted`로 조회를 중단하고 provider-wide cooldown을
+적용하며, 보호 화면을 우회하거나 같은 요청에서 계속 진행하지 않습니다. 두 sidecar의 이 구조화 로그는
+서비스별 파일과 Docker stdout/stderr에 함께 남습니다.
+
+KORAIL 정기점검 시간에는 성공 경로 스모크를 반복하지 않습니다. 공식 HTTPS KORAIL host의
+`rejectservice_job.html` 또는 결과 행 없이 `서비스 일시중지`와 `승차권 예약 및 발매서비스` 문구가 함께 보이면
+점검·서비스 장애로 즉시 닫습니다. sidecar 로그는 원문 URL·본문을 남기지 않고
+`outcome=provider_unavailable stage=<closed-stage> trigger=maintenance_page|service_outage_page
+cooldown_seconds=<seconds>`만 기록합니다. 안내 본문의 종료시각은 파싱하지 않으며
+`SEAT_STATUS_PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS`(기본 300초)의 제한된 provider-wide cooldown 뒤 한
+요청만 복구 probe로 허용합니다. 이미 browser gate에 기다리던 서로 다른 query도
+hold를 다시 확인해 `event=provider_query_skipped reason=queued_provider_cooldown`으로 끝나야 합니다.
+
+sidecar는 이 전용 오류에만 기존 호환 503 body `source_unavailable`과 숫자형 `Retry-After`를 함께 보냅니다.
+main API는 두 근거가 정확히 맞을 때만 별도 Redis key `korail-browser-outage`에 같은 TTL의 provider hold를
+기록합니다. 일반 503·DOM timeout은 계속 exact query별 30~300초 backoff이고, 과거
+`korail-browser/source_unavailable` 값도 전역 장애로 되살리지 않습니다. worker는 outage hold를 조회 전과 첫
+실패 직후 확인해 남은 KORAIL 그룹을 같은 시각까지 미루며 오류 관측·예약 후보를 만들지 않습니다. 관리자
+상태의 공개 cause는 보호조치가 아닌 기존 `source_unavailable`이며 화면에는 `일시 불가`와 `조회 대기`로
+표시합니다. cooldown 중에도 서로 다른 query의 `provider_query_started`가 반복되면 구 이미지 혼재, Redis 연결,
+sidecar/API의 hold 전파 로그를 확인하고 수동 반복 조회로 우회하지 않습니다.
+
+2026년 8월 13일 01:30~04:30 KST 점검에서 수정 전 배포본은 공식 페이지 이동을 약 28초 뒤
+`outcome=source_unavailable stage=wait_result`로 닫았습니다. 01:30~02:17 KST의 DB에는 KORAIL
+`ERROR / provider_unavailable` 관측 115건과 신규 예약 시도 0건이 기록되어 좌석 발견이나 예매로 잘못 전이하지
+않는 fail-closed 동작은 확인했습니다. 반면 서로 다른 query별 backoff만 적용되어 02:05~02:17 KST에 실제 조회
+시작 29건이 직렬로 이어진 것이 이번 provider-wide 분류의 직접 근거입니다. 점검 종료와 hold 해제 뒤에는 읽기
+조회를 한 번만 실행하고 `provider_query_completed outcome=success`, fresh `official_provider` 관측과 신규 예약
+시도 없음까지 확인하기 전에는 성공 경로 운영 검증을 완료로 표시하지 않습니다.
+
+같은 날 03:14 KST에 위 분류와 전역 hold를 포함한 experimental profile 전체를 재빌드·재생성했고, migration과
+log-init은 종료 코드 0, 장기 서비스 12개는 모두 healthy였습니다. 새 sidecar가 준비된 03:18 KST 이후 운영
+KORAIL은 점검 페이지가 아니라 정상 공식 응답을 반환했고, `korail-official-page-browser` 관측과 성공 lifecycle이
+기록됐으며 같은 구간의 신규 KORAIL 예약 시도는 0건이었습니다. 따라서 배포와 정상 응답 fail-safe는 확인했지만,
+실제 운영 점검 페이지에서 `outcome=provider_unavailable`·`Retry-After`·`korail-browser-outage` TTL이 함께 열리는
+live 경로는 재현하지 못했습니다. 이 경로는 fixture·동시 query 경쟁조건 회귀로만 검증된 상태이며, 다음 실제
+점검에서 첫 분류 1회와 뒤따르는 skip을 확인할 때까지 성공 경로 1회 확인 항목과 구분해 미완료로 둡니다.
+
+같은 날 04:40 KST에는 provider-wide hold가 이전 좌석 cache보다 먼저 적용되는 최종 안전 순서를 포함해 profile
+전체를 다시 재빌드·재생성했습니다. migration·log-init은 다시 종료 코드 0이었고 장기 서비스 12개가 모두
+healthy였습니다. 배포 뒤 KORAIL 공식 관측은 `AVAILABLE` 12건, `LIMITED` 7건, `SOLD_OUT` 29건,
+`WAITLIST_AVAILABLE` 2건으로 정상 처리됐고 신규 KORAIL 예약 시도와 sidecar 예약 endpoint 호출은 모두 0건이었습니다.
+정상 페이지가 반환됐으므로 `korail-browser-outage` key는 열리지 않았으며, 이 확인도 실제 점검 페이지의 live
+분류·hold 검증을 대신하지 않습니다.
+
+관리자 화면의 `설정 → 로그·진행 상태 → 최근 진행 기록`은 원시 관측 로그가 아니라 최근 24시간의 작업 흐름과
+확인이 필요한 오류 중 최신 20건을 빠르게 확인하는 사건 중심 요약입니다. 전체 좌석 관측은 처리량·오류율·
+신선도 집계에 계속 사용하지만, 최근 목록에는 좌석 조회 오류·확인 불가·자료 만료만 관측 행으로 표시하고
+반복적인 매진·가용·잔여석 부족 관측은 제외합니다. 예매 시도 outcome, 로그인 확인 필요, 운영사 요청 제한,
+대기 상태 변경, 알림 전달, 결제기한 경과나 공식 미결제 보류 부재 뒤 감시 복귀·일회성 종료, 공식 결제 완료
+확인은 계속 구분합니다. 근거가 있는 행에는 열차번호·KST 운행일 요일/출발시각·좌석등급을 표시합니다.
+이 화면은 내부 watch/candidate ID, 노선 원문, provider 오류 원문과 outbox payload를 의도적으로 제외하므로,
+더 깊은 장애 분석이 필요할 때만 아래 sanitized 서비스 로그를 함께 확인합니다. 계정 저장 요청처럼 영속되지
+않은 HTTP 실패와 저장되지 않은 provider 세부 실패 사유는 목록에 항상 남지 않으며 추정하지 않습니다.
+
+KORAIL 결제 뒤에도 `결제 필요`가 유지되면 `korail-browser-adapter`의 confirmation 결과 source를 먼저
+확인합니다. `korail-reservation-list`의 `NOT_FOUND`만 반복되면 MyTicket 발권 카드가 양성 근거로 채택되지 않은
+것입니다. 일반 승차권 수는 `/ticket/myticket/list`의 `.my-ticket__trn-ticket-ticket-num .data`, 단체 수량은
+`.tck_group-count`에서 읽습니다. KORAIL 결제완료는 attempt에 보존된 호차·좌석과 발권 카드가 정확히 일치할
+때만 허용합니다. 좌석이 보존되지 않은 기존 attempt는 같은 여정의 과거 승차권과 구분할 수 없으므로 발권
+카드와 fresh 미결제 목록의 대상 부재가 함께 보여도 `INCONCLUSIVE`로 유지합니다. 실제 DOM을 진단할 때도
+승차권번호·PNR·QR·카드 본문과 인증 상태를 trace·HAR·로그에 남기지 않습니다.
+`/ticket/mypage/ticketinfo/history`는 반환을 포함한 거래 이력
+화면이므로 이 장애의 대체 결제완료 source로 사용하지 않습니다.
+
+새 판정기 배포 전에 재확인 한도를 이미 소진했거나 결제기한 최종 확인 뒤 `WATCHING`으로 복귀한 attempt는
+자동으로 소급 완료 처리하지 않습니다. 현재 발권 목록에서 fresh exact 승차권을 다시 확인할 수 없는 상태에서
+DB 상태를 `PAYMENT_REQUIRED`로 되돌리거나 `COMPLETED`로 직접 바꾸면 취소·반환·후속 재예약을 결제 완료로
+오인할 수 있습니다. 이런 이력은 fresh 발권 근거, 해당 attempt 이후 새 예약 성공 부재, row lock과 outbox
+멱등성을 함께 검증하는 전용 late-paid 보정 경로가 마련되기 전까지 공식 화면에서 수동 확인합니다.
 
 공유하면 안 되는 내용:
 
@@ -397,6 +489,13 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 
 시간표와 좌석 정보는 서로 다릅니다. 좌석 상태의 근거가 없거나 감시 기능이 꺼져 있으면 등록 버튼을 열지 않습니다.
 
+### 운행·예매 상태 관측 안내가 보임
+
+- `관측 오류 · 재시도 예정`은 같은 후보의 최신 공식 관측이 오류로 끝난 상태입니다. provider·rail worker 로그와 다음 관측 목표를 함께 확인합니다.
+- 활성 감시의 `관측 일시 대기`는 API가 공개한 `cooldown_until`까지 운영사 호출을 미룬 상태입니다. 일시정지·결제·완료·만료 뒤 남은 과거 cooldown은 표시하지 않습니다. 조회 대기 중 수동 반복 호출로 우회하지 않습니다.
+- `관측 지연 · 응답 대기 중`은 활성 작업이 유휴 상태인데 브라우저 화면 시각 기준으로 `next_check_at`이 30초 넘게 지난 경우입니다. 이는 장애 확정이 아닌 지연 진단 신호입니다. 마지막 성공이 매진이어도 독립적으로 표시되므로 기기 시각, scheduler, rail worker 큐, provider별 단일 실행과 sidecar health를 확인합니다.
+- 정상 성공 관측, 현재 처리 중인 요청, 다음 목표 30초 이내에는 과거 운행 projection의 현재형 문구와 만료 chip을 숨깁니다. 홈의 `최근 확인 HH:mm:ss`와 `다음 좌석 관측 목표 HH:mm:ss`를 비교해 실제 갱신 여부를 확인합니다.
+
 ### 알림이 오지 않음
 
 - 채널이 활성 상태인지 확인합니다.
@@ -409,9 +508,11 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 - 좌석 발견 직후 예매 진행 알림을 연속으로 시험하면 Android 15 알림 쿨다운의 영향을 받을 수 있습니다. 단일 테스트 알림을 2분 이상 간격으로 비교하고, 해당 알림 카테고리가 `긴급`인지 확인합니다.
 - 알림을 눌러도 PWA가 열리지 않으면 설치된 PWA와 브라우저를 완전히 종료한 경우와 이미 실행 중인 경우를 각각 시험하고, 서비스 워커가 최신 버전인지 확인합니다.
 - 앱을 보고 있는 동안 `실시간 알림`이 갱신되지 않으면 네트워크 연결과 `/events` SSE 또는 대기 목록 갱신이 정상인지 확인합니다. Push 내용 자체를 현재 좌석 상태로 사용하지 않습니다.
-- KORAIL 예매 카드가 `자동 예매 요청 시작`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed` outbox 생성 여부를 먼저 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다. Pydoll의 `Page load timeout ... LOAD_EVENT_FIRED` 뒤 `KORAIL direct navigation load signal timed out; validating current DOM`이 남으면 로드 완료 신호만 늦은 상태를 현재 DOM·정확 열차 검증으로 이어간 것입니다. 후속 진행 또는 결과 이벤트를 함께 확인하세요.
+- `실시간 알림`의 X로 닫은 과거 카드가 재접속 뒤 다시 나타나면 같은 브라우저 origin인지, 사이트 데이터가 삭제됐거나 localStorage가 차단되지 않았는지 확인합니다. 닫기 ledger는 기기 간 동기화하지 않으며 같은 subject의 더 최신 revision은 정상적으로 다시 표시합니다.
+- KORAIL 예매 카드가 `자동 예매 요청 시작`이나 `철도사 응답·공식 결과 대기`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed`·`watch.reservation_result` outbox, 같은 시각의 `GET /watches` 최신 attempt를 함께 확인합니다. 최신 attempt가 아직 `PENDING`이면 worker·maintenance 경로를 점검하고, 이미 `finished_at`과 `NOT_AVAILABLE`·`FAILED`·`UNKNOWN`을 가진다면 canonical 목록 갱신이 같은 watch의 진행 카드를 결과 카드로 교체해야 합니다. cursor 없는 신규 `/events`는 현재 outbox tail에서 시작해야 하므로 과거 outbox 행 수에 비례해 최신 event가 늦어지면 구버전 API 이미지가 섞였는지 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다. Pydoll의 `Page load timeout ... LOAD_EVENT_FIRED` 뒤 `KORAIL direct navigation load signal timed out; validating current DOM`이 남으면 로드 완료 신호만 늦은 상태를 현재 DOM·정확 열차 검증으로 이어간 것입니다. 후속 진행 또는 결과 이벤트를 함께 확인하세요.
 - provider 호출, rail worker 또는 외부 알림 발송이 멈춰도 시작 후 5분이 지난 `PENDING`은 전용 `maintenance-worker`가 다음 30초 주기 안에 `UNKNOWN`과 수동 확인 상태로 닫습니다. 5분 30초가 지나도 진행 카드가 유지되면 scheduler의 `recover-stale-reservation-attempts`, `maintenance-worker`의 `maintenance` 큐 수신 상태, `watch.reservation_result_requires_manual_check` outbox를 확인합니다. 이 복구는 예약 POST를 다시 보내지 않으며, 새로고침 뒤에도 확인된 단계와 수동 확인 카드를 canonical REST에서 복원합니다. 출발시간 경과로 감시가 끝났다면 카드도 감시 재개를 주장하지 않고 종료 상태와 공식 결과 수동 확인을 표시합니다.
-- sidecar의 `/v1/reserve-once/stream` 연결이 terminal frame 전에 끊긴 경우 예약 POST를 재전송하지 않습니다. sidecar는 이미 시작한 예약 task를 종료까지 보존하고, main API는 불확실 결과를 `UNKNOWN`으로 기록해 자동 재예매를 차단합니다. 이때 공식 예약 목록과 reconciliation 결과를 확인한 뒤에만 후속 조치합니다.
+- sidecar의 `/v1/reserve-once/stream` 연결이 terminal frame 전에 끊긴 경우 예약 POST를 재전송하지 않습니다. sidecar는 이미 시작한 예약 task를 종료까지 보존하고, main API는 불확실 결과를 `UNKNOWN`으로 기록해 즉시 재예매를 차단합니다. sidecar의 `reserve-once stream completed` 로그에서 닫힌 outcome/reason과 `reservation confirmation completed`의 purpose/outcome/source를 확인합니다. 최초 공식 확인이 `NOT_FOUND` 또는 `INCONCLUSIVE`이면 최소 30초 뒤 읽기 전용 확인이 예약되어야 합니다. 최초 `NOT_FOUND` 뒤 reconciliation도 `NOT_FOUND`이면 부재 확인을 닫고, 최초 결과가 `INCONCLUSIVE`였다면 첫 `NOT_FOUND` 뒤 30초 후 다시 `NOT_FOUND`여야 닫습니다. 그 뒤 같은 후보에 새 공식 `AVAILABLE`·`LIMITED`가 관측된 경우에만 `confirmed-absent-retry:<attempt_id>` episode가 한 번 생성되며, 같은 episode 또는 그 복구 시도의 재귀 반복은 허용되지 않습니다.
+- KORAIL 예약 팝업은 `KORAIL reservation dialog phase=... kind=... control_shape=... dialog_count=... action=...`처럼 원문 없는 닫힌 필드로 기록합니다. `reservation_information`, `post_request_notice` 또는 명시적 운영 동의가 필요한 `generic_acknowledgement`에서 `dismiss_succeeded`면 공식 단일 확인을 예매 전후 단계·유형별 한 번 닫고 최신 DOM을 다시 본 것입니다. `reservation_information_consent`·`delay_consent`의 `consent_accept_succeeded`는 운영자가 `KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED=true`로 예약 안내와 지연배상 제한을 수락한 상태에서 정확한 `네`를 단계·유형별 한 번 누른 뒤 최신 DOM을 다시 보는 중입니다. 이후 `payment_required`면 정확한 결제 상세를 확인한 것입니다. `official_post_dialog_action_unresolved`, `official_notice_persisted`, `reservation_information_consent_persisted`, `delay_consent_persisted`, `...accept_result_unknown`, `...dismiss_result_unknown` 또는 버튼 판독 실패는 새 성공 근거가 없어 수동 확인으로 닫은 것이므로 다시 누르거나 예매 요청을 재전송하지 않습니다. 동의가 없거나 `kind=existing_reservation_choice|unknown`, `dialog_count=multiple`이면 추가 자동 동작을 하지 않습니다. `reserve-once stream completed outcome=action_required`를 좌석 미감지나 전송 실패로 바꾸지 말고 같은 시각의 최초 공식 확인을 함께 확인하며, `NOT_FOUND`이면 예약 요청을 반복하지 않습니다. 2026년 8월 13일 240편 사례 당시 대화상자의 정확한 DOM·문구는 확보하지 못했고, 새 정책 배포 뒤 실제 팝업의 자연 재발은 아직 운영 확인 전입니다. 검증을 위해 예약을 인위적으로 만들지 않으며 자연 재발 때 닫힌 로그와 최종 공식 확인만 대조합니다.
 - 결제보류 종료 뒤 `자동 예매 다시 시도`가 보이지 않으면 watch가 `WATCHING`, 자동 예매 정책, 출발 전 상태인지와 최신 attempt의 `manual_rearm_available`을 확인합니다. 확인 요청이 409이면 진행 중 예약·미종료 보류·철도 계정 인증·provider capability를 먼저 점검합니다. 성공 시 candidate의 `manual_rearm_source_attempt_id`와 `manual_rearm_authorized_at`, `watch.manual_reservation_rearmed` outbox, 즉시 예약된 관측 작업을 순서대로 확인합니다. 버튼 성공만으로 provider 예약 호출이 생겨서는 안 되며 승인 시각 뒤의 공식 행동 가능 관측과 고유 manual episode가 있어야 한 번 실행됩니다.
 - iPhone·iPad에서 OS 알림 연결이 보이지 않으면 iOS·iPadOS 16.4 이상인지와 홈 화면에서 PWA로 실행했는지 확인합니다. Safari 일반 탭의 상태를 설치형 PWA 수신 성공으로 기록하지 않습니다.
 

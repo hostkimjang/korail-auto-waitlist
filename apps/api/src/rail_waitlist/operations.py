@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,12 +12,14 @@ from .domain import (
     OutboxStatus,
     ProviderCircuitState,
     ReservationOutcome,
+    SeatClass,
     SeatObservationStatus,
     WatchStatus,
 )
 from .operation_summary.schemas import (
     OperationCurrentCounts,
     OperationEntry,
+    OperationEntryReasonCode,
     OperationProviderCircuit,
     OperationRate,
     OperationServiceState,
@@ -27,6 +31,8 @@ from .operation_summary.schemas import (
 )
 from .outbox_management.models import OutboxEvent
 from .provider_circuit.models import ProviderCircuit
+from .reservations.payment_hold_application import payment_hold_end_reason
+from .reservations.provider_confirmation.contracts import ReservationConfirmationOutcome
 from .timetable_management.models import StationCatalogCache
 from .watch_management.models import (
     ReservationAttempt,
@@ -39,6 +45,7 @@ from .watch_management.models import (
 WINDOW_HOURS = 24
 RECENT_ENTRY_LIMIT = 40
 FUTURE_TIMESTAMP_TOLERANCE = timedelta(minutes=5)
+KOREA_TIMEZONE = ZoneInfo("Asia/Seoul")
 NOTIFICATION_EVENT_TYPES = frozenset(
     {"notification.test_requested", "notification.dispatch_requested"}
 )
@@ -49,8 +56,34 @@ RESERVATION_FAILURE_OUTCOMES = frozenset(
         ReservationOutcome.UNKNOWN,
     }
 )
+RESERVATION_REASON_CODES: dict[ReservationOutcome, OperationEntryReasonCode] = {
+    ReservationOutcome.PENDING: "reservation_pending",
+    ReservationOutcome.PAYMENT_REQUIRED: "reservation_payment_required",
+    ReservationOutcome.RESERVED: "reservation_reserved",
+    ReservationOutcome.NOT_AVAILABLE: "reservation_not_available",
+    ReservationOutcome.AUTH_REQUIRED: "reservation_auth_required",
+    ReservationOutcome.PROVIDER_BLOCKED: "reservation_provider_blocked",
+    ReservationOutcome.FAILED: "reservation_failed",
+    ReservationOutcome.UNKNOWN: "reservation_unknown",
+}
+PAYMENT_HOLD_TRANSITION_REASONS = frozenset(
+    {
+        "confirmed_payment_hold_no_longer_actionable_monitoring_resumed",
+        "confirmed_payment_hold_no_longer_actionable_one_off_expired",
+    }
+)
+SAFE_PROJECTED_TRANSITION_REASONS = PAYMENT_HOLD_TRANSITION_REASONS | {
+    "reservation_reconciliation_confirmed_paid"
+}
 SAFE_OBSERVATION_ERROR_CATEGORIES = frozenset(
     {"timeout", "schema_mismatch", "provider_unavailable", "partial_failure", "unknown"}
+)
+RECENT_ENTRY_OBSERVATION_STATUSES = frozenset(
+    {
+        SeatObservationStatus.ERROR,
+        SeatObservationStatus.UNKNOWN,
+        SeatObservationStatus.STALE,
+    }
 )
 
 
@@ -60,6 +93,45 @@ def _utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _kst(value: datetime) -> datetime:
+    return (value.replace(tzinfo=UTC) if value.tzinfo is None else value).astimezone(KOREA_TIMEZONE)
+
+
+def _safe_train_number(value: str) -> str | None:
+    if any(unicodedata.category(character).startswith("C") for character in value):
+        return None
+    normalized = " ".join(value.split())
+    return normalized if 0 < len(normalized) <= 40 else None
+
+
+def _safe_seat_class(value: str) -> SeatClass | None:
+    try:
+        return SeatClass(value)
+    except ValueError:
+        return None
+
+
+def _payment_hold_reason_code(
+    attempt: ReservationAttempt,
+    *,
+    monitoring_resumed: bool,
+) -> OperationEntryReasonCode | None:
+    end_reason = payment_hold_end_reason(attempt)
+    if end_reason == "confirmed_payment_deadline_elapsed":
+        return (
+            "payment_deadline_elapsed_monitoring_resumed"
+            if monitoring_resumed
+            else "payment_deadline_elapsed_one_off_expired"
+        )
+    if end_reason == "confirmed_payment_hold_no_longer_present":
+        return (
+            "payment_hold_no_longer_present_monitoring_resumed"
+            if monitoring_resumed
+            else "payment_hold_no_longer_present_one_off_expired"
+        )
+    return None
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
@@ -157,15 +229,18 @@ async def _recent_entries(session: AsyncSession, window_start: datetime) -> list
 
     observation_rows = (
         await session.execute(
-            select(SeatObservation, Watch.provider)
+            select(SeatObservation, WatchCandidate, Watch.provider)
             .join(WatchCandidate, WatchCandidate.id == SeatObservation.candidate_id)
             .join(Watch, Watch.id == WatchCandidate.watch_id)
-            .where(SeatObservation.observed_at >= window_start)
+            .where(
+                SeatObservation.observed_at >= window_start,
+                SeatObservation.status.in_(RECENT_ENTRY_OBSERVATION_STATUSES),
+            )
             .order_by(SeatObservation.observed_at.desc())
             .limit(RECENT_ENTRY_LIMIT)
         )
     ).all()
-    for observation, provider in observation_rows:
+    for observation, candidate, provider in observation_rows:
         is_error = observation.status == SeatObservationStatus.ERROR
         entries.append(
             OperationEntry(
@@ -177,20 +252,27 @@ async def _recent_entries(session: AsyncSession, window_start: datetime) -> list
                     observation.error_category, is_error=is_error
                 ),
                 provider=provider,
+                train_number=_safe_train_number(candidate.train_number),
+                departure_at=_kst(candidate.departure_at),
+                seat_class=_safe_seat_class(candidate.seat_class),
             )
         )
 
+    reservation_occurred_at = func.coalesce(
+        ReservationAttempt.finished_at,
+        ReservationAttempt.started_at,
+    )
     reservation_rows = (
         await session.execute(
-            select(ReservationAttempt, Watch.provider)
+            select(ReservationAttempt, WatchCandidate, Watch.provider)
             .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
             .join(Watch, Watch.id == WatchCandidate.watch_id)
-            .where(ReservationAttempt.started_at >= window_start)
-            .order_by(ReservationAttempt.started_at.desc())
+            .where(reservation_occurred_at >= window_start)
+            .order_by(reservation_occurred_at.desc())
             .limit(RECENT_ENTRY_LIMIT)
         )
     ).all()
-    for attempt, provider in reservation_rows:
+    for attempt, candidate, provider in reservation_rows:
         entries.append(
             OperationEntry(
                 occurred_at=_utc(attempt.finished_at or attempt.started_at),
@@ -201,6 +283,167 @@ async def _recent_entries(session: AsyncSession, window_start: datetime) -> list
                 if attempt.outcome in RESERVATION_FAILURE_OUTCOMES
                 else None,
                 provider=provider,
+                train_number=_safe_train_number(candidate.train_number),
+                departure_at=_kst(candidate.departure_at),
+                seat_class=_safe_seat_class(candidate.seat_class),
+                reason_code=RESERVATION_REASON_CODES[attempt.outcome],
+            )
+        )
+
+    paid_confirmation_rows = (
+        await session.execute(
+            select(ReservationAttempt, WatchCandidate, Watch)
+            .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+            .join(Watch, Watch.id == WatchCandidate.watch_id)
+            .where(
+                ReservationAttempt.confirmation_outcome
+                == ReservationConfirmationOutcome.CONFIRMED_PAID,
+                ReservationAttempt.last_reconciled_at >= window_start,
+            )
+            .order_by(ReservationAttempt.last_reconciled_at.desc())
+            .limit(RECENT_ENTRY_LIMIT)
+        )
+    ).all()
+    paid_watch_ids = {watch.id for _attempt, _candidate, watch in paid_confirmation_rows}
+    paid_transitions_by_watch: dict[str, list[WatchTransitionHistory]] = {}
+    used_paid_transition_ids: set[str] = set()
+    if paid_watch_ids:
+        paid_transition_rows = list(
+            (
+                await session.scalars(
+                    select(WatchTransitionHistory)
+                    .where(
+                        WatchTransitionHistory.watch_id.in_(paid_watch_ids),
+                        WatchTransitionHistory.from_status == WatchStatus.PAYMENT_REQUIRED,
+                        WatchTransitionHistory.to_status == WatchStatus.COMPLETED,
+                        WatchTransitionHistory.reason
+                        == "reservation_reconciliation_confirmed_paid",
+                        WatchTransitionHistory.created_at
+                        >= window_start - FUTURE_TIMESTAMP_TOLERANCE,
+                    )
+                    .order_by(WatchTransitionHistory.created_at.desc())
+                )
+            ).all()
+        )
+        for transition in paid_transition_rows:
+            paid_transitions_by_watch.setdefault(transition.watch_id, []).append(transition)
+    for attempt, candidate, watch in paid_confirmation_rows:
+        confirmed_at = attempt.last_reconciled_at
+        if confirmed_at is None:
+            continue
+        confirmed_at_utc = _utc(confirmed_at)
+        if confirmed_at_utc is None:
+            continue
+        matching_transitions = [
+            (item, created_at)
+            for item in paid_transitions_by_watch.get(watch.id, [])
+            if item.id not in used_paid_transition_ids
+            if (created_at := _utc(item.created_at)) is not None
+        ]
+        transition_match = min(
+            matching_transitions,
+            key=lambda item: abs((item[1] - confirmed_at_utc).total_seconds()),
+            default=None,
+        )
+        if transition_match is None:
+            continue
+        transition, transition_created_at = transition_match
+        if abs((transition_created_at - confirmed_at_utc).total_seconds()) > 300:
+            continue
+        used_paid_transition_ids.add(transition.id)
+        entries.append(
+            OperationEntry(
+                occurred_at=confirmed_at_utc,
+                kind="watch_transition",
+                level="info",
+                status=WatchStatus.COMPLETED,
+                provider=watch.provider,
+                train_number=_safe_train_number(candidate.train_number),
+                departure_at=_kst(candidate.departure_at),
+                seat_class=_safe_seat_class(candidate.seat_class),
+                reason_code="payment_completed",
+            )
+        )
+
+    payment_hold_rows = (
+        await session.execute(
+            select(ReservationAttempt, WatchCandidate, Watch)
+            .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+            .join(Watch, Watch.id == WatchCandidate.watch_id)
+            .where(ReservationAttempt.post_deadline_reconciled_at >= window_start)
+            .order_by(ReservationAttempt.post_deadline_reconciled_at.desc())
+            .limit(RECENT_ENTRY_LIMIT)
+        )
+    ).all()
+    payment_hold_watch_ids = {watch.id for _attempt, _candidate, watch in payment_hold_rows}
+    payment_hold_transitions_by_watch: dict[str, list[WatchTransitionHistory]] = {}
+    used_payment_hold_transition_ids: set[str] = set()
+    if payment_hold_watch_ids:
+        payment_hold_transition_rows = list(
+            (
+                await session.scalars(
+                    select(WatchTransitionHistory)
+                    .where(
+                        WatchTransitionHistory.watch_id.in_(payment_hold_watch_ids),
+                        WatchTransitionHistory.reason.in_(PAYMENT_HOLD_TRANSITION_REASONS),
+                        WatchTransitionHistory.created_at
+                        >= window_start - FUTURE_TIMESTAMP_TOLERANCE,
+                    )
+                    .order_by(WatchTransitionHistory.created_at.desc())
+                )
+            ).all()
+        )
+        for transition in payment_hold_transition_rows:
+            payment_hold_transitions_by_watch.setdefault(transition.watch_id, []).append(transition)
+    for attempt, candidate, watch in payment_hold_rows:
+        reconciled_at = _utc(attempt.post_deadline_reconciled_at)
+        if reconciled_at is None:
+            continue
+        matching_transitions = [
+            (item, created_at)
+            for item in payment_hold_transitions_by_watch.get(watch.id, [])
+            if item.id not in used_payment_hold_transition_ids
+            if (created_at := _utc(item.created_at)) is not None
+        ]
+        transition_match = min(
+            matching_transitions,
+            key=lambda item: abs((item[1] - reconciled_at).total_seconds()),
+            default=None,
+        )
+        if transition_match is None:
+            continue
+        transition, transition_created_at = transition_match
+        if abs((transition_created_at - reconciled_at).total_seconds()) > 300:
+            continue
+        used_payment_hold_transition_ids.add(transition.id)
+        monitoring_resumed = (
+            transition.reason == "confirmed_payment_hold_no_longer_actionable_monitoring_resumed"
+            and transition.to_status is WatchStatus.WATCHING
+        )
+        one_off_expired = (
+            transition.reason == "confirmed_payment_hold_no_longer_actionable_one_off_expired"
+            and transition.to_status is WatchStatus.EXPIRED
+        )
+        if not monitoring_resumed and not one_off_expired:
+            continue
+        reason_code = _payment_hold_reason_code(
+            attempt,
+            monitoring_resumed=monitoring_resumed,
+        )
+        if reason_code is None:
+            continue
+        target_status = transition.to_status
+        entries.append(
+            OperationEntry(
+                occurred_at=reconciled_at,
+                kind="watch_transition",
+                level=_transition_level(target_status),
+                status=target_status,
+                provider=watch.provider,
+                train_number=_safe_train_number(candidate.train_number),
+                departure_at=_kst(candidate.departure_at),
+                seat_class=_safe_seat_class(candidate.seat_class),
+                reason_code=reason_code,
             )
         )
 
@@ -208,7 +451,13 @@ async def _recent_entries(session: AsyncSession, window_start: datetime) -> list
         await session.execute(
             select(WatchTransitionHistory, Watch.provider)
             .join(Watch, Watch.id == WatchTransitionHistory.watch_id)
-            .where(WatchTransitionHistory.created_at >= window_start)
+            .where(
+                WatchTransitionHistory.created_at >= window_start,
+                or_(
+                    WatchTransitionHistory.reason.is_(None),
+                    WatchTransitionHistory.reason.not_in(SAFE_PROJECTED_TRANSITION_REASONS),
+                ),
+            )
             .order_by(WatchTransitionHistory.created_at.desc())
             .limit(RECENT_ENTRY_LIMIT)
         )

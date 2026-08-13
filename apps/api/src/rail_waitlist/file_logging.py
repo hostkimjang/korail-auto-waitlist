@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, TextIO
 
 try:
     import fcntl
@@ -42,6 +42,10 @@ _RELATIVE_URL_QUERY = re.compile(r"(?P<path>/[^\s?\"]+)\?[^\s\"]+")
 _URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", re.IGNORECASE)
 _handler_cache: dict[str, ServiceFileHandler] = {}
 _handler_cache_lock = threading.Lock()
+
+
+class _SafeConsoleHandler(logging.StreamHandler[TextIO]):
+    """Marker type used to keep sidecar console configuration idempotent."""
 
 
 def _bounded_integer(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -193,3 +197,23 @@ def configure_service_file_logging(logger: logging.Logger | None = None) -> None
     for target in targets:
         if target is not None and handler not in target.handlers:
             target.addHandler(handler)
+
+
+def configure_service_console_logging(
+    logger: logging.Logger,
+    *,
+    stream: TextIO | None = None,
+) -> None:
+    """Emit sanitized application records to container stderr for sidecar diagnostics."""
+
+    service = os.getenv("APP_LOG_SERVICE", "").strip()
+    if not service:
+        return
+    level = os.getenv("APP_LOG_LEVEL", "INFO").upper()
+    logger.setLevel(level)
+    if any(isinstance(handler, _SafeConsoleHandler) for handler in logger.handlers):
+        return
+    handler = _SafeConsoleHandler(stream)
+    handler.setLevel(level)
+    handler.setFormatter(SafeJsonFormatter(service))
+    logger.addHandler(handler)

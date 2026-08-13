@@ -72,6 +72,9 @@ MODULES = {
 }
 OWNER_DEFINITIONS = {
     page_owner: {
+        "PydollIssuedTicketListSnapshot",
+        "PydollIssuedTicketSummary",
+        "PydollReservationListSnapshot",
         "PydollSeatBox",
         "PydollTrainRow",
         "PydollPageSnapshot",
@@ -171,12 +174,16 @@ def test_pydoll_contract_namespace_is_passive_and_owners_are_canonical() -> None
         for symbol in symbols:
             assert getattr(owner, symbol).__module__ == owner.__name__
 
+    assert not hasattr(legacy_page, "PydollReservationListSnapshot")
+
 
 def test_pydoll_contract_owners_have_exact_leaf_import_boundaries() -> None:
     expected = {
         "page_contracts.py": {
             ("__future__", 0),
             ("dataclasses", 0),
+            ("datetime", 0),
+            ("typing", 0),
         },
         "auth_contracts.py": {
             ("__future__", 0),

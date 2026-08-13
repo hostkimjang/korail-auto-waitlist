@@ -82,10 +82,52 @@ describe("watch lifecycle snapshot", () => {
     });
   });
 
+  it("preserves canonical reservation retry policy for terminal recovery", () => {
+    const source = {
+      ...createDemoWatch({
+        id: "lifecycle-terminal",
+        provider: "KORAIL",
+        train: "KTX 053",
+        route: "서울 → 대전",
+        origin: "서울",
+        destination: "대전",
+        departure: "17:58",
+        arrival: "18:57",
+        date: "8월 13일 (목)",
+        travelDate: "2026-08-13",
+        status: "watching",
+        statusLabel: "감시 중",
+        seatClass: "standard",
+        seatClassLabel: "일반실",
+        seatEvidenceLabel: "일반실 · 매진",
+        officialBookingUrl: "https://www.korail.com/ticket/search/general",
+      }),
+      latestReservationAttempt: {
+        outcome: "not_available" as const,
+        startedAt: "2026-08-12T13:56:21Z",
+        finishedAt: "2026-08-12T13:56:23Z",
+        retryable: true,
+        manualCheckRequired: false,
+        retryCondition: "new_availability_episode" as const,
+        paymentHoldEndedAt: null,
+      },
+    };
+
+    expect(mapWatchLifecycleSnapshot(source).latestReservationAttempt).toMatchObject({
+      outcome: "not_available",
+      retryable: true,
+      retryCondition: "new_availability_episode",
+    });
+  });
+
   it("keeps the legacy loose snake_case snapshot contract behind an adapter", () => {
     const legacy: WatchSnapshot = {
       id: "legacy-lifecycle",
       status: "watching",
+      latestReservationAttempt: {
+        outcome: "not_available",
+        retryable: true,
+      },
       payment_deadline: "2026-08-08T12:10:00+09:00",
       updated_at: "2026-08-08T03:01:00Z",
     };
@@ -95,6 +137,10 @@ describe("watch lifecycle snapshot", () => {
       status: "watching",
       provider: "철도",
       route: "여정 정보 없음",
+      latestReservationAttempt: {
+        outcome: "not_available",
+        retryable: true,
+      },
       paymentDeadline: "2026-08-08T12:10:00+09:00",
       updatedAt: "2026-08-08T03:01:00Z",
     });

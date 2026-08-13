@@ -43,6 +43,7 @@ const queuedReservationEventTypes: ReadonlySet<string> = new Set([
   "watch.reservation_result_requires_manual_check",
   "watch.payment_hold_ended_monitoring_resumed",
   "watch.payment_hold_ended_one_off_expired",
+  "watch.payment_completed",
 ]);
 
 interface WatchRefreshState {

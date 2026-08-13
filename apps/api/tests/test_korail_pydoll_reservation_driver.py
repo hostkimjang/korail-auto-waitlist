@@ -143,6 +143,30 @@ def test_reservation_driver_keeps_css_metadata_bounded_like_browser_controls() -
     assert tokens == ("one", "two", "three", "four", "five", "six", "seven")
 
 
+@pytest.mark.parametrize("aria_disabled", ["true", "mixed", "other", "read_error"])
+def test_dialog_action_rejects_disabled_or_unknown_aria_state(aria_disabled: str) -> None:
+    state = SimpleNamespace(
+        enabled=True,
+        aria_disabled=aria_disabled,
+        disabled_attribute=False,
+        read_error=False,
+    )
+
+    assert not reservation_driver_module._control_state_allows_dialog_action(state)
+
+
+@pytest.mark.parametrize("aria_disabled", ["", "false"])
+def test_dialog_action_accepts_only_known_enabled_aria_state(aria_disabled: str) -> None:
+    state = SimpleNamespace(
+        enabled=True,
+        aria_disabled=aria_disabled,
+        disabled_attribute=False,
+        read_error=False,
+    )
+
+    assert reservation_driver_module._control_state_allows_dialog_action(state)
+
+
 @pytest.mark.parametrize(
     "body",
     (
@@ -164,6 +188,7 @@ def test_payment_detail_seat_parser_accepts_one_explicit_car_and_seat() -> None:
 
 def _official_reservation_history_state() -> dict[str, object]:
     return {
+        "journeyCount": 1,
         "trainNumber": "00118",
         "departureDate": "20260802",
         "departureTime": "063500",
@@ -207,6 +232,28 @@ def test_payment_detail_reads_exact_official_history_seat_fields() -> None:
             "seats",
             [{"seatClass": "특실", "carNumber": "0004", "seatNumber": "입석"}],
         ),
+        (
+            "seats",
+            [
+                {"seatClass": "특실", "carNumber": "0004", "seatNumber": "002C"},
+                {"seatClass": "특실", "carNumber": "0004", "seatNumber": "003A"},
+            ],
+        ),
+        ("journeyCount", 0),
+        ("journeyCount", 2),
+        ("journeyCount", True),
+        ("trainNumber", 118),
+        ("departureDate", 20260802),
+        ("origin", ["대전역"]),
+        (
+            "seats",
+            [{"seatClass": "특실", "carNumber": 4, "seatNumber": "002C"}],
+        ),
+        (
+            "seats",
+            [{"seatClass": "특실", "carNumber": "0004", "seatNumber": 2}],
+        ),
+        ("seats", [["특실", "0004", "002C"]]),
     ),
 )
 def test_payment_detail_history_seat_fields_fail_closed_on_target_mismatch(
@@ -243,6 +290,19 @@ async def test_payment_detail_reads_seat_from_preserved_history_state_script(
 
     assert [(seat.car_number, seat.seat_number) for seat in seats] == [("4", "2C")]
     execute_script.assert_awaited_once()
+    script = execute_script.await_args_list[0].args[0]
+    assert isinstance(script, str)
+    assert "const reservation = state.reservation" in script
+    assert "reservation.jrny_infos.jrny_info" in script
+    assert "state.reservedTrainList" not in script
+    assert "isPlainRecord(reservation)" in script
+    assert "isPlainRecord(train)" in script
+    assert "isPlainRecord(seat)" in script
+    assert "Array.isArray(value)" in script
+    assert "journeyInfo.length !== 1" in script
+    assert "seatInfo.length !== 1" in script
+    assert "typeof train[name] === 'string'" in script
+    assert "typeof seat[name] === 'string'" in script
 
 
 @pytest.mark.asyncio
@@ -286,6 +346,43 @@ async def test_payment_terminal_projects_structured_seat_when_body_has_no_seat_t
     assert result is not None
     assert result.outcome is reservation_contracts_module.KorailReservationOutcome.PAYMENT_REQUIRED
     assert [(seat.car_number, seat.seat_number) for seat in result.reserved_seats] == [("4", "2C")]
+
+
+@pytest.mark.asyncio
+async def test_payment_terminal_does_not_persist_page_wide_seat_text_without_official_state() -> (
+    None
+):
+    port = SimpleNamespace(
+        _snapshot=AsyncMock(
+            return_value=reservation_driver_module.PydollPageSnapshot(
+                body_text=(
+                    "KTX 118 2026-08-02 대전 06:35 서울 07:49 특실 "
+                    "예약취소 장바구니 결제하기 배정 좌석 4호차 2C"
+                ),
+                rows=(),
+                url="https://www.korail.com/ticket/reservation/detail",
+            )
+        )
+    )
+    driver = reservation_driver_module.PydollReservationDomDriver(
+        port=port,
+        timeout_ms=1_000,
+        timeout_seconds=1.0,
+        execute_script=AsyncMock(return_value={"result": {"result": {"value": None}}}),
+        visible_elements=AsyncMock(return_value=[]),
+        current_schedule=AsyncMock(return_value=(date(2026, 8, 2), 6)),
+        read_control_state=AsyncMock(),
+        monotonic=lambda: 0.0,
+        sleep=AsyncMock(),
+        utc_now=lambda: datetime(2026, 8, 2, tzinfo=UTC),
+        event_logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+    )
+
+    result = await driver.probe_reservation_terminal(_request())
+
+    assert result is not None
+    assert result.outcome is reservation_contracts_module.KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reserved_seats == ()
 
 
 def test_reservation_driver_has_no_browser_or_actor_dependencies() -> None:

@@ -510,13 +510,26 @@ class KorailBrowserSeatSource:
         key: tuple[str, str, str, str, str, int],
         request: BrowserSeatSearchRequest,
     ) -> BrowserSeatSearchResult:
-        return await self._query_runtime.load(
-            key,
-            request,
-            provider_search=lambda: self._transport.search(request),
-            monotonic=lambda: self._monotonic(),
-            cache_ttl_seconds=lambda: self.cache_ttl_seconds,
-        )
+        try:
+            return await self._query_runtime.load(
+                key,
+                request,
+                provider_search=lambda: self._transport.search(request),
+                observe_cooldown=lambda error, failed_key: self._open_cooldown(
+                    error,
+                    failed_key,
+                ),
+                cooldown_store=lambda: self._cooldown_store,
+                monotonic=lambda: self._monotonic(),
+                cache_ttl_seconds=lambda: self.cache_ttl_seconds,
+            )
+        except _AdapterFailure as error:
+            if error.cooldown_scope == "provider":
+                # ``load`` writes the shared hold while still inside the provider gate.
+                # Surface the already-open hold directly so outer overlay/observe
+                # handlers do not add a query backoff or refresh the provider TTL.
+                raise _ProviderCooldown("source_unavailable") from None
+            raise
 
     async def _open_cooldown(
         self,

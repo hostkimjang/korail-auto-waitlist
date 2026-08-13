@@ -21,6 +21,7 @@ from ..provider_circuit.models import ProviderCircuit
 from ..provider_contracts import ObservationProvider
 from ..reservations.attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
+    CONFIRMED_ABSENT_RETRY_OBSERVATIONS,
     manual_payment_hold_rearm_episode_key,
     official_seat_observation_source,
     payment_hold_retry_episode_key,
@@ -314,9 +315,18 @@ async def retryable_reservation_episode_key(
             return None
         generation = int(authenticated_at.timestamp() * 1_000_000)
         return f"auth:{account.credential_version}:{generation}"
+    confirmation_observed_at = latest_attempt.confirmation_observed_at
+    safe_unknown_rediscovery = (
+        latest_attempt.outcome is ReservationOutcome.UNKNOWN
+        and current_observation.source == official_seat_observation_source(provider)
+        and current_observation.status in CONFIRMED_ABSENT_RETRY_OBSERVATIONS
+    )
+    legacy_payment_hold_rediscovery = latest_attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
     if (
         is_confirmed_absent_retry_source(latest_attempt)
-        and current_observation.observed_at > latest_attempt.confirmation_observed_at
+        and confirmation_observed_at is not None
+        and _as_utc(current_observation.observed_at) > _as_utc(confirmation_observed_at)
+        and (safe_unknown_rediscovery or legacy_payment_hold_rediscovery)
     ):
         return f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}{latest_attempt.id}"
     return None

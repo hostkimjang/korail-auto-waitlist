@@ -91,8 +91,14 @@ async def read_control_state(element: Any) -> PydollControlState:
             or has_disabled_class(container_classes)
             or has_disabled_class(slide_classes)
         )
+        recognized_aria_disabled = aria_disabled in {"", "true", "false"}
         return PydollControlState(
-            enabled=not disabled_attribute and aria_disabled != "true" and not class_disabled,
+            enabled=(
+                recognized_aria_disabled
+                and not disabled_attribute
+                and aria_disabled != "true"
+                and not class_disabled
+            ),
             aria_disabled=aria_disabled if aria_disabled in {"", "true", "false"} else "other",
             disabled_attribute=disabled_attribute,
             classes=classes,

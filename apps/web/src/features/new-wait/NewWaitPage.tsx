@@ -19,7 +19,6 @@ import {
   refreshSeatStatus,
 } from "../../api/timetables";
 import { fetchCachedTimetableSnapshot } from "../../api/timetableSnapshots";
-import { DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS } from "../../api/uiPreferences";
 import type { WatchReadModel } from "../../api/watches";
 import {
   demoNodeId,
@@ -144,7 +143,6 @@ export interface NewWaitPageProps {
   demo: boolean;
   watches?: readonly WatchReadModel[];
   providerAccounts?: readonly ProviderAccount[];
-  refreshIntervalSeconds?: number;
   onComplete: SeatWatchRegistrationCompletion;
   onCancelWatch?: SeatWatchCancellation;
   onCancel: () => void;
@@ -155,7 +153,6 @@ export function NewWaitPage({
   demo,
   watches = [],
   providerAccounts = [],
-  refreshIntervalSeconds = DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
   onComplete,
   onCancelWatch = async () => undefined,
   onCancel,
@@ -347,9 +344,8 @@ export function NewWaitPage({
             <div className="wizard-heading"><span>3</span><div><h2>공식 시간표에서 관심 열차를 고르세요</h2><p>일반실·특실을 각각 누르면 해당 대기가 즉시 등록됩니다. 여러 열차를 계속 추가할 수 있어요.</p></div></div>
             <div className="step-three-result-tools">
               <div className="step-three-live-toolbar" aria-label="열차 정보 자동 동기화">
-                <div><strong>열차 정보 자동 동기화</strong><span>서버 snapshot · {refreshIntervalSeconds}초</span></div>
+                <div><strong>열차 정보 자동 동기화</strong><span>서버에 저장된 최신 결과 자동 반영</span></div>
                 <StepThreeRefreshControl
-                  intervalSeconds={refreshIntervalSeconds}
                   enabled={timetableState.loadingProviders.length === 0 && trains.length > 0}
                   onManualRefresh={refreshAllTimetables}
                   onAutomaticRefresh={synchronizeCachedTimetables}

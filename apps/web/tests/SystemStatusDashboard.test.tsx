@@ -25,7 +25,18 @@ describe("SystemStatusDashboard", () => {
     expect(screen.getByText("알림 최종 실패율").nextElementSibling?.textContent).toBe("10.0%");
     expect(screen.getByText(payload.seat_observation_error_rate.definition)).toBeTruthy();
     expect(screen.getByText("알림 전달 · 전달됨")).toBeTruthy();
-    expect(screen.queryByText(/https?:\/\/|KTX|서울|payload|token/i)).toBeNull();
+    expect(screen.getByText(
+      /KORAIL · 예약 처리 · 좌석 확보 실패 · 123 · .*8월 15일.*토.*13:57.*일반실/,
+    )).toBeTruthy();
+    expect(screen.getByText("예매 시점에 요청 좌석을 확보하지 못했습니다.")).toBeTruthy();
+    expect(screen.getByText("공식 내역에서 결제 완료를 확인했습니다.")).toBeTruthy();
+    expect(screen.getByText(/KORAIL · 좌석 조회 · 관측 오류 · 382/)).toBeTruthy();
+    expect(screen.getByText("오류 · 시간 초과")).toBeTruthy();
+    expect(screen.getByText("운영사 로그인 확인이 필요해 예매를 진행하지 못했습니다.")).toBeTruthy();
+    expect(screen.getByText("활동·오류 최대 20개 · 반복 정상 관측 제외")).toBeTruthy();
+    expect(screen.getAllByRole("list").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText(/^기록 시각 /).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/https?:\/\/|서울|payload|token|watch-|candidate-/i)).toBeNull();
   });
 
   it("keeps the last safe summary when a manual refresh fails", async () => {
@@ -71,6 +82,8 @@ describe("SystemStatusDashboard", () => {
     expect(await screen.findByRole("heading", { name: "좌석 조회 제공원 상태" })).toBeTruthy();
     expect(screen.getByText("KORAIL 브라우저 좌석 조회")).toBeTruthy();
     expect(screen.getByText("공식 조회 제한 · 남은 1분 30초")).toBeTruthy();
+    expect(screen.getByText("조회 대기 중")).toBeTruthy();
+    expect(screen.getByText("별도 조회 대기 기준")).toBeTruthy();
     expect(screen.getByText("SRT 실시간 좌석 조회")).toBeTruthy();
     expect(screen.getByText("현재 제한 기록 없음")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "운영사 요청 상태" })).toBeTruthy();

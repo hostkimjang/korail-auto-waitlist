@@ -15,6 +15,7 @@ import rail_waitlist.srt_reservation_confirmation as legacy
 from rail_waitlist.domain import Provider, SeatClass
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
@@ -39,6 +40,7 @@ def _target(
     *,
     provider: Provider = Provider.SRT,
     credential_version: int = 7,
+    purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
 ) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-1",
@@ -51,6 +53,7 @@ def _target(
         seat_class=SeatClass.STANDARD,
         passenger_count=1,
         credential_version=credential_version,
+        purpose=purpose,
     )
 
 
@@ -182,7 +185,7 @@ def test_srt_confirmation_rejects_non_srt_target_before_evidence_branches() -> N
         ),
         (
             _evidence(records=(_record(paid=True),)),
-            ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationConfirmationOutcome.CONFIRMED_PAID,
         ),
         (_evidence(), ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
     ],
@@ -191,7 +194,15 @@ def test_srt_confirmation_branch_precedence_is_preserved(
     evidence: canonical.SrtReservationListEvidence,
     expected: ReservationConfirmationOutcome,
 ) -> None:
-    result = canonical.normalize_srt_reservation_records(_target(), evidence)
+    purpose = (
+        ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        if expected is ReservationConfirmationOutcome.CONFIRMED_PAID
+        else ReservationConfirmationPurpose.INITIAL
+    )
+    result = canonical.normalize_srt_reservation_records(
+        _target(purpose=purpose),
+        evidence,
+    )
     assert result.outcome is expected
     assert not result.permits_automatic_reservation_retry
 

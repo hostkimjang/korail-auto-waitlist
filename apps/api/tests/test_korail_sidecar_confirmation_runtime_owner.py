@@ -20,7 +20,9 @@ from rail_waitlist.korail_sidecar.contracts import (
 from rail_waitlist.reservations.provider_confirmation import korail_sidecar_runtime as owner
 from rail_waitlist.reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 
@@ -32,7 +34,13 @@ LEGACY_METHOD_PICKLE = (
 NOW = datetime(2026, 8, 8, 3, tzinfo=UTC)
 
 
-def _target(*, provider: Provider = Provider.KORAIL) -> ReservationConfirmationTarget:
+def _target(
+    *,
+    provider: Provider = Provider.KORAIL,
+    purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
+    passenger_count: int = 1,
+    reserved_seats: tuple[ReservationConfirmationSeat, ...] = (),
+) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-1",
         candidate_id="candidate-1",
@@ -43,8 +51,10 @@ def _target(*, provider: Provider = Provider.KORAIL) -> ReservationConfirmationT
         departure_at=datetime.fromisoformat("2026-08-09T08:00:00+09:00"),
         arrival_at=datetime.fromisoformat("2026-08-09T10:30:00+09:00"),
         seat_class=SeatClass.STANDARD,
-        passenger_count=1,
+        passenger_count=passenger_count,
         credential_version=7,
+        purpose=purpose,
+        reserved_seats=reserved_seats,
     )
 
 
@@ -234,6 +244,75 @@ async def test_owner_fails_closed_for_invalid_request_or_wire_result() -> None:
     assert invalid_request.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     assert invalid_normalizer_result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     assert invalid_wire.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        _target(),
+        _target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP),
+        _target(
+            purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+            passenger_count=2,
+            reserved_seats=(ReservationConfirmationSeat(car_number="4", seat_number="8A"),),
+        ),
+    ],
+)
+async def test_owner_rejects_wire_paid_for_ineligible_target_correlation(
+    target: ReservationConfirmationTarget,
+) -> None:
+    async def confirm(
+        _request: KorailReservationConfirmationRequest,
+    ) -> KorailReservationConfirmationResult:
+        return KorailReservationConfirmationResult(
+            outcome="confirmed_paid",
+            source="korail-issued-ticket-list",
+            observed_at=NOW,
+        )
+
+    result = await owner.confirm_korail_sidecar_reservation(
+        enabled=True,
+        target=target,
+        confirm=confirm,
+        normalize_train_number=lambda _value: "43",
+        now=lambda: NOW,
+        adapter_failure_type=_AdapterFailure,
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+
+
+async def test_owner_accepts_wire_paid_for_follow_up_with_one_persisted_seat() -> None:
+    target = _target(
+        purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+        reserved_seats=(ReservationConfirmationSeat(car_number="4", seat_number="8A"),),
+    )
+    requests: list[KorailReservationConfirmationRequest] = []
+
+    async def confirm(
+        request: KorailReservationConfirmationRequest,
+    ) -> KorailReservationConfirmationResult:
+        requests.append(request)
+        return KorailReservationConfirmationResult(
+            outcome="confirmed_paid",
+            source="korail-issued-ticket-list",
+            observed_at=NOW,
+        )
+
+    result = await owner.confirm_korail_sidecar_reservation(
+        enabled=True,
+        target=target,
+        confirm=confirm,
+        normalize_train_number=lambda _value: "43",
+        now=lambda: NOW,
+        adapter_failure_type=_AdapterFailure,
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    assert requests[0].purpose == "payment_follow_up"
+    assert [seat.model_dump() for seat in requests[0].reserved_seats] == [
+        {"car_number": "4", "seat_number": "8A"}
+    ]
 
 
 async def test_legacy_wrapper_keeps_pickle_late_runtime_and_dependency_seams(

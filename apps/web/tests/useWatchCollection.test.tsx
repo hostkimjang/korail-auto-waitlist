@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../src/api/client";
 import {
   initialNotificationCenterState,
+  notificationCenterReducer,
   pushNotifications as reduceNotifications,
   type AppNotificationInput,
   type NotificationCenterState,
@@ -29,6 +30,7 @@ interface TestWatch {
     | "seat_found"
     | "reserving"
     | "payment_required"
+    | "completed"
     | "auth_required"
     | "expired";
   reservationPolicy: "notify_only" | "reserve_once_before_payment";
@@ -37,7 +39,7 @@ interface TestWatch {
 
 function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
   const hasAttempt = value.recoveredUnknown === true
-    || ["reserving", "payment_required", "auth_required"].includes(value.status);
+    || ["reserving", "payment_required", "completed", "auth_required"].includes(value.status);
   return {
     id: value.id,
     status: value.status,
@@ -50,9 +52,14 @@ function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
     arrival: "16:52",
     latestReservationAttempt: hasAttempt
       ? {
-          outcome: value.recoveredUnknown ? "unknown" as const : "pending" as const,
+          outcome: value.recoveredUnknown
+            ? "unknown" as const
+            : value.status === "completed"
+              ? "payment_required" as const
+              : "pending" as const,
           startedAt: "2026-08-03T12:09:45Z",
           finishedAt: value.status === "reserving" ? null : "2026-08-03T12:09:48Z",
+          retryable: false,
           manualCheckRequired: value.recoveredUnknown === true,
           retryCondition: null,
           progressStages: value.recoveredUnknown
@@ -79,7 +86,9 @@ function snapshotOf(value: TestWatch): WatchLifecycleSnapshot {
     seatFoundObservation: value.status === "seat_found"
       ? { observedAt: "2026-08-01T03:45:00Z" }
       : null,
-    updatedAt: hasAttempt ? "2026-08-03T12:09:48Z" : null,
+    updatedAt: value.status === "completed"
+      ? "2026-08-03T12:10:01Z"
+      : hasAttempt ? "2026-08-03T12:09:48Z" : null,
   };
 }
 
@@ -353,14 +362,16 @@ describe("useWatchCollection", () => {
     unmount();
   });
 
-  it("keeps one same-watch notice through SSE, canonical reserving, and terminal result", async () => {
+  it("replaces a payment notice after the paid SSE event and lets the completion close", async () => {
     const initial = watch("reserve_once_before_payment", "watching");
     const reserving = watch("reserve_once_before_payment", "reserving");
     const payment = watch("reserve_once_before_payment", "payment_required");
+    const completed = watch("reserve_once_before_payment", "completed");
     const loadWatches = vi.fn()
       .mockResolvedValueOnce([initial])
       .mockResolvedValueOnce([reserving])
-      .mockResolvedValue([payment]);
+      .mockResolvedValueOnce([payment])
+      .mockResolvedValue([completed]);
     let onEvent: ((event: unknown) => void) | undefined;
     eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
       onEvent = handler;
@@ -458,6 +469,45 @@ describe("useWatchCollection", () => {
       subjectKey: `watch:${initial.id}`,
       kind: "payment_required",
     });
+
+    act(() => {
+      onEvent?.({
+        id: "payment-completed-one",
+        event_type: "watch.payment_completed",
+        aggregate_id: initial.id,
+        created_at: "2026-08-03T12:10:01Z",
+        payload: {
+          watch_id: initial.id,
+          candidate_id: "candidate",
+          terminal: true,
+          status: "completed",
+          from: "payment_required",
+          to: "completed",
+          reason: "untrusted-provider-text",
+          message: "이 원문은 사용자 안내에 노출되면 안 됩니다.",
+          automatic_reservation_retry: false,
+        },
+      });
+    });
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(4));
+    expect(notificationState.notices).toHaveLength(1);
+    expect(notificationState.notices[0]).toMatchObject({
+      subjectKey: `watch:${initial.id}`,
+      kind: "recovery",
+      persistence: "timed",
+      title: "결제가 완료되었습니다",
+    });
+    expect(notificationState.notices[0]?.description).not.toContain("원문");
+
+    const completionId = notificationState.notices[0]?.id;
+    expect(completionId).toBeDefined();
+    if (completionId === undefined) throw new Error("completion notice was not created");
+    notificationState = notificationCenterReducer(notificationState, {
+      type: "dismiss",
+      id: completionId,
+    });
+    expect(notificationState.notices).toEqual([]);
+    expect(notificationState.dismissalLedger).toEqual([]);
     unmount();
   });
 

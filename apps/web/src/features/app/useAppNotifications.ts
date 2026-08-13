@@ -1,12 +1,16 @@
-import { useCallback, useReducer } from "react";
+import { useCallback, useEffect, useReducer } from "react";
 
 import {
-  initialNotificationCenterState,
+  createInitialNotificationCenterState,
   notificationCenterReducer,
   type AppNotificationInput,
   type NotificationCenterState,
   type NotificationKind,
 } from "./notificationCenter";
+import {
+  loadNotificationDismissalLedger,
+  saveNotificationDismissalLedger,
+} from "./notificationDismissalStorage";
 
 interface UseAppNotificationsResult {
   state: NotificationCenterState;
@@ -21,8 +25,12 @@ interface UseAppNotificationsResult {
 export function useAppNotifications(): UseAppNotificationsResult {
   const [state, dispatch] = useReducer(
     notificationCenterReducer,
-    initialNotificationCenterState,
+    undefined,
+    () => createInitialNotificationCenterState(loadNotificationDismissalLedger()),
   );
+  useEffect(() => {
+    saveNotificationDismissalLedger(state.dismissalLedger);
+  }, [state.dismissalLedger]);
   const push = useCallback((input: AppNotificationInput | string) => {
     const receivedAt = new Date().toISOString();
     const normalized = typeof input === "string" ? { title: input } : input;

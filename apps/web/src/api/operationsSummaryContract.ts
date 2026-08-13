@@ -1,6 +1,22 @@
 export type OperationsHealthStatus = "healthy" | "fresh" | "stale" | "unknown";
 export type OperationsEntryLevel = "info" | "warning" | "error";
+export type OperationsEntryProvider = "KORAIL" | "SRT" | "MOCK";
 export type ProviderCircuitState = "closed" | "open" | "half_open" | "manual_hold" | "unknown";
+export type OperationsSeatClass = "standard" | "first" | "infant" | "free" | "waitlist" | "any";
+export type OperationsEntryReasonCode =
+  | "reservation_pending"
+  | "reservation_payment_required"
+  | "reservation_reserved"
+  | "reservation_not_available"
+  | "reservation_auth_required"
+  | "reservation_provider_blocked"
+  | "reservation_failed"
+  | "reservation_unknown"
+  | "payment_completed"
+  | "payment_deadline_elapsed_monitoring_resumed"
+  | "payment_hold_no_longer_present_monitoring_resumed"
+  | "payment_deadline_elapsed_one_off_expired"
+  | "payment_hold_no_longer_present_one_off_expired";
 
 export interface OperationsWindow {
   fromAt: string | null;
@@ -65,7 +81,11 @@ export interface OperationsEntry {
   level: OperationsEntryLevel;
   status: string;
   errorCategory: string | null;
-  provider: string | null;
+  provider: OperationsEntryProvider | null;
+  trainNumber: string | null;
+  departureAt: string | null;
+  seatClass: OperationsSeatClass | null;
+  reasonCode: OperationsEntryReasonCode | null;
 }
 
 export interface OperationsSummary {
@@ -85,7 +105,31 @@ export interface OperationsSummary {
 
 const healthStatuses = new Set<OperationsHealthStatus>(["healthy", "fresh", "stale", "unknown"]);
 const entryLevels = new Set<OperationsEntryLevel>(["info", "warning", "error"]);
+const entryProviders = new Set<OperationsEntryProvider>(["KORAIL", "SRT", "MOCK"]);
 const circuitStates = new Set<ProviderCircuitState>(["closed", "open", "half_open", "manual_hold", "unknown"]);
+const seatClasses = new Set<OperationsSeatClass>([
+  "standard",
+  "first",
+  "infant",
+  "free",
+  "waitlist",
+  "any",
+]);
+const entryReasonCodes = new Set<OperationsEntryReasonCode>([
+  "reservation_pending",
+  "reservation_payment_required",
+  "reservation_reserved",
+  "reservation_not_available",
+  "reservation_auth_required",
+  "reservation_provider_blocked",
+  "reservation_failed",
+  "reservation_unknown",
+  "payment_completed",
+  "payment_deadline_elapsed_monitoring_resumed",
+  "payment_hold_no_longer_present_monitoring_resumed",
+  "payment_deadline_elapsed_one_off_expired",
+  "payment_hold_no_longer_present_one_off_expired",
+]);
 const knownLimitations = new Set([
   "http_and_process_errors_are_not_durably_recorded",
   "worker_and_scheduler_health_require_durable_heartbeats",
@@ -131,6 +175,37 @@ function entryLevel(value: unknown): OperationsEntryLevel {
   return typeof value === "string" && entryLevels.has(value as OperationsEntryLevel)
     ? (value as OperationsEntryLevel)
     : "warning";
+}
+
+function seatClass(value: unknown): OperationsSeatClass | null {
+  return typeof value === "string" && seatClasses.has(value as OperationsSeatClass)
+    ? (value as OperationsSeatClass)
+    : null;
+}
+
+function entryReasonCode(value: unknown): OperationsEntryReasonCode | null {
+  return typeof value === "string" && entryReasonCodes.has(value as OperationsEntryReasonCode)
+    ? (value as OperationsEntryReasonCode)
+    : null;
+}
+
+function entryProvider(value: unknown): OperationsEntryProvider | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return entryProviders.has(normalized as OperationsEntryProvider)
+    ? (normalized as OperationsEntryProvider)
+    : null;
+}
+
+function trainNumber(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  const containsControlText = /[\u0000-\u001f\u007f]/.test(normalized); // eslint-disable-line no-control-regex
+  return normalized.length > 0
+    && normalized.length <= 40
+    && !containsControlText
+    ? normalized
+    : null;
 }
 
 function circuitState(value: unknown): ProviderCircuitState {
@@ -189,7 +264,11 @@ function recentEntries(value: unknown): OperationsEntry[] {
     level: entryLevel(item.level),
     status: safeString(item.status),
     errorCategory: safeString(item.error_category) || null,
-    provider: safeString(item.provider).toUpperCase() || null,
+    provider: entryProvider(item.provider),
+    trainNumber: trainNumber(item.train_number),
+    departureAt: timestamp(item.departure_at),
+    seatClass: seatClass(item.seat_class),
+    reasonCode: entryReasonCode(item.reason_code),
   }));
 }
 

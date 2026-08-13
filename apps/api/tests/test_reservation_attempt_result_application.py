@@ -381,6 +381,46 @@ async def test_confirmation_identity_and_timestamp_contracts_are_preserved() -> 
         )
 
 
+@pytest.mark.parametrize(
+    "confirmation_outcome",
+    [
+        ReservationConfirmationOutcome.INCONCLUSIVE,
+        ReservationConfirmationOutcome.NOT_FOUND,
+    ],
+)
+async def test_unknown_schedules_one_delayed_official_recheck(
+    confirmation_outcome: ReservationConfirmationOutcome,
+) -> None:
+    transitions: list[tuple[WatchStatus, str | None]] = []
+    events: list[dict[str, object]] = []
+    watch = make_watch()
+    candidate = make_candidate()
+    attempt = make_attempt()
+    confirmation = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=confirmation_outcome,
+        source="srtrain-reservation-list",
+        observed_at=OBSERVED_AT,
+    )
+
+    await complete_reservation_attempt_application(
+        cast(AsyncSession, ResultSession()),
+        watch,
+        candidate,
+        attempt,
+        ReservationResult(
+            outcome=ReservationOutcome.UNKNOWN,
+            source="srt.owner-test",
+            observed_at=OBSERVED_AT,
+        ),
+        confirmation,
+        dependencies=make_dependencies(transitions, events),
+    )
+
+    assert attempt.confirmation_outcome is confirmation_outcome
+    assert attempt.next_reconcile_at == COMPLETED_AT + timedelta(seconds=30)
+
+
 async def test_result_application_rejects_completion_and_confirmation_mismatch() -> None:
     dependencies = make_dependencies([], [])
     with pytest.raises(ReservationAttemptAlreadyCompleted):

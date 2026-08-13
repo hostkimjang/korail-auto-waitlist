@@ -3,6 +3,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .test-tmp/
+.test-tmp-*/
 .tmp-pytest-*/
 .uv-cache/
 .venv/

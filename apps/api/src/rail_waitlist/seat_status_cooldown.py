@@ -9,6 +9,10 @@ from redis.exceptions import RedisError
 
 from .timetable_management.schemas import SeatAvailabilityNotObservedReason
 
+KORAIL_BROWSER_COOLDOWN_KEY = "korail-browser"
+KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY = "korail-browser-outage"
+SRT_COOLDOWN_KEY = "srt"
+
 
 @dataclass(frozen=True)
 class ProviderCooldown:

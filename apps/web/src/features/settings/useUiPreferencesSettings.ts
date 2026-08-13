@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS,
-  DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
   fetchUiPreferences,
   updateUiPreferences,
   type UiPreferences,
@@ -36,7 +35,6 @@ function currentIsoTimestamp(): string {
 
 function defaultUiPreferences(): UiPreferences {
   return {
-    timetableRefreshIntervalSeconds: DEFAULT_TIMETABLE_REFRESH_INTERVAL_SECONDS,
     seatObservationIntervalSeconds: DEFAULT_SEAT_OBSERVATION_INTERVAL_SECONDS,
     updatedAt: new Date(0).toISOString(),
   };
@@ -64,7 +62,7 @@ export function useUiPreferencesSettings({
       if (active) setPreferences(loaded);
     }).catch((reason: unknown) => {
       if (active) {
-        pushToast(errorMessage(reason, "화면 갱신 설정을 불러오지 못했습니다."));
+        pushToast(errorMessage(reason, "화면 동작 설정을 불러오지 못했습니다."));
       }
     });
     return () => {
@@ -81,10 +79,10 @@ export function useUiPreferencesSettings({
         ? { ...input, updatedAt: now() }
         : await persistPreferences(input);
       setPreferences(saved);
-      pushToast("화면·좌석 관측 간격을 저장했습니다. 활성 작업의 다음 관측부터 적용됩니다.");
+      pushToast("좌석 관측 간격을 저장했습니다. 활성 작업의 다음 관측부터 적용됩니다.");
       return saved;
     } catch (reason: unknown) {
-      pushToast(errorMessage(reason, "화면·좌석 관측 간격을 저장하지 못했습니다."));
+      pushToast(errorMessage(reason, "좌석 관측 간격을 저장하지 못했습니다."));
       throw reason;
     } finally {
       setSaving(false);

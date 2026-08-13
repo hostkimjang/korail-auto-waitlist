@@ -14,13 +14,16 @@ import rail_waitlist.reservations.provider_confirmation.korail as canonical
 from rail_waitlist.domain import Provider, SeatClass
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 
 API_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_SYMBOLS = (
     "KORAIL_CONFIRMATION_SOURCE",
+    "KORAIL_ISSUED_TICKET_LIST_SOURCE",
     "KORAIL_RESERVATION_HANDOFF_URL",
     "KORAIL_RESERVATION_LIST_SOURCE",
     "KorailSameSessionDetailConfirmationAdapter",
@@ -40,6 +43,7 @@ EVIDENCE_FIELDS = [
     "official_list_target_absent",
     "auth_required",
     "provider_blocked",
+    "issued_ticket_exact_match",
     "payment_deadline",
     "source",
 ]
@@ -51,6 +55,8 @@ def _target(
     provider: Provider = Provider.KORAIL,
     *,
     credential_version: int = 7,
+    purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
+    reserved_seats: tuple[ReservationConfirmationSeat, ...] = (),
 ) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-1",
@@ -64,6 +70,8 @@ def _target(
         seat_class=SeatClass.STANDARD,
         passenger_count=1,
         credential_version=credential_version,
+        purpose=purpose,
+        reserved_seats=reserved_seats,
     )
 
 
@@ -87,6 +95,7 @@ def test_korail_confirmation_legacy_facade_has_exact_canonical_exports() -> None
     assert canonical.normalize_korail_same_session_detail.__module__ == canonical.__name__
     assert canonical.KORAIL_CONFIRMATION_SOURCE == "korail-same-session-detail"
     assert canonical.KORAIL_RESERVATION_LIST_SOURCE == "korail-reservation-list"
+    assert canonical.KORAIL_ISSUED_TICKET_LIST_SOURCE == "korail-issued-ticket-list"
     assert canonical.KORAIL_RESERVATION_HANDOFF_URL == (
         "https://www.korail.com/ticket/reservation/list"
     )
@@ -111,6 +120,7 @@ def test_korail_confirmation_dataclass_shapes_and_defaults_are_preserved() -> No
     assert detail.official_list_target_absent is False
     assert detail.auth_required is False
     assert detail.provider_blocked is False
+    assert detail.issued_ticket_exact_match is False
     assert detail.payment_deadline is None
     assert detail.source == canonical.KORAIL_CONFIRMATION_SOURCE
 
@@ -132,6 +142,26 @@ def test_korail_confirmation_dataclass_shapes_and_defaults_are_preserved() -> No
             {
                 "source": canonical.KORAIL_RESERVATION_LIST_SOURCE,
                 "official_list_target_absent": True,
+            },
+            "official list target absence requires a completed official list read",
+        ),
+        (
+            {
+                "source": canonical.KORAIL_ISSUED_TICKET_LIST_SOURCE,
+                "official_list_read_completed": True,
+                "official_list_target_absent": True,
+            },
+            "official list target absence requires a completed official list read",
+        ),
+        (
+            {
+                "source": canonical.KORAIL_ISSUED_TICKET_LIST_SOURCE,
+                "exact_identity_matched": True,
+                "seat_class_matched": True,
+                "passenger_count_matched": True,
+                "official_list_read_completed": True,
+                "official_list_target_absent": True,
+                "issued_ticket_exact_match": True,
             },
             "official list target absence requires a completed official list read",
         ),
@@ -272,6 +302,21 @@ def test_korail_confirmation_prefers_positive_over_contradictory_list_absence() 
     )
 
     assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+
+
+def test_korail_confirmation_requires_persisted_seat_for_issued_ticket_paid_result() -> None:
+    result = canonical.normalize_korail_same_session_detail(
+        _target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP),
+        _evidence(
+            source=canonical.KORAIL_ISSUED_TICKET_LIST_SOURCE,
+            exact_identity_matched=True,
+            seat_class_matched=True,
+            passenger_count_matched=True,
+            issued_ticket_exact_match=True,
+        ),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
 
 
 def test_korail_confirmation_validates_the_exact_handoff_at_call_time(monkeypatch) -> None:

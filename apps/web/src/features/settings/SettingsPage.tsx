@@ -163,7 +163,7 @@ export function SettingsPage({
             <>
               <div className="panel-heading">
                 <h2>화면 동작</h2>
-                <p>화면 표시와 백엔드 좌석 관측 간격을 관리합니다.</p>
+                <p>실시간 화면 동기화 상태를 확인하고 좌석 관측 목표를 관리합니다.</p>
               </div>
               <TimetableRefreshSettings
                 preferences={uiPreferences}

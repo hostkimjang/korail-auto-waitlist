@@ -24,11 +24,13 @@ from ..browser_contracts import (
     BrowserSourceUnavailable,
 )
 from ..browser_protection import normalize_replay_protection_trigger
+from ..browser_service_availability import BrowserProviderUnavailable
 from ..http_replay import (
     HttpReplayInvalidCapture,
     HttpReplayInvalidResponse,
     HttpReplayLeaseInvalid,
     HttpReplayProtectionDetected,
+    HttpReplayProviderUnavailable,
     HttpReplayRateLimited,
     HttpReplaySessionInvalid,
     HttpReplaySourceUnavailable,
@@ -155,6 +157,9 @@ class PydollHttpReplayManager:
         except HttpReplayRateLimited:
             await self.discard(route_key)
             raise BrowserRateLimited() from None
+        except HttpReplayProviderUnavailable as error:
+            await self.discard(route_key)
+            raise BrowserProviderUnavailable(error.trigger, "http_replay") from None
         except HttpReplaySessionInvalid:
             self._logger.info(
                 "KORAIL HTTP replay event=cold_reinit source=http_replay reason=session_invalid"

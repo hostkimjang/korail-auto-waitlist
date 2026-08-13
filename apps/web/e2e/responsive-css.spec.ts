@@ -437,14 +437,15 @@ async function expectRefreshPreferencesWithinBounds(
 
   const inputs = page.locator(".refresh-preference-input");
   const inputControls = page.locator(".refresh-preference-input input");
-  await expect(inputs).toHaveCount(2);
-  await expect(inputControls).toHaveCount(2);
-  for (let index = 0; index < 2; index += 1) {
+  await expect(page.locator(".refresh-preference-live")).toContainText("실시간");
+  await expect(inputs).toHaveCount(1);
+  await expect(inputControls).toHaveCount(1);
+  for (let index = 0; index < 1; index += 1) {
     await expectWithinViewport(inputs.nth(index), viewport.width);
     await expectWithinViewport(inputControls.nth(index), viewport.width);
     await expectVisibleActionTarget(inputs.nth(index), `refresh preference input ${index + 1}`);
   }
-  const saveAction = page.getByRole("button", { name: "간격 저장" });
+  const saveAction = page.getByRole("button", { name: "관측 간격 저장" });
   await expectWithinViewport(saveAction, viewport.width);
   await expectVisibleActionTarget(
     saveAction,

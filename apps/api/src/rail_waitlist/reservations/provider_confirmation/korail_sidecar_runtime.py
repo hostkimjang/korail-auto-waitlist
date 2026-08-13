@@ -15,6 +15,7 @@ from ...korail_sidecar.contracts import (
 )
 from .contracts import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
 )
@@ -65,6 +66,14 @@ async def confirm_korail_sidecar_reservation(
                     "seat_class": target.seat_class.value,
                     "passenger_count": target.passenger_count,
                     "credential_version": target.credential_version,
+                    "purpose": target.purpose.value,
+                    "reserved_seats": [
+                        {
+                            "car_number": seat.car_number,
+                            "seat_number": seat.seat_number,
+                        }
+                        for seat in target.reserved_seats
+                    ],
                 }
             )
         )
@@ -82,9 +91,16 @@ async def confirm_korail_sidecar_reservation(
     except (ValueError, ValidationError):
         return _inconclusive(now)
     try:
+        outcome = ReservationConfirmationOutcome(result.outcome)
+        if outcome is ReservationConfirmationOutcome.CONFIRMED_PAID and (
+            target.purpose is not ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+            or target.passenger_count != 1
+            or len(target.reserved_seats) != 1
+        ):
+            return _inconclusive(now)
         return ReservationConfirmationResult(
             provider=Provider.KORAIL,
-            outcome=ReservationConfirmationOutcome(result.outcome),
+            outcome=outcome,
             source=result.source,
             observed_at=result.observed_at,
             payment_deadline=result.payment_deadline,

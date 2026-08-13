@@ -430,7 +430,8 @@ async def test_reconciliation_uses_same_generation_read_only_confirmation_once(
         )
         assert attempt.last_reconciled_at is not None
         assert attempt.reconciliation_attempt_count == 1
-        assert attempt.next_reconcile_at is None
+        assert attempt.next_reconcile_at is not None
+        assert attempt.next_reconcile_at - attempt.last_reconciled_at == timedelta(seconds=30)
         assert attempt.payment_deadline == deadline.replace(tzinfo=None)
         reconciliation_events = list(
             (
@@ -791,6 +792,97 @@ def test_missing_deadline_payment_hold_is_due_for_bounded_legacy_refresh() -> No
     assert _reservation_reconciliation_is_due(attempt, watch, now) is False
 
 
+@pytest.mark.parametrize(
+    "confirmation_outcome",
+    [
+        ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+        ReservationConfirmationOutcome.INCONCLUSIVE,
+        ReservationConfirmationOutcome.NOT_FOUND,
+    ],
+)
+def test_known_payment_hold_is_rechecked_before_deadline_on_bounded_schedule(
+    confirmation_outcome: ReservationConfirmationOutcome,
+) -> None:
+    now = datetime.now(timezone.utc)
+    watch = Watch(
+        provider=Provider.SRT,
+        origin="수서",
+        destination="부산",
+        travel_date=date(2026, 8, 4),
+        time_from=time(12),
+        time_to=time(18),
+        train_numbers=["329"],
+        status=WatchStatus.PAYMENT_REQUIRED,
+        payment_deadline=now + timedelta(minutes=20),
+        dedupe_key="bounded-pre-deadline-payment-confirmation",
+    )
+    attempt = ReservationAttempt(
+        candidate_id="candidate-payment-confirmation",
+        attempt_sequence=1,
+        episode_key="availability:first",
+        idempotency_key="reserve:payment-confirmation",
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        confirmation_outcome=confirmation_outcome,
+        confirmation_source="srtrain-reservation-list",
+        confirmation_observed_at=now - timedelta(seconds=31),
+        last_reconciled_at=now - timedelta(seconds=31),
+        reconciliation_attempt_count=1,
+        next_reconcile_at=now - timedelta(seconds=1),
+    )
+
+    assert _reservation_reconciliation_is_due(attempt, watch, now) is True
+    attempt.next_reconcile_at = now + timedelta(seconds=1)
+    assert _reservation_reconciliation_is_due(attempt, watch, now) is False
+    attempt.reconciliation_attempt_count = 6
+    attempt.next_reconcile_at = now - timedelta(seconds=1)
+    assert _reservation_reconciliation_is_due(attempt, watch, now) is False
+
+
+@pytest.mark.parametrize(
+    ("completed_count", "elapsed", "expected"),
+    [
+        (1, timedelta(seconds=31), True),
+        (2, timedelta(seconds=31), True),
+        (3, timedelta(minutes=1, seconds=59), False),
+        (3, timedelta(minutes=2, seconds=1), True),
+        (4, timedelta(minutes=5, seconds=1), True),
+        (5, timedelta(minutes=9, seconds=59), False),
+        (5, timedelta(minutes=10, seconds=1), True),
+        (6, timedelta(hours=1), False),
+    ],
+)
+def test_known_payment_hold_missing_schedule_uses_payment_follow_up_interval(
+    completed_count: int,
+    elapsed: timedelta,
+    expected: bool,
+) -> None:
+    now = datetime.now(timezone.utc)
+    watch = Watch(
+        provider=Provider.SRT,
+        origin="수서",
+        destination="부산",
+        travel_date=date(2026, 8, 4),
+        time_from=time(12),
+        time_to=time(18),
+        status=WatchStatus.PAYMENT_REQUIRED,
+        payment_deadline=now + timedelta(hours=1),
+        dedupe_key=f"missing-payment-follow-up-schedule-{completed_count}-{elapsed}",
+    )
+    attempt = ReservationAttempt(
+        candidate_id="candidate-payment-follow-up",
+        attempt_sequence=1,
+        episode_key="availability:first",
+        idempotency_key=f"reserve:missing-payment-follow-up-{completed_count}-{elapsed}",
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        last_reconciled_at=now - elapsed,
+        reconciliation_attempt_count=completed_count,
+        next_reconcile_at=None,
+    )
+
+    assert _reservation_reconciliation_is_due(attempt, watch, now) is expected
+
+
 def test_expired_payment_hold_and_legacy_stuck_row_get_one_cleanup_read() -> None:
     now = datetime.now(timezone.utc)
     watch = Watch(
@@ -937,16 +1029,19 @@ class DisabledExecutionAdapter(CountingMockAdapter):
 
 
 class DeferredObservationAdapter(CountingMockAdapter):
-    provider = Provider.SRT
-
-    def __init__(self, deferred_until: datetime | None) -> None:
+    def __init__(
+        self,
+        deferred_until: datetime | None,
+        provider: Provider = Provider.SRT,
+    ) -> None:
         super().__init__()
+        self.provider = provider
         self.deferred_until = deferred_until
         self.close_calls = 0
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            provider=Provider.SRT,
+            provider=self.provider,
             timetable=False,
             official_booking_link=False,
             official_waitlist_link=False,
@@ -1854,14 +1949,28 @@ async def test_ambiguous_hold_or_generic_failure_never_rearms_candidate(
         )
 
 
-async def test_confirmed_absent_unknown_stays_fenced_during_continued_availability(
+@pytest.mark.parametrize(
+    "rediscovered_status",
+    [SeatObservationStatus.AVAILABLE, SeatObservationStatus.LIMITED],
+)
+@pytest.mark.parametrize(
+    ("provider", "official_source"),
+    [
+        (Provider.SRT, "srtrain-2.6.7-accountless"),
+        (Provider.KORAIL, "korail-official-page-browser"),
+    ],
+)
+async def test_reconciled_confirmed_absent_unknown_emits_one_official_retry_episode(
     db_engine,
+    rediscovered_status: SeatObservationStatus,
+    provider: Provider,
+    official_source: str,
 ) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     confirmed_at = datetime.now(timezone.utc)
     async with factory() as session:
         watch = Watch(
-            provider=Provider.SRT,
+            provider=provider,
             origin="대전",
             origin_node_id="N-DAEJEON",
             destination="부산",
@@ -1872,7 +1981,7 @@ async def test_confirmed_absent_unknown_stays_fenced_during_continued_availabili
             passenger_count=1,
             mode="official",
             status=WatchStatus.SEAT_FOUND,
-            dedupe_key="confirmed-absent-worker-retry",
+            dedupe_key=f"confirmed-absent-worker-retry:{provider.value}",
         )
         candidate = WatchCandidate(
             train_number="335",
@@ -1891,25 +2000,105 @@ async def test_confirmed_absent_unknown_stays_fenced_during_continued_availabili
             idempotency_key="reserve:confirmed-absent-worker:first",
             outcome=ReservationOutcome.UNKNOWN,
             confirmation_outcome=ReservationConfirmationOutcome.NOT_FOUND,
-            confirmation_source="srtrain-reservation-list",
+            confirmation_source=(
+                "srtrain-reservation-list"
+                if provider is Provider.SRT
+                else "korail-reservation-list"
+            ),
             confirmation_observed_at=confirmed_at,
+            last_reconciled_at=confirmed_at,
+            reconciliation_attempt_count=1,
         )
-        observation = SeatObservation(
+        non_official_observation = SeatObservation(
             candidate=candidate,
             status=SeatObservationStatus.AVAILABLE,
             source="authorized-provider",
             observed_at=confirmed_at + timedelta(seconds=1),
             fresh_until=confirmed_at + timedelta(minutes=1),
         )
-        session.add_all([attempt, observation])
+        non_bookable_official_observation = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.WAITLIST_AVAILABLE,
+            source=official_source,
+            observed_at=confirmed_at + timedelta(seconds=2),
+            fresh_until=confirmed_at + timedelta(minutes=1),
+        )
+        rediscovered_observation = SeatObservation(
+            candidate=candidate,
+            status=rediscovered_status,
+            source=official_source,
+            observed_at=confirmed_at + timedelta(seconds=3),
+            fresh_until=confirmed_at + timedelta(minutes=1),
+        )
+        session.add_all(
+            [
+                attempt,
+                non_official_observation,
+                non_bookable_official_observation,
+                rediscovered_observation,
+            ]
+        )
         await session.flush()
 
         assert (
             await _retryable_reservation_episode_key(
                 session,
                 candidate,
-                observation,
-                Provider.SRT,
+                non_official_observation,
+                provider,
+            )
+            is None
+        )
+        assert (
+            await _retryable_reservation_episode_key(
+                session,
+                candidate,
+                non_bookable_official_observation,
+                provider,
+            )
+            is None
+        )
+        episode_key = await _retryable_reservation_episode_key(
+            session,
+            candidate,
+            rediscovered_observation,
+            provider,
+        )
+        assert episode_key == f"confirmed-absent-retry:{attempt.id}"
+
+        retry_confirmed_at = confirmed_at + timedelta(seconds=4)
+        retry = ReservationAttempt(
+            candidate_id=candidate.id,
+            attempt_sequence=2,
+            episode_key=episode_key,
+            idempotency_key="reserve:confirmed-absent-worker:retry",
+            outcome=ReservationOutcome.UNKNOWN,
+            confirmation_outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            confirmation_source=(
+                "srtrain-reservation-list"
+                if provider is Provider.SRT
+                else "korail-reservation-list"
+            ),
+            confirmation_observed_at=retry_confirmed_at,
+            last_reconciled_at=retry_confirmed_at,
+            reconciliation_attempt_count=1,
+        )
+        later_observation = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.AVAILABLE,
+            source=official_source,
+            observed_at=retry_confirmed_at + timedelta(seconds=1),
+            fresh_until=retry_confirmed_at + timedelta(minutes=1),
+        )
+        session.add_all([retry, later_observation])
+        await session.flush()
+
+        assert (
+            await _retryable_reservation_episode_key(
+                session,
+                candidate,
+                later_observation,
+                provider,
             )
             is None
         )
@@ -3557,12 +3746,13 @@ async def test_adapter_cleanup_error_does_not_skip_other_cleanup_or_lease_releas
         assert lease.expires_at is None
 
 
-async def test_srt_source_cooldown_defers_due_watch_without_error_observation(
-    app, db_engine, monkeypatch
+@pytest.mark.parametrize("provider", [Provider.SRT, Provider.KORAIL])
+async def test_provider_source_cooldown_defers_due_watch_without_error_observation(
+    app, db_engine, monkeypatch, provider
 ):
     now = datetime.now(timezone.utc)
     deferred_until = now + timedelta(minutes=5)
-    adapter = DeferredObservationAdapter(deferred_until)
+    adapter = DeferredObservationAdapter(deferred_until, provider)
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
     monkeypatch.setattr(
         worker_module,
@@ -3573,7 +3763,7 @@ async def test_srt_source_cooldown_defers_due_watch_without_error_observation(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         watch = Watch(
-            provider=Provider.SRT,
+            provider=provider,
             origin="서울",
             origin_node_id="N1",
             destination="부산",
@@ -3584,7 +3774,7 @@ async def test_srt_source_cooldown_defers_due_watch_without_error_observation(
             passenger_count=1,
             status=WatchStatus.SCHEDULED,
             mode="official",
-            dedupe_key="deferred-srt-source-cooldown",
+            dedupe_key=f"deferred-{provider.value}-source-cooldown",
             next_check_at=now - timedelta(seconds=1),
         )
         session.add(watch)
@@ -3592,7 +3782,7 @@ async def test_srt_source_cooldown_defers_due_watch_without_error_observation(
         session.add(
             WatchCandidate(
                 watch_id=watch.id,
-                train_number="SRT-001",
+                train_number=f"{provider.value}-001",
                 departure_at=now + timedelta(days=7),
                 arrival_at=now + timedelta(days=7, hours=2),
                 seat_class=SeatClass.STANDARD,
@@ -3618,9 +3808,10 @@ async def test_srt_source_cooldown_defers_due_watch_without_error_observation(
         assert watch.cooldown_until.replace(tzinfo=timezone.utc) == deferred_until
         assert watch.next_check_at.replace(tzinfo=timezone.utc) == deferred_until
         assert observation_count == 0
+        assert await session.scalar(select(func.count()).select_from(ReservationAttempt)) == 0
         lease = await session.get(
             ProviderExecutionLease,
-            (Provider.SRT, "anonymous/public"),
+            (provider, "anonymous/public"),
         )
         assert lease is not None
         assert lease.fencing_token >= 1
@@ -3726,10 +3917,11 @@ async def test_invalid_srt_lease_cannot_write_source_cooldown_deferral(
         assert watch.next_check_at.replace(tzinfo=timezone.utc) == original_next_check
 
 
-async def test_srt_cooldown_opened_after_preflight_defers_without_persisting_error(
-    app, db_engine, monkeypatch
+@pytest.mark.parametrize("provider", [Provider.SRT, Provider.KORAIL])
+async def test_provider_cooldown_opened_after_preflight_defers_without_persisting_error(
+    app, db_engine, monkeypatch, provider
 ):
-    adapter = CooldownOpeningObservationAdapter(None)
+    adapter = CooldownOpeningObservationAdapter(None, provider)
     monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
     monkeypatch.setattr(
         worker_module,
@@ -3741,7 +3933,7 @@ async def test_srt_cooldown_opened_after_preflight_defers_without_persisting_err
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session:
         watch = Watch(
-            provider=Provider.SRT,
+            provider=provider,
             origin="서울",
             origin_node_id="N1",
             destination="부산",
@@ -3752,7 +3944,7 @@ async def test_srt_cooldown_opened_after_preflight_defers_without_persisting_err
             passenger_count=1,
             status=WatchStatus.SCHEDULED,
             mode="official",
-            dedupe_key="srt-cooldown-opened-after-preflight",
+            dedupe_key=f"{provider.value}-cooldown-opened-after-preflight",
             next_check_at=now - timedelta(seconds=1),
         )
         session.add(watch)
@@ -3760,7 +3952,7 @@ async def test_srt_cooldown_opened_after_preflight_defers_without_persisting_err
         session.add(
             WatchCandidate(
                 watch_id=watch.id,
-                train_number="SRT-001",
+                train_number=f"{provider.value}-001",
                 departure_at=now + timedelta(days=7),
                 arrival_at=now + timedelta(days=7, hours=2),
                 seat_class=SeatClass.STANDARD,
@@ -3786,6 +3978,7 @@ async def test_srt_cooldown_opened_after_preflight_defers_without_persisting_err
         assert watch.cooldown_until is not None
         assert watch.next_check_at == watch.cooldown_until
         assert observation_count == 0
+        assert await session.scalar(select(func.count()).select_from(ReservationAttempt)) == 0
 
 
 @pytest.mark.parametrize(

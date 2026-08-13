@@ -12,14 +12,41 @@ from ...domain import Provider, SeatClass
 from ...provider_registry.official_url_policy import require_official_handoff_url
 
 _SOURCE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+_SEAT_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 
 
 class ReservationConfirmationOutcome(StrEnum):
     CONFIRMED_PAYMENT_REQUIRED = "confirmed_payment_required"
+    CONFIRMED_PAID = "confirmed_paid"
     NOT_FOUND = "not_found"
     AUTH_REQUIRED = "auth_required"
     PROVIDER_BLOCKED = "provider_blocked"
     INCONCLUSIVE = "inconclusive"
+
+
+class ReservationConfirmationPurpose(StrEnum):
+    INITIAL = "initial"
+    PAYMENT_FOLLOW_UP = "payment_follow_up"
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationConfirmationSeat:
+    """Sanitized seat identity already persisted for the claimed attempt."""
+
+    car_number: str
+    seat_number: str
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("car_number", self.car_number),
+            ("seat_number", self.seat_number),
+        ):
+            normalized = value.strip().upper()
+            if not normalized or len(normalized) > 10:
+                raise ValueError(f"{name} must be between 1 and 10 characters")
+            if _SEAT_IDENTIFIER_PATTERN.fullmatch(normalized) is None:
+                raise ValueError(f"{name} contains unsupported characters")
+            object.__setattr__(self, name, normalized)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +64,26 @@ class ReservationConfirmationTarget:
     passenger_count: int
     credential_version: int
     arrival_at: datetime | None = None
+    purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL
+    reserved_seats: tuple[ReservationConfirmationSeat, ...] = ()
+
+    def __setstate__(self, state: object) -> None:
+        """Restore pre-purpose slot pickles with fail-closed defaults."""
+
+        if not isinstance(state, list) or len(state) not in {11, 13}:
+            raise ValueError("invalid reservation confirmation target state")
+        values = (
+            [
+                *state,
+                ReservationConfirmationPurpose.INITIAL,
+                (),
+            ]
+            if len(state) == 11
+            else state
+        )
+        for name, value in zip(self.__slots__, values, strict=True):
+            object.__setattr__(self, name, value)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -65,6 +112,19 @@ class ReservationConfirmationTarget:
             raise ValueError("passenger_count must be between 1 and 9")
         if self.credential_version < 1:
             raise ValueError("credential_version must be positive")
+        if not isinstance(self.purpose, ReservationConfirmationPurpose):
+            raise ValueError("reservation confirmation purpose is invalid")
+        if not isinstance(self.reserved_seats, tuple) or any(
+            not isinstance(seat, ReservationConfirmationSeat) for seat in self.reserved_seats
+        ):
+            raise ValueError("reserved_seats must contain sanitized confirmation seats")
+        seat_keys = tuple((seat.car_number, seat.seat_number) for seat in self.reserved_seats)
+        if len(seat_keys) != len(set(seat_keys)):
+            raise ValueError("reserved_seats must contain unique car and seat pairs")
+        if len(self.reserved_seats) > self.passenger_count:
+            raise ValueError("reserved_seats cannot exceed passenger_count")
+        if self.purpose is ReservationConfirmationPurpose.INITIAL and self.reserved_seats:
+            raise ValueError("only payment follow-up may carry reserved seats")
 
 
 @dataclass(frozen=True, slots=True)

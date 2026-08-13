@@ -8,7 +8,11 @@ from typing import Any
 
 from ..korail_sidecar.browser_contracts import BrowserSeatSearchRequest, BrowserSeatSearchResult
 from ..korail_sidecar.client import _AdapterFailure
-from ..seat_status_cooldown import CooldownStore
+from ..seat_status_cooldown import (
+    KORAIL_BROWSER_COOLDOWN_KEY,
+    KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+    CooldownStore,
+)
 from ..timetable_management.schemas import SeatAvailabilityNotObservedReason
 
 QueryKey = tuple[str, str, str, str, str, int]
@@ -20,6 +24,7 @@ ProviderSearch = Callable[[], Awaitable[BrowserSeatSearchResult]]
 Monotonic = Callable[[], float]
 CooldownStoreReader = Callable[[], CooldownStore]
 SecondsReader = Callable[[], int]
+CooldownObserver = Callable[[_AdapterFailure, QueryKey], Awaitable[None]]
 
 SOURCE_FAILURE_COOLDOWN_MAX_SECONDS = 300
 
@@ -79,18 +84,21 @@ class KorailBrowserQueryRuntime:
             for query_key in expired_query_keys:
                 self._query_cooldowns.pop(query_key, None)
                 self._query_failure_counts.pop(query_key, None)
+            outage_cooldown = await cooldown_store().get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
+            if outage_cooldown is not None:
+                raise _ProviderCooldown("source_unavailable")
+            provider_cooldown = await cooldown_store().get(KORAIL_BROWSER_COOLDOWN_KEY)
+            if (
+                provider_cooldown is not None
+                and provider_cooldown.reason == "provider_access_restricted"
+            ):
+                raise _ProviderCooldown(provider_cooldown.reason)
             cached = self._cache.get(key)
             if cached is not None and cached.expires_at > now:
                 return cached.result
             query_cooldown = self._query_cooldowns.get(key)
             if query_cooldown is not None:
                 raise _ProviderCooldown(query_cooldown.reason)
-            provider_cooldown = await cooldown_store().get("korail-browser")
-            if (
-                provider_cooldown is not None
-                and provider_cooldown.reason == "provider_access_restricted"
-            ):
-                raise _ProviderCooldown(provider_cooldown.reason)
             task = self._inflight.get(key)
             if task is None:
                 task = asyncio.create_task(load(key, request))
@@ -103,13 +111,23 @@ class KorailBrowserQueryRuntime:
         request: BrowserSeatSearchRequest,
         *,
         provider_search: ProviderSearch,
+        observe_cooldown: CooldownObserver,
+        cooldown_store: CooldownStoreReader,
         monotonic: Monotonic,
         cache_ttl_seconds: SecondsReader,
     ) -> BrowserSeatSearchResult:
         current_task = asyncio.current_task()
         try:
             async with self._provider_gate:
-                result = await provider_search()
+                outage = await cooldown_store().get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
+                if outage is not None:
+                    raise _ProviderCooldown("source_unavailable")
+                try:
+                    result = await provider_search()
+                except _AdapterFailure as error:
+                    if error.cooldown_scope == "provider":
+                        await observe_cooldown(error, key)
+                    raise
             if (
                 result.origin != request.origin
                 or result.destination != request.destination
@@ -141,6 +159,14 @@ class KorailBrowserQueryRuntime:
         rate_limit_seconds: SecondsReader,
         protection_seconds: SecondsReader,
     ) -> None:
+        if error.cooldown_scope == "provider":
+            duration = error.retry_after_seconds or SOURCE_FAILURE_COOLDOWN_MAX_SECONDS
+            await cooldown_store().set(
+                KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
+                "source_unavailable",
+                duration,
+            )
+            return
         if error.protection:
             self._failure_count += 1
             duration = protection_seconds()
@@ -148,8 +174,8 @@ class KorailBrowserQueryRuntime:
             self._failure_count += 1
             duration = rate_limit_seconds()
         else:
-            # Ordinary source failures are query-local. Only explicit provider access
-            # evidence may create the shared Redis hold used across service dates.
+            # Ordinary source failures are query-local. Protection/rate-limit evidence
+            # and explicit service-outage pages use separate shared provider holds.
             async with self._state_lock:
                 failures = self._query_failure_counts.get(key, 0) + 1
                 self._query_failure_counts[key] = failures
@@ -162,7 +188,7 @@ class KorailBrowserQueryRuntime:
                     reason=error.reason,
                 )
             return
-        await cooldown_store().set("korail-browser", error.reason, duration)
+        await cooldown_store().set(KORAIL_BROWSER_COOLDOWN_KEY, error.reason, duration)
 
     async def drain_pending_calls(self) -> None:
         """Drain shielded searches before the owning transport is closed."""
@@ -179,7 +205,18 @@ class KorailBrowserQueryRuntime:
         *,
         cooldown_store: CooldownStoreReader,
     ) -> datetime | None:
-        cooldown = await cooldown_store().get("korail-browser")
-        if cooldown is None or cooldown.reason != "provider_access_restricted":
+        outage, cooldown = await asyncio.gather(
+            cooldown_store().get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY),
+            cooldown_store().get(KORAIL_BROWSER_COOLDOWN_KEY),
+        )
+        candidates = [outage]
+        if cooldown is not None and cooldown.reason == "provider_access_restricted":
+            candidates.append(cooldown)
+        active = max(
+            (candidate for candidate in candidates if candidate is not None),
+            key=lambda candidate: candidate.retry_after_seconds,
+            default=None,
+        )
+        if active is None:
             return None
-        return datetime.now(UTC) + timedelta(seconds=max(1, cooldown.retry_after_seconds))
+        return datetime.now(UTC) + timedelta(seconds=max(1, active.retry_after_seconds))

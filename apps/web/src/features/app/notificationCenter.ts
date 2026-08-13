@@ -47,6 +47,7 @@ export interface NotificationCenterState {
   notices: ReadonlyArray<AppNotificationNotice>;
   seenRevisionKeys: ReadonlyArray<string>;
   subjectRevisionWatermarks: ReadonlyArray<NotificationSubjectRevisionWatermark>;
+  dismissalLedger: ReadonlyArray<NotificationDismissalLedgerEntry>;
   announcement: string;
   announcementMode: NotificationAnnouncement;
   sequence: number;
@@ -55,7 +56,16 @@ export interface NotificationCenterState {
 interface NotificationSubjectRevisionWatermark {
   subjectKey: string;
   revisionAt: string;
-  lifecyclePhase: number;
+  lifecyclePhase: NotificationLifecyclePhase;
+}
+
+export type NotificationLifecyclePhase = 0 | 1 | 2;
+
+export interface NotificationDismissalLedgerEntry {
+  subjectKey: string;
+  revisionKey: string;
+  revisionAt: string | null;
+  lifecyclePhase: NotificationLifecyclePhase;
 }
 
 export type NotificationCenterAction =
@@ -115,16 +125,53 @@ const DEFAULTS: Record<NotificationKind, {
   },
 };
 
-const MAX_SEEN_REVISIONS = 240;
+export const MAX_NOTIFICATION_REVISION_HISTORY = 240;
 
-export const initialNotificationCenterState: NotificationCenterState = {
-  notices: [],
-  seenRevisionKeys: [],
-  subjectRevisionWatermarks: [],
-  announcement: "",
-  announcementMode: "polite",
-  sequence: 0,
-};
+function dismissalWatermarks(
+  ledger: ReadonlyArray<NotificationDismissalLedgerEntry>,
+): ReadonlyArray<NotificationSubjectRevisionWatermark> {
+  const bySubject = new Map<string, NotificationSubjectRevisionWatermark>();
+  for (const entry of ledger) {
+    if (entry.revisionAt === null) continue;
+    const current = bySubject.get(entry.subjectKey);
+    const currentInstant = validSortInstant(current?.revisionAt);
+    const entryInstant = validSortInstant(entry.revisionAt);
+    if (entryInstant === null) continue;
+    if (
+      currentInstant === null
+      || entryInstant > currentInstant
+      || (
+        entryInstant === currentInstant
+        && current !== undefined
+        && entry.lifecyclePhase > current.lifecyclePhase
+      )
+    ) {
+      bySubject.set(entry.subjectKey, {
+        subjectKey: entry.subjectKey,
+        revisionAt: entry.revisionAt,
+        lifecyclePhase: entry.lifecyclePhase,
+      });
+    }
+  }
+  return [...bySubject.values()].slice(-MAX_NOTIFICATION_REVISION_HISTORY);
+}
+
+export function createInitialNotificationCenterState(
+  dismissalLedger: ReadonlyArray<NotificationDismissalLedgerEntry> = [],
+): NotificationCenterState {
+  const boundedLedger = dismissalLedger.slice(-MAX_NOTIFICATION_REVISION_HISTORY);
+  return {
+    notices: [],
+    seenRevisionKeys: boundedLedger.map((entry) => entry.revisionKey),
+    subjectRevisionWatermarks: dismissalWatermarks(boundedLedger),
+    dismissalLedger: boundedLedger,
+    announcement: "",
+    announcementMode: "polite",
+    sequence: 0,
+  };
+}
+
+export const initialNotificationCenterState = createInitialNotificationCenterState();
 
 function validSortInstant(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -136,7 +183,9 @@ function validDuration(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-export function notificationLifecyclePhasePriority(kind: NotificationKind): number {
+export function notificationLifecyclePhasePriority(
+  kind: NotificationKind,
+): NotificationLifecyclePhase {
   if (kind === "reserving") return 1;
   if (
     kind === "payment_required"
@@ -183,9 +232,15 @@ export function pushNotifications(
 ): NotificationCenterState {
   if (inputs.length === 0) return state;
   const seen = new Set(state.seenRevisionKeys);
+  const dismissedRevisionKeys = new Set(
+    state.dismissalLedger.map((entry) => entry.revisionKey),
+  );
   const bySubject = new Map(state.notices.map((notice) => [notice.subjectKey, notice]));
   const watermarks = new Map(
-    state.subjectRevisionWatermarks.map((watermark) => [watermark.subjectKey, watermark]),
+    [
+      ...dismissalWatermarks(state.dismissalLedger),
+      ...state.subjectRevisionWatermarks,
+    ].map((watermark) => [watermark.subjectKey, watermark]),
   );
   const added: AppNotificationNotice[] = [];
   let sequence = state.sequence;
@@ -197,7 +252,7 @@ export function pushNotifications(
     const nextSequence = sequence + 1;
     const subjectKey = input.subjectKey ?? input.key ?? `generic:${nextSequence}`;
     const revisionKey = input.revisionKey ?? `${subjectKey}:${nextSequence}`;
-    if (seen.has(revisionKey)) continue;
+    if (seen.has(revisionKey) || dismissedRevisionKeys.has(revisionKey)) continue;
     const existing = bySubject.get(subjectKey);
     const incomingRevisionAt = validSortInstant(input.revisionAt);
     const watermark = watermarks.get(subjectKey);
@@ -279,8 +334,9 @@ export function pushNotifications(
     added.push(notice);
   }
 
-  const seenRevisionKeys = [...seen].slice(-MAX_SEEN_REVISIONS);
-  const subjectRevisionWatermarks = [...watermarks.values()].slice(-MAX_SEEN_REVISIONS);
+  const seenRevisionKeys = [...seen].slice(-MAX_NOTIFICATION_REVISION_HISTORY);
+  const subjectRevisionWatermarks = [...watermarks.values()]
+    .slice(-MAX_NOTIFICATION_REVISION_HISTORY);
   if (added.length === 0) {
     return { ...state, seenRevisionKeys, subjectRevisionWatermarks, sequence };
   }
@@ -289,11 +345,44 @@ export function pushNotifications(
     notices,
     seenRevisionKeys,
     subjectRevisionWatermarks,
+    dismissalLedger: state.dismissalLedger,
     announcement: announcementFor(added),
     announcementMode: added.some((notice) => notice.announcement === "assertive")
       ? "assertive"
       : "polite",
     sequence,
+  };
+}
+
+function appendStickyDismissals(
+  ledger: ReadonlyArray<NotificationDismissalLedgerEntry>,
+  notices: ReadonlyArray<AppNotificationNotice>,
+): ReadonlyArray<NotificationDismissalLedgerEntry> {
+  const byRevision = new Map(ledger.map((entry) => [entry.revisionKey, entry]));
+  for (const notice of notices) {
+    if (notice.persistence !== "sticky") continue;
+    const entry: NotificationDismissalLedgerEntry = {
+      subjectKey: notice.subjectKey,
+      revisionKey: notice.revisionKey,
+      revisionAt: validSortInstant(notice.revisionAt) === null ? null : notice.revisionAt,
+      lifecyclePhase: notificationLifecyclePhasePriority(notice.kind),
+    };
+    byRevision.delete(entry.revisionKey);
+    byRevision.set(entry.revisionKey, entry);
+  }
+  return [...byRevision.values()].slice(-MAX_NOTIFICATION_REVISION_HISTORY);
+}
+
+function dismissNotices(
+  state: NotificationCenterState,
+  matches: (notice: AppNotificationNotice) => boolean,
+): NotificationCenterState {
+  const dismissed = state.notices.filter(matches);
+  if (dismissed.length === 0) return state;
+  return {
+    ...state,
+    notices: state.notices.filter((notice) => !matches(notice)),
+    dismissalLedger: appendStickyDismissals(state.dismissalLedger, dismissed),
   };
 }
 
@@ -305,15 +394,15 @@ export function notificationCenterReducer(
     case "push":
       return pushNotifications(state, action.inputs);
     case "dismiss":
-      return { ...state, notices: state.notices.filter((notice) => notice.id !== action.id) };
+      return dismissNotices(state, (notice) => notice.id === action.id);
     case "dismiss_group":
-      return { ...state, notices: state.notices.filter((notice) => notice.kind !== action.kind) };
+      return dismissNotices(state, (notice) => notice.kind === action.kind);
     case "dismiss_timed":
       return {
         ...state,
         notices: state.notices.filter((notice) => notice.persistence === "sticky"),
       };
     case "clear":
-      return initialNotificationCenterState;
+      return createInitialNotificationCenterState(state.dismissalLedger);
   }
 }

@@ -33,6 +33,7 @@ export interface WatchLifecycleAttempt {
   outcome: ReservationAttemptOutcome;
   startedAt: string | null;
   finishedAt: string | null;
+  retryable: boolean;
   manualCheckRequired: boolean;
   retryCondition: ReservationRetryCondition | null;
   progressStages?: ReadonlyArray<ReservationProgressStage>;
@@ -107,6 +108,7 @@ function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
       : "pending",
     startedAt: nonEmptyString(value.startedAt),
     finishedAt: nonEmptyString(value.finishedAt),
+    retryable: value.retryable === true,
     manualCheckRequired: value.manualCheckRequired === true,
     retryCondition: value.retryCondition === "new_availability_episode"
       || value.retryCondition === "provider_account_reverified"
@@ -172,6 +174,7 @@ export function mapWatchLifecycleSnapshot(watch: WatchReadModel): WatchLifecycle
         outcome: attempt.outcome,
         startedAt: attempt.startedAt,
         finishedAt: attempt.finishedAt,
+        retryable: attempt.retryable,
         manualCheckRequired: attempt.manualCheckRequired,
         retryCondition: attempt.retryCondition,
         progressStages: attempt.progressStages ?? [],

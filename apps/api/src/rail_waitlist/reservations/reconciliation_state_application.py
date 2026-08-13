@@ -14,9 +14,11 @@ from .provider_confirmation.contracts import (
     ReservationConfirmationResult,
 )
 from .reconciliation_policy import (
+    PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
     RESERVATION_RECONCILIATION_INTERVAL,
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
+    payment_hold_reconciliation_retry_interval,
     unknown_reconciliation_retry_interval,
 )
 
@@ -97,6 +99,12 @@ async def apply_reservation_reconciliation(
         payment_deadline.tzinfo is None or payment_deadline.utcoffset() is None
     ):
         payment_deadline = payment_deadline.replace(tzinfo=UTC)
+    known_future_payment_hold = (
+        attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+        and watch.status is WatchStatus.PAYMENT_REQUIRED
+        and payment_deadline is not None
+        and payment_deadline > reconciled_at
+    )
     legacy_expired_hold_cleanup_read = (
         attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
         and attempt.reconciliation_attempt_count == RESERVATION_RECONCILIATION_MAX_ATTEMPTS
@@ -115,6 +123,7 @@ async def apply_reservation_reconciliation(
         and attempt.reconciliation_attempt_count >= RESERVATION_RECONCILIATION_MAX_ATTEMPTS
         and (attempt.post_deadline_reconciled_at is None or legacy_expired_hold_cleanup_read)
     )
+    previous_confirmation_outcome = attempt.confirmation_outcome
     dependencies.record_reservation_confirmation(
         attempt,
         confirmation,
@@ -128,7 +137,7 @@ async def apply_reservation_reconciliation(
     reconciliation_attempt_limit = (
         UNKNOWN_RECONCILIATION_MAX_ATTEMPTS
         if attempt.outcome is ReservationOutcome.UNKNOWN
-        else RESERVATION_RECONCILIATION_MAX_ATTEMPTS
+        else PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS
     )
     if post_deadline_final_read:
         if confirmed_hold_has_usable_deadline:
@@ -144,10 +153,17 @@ async def apply_reservation_reconciliation(
     confirmed_absent_unknown = (
         attempt.outcome is ReservationOutcome.UNKNOWN
         and confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
+        and previous_confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
+    )
+    confirmed_paid = (
+        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+        and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
+        and watch.status is WatchStatus.PAYMENT_REQUIRED
     )
     terminal_confirmation = (
         confirmed_hold_has_usable_deadline
         or confirmed_absent_unknown
+        or confirmed_paid
         or confirmation.outcome
         in {
             ReservationConfirmationOutcome.AUTH_REQUIRED,
@@ -166,6 +182,44 @@ async def apply_reservation_reconciliation(
             if reconciliation_anchor is None:
                 raise RuntimeError("reconciliation must persist a reconciliation timestamp")
             attempt.next_reconcile_at = reconciliation_anchor + retry_interval
+    elif (
+        attempt.outcome is ReservationOutcome.UNKNOWN
+        and confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
+        and not confirmed_absent_unknown
+    ):
+        reconciliation_anchor = attempt.last_reconciled_at
+        if reconciliation_anchor is None:
+            raise RuntimeError("reconciliation must persist a reconciliation timestamp")
+        attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
+    elif confirmed_hold_has_usable_deadline or (
+        known_future_payment_hold
+        and confirmation.outcome
+        in {
+            ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationConfirmationOutcome.NOT_FOUND,
+        }
+    ):
+        retry_interval = payment_hold_reconciliation_retry_interval(
+            attempt.reconciliation_attempt_count
+        )
+        if retry_interval is None:
+            attempt.next_reconcile_at = None
+        else:
+            reconciliation_anchor = attempt.last_reconciled_at
+            if reconciliation_anchor is None:
+                raise RuntimeError("reconciliation must persist a reconciliation timestamp")
+            effective_payment_deadline = (
+                confirmation.payment_deadline
+                if confirmed_hold_has_usable_deadline
+                else payment_deadline
+            )
+            if effective_payment_deadline is None:
+                raise RuntimeError("active payment hold requires a payment deadline")
+            attempt.next_reconcile_at = min(
+                reconciliation_anchor + retry_interval,
+                effective_payment_deadline,
+            )
     elif (
         not terminal_confirmation
         and attempt.reconciliation_attempt_count < RESERVATION_RECONCILIATION_MAX_ATTEMPTS
@@ -198,6 +252,52 @@ async def apply_reservation_reconciliation(
             or expired_confirmed_hold
         )
     )
+    if confirmed_paid:
+        attempt.next_reconcile_at = None
+        candidate.state = "expired"
+        candidate.suppressed_by_candidate_id = None
+        suppressed_candidates = list(
+            (
+                await session.scalars(
+                    select(WatchCandidate).where(
+                        WatchCandidate.watch_id == watch.id,
+                        WatchCandidate.state == "suppressed_by_priority",
+                        WatchCandidate.suppressed_by_candidate_id == candidate.id,
+                    )
+                )
+            ).all()
+        )
+        for suppressed in suppressed_candidates:
+            suppressed.state = "expired"
+            suppressed.suppressed_by_candidate_id = None
+        watch.payment_deadline = None
+        watch.official_booking_url = None
+        watch.next_check_at = None
+        await dependencies.apply_watch_transition(
+            session,
+            watch,
+            WatchStatus.COMPLETED,
+            reason="reservation_reconciliation_confirmed_paid",
+        )
+        await dependencies.add_outbox_event(
+            session,
+            aggregate_type="watch",
+            aggregate_id=watch.id,
+            event_type="watch.payment_completed",
+            payload={
+                "watch_id": watch.id,
+                "candidate_id": candidate.id,
+                "terminal": True,
+                "status": WatchStatus.COMPLETED.value,
+                "from": WatchStatus.PAYMENT_REQUIRED.value,
+                "to": WatchStatus.COMPLETED.value,
+                "reason": "confirmed_paid",
+                "message": "공식 예약 내역에서 결제 완료를 확인했습니다.",
+                "automatic_reservation_retry": False,
+            },
+            dedupe_key=f"payment-completed:{attempt.id}",
+        )
+        return
     if payment_hold_ended_confirmation:
         if expired_confirmed_hold:
             attempt.payment_deadline = confirmation.payment_deadline

@@ -305,7 +305,7 @@ describe("ServerSeatStatusPanel", () => {
     />);
 
     expect(screen.getByText("공식 좌석 조회가 제한되었습니다")).toBeTruthy();
-    expect(screen.getByText(/보호 대기 시간 동안 서버는 운영사에 다시 요청하지 않습니다/))
+    expect(screen.getByText(/조회 대기 시간 동안 서버는 운영사에 다시 요청하지 않습니다/))
       .toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
   });

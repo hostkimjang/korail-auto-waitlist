@@ -30,6 +30,7 @@ export interface ReservedSeat {
 
 type ReservationConfirmationOutcome =
   | "confirmed_payment_required"
+  | "confirmed_paid"
   | "not_found"
   | "auth_required"
   | "provider_blocked"
@@ -69,6 +70,7 @@ const retryConditions: ReadonlySet<string> = new Set([
 ]);
 const confirmationOutcomes: ReadonlySet<string> = new Set([
   "confirmed_payment_required",
+  "confirmed_paid",
   "not_found",
   "auth_required",
   "provider_blocked",

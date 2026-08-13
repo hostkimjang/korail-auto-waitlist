@@ -18,7 +18,9 @@ from rail_waitlist.provider_execution_lease import ExecutionLeaseGrant
 from rail_waitlist.providers import ProviderUnavailable
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 from rail_waitlist.reservations.reconciliation_application import (
@@ -147,6 +149,70 @@ async def _seed_due_attempt(session_factory, *, credential_version: int = 3) -> 
         return attempt.id
 
 
+async def _seed_due_payment_hold(session_factory, *, credential_version: int = 3) -> str:
+    async with session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.SRT,
+                credentials_ciphertext="test-payment-hold-ciphertext",
+                enabled=True,
+                credential_version=credential_version,
+                last_auth_status="authenticated",
+            )
+        )
+        deadline = NOW + timedelta(minutes=30)
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="수서",
+            destination="부산",
+            travel_date=date(2026, 8, 5),
+            time_from=time(12),
+            time_to=time(18),
+            seat_class="standard",
+            passenger_count=1,
+            train_numbers=["301"],
+            notification_channel_ids=[],
+            mode="official",
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.PAYMENT_REQUIRED,
+            payment_deadline=deadline,
+            official_booking_url="https://etk.srail.kr/hpg/hra/02/selectReservationList.do",
+            dedupe_key=f"payment-follow-up-{credential_version}",
+            reservation_attempted=True,
+        )
+        candidate = WatchCandidate(
+            train_number="301",
+            departure_at=NOW + timedelta(hours=6),
+            arrival_at=NOW + timedelta(hours=8),
+            seat_class="standard",
+            priority=1,
+            state="payment_required",
+        )
+        attempt = ReservationAttempt(
+            candidate=candidate,
+            attempt_sequence=1,
+            episode_key="availability:payment-hold",
+            idempotency_key=f"reserve:payment-follow-up-{credential_version}",
+            started_at=NOW - timedelta(minutes=2),
+            outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            payment_deadline=deadline,
+            official_handoff_url=watch.official_booking_url,
+            credential_version=credential_version,
+            confirmation_outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            confirmation_source="srtrain-reservation-list",
+            confirmation_observed_at=NOW - timedelta(minutes=1),
+            last_reconciled_at=NOW - timedelta(minutes=1),
+            reconciliation_attempt_count=1,
+            next_reconcile_at=NOW - timedelta(seconds=1),
+            finished_at=NOW - timedelta(minutes=1),
+            reserved_seats=[{"car_number": "4", "seat_number": "8A"}],
+        )
+        watch.candidates.append(candidate)
+        session.add(watch)
+        await session.commit()
+        return attempt.id
+
+
 def _dependencies(
     session_factory,
     adapter: RecordingAdapter,
@@ -218,6 +284,192 @@ async def _attempt_state(session_factory, attempt_id: str) -> tuple[ReservationO
         assert attempt is not None
         outbox_count = await session.scalar(select(func.count()).select_from(OutboxEvent))
         return attempt.outcome, attempt.reconciliation_attempt_count, outbox_count or 0
+
+
+async def test_due_unknown_not_found_runs_one_scheduled_confirmation_then_stops(app) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_attempt(session_factory)
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        attempt.confirmation_outcome = ReservationConfirmationOutcome.NOT_FOUND
+        attempt.confirmation_source = "test-unknown-not-found"
+        attempt.confirmation_observed_at = NOW - timedelta(seconds=31)
+        attempt.last_reconciled_at = NOW - timedelta(seconds=31)
+        attempt.reconciliation_attempt_count = 3
+        attempt.next_reconcile_at = NOW - timedelta(seconds=1)
+        await session.commit()
+
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            source="test-unknown-not-found",
+            observed_at=NOW,
+        ),
+    )
+    dependencies = _dependencies(
+        session_factory,
+        adapter,
+        RecordingLeaseService(events),
+        events,
+        apply_reconciliation=apply_reservation_reconciliation,
+    )
+
+    assert (
+        await reconcile_reservation_attempt(
+            attempt_id,
+            dependencies=dependencies,
+            adapter=adapter,
+        )
+        == 1
+    )
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
+        assert attempt.reconciliation_attempt_count == 4
+        assert attempt.next_reconcile_at is None
+
+    assert (
+        await reconcile_reservation_attempt(
+            attempt_id,
+            dependencies=dependencies,
+            adapter=adapter,
+        )
+        == 0
+    )
+    assert len(adapter.targets) == 1
+
+
+async def test_known_payment_hold_remains_follow_up_after_inconclusive_read(app) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_payment_hold(session_factory)
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            source="test-payment-follow-up",
+            observed_at=NOW,
+        ),
+    )
+    lease_service = RecordingLeaseService(events)
+    dependencies = _dependencies(
+        session_factory,
+        adapter,
+        lease_service,
+        events,
+        apply_reconciliation=apply_reservation_reconciliation,
+    )
+
+    assert (
+        await reconcile_reservation_attempt(
+            attempt_id,
+            dependencies=dependencies,
+            adapter=adapter,
+        )
+        == 1
+    )
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+        assert attempt.reconciliation_attempt_count == 2
+        assert attempt.next_reconcile_at == attempt.last_reconciled_at + timedelta(seconds=30)
+        attempt.next_reconcile_at = NOW - timedelta(seconds=1)
+        await session.commit()
+
+    assert (
+        await reconcile_reservation_attempt(
+            attempt_id,
+            dependencies=dependencies,
+            adapter=adapter,
+        )
+        == 1
+    )
+
+    assert len(adapter.targets) == 2
+    for target in adapter.targets:
+        assert target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        assert target.reserved_seats == (
+            ReservationConfirmationSeat(car_number="4", seat_number="8A"),
+        )
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.reconciliation_attempt_count == 3
+        assert attempt.next_reconcile_at == attempt.last_reconciled_at + timedelta(minutes=2)
+
+
+async def test_elapsed_payment_hold_final_read_remains_payment_follow_up(app) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_payment_hold(session_factory)
+    elapsed_deadline = NOW - timedelta(seconds=1)
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        watch = await session.scalar(
+            select(Watch).join(WatchCandidate).where(WatchCandidate.id == attempt.candidate_id)
+        )
+        assert watch is not None
+        watch.payment_deadline = elapsed_deadline
+        attempt.payment_deadline = elapsed_deadline
+        attempt.confirmation_outcome = ReservationConfirmationOutcome.INCONCLUSIVE
+        attempt.reconciliation_attempt_count = 6
+        attempt.next_reconcile_at = None
+        await session.commit()
+
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            source="test-payment-follow-up",
+            observed_at=NOW,
+        ),
+    )
+    lease_service = RecordingLeaseService(events)
+
+    assert (
+        await reconcile_reservation_attempt(
+            attempt_id,
+            dependencies=_dependencies(
+                session_factory,
+                adapter,
+                lease_service,
+                events,
+                apply_reconciliation=apply_reservation_reconciliation,
+            ),
+            adapter=adapter,
+        )
+        == 1
+    )
+    assert len(adapter.targets) == 1
+    assert adapter.targets[0].purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+    assert adapter.targets[0].reserved_seats == (
+        ReservationConfirmationSeat(car_number="4", seat_number="8A"),
+    )
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        watch = await session.scalar(
+            select(Watch).join(WatchCandidate).where(WatchCandidate.id == attempt.candidate_id)
+        )
+        assert watch is not None
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
+        assert attempt.post_deadline_reconciled_at is not None
+        assert attempt.post_deadline_reconciled_at.replace(tzinfo=timezone.utc) == NOW
+        assert watch.status is WatchStatus.WATCHING
+        assert watch.payment_deadline is None
+        assert watch.official_booking_url is None
 
 
 @pytest.mark.parametrize("owns_adapter", [False, True])

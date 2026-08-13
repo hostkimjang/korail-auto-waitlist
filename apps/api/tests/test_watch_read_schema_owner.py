@@ -227,6 +227,17 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     assert canonical.WatchCandidateRead.model_fields["latest_reservation_attempt"].default is None
     assert canonical.WatchRead.model_fields["last_checked_at"].default is None
     assert canonical.WatchRead.model_fields["observation_execution_state"].default == "idle"
+    confirmation_schema = canonical.WatchCandidateLatestReservationAttemptRead.model_json_schema()[
+        "properties"
+    ]["confirmation_outcome"]["anyOf"][0]
+    assert confirmation_schema["enum"] == [
+        "confirmed_payment_required",
+        "confirmed_paid",
+        "not_found",
+        "auth_required",
+        "provider_blocked",
+        "inconclusive",
+    ]
     execution_state_annotation = canonical.WatchRead.model_fields[
         "observation_execution_state"
     ].annotation
@@ -250,11 +261,11 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     [
         (
             canonical.WatchCandidateLatestReservationAttemptRead,
-            "1dfa4793b0a84e8c2daea00b66a13d07e66ec20f7ff6dbbab276f4e1c8edbb4c",
+            "2ad25e016a532f23b6a549237e6cc78c58cfc8b7e9c6d56089bd606632264295",
         ),
         (
             canonical.WatchCandidateRead,
-            "2ff2d59614652f6156889aae0c8258a6e31ea7eb2833a16a50303d0b5f032335",
+            "4aecaeaa168b02d27a6586589fd5823167566eb7b7e68c9569eae21114677cbe",
         ),
         (
             canonical.WatchCandidateLatestObservationRead,
@@ -262,7 +273,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         ),
         (
             canonical.WatchRead,
-            "809b442c18fac10b3c441d570b279c12318ce3cc6e8cedc8e773d086607e1c0f",
+            "3949e4e843ca2a9372848957e25ed6349c16be23029a1f7f8474484b3b2349dc",
         ),
     ],
 )

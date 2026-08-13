@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -27,13 +29,27 @@ def event_wire(event: OutboxEvent) -> str:
     return f"id: {event.id}\nevent: {event.event_type}\ndata: {data}\n\n"
 
 
-async def _stream_events(request: Request, last_event_id: str | None):
-    cursor_time = None
-    cursor_id = last_event_id
-    if cursor_id:
-        async with SessionFactory() as session:
-            previous = await session.get(OutboxEvent, cursor_id)
-            cursor_time = previous.created_at if previous else None
+async def _initial_event_cursor(last_event_id: str | None) -> tuple[datetime | None, str | None]:
+    async with SessionFactory() as session:
+        if last_event_id is not None:
+            previous = await session.get(OutboxEvent, last_event_id)
+            if previous is not None:
+                return previous.created_at, last_event_id
+        latest = await session.scalar(
+            select(OutboxEvent)
+            .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc())
+            .limit(1)
+        )
+    if latest is None:
+        return None, None
+    return latest.created_at, latest.id
+
+
+async def _stream_events(
+    request: Request,
+    last_event_id: str | None,
+) -> AsyncIterator[str]:
+    cursor_time, cursor_id = await _initial_event_cursor(last_event_id)
     while not await request.is_disconnected():
         async with SessionFactory() as session:
             query = select(OutboxEvent).order_by(OutboxEvent.created_at, OutboxEvent.id).limit(100)

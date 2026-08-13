@@ -22,6 +22,11 @@ from .browser_contracts import (
     SeatStatus,
 )
 from .browser_protection import protection_trigger_from_replay_text
+from .browser_service_availability import (
+    ProviderUnavailableTrigger,
+    decode_provider_page_text,
+    provider_unavailable_trigger_from_page,
+)
 from .search_result_policy import parse_official_train_type, parse_unambiguous_adult_fare
 
 OFFICIAL_HOST = "www.korail.com"
@@ -89,6 +94,12 @@ class KorailHttpReplayRateLimited(KorailHttpReplayError):
 class KorailHttpReplaySourceUnavailable(KorailHttpReplayError):
     def __init__(self) -> None:
         super().__init__("source_unavailable")
+
+
+class KorailHttpReplayProviderUnavailable(KorailHttpReplaySourceUnavailable):
+    def __init__(self, trigger: ProviderUnavailableTrigger) -> None:
+        self.trigger = trigger
+        super().__init__()
 
 
 class KorailHttpReplayInvalidCapture(KorailHttpReplayError):
@@ -409,10 +420,16 @@ class KorailHttpReplayClient:
                 if response.is_redirect and _is_session_redirect(response):
                     raise KorailHttpReplaySessionInvalid()
                 if response.is_redirect:
+                    target = urljoin(request.url, response.headers.get("location", ""))
+                    unavailable_trigger = provider_unavailable_trigger_from_page(target, "")
+                    if unavailable_trigger is not None:
+                        raise KorailHttpReplayProviderUnavailable(unavailable_trigger)
                     raise KorailHttpReplaySourceUnavailable()
                 if 400 <= response.status_code < 500:
                     raise KorailHttpReplaySourceUnavailable()
-                if response.status_code < 200 or response.status_code >= 300:
+                if response.status_code != 503 and (
+                    response.status_code < 200 or response.status_code >= 300
+                ):
                     raise KorailHttpReplaySourceUnavailable()
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -423,6 +440,14 @@ class KorailHttpReplayClient:
             raise
         except httpx.HTTPError:
             raise KorailHttpReplaySourceUnavailable() from None
+        unavailable_trigger = provider_unavailable_trigger_from_page(
+            str(response.url),
+            decode_provider_page_text(bytes(body)),
+        )
+        if unavailable_trigger is not None:
+            raise KorailHttpReplayProviderUnavailable(unavailable_trigger)
+        if response.status_code == 503:
+            raise KorailHttpReplaySourceUnavailable()
         marker = _protection_marker(bytes(body))
         if marker is not None:
             raise KorailHttpReplayProtectionDetected(marker)
@@ -865,6 +890,7 @@ HttpReplaySessionInvalid = KorailHttpReplaySessionInvalid
 HttpReplayProtectionDetected = KorailHttpReplayProtectionDetected
 HttpReplayRateLimited = KorailHttpReplayRateLimited
 HttpReplaySourceUnavailable = KorailHttpReplaySourceUnavailable
+HttpReplayProviderUnavailable = KorailHttpReplayProviderUnavailable
 HttpReplayInvalidCapture = KorailHttpReplayInvalidCapture
 HttpReplayInvalidResponse = KorailHttpReplayInvalidResponse
 HttpReplayPlan = KorailHttpReplayPlan

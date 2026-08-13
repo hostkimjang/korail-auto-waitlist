@@ -14,10 +14,17 @@ from rail_waitlist.korail_browser_automation import (
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
 )
-from rail_waitlist.korail_http_replay import HttpReplayProtectionDetected, KorailHttpReplayPlan
+from rail_waitlist.korail_http_replay import (
+    HttpReplayProtectionDetected,
+    HttpReplayProviderUnavailable,
+    KorailHttpReplayPlan,
+)
 from rail_waitlist.korail_pydoll_http_replay import (
     KorailHttpReplayCaptureSession,
     PydollHttpReplayManager,
+)
+from rail_waitlist.korail_sidecar.browser_service_availability import (
+    BrowserProviderUnavailable,
 )
 
 
@@ -156,6 +163,31 @@ async def test_manager_retires_only_failed_route_and_maps_the_existing_protectio
     assert len(manager.active_leases) == 1
     assert manager.route_key(second) in manager.active_leases
     assert await manager.try_search(second) == _result(second)
+
+
+@pytest.mark.asyncio
+async def test_manager_maps_provider_outage_without_falling_back_to_browser() -> None:
+    request = _request()
+    replay = _ReplayClient(
+        _result(request),
+        HttpReplayProviderUnavailable("maintenance_page"),
+    )
+    manager = _manager(factory=lambda *_args, **_kwargs: replay)
+    session = _CaptureSession()
+    assert await manager.begin_capture(session) is True
+    assert await manager.install_capture(
+        session=session,
+        request=request,
+        created_at=0,
+        searches_started=1,
+    )
+
+    with pytest.raises(BrowserProviderUnavailable) as raised:
+        await manager.try_search(request)
+
+    assert raised.value.trigger == "maintenance_page"
+    assert raised.value.stage == "http_replay"
+    assert manager.active_leases == {}
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,11 @@ from ..browser_protection import (
     protection_trigger_from_http_response,
     protection_trigger_from_text,
 )
+from ..browser_service_availability import (
+    BrowserProviderUnavailable,
+    ProviderUnavailableTrigger,
+    provider_unavailable_trigger_from_page,
+)
 from .page_contracts import PydollPageSnapshot
 
 AUTOMATION_GENERIC_PROTECTION_TRIGGERS = BROWSER_GENERIC_PROTECTION_TRIGGERS
@@ -37,7 +42,13 @@ class PydollProtectionBlock:
     kind: Literal["protection"] = "protection"
 
 
-type PydollPageBlock = PydollRateLimitBlock | PydollProtectionBlock
+@dataclass(frozen=True)
+class PydollProviderUnavailableBlock:
+    trigger: ProviderUnavailableTrigger
+    kind: Literal["provider_unavailable"] = "provider_unavailable"
+
+
+type PydollPageBlock = PydollRateLimitBlock | PydollProtectionBlock | PydollProviderUnavailableBlock
 
 
 def classify_pydoll_page_block(snapshot: PydollPageSnapshot) -> PydollPageBlock | None:
@@ -49,6 +60,14 @@ def classify_pydoll_page_block(snapshot: PydollPageSnapshot) -> PydollPageBlock 
         trigger = protection_trigger_from_http_response(status, resource_type)
         if trigger == "http_403_main":
             return PydollProtectionBlock(trigger)
+
+    unavailable_trigger = provider_unavailable_trigger_from_page(
+        snapshot.url,
+        snapshot.body_text,
+        has_result_rows=bool(snapshot.rows),
+    )
+    if unavailable_trigger is not None:
+        return PydollProviderUnavailableBlock(unavailable_trigger)
 
     trigger = protection_trigger_from_text(snapshot.body_text)
     if trigger is None:
@@ -76,6 +95,11 @@ def assert_pydoll_response_allowed(
         return
     if block.kind == "rate_limited":
         raise BrowserRateLimited()
+    if block.kind == "provider_unavailable":
+        _log_provider_unavailable_snapshot(
+            snapshot, stage, block.trigger, event_logger=event_logger
+        )
+        raise BrowserProviderUnavailable(block.trigger, stage)
     _log_protection_snapshot(snapshot, stage, block.trigger, event_logger=event_logger)
     raise BrowserProtectionDetected(block.trigger, stage)
 
@@ -99,4 +123,20 @@ def _log_protection_snapshot(
         len(snapshot.protection_texts),
         marker_surface_count,
         snapshot.network_responses,
+    )
+
+
+def _log_provider_unavailable_snapshot(
+    snapshot: PydollPageSnapshot,
+    stage: str,
+    trigger: str,
+    *,
+    event_logger: logging.Logger,
+) -> None:
+    event_logger.warning(
+        "KORAIL Pydoll service unavailable evidence stage=%s trigger=%s rows=%d network_count=%d",
+        stage,
+        trigger,
+        len(snapshot.rows),
+        len(snapshot.network_responses),
     )

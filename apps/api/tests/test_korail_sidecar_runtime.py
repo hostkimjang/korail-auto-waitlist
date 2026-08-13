@@ -37,6 +37,43 @@ def test_boolean_setting_accepts_only_explicit_true_or_false(
         raise AssertionError("invalid boolean setting must fail closed")
 
 
+def test_build_browser_client_forwards_dialog_auto_action_setting(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "rail_waitlist.korail_pydoll_browser.PydollKorailBrowserClient",
+        FakeClient,
+    )
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "false")
+    monkeypatch.delenv("KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED", raising=False)
+
+    runtime.build_browser_client(
+        runtime.KorailBrowserEngine.PYDOLL,
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_seconds=25,
+        allow_fullstack_fixture=False,
+    )
+
+    assert captured["auto_handle_dialogs"] is False
+
+    monkeypatch.setenv("KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED", "true")
+
+    runtime.build_browser_client(
+        runtime.KorailBrowserEngine.PYDOLL,
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_seconds=25,
+        allow_fullstack_fixture=False,
+    )
+
+    assert captured["auto_handle_dialogs"] is True
+
+
 def test_sidecar_runtime_does_not_reverse_depend_on_http_or_the_compatibility_facade() -> None:
     module_path = (
         Path(__file__).parents[1] / "src" / "rail_waitlist" / "korail_sidecar" / "runtime.py"

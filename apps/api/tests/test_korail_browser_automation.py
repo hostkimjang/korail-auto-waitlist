@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import rail_waitlist.korail_browser_adapter_service as adapter_service
+import rail_waitlist.korail_sidecar.playwright.client as playwright_client_module
 import rail_waitlist.korail_sidecar.pydoll.chromium_lifecycle as pydoll_lifecycle
 from rail_waitlist.korail_browser_adapter_service import (
     KorailBrowserEngine,
@@ -26,6 +27,7 @@ from rail_waitlist.korail_browser_automation import (
     FULLSTACK_E2E_PAGE_URL,
     OFFICIAL_KORAIL_SEARCH_URL,
     BrowserProtectionDetected,
+    BrowserRateLimited,
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
@@ -43,6 +45,9 @@ from rail_waitlist.korail_browser_automation import (
     visible_departure_matches,
 )
 from rail_waitlist.korail_search_bootstrap import KorailStationIdentityResolver
+from rail_waitlist.korail_sidecar.browser_service_availability import (
+    BrowserProviderUnavailable,
+)
 from rail_waitlist.korail_sidecar.playwright import search_form
 
 
@@ -236,6 +241,7 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
             "page_url": OFFICIAL_KORAIL_SEARCH_URL,
             "timeout_seconds": 25,
             "headless": True,
+            "auto_handle_dialogs": False,
             "allow_fullstack_fixture": False,
             "session_reuse_ttl_seconds": 1800,
             "session_reuse_max_searches": 100,
@@ -302,12 +308,14 @@ def test_browser_automation_uses_operational_cache_and_cooldown_defaults(
     monkeypatch.delenv("KORAIL_BROWSER_CACHE_TTL_SECONDS", raising=False)
     monkeypatch.delenv("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", raising=False)
     monkeypatch.delenv("SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", raising=False)
+    monkeypatch.delenv("SEAT_STATUS_PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS", raising=False)
 
     automation = adapter_service.build_automation(browser_client=FakeClient())
 
     assert automation._cache_ttl_seconds == 1
     assert automation._rate_limit_cooldown_seconds == 300
     assert automation._protection_cooldown_seconds == 60
+    assert automation._provider_unavailable_cooldown_seconds == 300
 
 
 def test_pydoll_engine_readiness_uses_selected_probe_without_network(
@@ -577,6 +585,67 @@ async def test_canonical_submit_search_orchestrates_the_client_form_seams(
 
 
 @pytest.mark.asyncio
+async def test_playwright_page_guard_classifies_official_maintenance_page() -> None:
+    body = SimpleNamespace(inner_text=AsyncMock(return_value="점검 안내"))
+    rows = SimpleNamespace(count=AsyncMock(return_value=0))
+    page = SimpleNamespace(
+        url="https://www.korail.com/rejectservice_job.html",
+        locator=lambda selector: body if selector == "body" else rows,
+    )
+    client = PlaywrightKorailBrowserClient()
+
+    with pytest.raises(BrowserProviderUnavailable) as raised:
+        await client._assert_not_protected(page, [], "load_page")
+
+    assert raised.value.trigger == "maintenance_page"
+    assert raised.value.stage == "load_page"
+
+
+@pytest.mark.asyncio
+async def test_playwright_navigation_timeout_still_classifies_maintenance_dom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright_api = pytest.importorskip("playwright.async_api")
+
+    class AsyncContext:
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+        async def __aenter__(self) -> object:
+            return self.value
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    body = SimpleNamespace(inner_text=AsyncMock(return_value="점검 안내"))
+    rows = SimpleNamespace(count=AsyncMock(return_value=0))
+    page = SimpleNamespace(
+        url="https://www.korail.com/rejectservice_job.html",
+        set_viewport_size=AsyncMock(),
+        on=lambda *_args: None,
+        goto=AsyncMock(side_effect=playwright_api.TimeoutError("navigation timeout")),
+        locator=lambda selector: body if selector == "body" else rows,
+    )
+    context = SimpleNamespace(pages=[page])
+    browser = SimpleNamespace(contexts=[context])
+    playwright = SimpleNamespace(chromium=object())
+    monkeypatch.setattr(playwright_api, "async_playwright", lambda: AsyncContext(playwright))
+    monkeypatch.setattr(
+        playwright_client_module,
+        "open_direct_cdp_browser",
+        lambda *_args, **_kwargs: AsyncContext(browser),
+    )
+    client = PlaywrightKorailBrowserClient()
+
+    with pytest.raises(BrowserProviderUnavailable) as raised:
+        await client.search(request())
+
+    assert raised.value.trigger == "maintenance_page"
+    assert raised.value.stage == "load_page"
+    page.set_viewport_size.assert_awaited_once_with({"width": 1440, "height": 1000})
+
+
+@pytest.mark.asyncio
 async def test_visible_control_click_uses_cdp_press_hold_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -666,6 +735,101 @@ async def test_singleflight_and_cache_run_one_browser_search() -> None:
     assert client.calls == 1
 
 
+async def test_provider_query_logs_actual_start_and_success_without_request_identity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    automation = KorailBrowserAutomation(FakeClient())
+
+    with caplog.at_level(logging.INFO, logger="rail_waitlist.korail_browser_automation"):
+        await automation.search(request())
+
+    assert "KORAIL 운영사 조회를 시작합니다" in caplog.text
+    assert "event=provider_query_started" in caplog.text
+    assert "event=provider_query_completed outcome=success train_count=1" in caplog.text
+    assert "서울" not in caplog.text
+    assert "부산" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (
+            BrowserProtectionDetected("marker_netfunnel", "wait_result"),
+            (
+                "event=provider_query_completed outcome=provider_access_restricted "
+                "stage=wait_result "
+                "trigger=marker_netfunnel cooldown_seconds=60"
+            ),
+        ),
+        (
+            BrowserRateLimited(),
+            "event=provider_query_completed outcome=rate_limited cooldown_seconds=300",
+        ),
+        (
+            BrowserSourceUnavailable("result_read"),
+            (
+                "event=provider_query_completed outcome=source_unavailable "
+                "stage=result_read backoff_seconds=30"
+            ),
+        ),
+    ],
+)
+async def test_provider_query_logs_closed_failure_state_without_exception_text(
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+    expected: str,
+) -> None:
+    automation = KorailBrowserAutomation(FakeClient(failure=failure))
+
+    with (
+        caplog.at_level(logging.INFO, logger="rail_waitlist.korail_browser_automation"),
+        pytest.raises(type(failure)),
+    ):
+        await automation.search(request())
+
+    assert expected in caplog.text
+    assert "서울" not in caplog.text
+    assert "부산" not in caplog.text
+
+
+async def test_provider_query_logs_unexpected_failure_without_exception_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    automation = KorailBrowserAutomation(FakeClient(failure=RuntimeError("raw-provider-body")))
+
+    with (
+        caplog.at_level(logging.INFO, logger="rail_waitlist.korail_browser_automation"),
+        pytest.raises(BrowserSourceUnavailable),
+    ):
+        await automation.search(request())
+
+    assert (
+        "event=provider_query_completed outcome=source_unavailable "
+        "stage=unexpected_backend_error backoff_seconds=30" in caplog.text
+    )
+    assert "raw-provider-body" not in caplog.text
+
+
+async def test_provider_query_logs_cancellation_and_reraises_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = FakeClient()
+    client.gate.clear()
+    automation = KorailBrowserAutomation(client)
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_automation")
+
+    task = asyncio.create_task(automation.search(request()))
+    while client.calls == 0:
+        await asyncio.sleep(0)
+    owned_task = next(iter(automation._inflight.values()))
+    owned_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert "event=provider_query_completed outcome=cancelled" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_drain_pending_calls_survives_repeated_cancellation() -> None:
     client = FakeClient()
@@ -732,9 +896,12 @@ async def test_close_skips_client_lock_when_owned_search_does_not_drain(
     assert await search_task == result()
 
 
-async def test_protection_result_opens_cooldown_without_second_browser() -> None:
+async def test_protection_result_opens_cooldown_without_second_browser(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     client = FakeClient(failure=BrowserProtectionDetected())
     automation = KorailBrowserAutomation(client)
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_automation")
 
     with pytest.raises(BrowserProtectionDetected):
         await automation.search(request())
@@ -742,6 +909,12 @@ async def test_protection_result_opens_cooldown_without_second_browser() -> None
         await automation.search(request())
 
     assert client.calls == 1
+    assert caplog.text.count("event=provider_query_started") == 1
+    assert caplog.text.count("event=provider_query_completed") == 1
+    assert (
+        "event=provider_query_skipped reason=provider_cooldown "
+        "outcome=provider_access_restricted" in caplog.text
+    )
 
 
 @pytest.mark.asyncio
@@ -790,6 +963,73 @@ async def test_protection_cooldown_blocks_a_different_query_globally() -> None:
     assert client.calls == 1
 
 
+@pytest.mark.asyncio
+async def test_provider_outage_blocks_a_different_query_globally_with_retry_after() -> None:
+    client = FakeClient(failure=BrowserProviderUnavailable("maintenance_page", "wait_result"))
+    automation = KorailBrowserAutomation(client, provider_unavailable_cooldown_seconds=300)
+    next_date = request().model_copy(update={"travel_date": date(2026, 8, 4)})
+
+    with pytest.raises(BrowserProviderUnavailable) as first:
+        await automation.search(request())
+    with pytest.raises(BrowserProviderUnavailable) as second:
+        await automation.search(next_date)
+
+    assert first.value.retry_after_seconds == 300
+    assert second.value.retry_after_seconds == 300
+    assert second.value.stage == "provider_cooldown"
+    assert client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_outage_preempts_a_cached_different_query() -> None:
+    client = FakeClient()
+    automation = KorailBrowserAutomation(client, cache_ttl_seconds=60)
+    cached_request = request()
+    await automation.search(cached_request)
+    client.failure = BrowserProviderUnavailable("maintenance_page", "wait_result")
+    outage_request = request().model_copy(update={"travel_date": date(2026, 8, 4)})
+
+    with pytest.raises(BrowserProviderUnavailable):
+        await automation.search(outage_request)
+    with pytest.raises(BrowserProviderUnavailable) as cached:
+        await automation.search(cached_request)
+
+    assert cached.value.stage == "provider_cooldown"
+    assert client.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_outage_stops_a_different_query_already_waiting_for_browser() -> None:
+    class BlockingOutageClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def search(
+            self,
+            _request: BrowserSeatSearchRequest,
+        ) -> BrowserSeatSearchResult:
+            self.calls += 1
+            self.started.set()
+            await self.release.wait()
+            raise BrowserProviderUnavailable("maintenance_page", "wait_result")
+
+    client = BlockingOutageClient()
+    automation = KorailBrowserAutomation(client, provider_unavailable_cooldown_seconds=300)
+    next_date = request().model_copy(update={"travel_date": date(2026, 8, 4)})
+    first = asyncio.create_task(automation.search(request()))
+    await client.started.wait()
+    second = asyncio.create_task(automation.search(next_date))
+    await asyncio.sleep(0)
+    client.release.set()
+
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert all(isinstance(item, BrowserProviderUnavailable) for item in results)
+    assert client.calls == 1
+
+
 def test_sidecar_requires_internal_bearer_token() -> None:
     client = FakeClient()
     app = create_adapter_app(
@@ -810,7 +1050,7 @@ def test_sidecar_requires_internal_bearer_token() -> None:
     assert accepted.headers["Cache-Control"] == "no-store"
 
 
-def test_sidecar_logs_sanitized_protection_diagnostic_without_exposing_it(
+def test_sidecar_logs_one_sanitized_protection_terminal_without_exposing_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     failure = BrowserProtectionDetected("marker_code_8003", "wait_result")
@@ -831,6 +1071,31 @@ def test_sidecar_logs_sanitized_protection_diagnostic_without_exposing_it(
     assert response.json() == {"detail": {"reason": "provider_access_restricted"}}
     assert response.headers["Cache-Control"] == "no-store"
     assert "stage=wait_result trigger=marker_code_8003" in caplog.text
+    assert caplog.text.count("stage=wait_result trigger=marker_code_8003") == 1
+
+
+def test_sidecar_projects_provider_outage_as_compatible_503_with_retry_after() -> None:
+    failure = BrowserProviderUnavailable("maintenance_page", "wait_result")
+    app = create_adapter_app(
+        KorailBrowserAutomation(
+            FakeClient(failure=failure),
+            provider_unavailable_cooldown_seconds=300,
+        ),
+        token="t" * 32,
+        readiness_probe=FakeReadinessProbe(),
+    )
+
+    with TestClient(app) as http:
+        response = http.post(
+            "/v1/seat-snapshot",
+            json=request().model_dump(mode="json"),
+            headers={"Authorization": f"Bearer {'t' * 32}"},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"reason": "source_unavailable"}}
+    assert response.headers["Retry-After"] == "300"
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 def test_sidecar_is_ready_only_after_one_successful_chromium_probe() -> None:

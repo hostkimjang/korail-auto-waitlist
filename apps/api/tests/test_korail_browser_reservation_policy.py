@@ -65,6 +65,7 @@ def _safe_digest(value: str) -> bytes:
 def _wire_result(
     outcome: str,
     *,
+    reason: str | None = None,
     reservation_clicked: bool = False,
     progress_times: tuple[datetime, ...] = (),
     reserved_seats: list[dict[str, str]] | None = None,
@@ -72,7 +73,7 @@ def _wire_result(
     padded = (*progress_times, None, None, None, None)
     return KorailReserveOnceResult(
         outcome=outcome,
-        reason=f"fixture_{outcome}",
+        reason=reason or f"fixture_{outcome}",
         seat_clicked=bool(progress_times) or reservation_clicked,
         reservation_clicked=reservation_clicked,
         session_ready_at=padded[0],
@@ -338,3 +339,22 @@ def test_wire_result_priority_and_progress_are_preserved(
     else:
         assert result.official_handoff_url is None
         assert result.progress_stages == ()
+
+
+def test_click_error_remains_unknown_without_claiming_request_progress() -> None:
+    wire = _wire_result(
+        "failed",
+        reason="reservation_result_unknown:reservation_click_error",
+        progress_times=PROGRESS_TIMES[:3],
+    )
+
+    result = policy.project_reservation_result(wire, observed_at=OBSERVED_AT)
+
+    assert wire.reservation_clicked is False
+    assert wire.reservation_requested_at is None
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert [stage.stage for stage in result.progress_stages] == [
+        "authenticated_session_ready",
+        "target_rechecked",
+        "seat_selected",
+    ]

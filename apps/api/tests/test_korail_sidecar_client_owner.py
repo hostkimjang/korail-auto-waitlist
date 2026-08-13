@@ -43,9 +43,16 @@ LEGACY_PICKLES = {
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload: object) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        payload: object,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self._payload = payload
+        self.headers = headers or {}
 
     def json(self) -> object:
         return self._payload
@@ -350,6 +357,52 @@ async def test_search_transport_preserves_failure_classification() -> None:
     assert captured.value.reason == "source_unavailable"
 
 
+@pytest.mark.parametrize(
+    ("payload", "retry_after"),
+    [
+        ({"detail": {"reason": "source_unavailable"}}, "300"),
+        ({"detail": {"reason": "source_unavailable"}}, "1"),
+    ],
+)
+async def test_search_transport_preserves_explicit_provider_outage_scope(
+    payload: object,
+    retry_after: str,
+) -> None:
+    transport = transport_with(
+        FakeHttpClient(FakeResponse(503, payload, headers={"retry-after": retry_after}))
+    )
+
+    with pytest.raises(owner._AdapterFailure) as captured:
+        await transport.search(search_request())
+
+    assert captured.value.reason == "source_unavailable"
+    assert captured.value.cooldown_scope == "provider"
+    assert captured.value.retry_after_seconds == int(retry_after)
+
+
+@pytest.mark.parametrize(
+    ("payload", "headers"),
+    [
+        ({"detail": {"reason": "source_unavailable"}}, {}),
+        ({"detail": {"reason": "source_unavailable"}}, {"retry-after": "0"}),
+        ({"detail": {"reason": "source_unavailable"}}, {"retry-after": "86401"}),
+        ({"detail": {"reason": "other"}}, {"retry-after": "300"}),
+        ("not-an-object", {"retry-after": "300"}),
+    ],
+)
+async def test_search_transport_keeps_untrusted_503_retry_metadata_query_local(
+    payload: object,
+    headers: dict[str, str],
+) -> None:
+    transport = transport_with(FakeHttpClient(FakeResponse(503, payload, headers=headers)))
+
+    with pytest.raises(owner._AdapterFailure) as captured:
+        await transport.search(search_request())
+
+    assert captured.value.cooldown_scope == "query"
+    assert captured.value.retry_after_seconds is None
+
+
 async def test_session_state_keeps_all_non_200_responses_generic() -> None:
     for status in (403, 423, 429, 500):
         transport = transport_with(FakeHttpClient(FakeResponse(status, {})))
@@ -448,6 +501,47 @@ async def test_reserve_progress_stream_is_ordered_and_sent_once() -> None:
     assert [item.stage for item in observed] == list(stage_names)
     assert len(client.requests) == 1
     assert client.requests[0][1] == "/v1/reserve-once/stream"
+
+
+async def test_reserve_progress_stream_preserves_click_error_without_request_stage() -> None:
+    stage_names = (
+        "authenticated_session_ready",
+        "target_rechecked",
+        "seat_selected",
+    )
+    times = [datetime(2026, 8, 7, 3, 0, index, tzinfo=UTC) for index in range(3)]
+    lines = [
+        json.dumps({"type": "progress", "stage": stage, "occurred_at": occurred_at.isoformat()})
+        for stage, occurred_at in zip(stage_names, times, strict=True)
+    ]
+    lines.append(
+        json.dumps(
+            {
+                "type": "result",
+                "result": {
+                    "outcome": "failed",
+                    "reason": "reservation_result_unknown:reservation_click_error",
+                    "seat_clicked": True,
+                    "reservation_clicked": False,
+                    "session_ready_at": times[0].isoformat(),
+                    "target_rechecked_at": times[1].isoformat(),
+                    "seat_selected_at": times[2].isoformat(),
+                },
+            }
+        )
+    )
+    transport = transport_with(FakeStreamHttpClient(lines))  # type: ignore[arg-type]
+    observed = []
+
+    async def on_progress(stage):
+        observed.append(stage)
+
+    result = await transport.reserve_with_progress(reserve_request(), on_progress)
+
+    assert [item.stage for item in observed] == list(stage_names)
+    assert result.reason == "reservation_result_unknown:reservation_click_error"
+    assert result.reservation_clicked is False
+    assert result.reservation_requested_at is None
 
 
 @pytest.mark.parametrize(

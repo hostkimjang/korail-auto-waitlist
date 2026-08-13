@@ -31,6 +31,9 @@ from ..provider_adapters.srt_identity import (
     normalize_srt_time,
     normalize_srt_train_number,
 )
+from ..provider_adapters.srt_netfunnel_logging import (
+    LoggingNetFunnelHelper as _LoggingNetFunnelHelper,
+)
 from ..provider_adapters.srt_station_roster import (
     SrtStationRosterUnavailable,
     load_srt_station_roster,
@@ -170,7 +173,16 @@ def _canonical_login_id(credentials: SrtReservationCredentials) -> str:
 
 
 def _default_client_factory(login_id: str, password: str) -> _SrtClient:
-    return _cast(_SrtClient, SRT(login_id, password, auto_login=True, verbose=False))
+    return _cast(
+        _SrtClient,
+        SRT(
+            login_id,
+            password,
+            auto_login=True,
+            verbose=False,
+            netfunnel_helper=_LoggingNetFunnelHelper(flow="authenticated"),
+        ),
+    )
 
 
 def verify_srt_credentials_once(

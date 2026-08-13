@@ -50,7 +50,7 @@ const sourceLabels: Record<string, string> = {
   provider_circuits: "운영사 보호 회로",
   station_catalog: "역 목록 갱신",
 };
-const providerLabels: Record<string, string> = { KORAIL: "KORAIL", SRT: "SRT" };
+const providerLabels: Record<string, string> = { KORAIL: "KORAIL", SRT: "SRT", MOCK: "모의" };
 const timestampBasisLabels: Record<string, string> = {
   observed_at: "관측 시각 기준",
   started_at: "시작 시각 기준",
@@ -79,8 +79,8 @@ const seatStatusSourceLabels: Record<SeatStatusSource["source"], string> = {
   srt_live: "SRT 실시간 좌석 조회",
 };
 const seatStatusSourceStateLabels: Record<SeatStatusSource["state"], string> = {
-  ready: "보호 대기 없음",
-  cooldown: "보호 대기 중",
+  ready: "조회 대기 없음",
+  cooldown: "조회 대기 중",
   unknown: "확인 불가",
 };
 const seatStatusSourceCauseLabels: Record<Exclude<SeatStatusSourceCause, null>, string> = {
@@ -91,7 +91,7 @@ const seatStatusSourceCauseLabels: Record<Exclude<SeatStatusSourceCause, null>, 
 const kindLabels: Record<string, string> = {
   notification_delivery: "알림 전달",
   watch_transition: "상태 변경",
-  seat_observation: "관측 기록",
+  seat_observation: "좌석 조회",
   reservation_attempt: "예약 처리",
   provider_circuit: "운영사 요청 보호",
 };
@@ -100,14 +100,31 @@ const eventStatusLabels: Record<string, string> = {
   sent: "전달됨",
   succeeded: "성공",
   success: "성공",
+  draft: "초안",
+  scheduled: "대기 등록",
   failed: "실패",
   watching: "감시 중",
+  official_waitlist: "공식 예약대기",
+  seat_found: "좌석 발견",
+  reserving: "예약 진행",
   paused: "일시정지",
   expired: "만료",
   payment_required: "결제 필요",
+  reserved: "임시 예약",
+  not_available: "좌석 확보 실패",
+  provider_blocked: "운영사 제한",
   completed: "완료",
   available: "예약 가능 관측",
   limited: "잔여석 부족 관측",
+  standing_plus_seat: "입석+좌석 관측",
+  not_enough_seats: "요청 인원 좌석 부족",
+  sold_out: "매진 관측",
+  waitlist_available: "예약대기 가능 관측",
+  reservation_completed: "예약 완료 관측",
+  not_offered: "미판매 관측",
+  departed: "출발 완료 관측",
+  out_of_service: "운행 종료 관측",
+  stale: "관측 유효기간 만료",
   unavailable: "매진 관측",
   error: "관측 오류",
   auth_required: "로그인 확인 필요",
@@ -145,10 +162,33 @@ const entryLevelLabels: Record<OperationsEntry["level"], string> = {
   warning: "주의",
   error: "오류",
 };
+const seatClassLabels: Record<NonNullable<OperationsEntry["seatClass"]>, string> = {
+  standard: "일반실",
+  first: "특실",
+  infant: "유아석",
+  free: "자유석",
+  waitlist: "예약대기",
+  any: "좌석 등급 무관",
+};
+const entryReasonLabels: Record<NonNullable<OperationsEntry["reasonCode"]>, string> = {
+  reservation_pending: "예매 처리 결과를 기다리는 중입니다.",
+  reservation_payment_required: "좌석을 임시 확보했으며 공식 창에서 결제가 필요합니다.",
+  reservation_reserved: "임시 예약이 확인됐으며 결제 완료 상태는 아닙니다.",
+  reservation_not_available: "예매 시점에 요청 좌석을 확보하지 못했습니다.",
+  reservation_auth_required: "운영사 로그인 확인이 필요해 예매를 진행하지 못했습니다.",
+  reservation_provider_blocked: "운영사 요청 제한으로 예매 시도가 중단됐습니다.",
+  reservation_failed: "예매 처리가 실패했지만 세부 원인은 기록되지 않았습니다.",
+  reservation_unknown: "예매 결과를 확정하지 못해 공식 창 확인이 필요합니다.",
+  payment_completed: "공식 내역에서 결제 완료를 확인했습니다.",
+  payment_deadline_elapsed_monitoring_resumed: "결제기한 안에 결제가 확인되지 않아 좌석 관측을 다시 시작했습니다.",
+  payment_hold_no_longer_present_monitoring_resumed: "공식 미결제 보류가 더 이상 확인되지 않아 좌석 관측을 다시 시작했습니다.",
+  payment_deadline_elapsed_one_off_expired: "결제기한이 지나 일회성 관측을 만료 처리했습니다.",
+  payment_hold_no_longer_present_one_off_expired: "공식 미결제 보류가 더 이상 확인되지 않아 일회성 관측을 만료 처리했습니다.",
+};
 const limitationLabels: Record<string, string> = {
   http_and_process_errors_are_not_durably_recorded: "HTTP·프로세스 오류는 이 영속 집계에 포함되지 않습니다.",
   worker_and_scheduler_health_require_durable_heartbeats: "작업 처리·일정 실행은 지속 heartbeat가 없어 현재 정상 여부를 판단할 수 없습니다.",
-  recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors: "최근 기록은 식별정보와 원문 오류를 제거한 분류만 표시합니다.",
+  recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors: "최근 기록은 내부 ID·노선·원문 오류를 제외하고 열차와 출발 시각 등 필요한 진행 문맥만 표시합니다.",
 };
 
 function displayTimestamp(value: string | null): string {
@@ -245,8 +285,36 @@ function seatStatusSourceDetail(source: SeatStatusSource): string {
 function safeEventDescription(entry: OperationsEntry): string {
   const kind = kindLabels[entry.kind] ?? "운영 상태 기록";
   const status = eventStatusLabels[entry.status] ?? "상태 확인 필요";
-  const provider = entry.provider ? providerLabels[entry.provider] : null;
-  return `${provider ? `${provider} · ` : ""}${kind} · ${status}`;
+  const provider = entry.provider ? providerLabels[entry.provider] ?? null : null;
+  const departureDate = entry.departureAt ? new Date(entry.departureAt) : null;
+  const departure = departureDate && !Number.isNaN(departureDate.getTime())
+    ? new Intl.DateTimeFormat("ko-KR", {
+        month: "long",
+        day: "numeric",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+        timeZone: "Asia/Seoul",
+      }).format(departureDate)
+    : null;
+  const context = [
+    entry.trainNumber,
+    departure ? `출발 ${departure}` : null,
+    entry.seatClass ? seatClassLabels[entry.seatClass] : null,
+  ].filter((value): value is string => value !== null);
+  return [provider, kind, status, ...context]
+    .filter((value): value is string => value !== null)
+    .join(" · ");
+}
+
+function safeEventDetail(entry: OperationsEntry): string {
+  const reason = entry.reasonCode ? entryReasonLabels[entry.reasonCode] : null;
+  const error = entry.errorCategory
+    ? errorCategoryLabels[entry.errorCategory] ?? "오류 분류 확인 필요"
+    : null;
+  if (reason) return error ? `${reason} · ${error}` : reason;
+  return `${entryLevelLabels[entry.level]}${error ? ` · ${error}` : ""}`;
 }
 
 function rateLabel(value: OperationsRate): string {
@@ -420,7 +488,7 @@ export function SystemStatusDashboard({
           <section className="operations-section" aria-labelledby="operations-seat-status-sources-title">
             <div className="operations-section-heading">
               <h3 id="operations-seat-status-sources-title">좌석 조회 제공원 상태</h3>
-              <span>별도 보호 대기 기준</span>
+              <span>별도 조회 대기 기준</span>
             </div>
             {seatStatusSourcesState.phase === "loading" && (
               <p className="operations-inline-empty" role="status">좌석 조회 제공원 상태를 불러오는 중입니다.</p>
@@ -451,22 +519,27 @@ export function SystemStatusDashboard({
           <section className="operations-section" aria-labelledby="operations-recent-title">
             <div className="operations-section-heading">
               <h3 id="operations-recent-title">최근 진행 기록</h3>
-              <span>최대 20개 · 식별정보 제외</span>
+              <span>활동·오류 최대 20개 · 반복 정상 관측 제외</span>
             </div>
             {data.recentEntries.length > 0 ? (
-              <ol className="operations-event-list">
+              <ol className="operations-event-list" role="list">
                 {data.recentEntries.map((entry, index) => (
                   <li key={`${entry.occurredAt ?? "unknown"}-${index}`}>
                     <span className={`operations-event-dot is-${entry.level}`} aria-hidden="true" />
                     <div>
                       <strong>{safeEventDescription(entry)}</strong>
-                      <span>{entryLevelLabels[entry.level]}{entry.errorCategory ? ` · ${errorCategoryLabels[entry.errorCategory] ?? "오류 분류 확인 필요"}` : ""}</span>
+                      <span>{safeEventDetail(entry)}</span>
                     </div>
-                    <time dateTime={entry.occurredAt ?? undefined}>{displayTimestamp(entry.occurredAt)}</time>
+                    <time
+                      dateTime={entry.occurredAt ?? undefined}
+                      aria-label={`기록 시각 ${displayTimestamp(entry.occurredAt)}`}
+                    >
+                      {displayTimestamp(entry.occurredAt)}
+                    </time>
                   </li>
                 ))}
               </ol>
-            ) : <p className="operations-inline-empty">최근 진행 기록 없음</p>}
+            ) : <p className="operations-inline-empty">최근 활동·오류 기록 없음</p>}
           </section>
 
           {data.limitations.length > 0 && (

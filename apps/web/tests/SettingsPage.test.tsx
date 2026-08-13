@@ -10,7 +10,6 @@ import {
 } from "../src/features/settings/SettingsPage";
 
 const preferences: UiPreferences = {
-  timetableRefreshIntervalSeconds: 5,
   seatObservationIntervalSeconds: 5,
   updatedAt: "2026-08-05T00:00:00Z",
 };

@@ -20,6 +20,7 @@ from rail_waitlist.watch_management import models as watch_models
 API_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_MEMBERS = (
     ("CONFIRMED_PAYMENT_REQUIRED", "confirmed_payment_required"),
+    ("CONFIRMED_PAID", "confirmed_paid"),
     ("NOT_FOUND", "not_found"),
     ("AUTH_REQUIRED", "auth_required"),
     ("PROVIDER_BLOCKED", "provider_blocked"),

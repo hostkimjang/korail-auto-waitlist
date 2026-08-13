@@ -14,6 +14,7 @@ from rail_waitlist.korail_sidecar import contracts as canonical
 
 API_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_SYMBOLS = {
+    "KorailConfirmationPurposeValue",
     "KorailCredentialRequest",
     "KorailLoginMethodValue",
     "KorailLoginVerificationOutcomeValue",
@@ -117,6 +118,8 @@ def test_contract_models_forbid_unknown_fields_and_redact_credentials() -> None:
 def test_confirmation_request_preserves_time_route_and_arrival_validation() -> None:
     valid = confirmation_request()
     assert valid.departure_at.tzinfo is UTC
+    assert valid.purpose == "initial"
+    assert valid.reserved_seats == []
     payload = valid.model_dump()
     payload["departure_at"] = valid.departure_at.replace(tzinfo=None)
     with pytest.raises(ValidationError, match="reservation times must include a timezone"):
@@ -128,6 +131,21 @@ def test_confirmation_request_preserves_time_route_and_arrival_validation() -> N
     with pytest.raises(ValidationError, match="arrival_at must be later"):
         canonical.KorailReservationConfirmationRequest.model_validate(
             {**valid.model_dump(), "arrival_at": valid.departure_at}
+        )
+    follow_up = canonical.KorailReservationConfirmationRequest.model_validate(
+        {
+            **valid.model_dump(),
+            "purpose": "payment_follow_up",
+            "reserved_seats": [{"car_number": "4", "seat_number": "8A"}],
+        }
+    )
+    assert follow_up.reserved_seats[0].seat_number == "8A"
+    with pytest.raises(ValidationError, match="only payment follow-up"):
+        canonical.KorailReservationConfirmationRequest.model_validate(
+            {
+                **valid.model_dump(),
+                "reserved_seats": [{"car_number": "4", "seat_number": "8A"}],
+            }
         )
 
 
@@ -141,6 +159,19 @@ def test_confirmation_result_preserves_handoff_and_deadline_shape() -> None:
         official_handoff_url="opaque-existing-handoff",
     )
     assert confirmed.official_handoff_url == "opaque-existing-handoff"
+    paid = canonical.KorailReservationConfirmationResult(
+        outcome="confirmed_paid",
+        source="korail-issued-ticket-list",
+        observed_at=now,
+    )
+    assert paid.payment_deadline is None
+    assert paid.official_handoff_url is None
+    with pytest.raises(ValidationError, match="confirmed paid requires issued-ticket"):
+        canonical.KorailReservationConfirmationResult(
+            outcome="confirmed_paid",
+            source="korail-reservation-list",
+            observed_at=now,
+        )
     with pytest.raises(ValidationError, match="only confirmed payment holds"):
         canonical.KorailReservationConfirmationResult(
             outcome="confirmed_payment_required",

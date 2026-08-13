@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,6 +26,7 @@ OWNER_DEFINITIONS = {
 }
 EXPECTED_ALL = (
     "build_reservation_request",
+    "normalize_reservation_terminal_time",
     "project_reservation_failure",
     "project_reservation_result",
 )
@@ -113,6 +114,7 @@ def test_reservation_policy_has_exact_pure_owner_boundary() -> None:
         (2, "korail_sidecar.contracts"),
         (2, "provider_account_management.contracts"),
         (2, "reservations.contracts"),
+        (2, "reservations.progress_timing_policy"),
     }
 
     assert definitions == OWNER_DEFINITIONS
@@ -358,3 +360,18 @@ def test_click_error_remains_unknown_without_claiming_request_progress() -> None
         "target_rechecked",
         "seat_selected",
     ]
+
+
+def test_result_projection_survives_wall_clock_rollback_after_progress() -> None:
+    wire = _wire_result(
+        "action_required",
+        reservation_clicked=True,
+        progress_times=PROGRESS_TIMES,
+    )
+    rolled_back_observed_at = PROGRESS_TIMES[-1] - timedelta(milliseconds=673)
+
+    result = policy.project_reservation_result(wire, observed_at=rolled_back_observed_at)
+
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert result.observed_at == PROGRESS_TIMES[-1]
+    assert tuple(stage.occurred_at for stage in result.progress_stages) == PROGRESS_TIMES

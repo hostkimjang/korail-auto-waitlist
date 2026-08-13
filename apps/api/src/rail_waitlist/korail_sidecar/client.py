@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
@@ -8,6 +9,13 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import ValidationError
 
+from ..provider_call_context import (
+    REQUEST_ID_HEADER,
+    REQUEST_TIMEOUT_MS_HEADER,
+    current_request_id,
+    new_log_id,
+    remaining_request_timeout_ms,
+)
 from ..reservations.contracts import ReservationProgressStage
 from ..timetable_management.schemas import SeatAvailabilityNotObservedReason
 from .browser_contracts import BrowserSeatSearchRequest, BrowserSeatSearchResult
@@ -25,6 +33,8 @@ from .contracts import (
 
 ReservationProgressCallback = Callable[[ReservationProgressStage], Awaitable[None]]
 FailureCooldownScope = Literal["query", "provider"]
+SIDECAR_COMPLETION_MARGIN_MS = 1_000
+_LOGGER = logging.getLogger(__name__)
 
 
 class BrowserAdapterTransport(Protocol):
@@ -63,6 +73,7 @@ class _AdapterFailure(RuntimeError):
         retry_after_seconds: int | None = None,
         reservation_command_uncertain: bool = False,
         progress_stages: tuple[ReservationProgressStage, ...] = (),
+        deadline_exceeded: bool = False,
     ) -> None:
         self.reason = reason
         self.rate_limited = rate_limited
@@ -71,6 +82,7 @@ class _AdapterFailure(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
         self.reservation_command_uncertain = reservation_command_uncertain
         self.progress_stages = progress_stages
+        self.deadline_exceeded = deadline_exceeded
         super().__init__(reason)
 
 
@@ -119,13 +131,62 @@ class HttpBrowserAdapterTransport:
         )
 
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+        request_id = current_request_id() or new_log_id()
+        _LOGGER.info(
+            "Provider sidecar request started event=provider_sidecar_request_started "
+            "provider=KORAIL operation=seat_snapshot "
+            "request_id=%s",
+            request_id,
+        )
+        remaining_timeout_ms = remaining_request_timeout_ms()
+        if (
+            remaining_timeout_ms is not None
+            and remaining_timeout_ms <= SIDECAR_COMPLETION_MARGIN_MS
+        ):
+            _LOGGER.warning(
+                "Provider sidecar request failed event=provider_sidecar_request_failed "
+                "provider=KORAIL operation=seat_snapshot "
+                "request_id=%s outcome=timeout",
+                request_id,
+            )
+            raise _AdapterFailure("source_unavailable", deadline_exceeded=True)
+        headers = {REQUEST_ID_HEADER: request_id}
+        if remaining_timeout_ms is not None:
+            headers[REQUEST_TIMEOUT_MS_HEADER] = str(
+                min(remaining_timeout_ms - SIDECAR_COMPLETION_MARGIN_MS, 170_000)
+            )
         try:
             response = await self._client.post(
                 "/v1/seat-snapshot",
                 json=request.model_dump(mode="json"),
+                headers=headers,
             )
-        except (httpx.TimeoutException, httpx.TransportError) as error:
+        except httpx.TimeoutException as error:
+            _LOGGER.warning(
+                "Provider sidecar request failed event=provider_sidecar_request_failed "
+                "provider=KORAIL operation=seat_snapshot "
+                "request_id=%s outcome=timeout",
+                request_id,
+            )
+            raise _AdapterFailure("source_unavailable", deadline_exceeded=True) from error
+        except httpx.TransportError as error:
+            _LOGGER.warning(
+                "Provider sidecar request failed event=provider_sidecar_request_failed "
+                "provider=KORAIL operation=seat_snapshot "
+                "request_id=%s outcome=transport_error",
+                request_id,
+            )
             raise _AdapterFailure("source_unavailable") from error
+        if response.status_code != 200:
+            _LOGGER.warning(
+                "Provider sidecar request failed event=provider_sidecar_request_failed "
+                "provider=KORAIL operation=seat_snapshot "
+                "request_id=%s outcome=http_status status_code=%s",
+                request_id,
+                response.status_code,
+            )
+        if response.status_code == 504:
+            raise _AdapterFailure("source_unavailable", deadline_exceeded=True)
         if response.status_code == 429:
             raise _AdapterFailure("provider_access_restricted", rate_limited=True)
         if response.status_code in {403, 423}:
@@ -152,9 +213,22 @@ class HttpBrowserAdapterTransport:
         if response.status_code != 200:
             raise _AdapterFailure("source_unavailable")
         try:
-            return BrowserSeatSearchResult.model_validate(response.json())
+            result = BrowserSeatSearchResult.model_validate(response.json())
         except (ValueError, ValidationError) as error:
+            _LOGGER.warning(
+                "Provider sidecar request failed event=provider_sidecar_request_failed "
+                "provider=KORAIL operation=seat_snapshot "
+                "request_id=%s outcome=validation_error",
+                request_id,
+            )
             raise _AdapterFailure("source_unavailable") from error
+        _LOGGER.info(
+            "Provider sidecar request completed event=provider_sidecar_request_completed "
+            "provider=KORAIL operation=seat_snapshot "
+            "request_id=%s outcome=success",
+            request_id,
+        )
+        return result
 
     async def reserve(self, request: KorailReserveOnceRequest) -> KorailReserveOnceResult:
         payload = request.model_dump(mode="json", exclude={"credential"})

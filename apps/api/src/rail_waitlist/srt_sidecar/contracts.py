@@ -71,6 +71,21 @@ class SrtSessionStatus(SrtProviderAdapterModel):
     observation_deferred_until: datetime | None = None
 
 
+class SrtReadOnlyCallRegistrationRequest(SrtProviderAdapterModel):
+    call_id: str = Field(min_length=32, max_length=32)
+    request_id: str = Field(min_length=32, max_length=32)
+
+
+class SrtReadOnlyCallRegistrationResult(SrtProviderAdapterModel):
+    accepted: bool
+    instance_id: str = Field(min_length=32, max_length=32)
+
+
+class SrtReadOnlyCallStatus(SrtProviderAdapterModel):
+    state: Literal["pending", "terminal", "unknown"]
+    instance_id: str = Field(min_length=32, max_length=32)
+
+
 class SrtLoginRequest(SrtProviderAdapterModel):
     operation: Literal["prewarm", "verify"]
     credential: SrtCredentialRequest

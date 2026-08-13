@@ -20,6 +20,7 @@ from ..reservations.contracts import (
     ReservationResult,
     ReservedSeat,
 )
+from ..reservations.progress_timing_policy import normalize_reservation_terminal_time
 
 RESERVATION_SOURCE = "korail-pydoll-reservation"
 PAYMENT_HANDOFF_URL = AnyHttpUrl("https://www.korail.com/ticket/mypage/mykorail")
@@ -29,6 +30,7 @@ TrainNumberNormalizer = Callable[[object], str]
 
 __all__ = (
     "build_reservation_request",
+    "normalize_reservation_terminal_time",
     "project_reservation_failure",
     "project_reservation_result",
 )
@@ -100,6 +102,10 @@ def project_reservation_result(
         ReservationProgressStage(stage=stage, occurred_at=occurred_at)
         for stage, occurred_at in progress_values
         if occurred_at is not None
+    )
+    observed_at = normalize_reservation_terminal_time(
+        observed_at,
+        (progress.occurred_at for progress in progress_stages),
     )
 
     if result.outcome == "payment_required":

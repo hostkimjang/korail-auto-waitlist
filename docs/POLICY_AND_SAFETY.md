@@ -170,6 +170,11 @@ keepalive 성공으로도 인정하지 않으며, 자격증명을 제출한 새 
 철도사 조회 lifecycle 로그는 고정 event·outcome, 숫자로 검증한 SRT 대기 인원, 경과시간, 코드가 소유한
 stage와 닫힌 trigger만 기록합니다. NetFunnel key, provider 응답 원문, 요청 URL, 역·열차 query identity와
 IP는 기록하지 않습니다.
+조회 추적에는 매 호출자의 임시 `request_id`와 실제 운영사 I/O 한 건의 임시 `provider_call_id`만 사용합니다.
+두 값은 무작위 UUIDv4이며 인증·Redis key·metric label로 사용하지 않습니다. Celery task·watch·candidate ID,
+execution lease의 owner/fencing 값, 계정 식별자와 NetFunnel key를 그대로 쓰거나 변환·hash해 추적 ID로
+재사용하지 않습니다. 동일 query singleflight에 여러 호출자가 참여하면 각 `request_id`를 하나의
+`provider_call_id`에 연결하되 특정 호출자가 공유 작업 전체를 소유한 것처럼 기록하지 않습니다.
 KORAIL 예약 팝업 로그도 원문 제목·본문·버튼·DOM·URL을 저장하지 않고, 예매 전후 phase, 닫힌 dialog kind,
 control shape, dialog 수와 `none/dismiss_attempted/dismiss_succeeded/dismiss_failed`,
 `consent_accept_attempted/consent_accept_succeeded/consent_accept_failed` 같은 bounded action만

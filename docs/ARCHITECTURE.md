@@ -311,7 +311,7 @@ Chrome Android의 origin별 사이트 알림 채널은 브라우저가 소유합
 
 예약 attempt에는 확인된 누적 provider 단계와 원래 시각을 함께 저장합니다. 따라서 새로고침 뒤에도 현재 진행 카드의 세부 단계가 시작 단계 하나로 축소되지 않으며, `UNKNOWN` 수동 확인 상태도 같은 watch의 진행 카드를 교체해 복원됩니다. status 문자열이 그대로여도 REST의 새 진행 단계나 완료된 `NOT_AVAILABLE`·`FAILED`·`UNKNOWN` 결과가 생기면 후보·시작·종료·결과로 terminal revision을 식별해 같은 subject에 반영합니다. 따라서 최종 SSE를 놓치고 watch가 `WATCHING`으로 복귀한 뒤에도 visible 탭의 canonical 조회가 진행 spinner를 결과 카드로 교체합니다. 다중 후보에서는 화면 표시 우선순위와 별개로 가장 최근 attempt의 실제 후보 context를 사용합니다.
 
-KORAIL 예약은 기존 단일 JSON 명령과 호환되는 별도의 인증된 NDJSON 스트림을 사용합니다. sidecar가 실제 브라우저 단계에서 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested` 시각을 내보내면 main API는 진행 단계마다 짧은 트랜잭션으로 누적 `watch.reservation_progressed` outbox를 커밋하고, `/events` SSE가 같은 watch의 sticky 진행 카드를 갱신합니다. `reservation_requested`는 예약 버튼 click promise가 정상 반환된 뒤에만 기록하며, click 예외는 공식 전달 여부가 불명확한 `UNKNOWN`으로 닫되 전달 완료 단계는 만들지 않습니다. cursor 없는 새 SSE 연결은 연결 시점의 outbox tail을 기준선으로 삼아 오래된 durable history를 wire로 재생하지 않고 그 뒤의 새 event만 전달합니다. 브라우저가 유효한 `Last-Event-ID`로 재연결하면 해당 event 뒤부터 이어서 전달하며, 알 수 없는 cursor는 현재 tail로 복구합니다. 이미 후보 context가 있는 화면은 전체 대기 목록을 다시 읽지 않고 진행 event를 반영합니다. 초기 또는 오래된 snapshot 때문에 event를 매핑할 수 없으면 event를 queue에 보존하고 canonical 목록을 한 번 갱신한 뒤 재투영합니다. 아직 발생하지 않은 단계나 완료시간은 추정하지 않으며, 최종 `watch.reservation_result`가 진행 snapshot의 authoritative superset으로 카드를 교체합니다. 두 event의 `created_at`이 같아도 terminal lifecycle이 reserving보다 우선하고, 이미 표시한 terminal을 늦은 progress가 되돌리지 못합니다. 사용자가 terminal 카드를 명시적으로 닫으면 origin-local dismissal ledger의 subject watermark가 더 오래된 진행 revision이 카드를 다시 열지 못하게 합니다. 공식 confirmation이 결과를 재투영해도 원래 stage timestamp를 보존하고 화면은 각 이전 단계 대비 시간과 전체 `finished-started` 시간을 함께 표시합니다. `target_rechecked` 구간은 direct URL 이동·결과 렌더링·정확 열차 확인을 포함합니다. 스트림 연결이 끊겨도 이미 시작한 예약 명령은 sidecar에서 취소하거나 재전송하지 않으며, terminal 결과를 확인하지 못한 main API는 `UNKNOWN`으로 닫아 자동 재예매를 차단하고 공식 reconciliation 대상으로 남깁니다. sidecar는 예약 terminal의 닫힌 outcome/reason과 공식 확인 purpose/outcome/source만 비밀값 없이 구조화해 기록합니다. 활성 단계 spinner는 결과 또는 다음 상태가 올 때까지 회전하고 `prefers-reduced-motion` 환경에서는 정지합니다. 새 revision은 Android·Apple 공통으로 같은 `실시간 알림` surface의 8초 간략 미리보기에 표시되고, 이후 접힌 건수 header에 남습니다. 8초 경과는 미리보기만 숨기며, 미리보기 X는 해당 sticky notice의 명시적 닫기로 처리합니다. 이 미리보기는 별도 live region을 만들지 않으며 문서 스크롤·입력·초점을 잠그지 않습니다.
+KORAIL 예약은 기존 단일 JSON 명령과 호환되는 별도의 인증된 NDJSON 스트림을 사용합니다. sidecar가 실제 브라우저 단계에서 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested` 시각을 내보내면 main API는 진행 단계마다 짧은 트랜잭션으로 누적 `watch.reservation_progressed` outbox를 커밋하고, `/events` SSE가 같은 watch의 sticky 진행 카드를 갱신합니다. sidecar와 main API는 서로 다른 프로세스의 wall clock을 사용하므로 운영체제 시각 보정 중에는 완료 시각이 직전에 받은 진행 시각보다 잠시 앞설 수 있습니다. 완료 결과와 영속 attempt의 `finished_at`은 수락한 모든 진행 시각의 최댓값 이상으로 정규화하며, canonical watch 읽기도 같은 규칙으로 기존 행을 안전하게 투영합니다. 마이그레이션 `0034_progress_terminal_time`은 이미 저장된 terminal-before-progress 행을 같은 방식으로 보정합니다. `reservation_requested`는 예약 버튼 click promise가 정상 반환된 뒤에만 기록하며, click 예외는 공식 전달 여부가 불명확한 `UNKNOWN`으로 닫되 전달 완료 단계는 만들지 않습니다. cursor 없는 새 SSE 연결은 연결 시점의 outbox tail을 기준선으로 삼아 오래된 durable history를 wire로 재생하지 않고 그 뒤의 새 event만 전달합니다. 브라우저가 유효한 `Last-Event-ID`로 재연결하면 해당 event 뒤부터 이어서 전달하며, 알 수 없는 cursor는 현재 tail로 복구합니다. 이미 후보 context가 있는 화면은 전체 대기 목록을 다시 읽지 않고 진행 event를 반영합니다. 초기 또는 오래된 snapshot 때문에 event를 매핑할 수 없으면 event를 queue에 보존하고 canonical 목록을 한 번 갱신한 뒤 재투영합니다. 아직 발생하지 않은 단계나 완료시간은 추정하지 않으며, 최종 `watch.reservation_result`가 진행 snapshot의 authoritative superset으로 카드를 교체합니다. 두 event의 `created_at`이 같아도 terminal lifecycle이 reserving보다 우선하고, 이미 표시한 terminal을 늦은 progress가 되돌리지 못합니다. 사용자가 terminal 카드를 명시적으로 닫으면 origin-local dismissal ledger의 subject watermark가 더 오래된 진행 revision이 카드를 다시 열지 못하게 합니다. 공식 confirmation이 결과를 재투영해도 원래 stage timestamp를 보존하고 화면은 각 이전 단계 대비 시간과 전체 `finished-started` 시간을 함께 표시합니다. `target_rechecked` 구간은 direct URL 이동·결과 렌더링·정확 열차 확인을 포함합니다. 스트림 연결이 끊겨도 이미 시작한 예약 명령은 sidecar에서 취소하거나 재전송하지 않으며, terminal 결과를 확인하지 못한 main API는 `UNKNOWN`으로 닫아 자동 재예매를 차단하고 공식 reconciliation 대상으로 남깁니다. sidecar는 예약 terminal의 닫힌 outcome/reason과 공식 확인 purpose/outcome/source만 비밀값 없이 구조화해 기록합니다. 활성 단계 spinner는 결과 또는 다음 상태가 올 때까지 회전하고 `prefers-reduced-motion` 환경에서는 정지합니다. 새 revision은 Android·Apple 공통으로 같은 `실시간 알림` surface의 8초 간략 미리보기에 표시되고, 이후 접힌 건수 header에 남습니다. 8초 경과는 미리보기만 숨기며, 미리보기 X는 해당 sticky notice의 명시적 닫기로 처리합니다. 이 미리보기는 별도 live region을 만들지 않으며 문서 스크롤·입력·초점을 잠그지 않습니다.
 
 Pydoll이 direct navigation에서 `LOAD_EVENT_FIRED`를 제한 시간 안에 받지 못했더라도 현재 DOM은 이미 결과 화면일 수 있습니다. 이 경우 sidecar는 페이지를 즉시 실패로 버리지 않고 기존 보호 화면 검사, 결과 존재 확인, 정확 열차·좌석 검증을 그대로 통과한 경우에만 예약 흐름을 이어갑니다.
 
@@ -485,6 +485,13 @@ owner입니다. 동일 query singleflight·짧은 결과 cache, browser 전체 �
 cooldown, 명시적 점검 페이지의 기본 300초 전역 cooldown, 일반 source failure의 query별 30~300초 backoff와
 취소 중 bounded drain·client close 순서를 한 aggregate로 소유합니다. 이 owner는 Playwright·Pydoll·DOM·HTTP를
 모르고 `BrowserClient` protocol만 사용합니다.
+읽기 검색의 기본 전체 budget은 80초이며 browser gate 대기를 포함합니다. 각 caller waiter와 실제 browser
+작업을 분리해 추적하고, 마지막 waiter가 사라졌거나 deadline이 지난 queued 작업은 browser I/O 전에
+폐기합니다. 이미 시작한 읽기 검색에는 sidecar 5초·main 1초 이내의 취소 정리 여유를 두어 정상적인 정리가
+기본 90초 HTTP timeout보다 먼저 끝나게 합니다. 외부 browser 작업이 취소에 응답하지 않더라도 caller는 정해진
+deadline에서 종료하되, 실제 작업은 기존 inflight owner와 shutdown drain이 terminal까지 계속 소유하고 deadline
+뒤의 늦은 성공은 cache로 채택하지 않습니다. deadline·caller 취소는 provider 장애 근거가 아니므로 query
+backoff나 provider-wide cooldown을 열지 않습니다.
 전역 cooldown은 cache보다 먼저 판정하므로, 한 query에서 점검·보호 근거가 열린 뒤 다른 query의 이전 좌석
 snapshot을 행동 가능한 상태로 다시 내보내지 않습니다.
 실제 browser gate를 획득한 cache-miss 작업만 secret-free `provider_query_started`·`provider_query_completed`
@@ -493,6 +500,10 @@ cooldown을 엽니다. 점검 페이지는 `provider_unavailable`로 즉시 중�
 실제 browser 호출 직전에 전역 cooldown을 다시 확인합니다. sidecar HTTP는 이 typed 오류에만 기존 호환 503
 `source_unavailable` body와 bounded `Retry-After`를 함께 보냅니다. cache hit와 동일-query singleflight 참여자는
 별도 INFO 시작 로그를 만들지 않습니다.
+main query runtime이 만든 남은 deadline은 내부 `X-Rail-Timeout-Ms`로 sidecar에 전달하고 sidecar는 자체
+80초 상한과 더 짧은 값을 사용합니다. 따라서 main gate에서 오래 기다린 요청이 sidecar에서 새 80초 budget을
+다시 얻지 않습니다. 이 헤더는 인증된 내부 읽기 요청에서만 제한된 양의 정수로 해석하며 로그에 원문을 남기지
+않습니다.
 두 engine과 sidecar HTTP·runtime·시간표 projection이 공유하는 공식 검색 form URL과 격리 fullstack fixture URL은
 4줄 `korail_sidecar/browser_page_contracts.py`가 소유합니다.
 
@@ -820,9 +831,10 @@ top-level `srt_provider_adapter_contract.py`, `srt_provider_adapter.py`도 기�
 
 SRT sidecar 서비스에서는 `srt_sidecar/application.py`가 typed provider port와 session/login 조립을,
 `srt_sidecar/runtime.py`가 환경값·Redis cooldown·live source 조립을, `srt_sidecar/http.py`가 인증·검증
-redaction·lifespan·7개 FastAPI route를 소유합니다. top-level `srt_provider_adapter_service.py`는 기존 공개
-표면과 `rail_waitlist.srt_provider_adapter_service:app` Compose entrypoint를 유지합니다. 이번 구조 이동으로
-endpoint·OpenAPI, 환경변수와 Redis cooldown, 좌석 관측·시간표·예약·확인 의미는 바꾸지 않았습니다.
+redaction·lifespan·9개 FastAPI route를 소유합니다. `srt_sidecar/read_only_lifecycle.py`는 읽기 호출의 사전 등록,
+handler 실행, provider terminal, bounded tombstone 상태를 소유합니다. top-level
+`srt_provider_adapter_service.py`는 기존 Compose entrypoint를 유지하고 wire compatibility facade에는 새 lifecycle
+계약을 exact alias로 추가합니다. 기존 좌석 관측·시간표·예약·확인 payload 의미는 바꾸지 않았습니다.
 
 SRT의 인증 세션 actor와 로그인 단발 검증·열차 재확인·단발 예약·읽기 전용 예약 확인 구현은
 `srt_sidecar/reservation.py`가 canonical owner입니다. credential fingerprint와 generation, process-local
@@ -1015,10 +1027,33 @@ cooldown, 공식 역 code와 NetFunnel cache를 사용하는 기본 client 계�
 assignment-only facade이며, facade dependency 재할당은 canonical source에 전파되지 않습니다.
 project-owned `provider_adapters/srt_netfunnel_logging.py` helper는 accountless 조회와 인증 예약 client에
 주입되어 공식 접속 대기의 진입과 NetFunnel 완료 통지 뒤 통과를 각각 한 번 기록합니다. 대기 인원은 숫자만,
-진행 변화는 DEBUG로 제한하며 key·응답 원문·IP는 기록하지 않습니다. caller timeout은 provider thread를
-취소하지 않으므로 `provider_call_timed_out`와 이후 `provider_call_finished_after_timeout`을 분리해, 늦게 끝난
-작업이 이미 반환된 API 결과에 반영된 것처럼 보이지 않게 합니다. timeout budget은 provider gate 대기도
-포함하며 실제 운영사 I/O 진입은 별도 `provider_query_started` event로만 판단합니다.
+실제 변화만 INFO로 기록하며 key·응답 원문·IP는 기록하지 않습니다. accountless 읽기 조회는 각 caller의
+`request_id`와 실제 SRTrain 작업 후보의 `provider_call_id`를 분리하고, singleflight 참여 event로 다대일 관계를
+연결합니다. 같은 `provider_call_id`는 조회 시작·공식 queue 진입/변화/통과·caller timeout·late 종료 전 구간에
+유지됩니다. 인증 예약 queue는 이 read-only correlation 범위에 포함하지 않습니다.
+UUID는 task·watch·lease·NetFunnel 식별자와 독립된 임시 난수입니다.
+caller timeout은 이미 시작한 provider thread를 취소하지 않으므로 `provider_call_timed_out`와 이후
+`provider_call_finished_after_timeout`을 분리합니다. 실제 작업은 완료될 때까지 singleflight owner에 남아 늦은
+정상 결과도 짧은 cache에 저장하며, 그 사이 같은 query의 새 caller는 같은 작업에 참여할 수 있습니다. 반면
+provider gate에서 budget이 끝났거나 waiter가 모두 사라진 읽기 작업은 SRTrain I/O 전에 폐기합니다. caller
+deadline 자체는 provider 장애가 아니므로 source cooldown을 열지 않습니다. 기본 budget은 공식 queue와 gate를
+포함한 25초이고 sidecar HTTP 기본 35초보다 짧으며, 실제 운영사 I/O 진입은 별도
+`provider_query_started` event로만 판단합니다.
+sidecar client는 `observe`·`timetable-overlay`·`timetable-search`만 원 요청 전에 임시 `read_only_call_id`로
+인증된 사전 등록을 완료합니다. 이 ID는 여러 endpoint에서 재사용될 수 있는 `request_id`와 분리됩니다. sidecar는
+handler 진입 전 등록을 consume하고, handler가 끝난 뒤 같은 `request_id`에 연결된 모든 provider call이 실제로
+끝났을 때만 `terminal` tombstone을 남깁니다. 상태 RPC는 `pending | terminal | unknown`을 반환하며 미등록·만료
+tombstone, 전송·5xx·schema 실패를 terminal로 해석하지 않습니다. client의 task-local drain은 자기 호출만 poll해
+다른 sidecar 작업을 기다리지 않고, 취소도 terminal 확인 뒤 다시 전파하므로 group runtime이 provider thread보다
+먼저 execution lease를 명시적으로 release하지 않습니다. 등록 대기 60초와 terminal tombstone 300초는 bounded이고,
+terminal tombstone도 가장 최근 4096개까지만 유지합니다.
+sidecar instance가 바뀌면 이전 process의 thread도 종료된 것으로 판정합니다. 이 판정은 Compose의 고정 내부
+origin에 SRT sidecar replica가 하나뿐이라는 현재 배포 계약을 전제로 하며 load balancer나 다중 replica에는
+그대로 적용하지 않습니다. lifecycle header가 없는 인증된 직접 호출은 기존 호환을 위해 허용하지만 추적·drain
+대상이 아니며, worker와 API의 canonical client는 항상 사전 등록과 header를 사용합니다.
+이 보강은 accountless 읽기 3개 endpoint에만 적용됩니다. 로그인·예약·예약 확인의 동기 thread lifecycle과
+120초 execution lease의 자동 renewal은 아직 포함하지 않으므로, 120초를 넘는 비정상 provider hang을 전체 SRT
+lifecycle 해결로 간주하지 않습니다.
 이 helper는 고정된 `SRTrain==2.6.7`의 요청·응답·polling 구현을 복제하지 않고 vendor의
 `generate_netfunnel_key`와 대기 메서드를 그대로 호출하면서 진입·대기 인원 변화·완료 시점만 관측합니다.
 SRTrain pin을 올릴 때는 이 위임 경계와 동적 메서드 호출 호환성을 함께 확인합니다.

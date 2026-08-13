@@ -70,6 +70,11 @@ PRIVATE_SYMBOLS = {
     "_optional_time",
     "_snapshot_station_name",
 }
+OWNER_ONLY_PRIVATE_SYMBOLS = {
+    "_CallerTimeout",
+    "_InflightCall",
+    "_NoActiveWaiters",
+}
 OWNER_DEFINITIONS = {
     "SrtLiveTimetableUnavailable",
     "_SrtTrain",
@@ -78,7 +83,10 @@ OWNER_DEFINITIONS = {
     "SrtSeatSnapshot",
     "SrtOfficialTimetableTrain",
     "_CacheEntry",
+    "_InflightCall",
     "_ProviderCooldown",
+    "_CallerTimeout",
+    "_NoActiveWaiters",
     "_AccountlessSrtClient",
     "_default_client_factory",
     "map_srt_seat_state",
@@ -182,6 +190,7 @@ def test_owner_has_the_exact_definition_and_import_boundary() -> None:
         ("SRT.errors", 0),
         ("domain", 2),
         ("observations.contracts", 2),
+        ("provider_call_context", 2),
         ("seat_status_cooldown", 2),
         ("timetable_management.schemas", 2),
         ("srt_identity", 1),
@@ -191,7 +200,7 @@ def test_owner_has_the_exact_definition_and_import_boundary() -> None:
 
 
 def test_owner_definitions_report_the_canonical_module() -> None:
-    for symbol in OWNER_DEFINITIONS:
+    for symbol in OWNER_DEFINITIONS | OWNER_ONLY_PRIVATE_SYMBOLS:
         value = getattr(owner, symbol)
         assert value.__module__ == "rail_waitlist.provider_adapters.srt_seat_source"
 

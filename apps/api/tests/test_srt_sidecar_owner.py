@@ -33,7 +33,7 @@ CONTRACT_MODULE = "rail_waitlist.srt_sidecar.contracts"
 CLIENT_MODULE = "rail_waitlist.srt_sidecar.client"
 SESSION_MODULE = "rail_waitlist.srt_sidecar.session_contract"
 CREDENTIAL_MODULE = "rail_waitlist.provider_account_management.contracts"
-SCHEMA_SHA256 = "d7aad4d2d76427f42ec96023bc7c85ccff436c10c2543d62a1a39cd63dfd9d58"
+SCHEMA_SHA256 = "43292bfe6e2642ab8f92ce1b325162e66f7c0445f24e29a9c6e3e4963861ed7c"
 
 CONTRACT_SYMBOLS = {
     "BaseModel",
@@ -59,6 +59,9 @@ CONTRACT_SYMBOLS = {
     "SrtLoginResult",
     "SrtObserveRequest",
     "SrtObserveResult",
+    "SrtReadOnlyCallRegistrationRequest",
+    "SrtReadOnlyCallRegistrationResult",
+    "SrtReadOnlyCallStatus",
     "SrtOfficialSeatStatus",
     "SrtProviderAdapterModel",
     "SrtReservationConfirmationResult",
@@ -95,6 +98,9 @@ CLIENT_SYMBOLS = {
     "SrtLoginResult",
     "SrtObserveRequest",
     "SrtObserveResult",
+    "SrtReadOnlyCallRegistrationRequest",
+    "SrtReadOnlyCallRegistrationResult",
+    "SrtReadOnlyCallStatus",
     "SrtProviderAdapterClient",
     "SrtProviderAdapterUnavailable",
     "SrtReservationConfirmationTarget",
@@ -121,6 +127,9 @@ MODEL_NAMES = (
     "SrtLoginResult",
     "SrtObserveRequest",
     "SrtObserveResult",
+    "SrtReadOnlyCallRegistrationRequest",
+    "SrtReadOnlyCallRegistrationResult",
+    "SrtReadOnlyCallStatus",
     "SrtTimetableOverlayRequest",
     "SrtTimetableOverlayResult",
     "SrtTimetableSearchRequest",
@@ -365,10 +374,10 @@ def test_srt_sidecar_openapi_shape_is_unchanged() -> None:
     ).encode()
 
     assert hashlib.sha256(encoded).hexdigest() == (
-        "5dd359af2e41a296aa82242df12a774dbca80bbcfcdf200ec8e7bbfbd78e006a"
+        "94eb46d4ae98fae41811af652aa33fe9101e8e0eb3f22653df347b378c5aca38"
     )
-    assert len(schema["paths"]) == 7
-    assert len(schema["components"]["schemas"]) == 38
+    assert len(schema["paths"]) == 9
+    assert len(schema["components"]["schemas"]) == 41
     components = schema["components"]["schemas"]
     assert components["ReservationConfirmationOutcome"]["enum"] == [
         "confirmed_payment_required",

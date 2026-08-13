@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -9,8 +10,10 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from SRT.netfunnel import NetFunnelHelper
 
 import rail_waitlist.provider_adapters.srt_seat_source as srt_seat_source_module
+from rail_waitlist.provider_adapters.srt_netfunnel_logging import LoggingNetFunnelHelper
 from rail_waitlist.provider_adapters.srt_seat_source import (
     SrtLiveSeatSource,
     SrtLiveTimetableUnavailable,
@@ -23,6 +26,7 @@ from rail_waitlist.provider_adapters.srt_seat_source import (
 from rail_waitlist.provider_adapters.srt_station_roster import (
     SrtStationRosterUnavailable,
 )
+from rail_waitlist.provider_call_context import bind_request_id, new_log_id
 from rail_waitlist.schemas import (
     SeatAvailability,
     SeatAvailabilityAction,
@@ -320,7 +324,97 @@ async def test_observe_timeout_and_protection_fail_closed_and_open_cooldown():
 
 async def test_timeout_keeps_upstream_owned_until_drain_finishes(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    monkeypatch.setattr(
+        NetFunnelHelper,
+        "_wait_until_complete",
+        lambda _self, key, _nwait: key,
+    )
+
+    def vendor_generate(helper: NetFunnelHelper, _use_cache: bool) -> str:
+        helper._wait_until_complete("secret-entry", "1")
+        return "secret-pass"
+
+    monkeypatch.setattr(NetFunnelHelper, "generate_netfunnel_key", vendor_generate)
+
+    class BlockingClient:
+        def search_train(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            LoggingNetFunnelHelper(flow="accountless").generate_netfunnel_key(False)
+            started.set()
+            assert release.wait(timeout=2)
+            return [FakeTrain()]
+
+    source = SrtLiveSeatSource(
+        enabled=True,
+        cache_ttl_seconds=30,
+        timeout_seconds=0.1,
+        client_factory=BlockingClient,
+    )
+
+    caplog.set_level(logging.INFO, logger="rail_waitlist.srt_provider_adapter")
+    observation = asyncio.create_task(
+        source.observe(
+            observation_request(),
+            origin="수서",
+            destination="부산",
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+    timed_out = await observation
+    assert timed_out[0].error_category == "timeout"
+    assert await source.observation_deferred_until() is None
+
+    drain_task = asyncio.create_task(source.drain_pending_calls())
+    await asyncio.sleep(0.01)
+    assert not drain_task.done()
+
+    release.set()
+    await asyncio.wait_for(drain_task, timeout=1)
+    await asyncio.sleep(0)
+
+    cached = await source.observe(
+        observation_request(),
+        origin="수서",
+        destination="부산",
+    )
+
+    assert "SRT 운영사 조회를 시작합니다" in caplog.text
+    assert "event=provider_call_timed_out" in caplog.text
+    assert "upstream_still_running=true" in caplog.text
+    assert "event=provider_call_finished_after_timeout outcome=success" in caplog.text
+    assert calls == 1
+    assert cached[0].status.value == "waitlist_available"
+
+    lifecycle_events = (
+        "provider_query_started",
+        "provider_queue_entered",
+        "provider_queue_released",
+        "provider_call_timed_out",
+        "provider_query_completed",
+        "provider_call_finished_after_timeout",
+    )
+    lifecycle_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if any(f"event={event}" in record.getMessage() for event in lifecycle_events)
+    ]
+    provider_call_ids = {
+        match.group(1)
+        for message in lifecycle_messages
+        if (match := re.search(r"provider_call_id=([0-9a-f]{32})", message)) is not None
+    }
+    assert len(lifecycle_messages) == len(lifecycle_events)
+    assert len(provider_call_ids) == 1
+
+
+async def test_read_only_request_remains_pending_until_started_provider_call_finishes():
     started = threading.Event()
     release = threading.Event()
 
@@ -333,31 +427,84 @@ async def test_timeout_keeps_upstream_owned_until_drain_finishes(
     source = SrtLiveSeatSource(
         enabled=True,
         cache_ttl_seconds=30,
-        timeout_seconds=0.01,
+        timeout_seconds=0.02,
         client_factory=BlockingClient,
     )
+    request_id = new_log_id()
 
-    caplog.set_level(logging.INFO, logger="rail_waitlist.srt_provider_adapter")
-    timed_out = await source.observe(
-        observation_request(),
-        origin="수서",
-        destination="부산",
-    )
+    with bind_request_id(request_id):
+        timed_out = await source.observe(
+            observation_request(),
+            origin="수서",
+            destination="부산",
+        )
+
     assert started.is_set()
     assert timed_out[0].error_category == "timeout"
-
-    drain_task = asyncio.create_task(source.drain_pending_calls())
-    await asyncio.sleep(0.01)
-    assert not drain_task.done()
+    assert await source.read_only_call_pending(request_id) is True
 
     release.set()
-    await asyncio.wait_for(drain_task, timeout=1)
-    await asyncio.sleep(0)
+    await source.drain_pending_calls()
 
-    assert "SRT 운영사 조회를 시작합니다" in caplog.text
-    assert "event=provider_call_timed_out" in caplog.text
-    assert "upstream_still_running=true" in caplog.text
-    assert "event=provider_call_finished_after_timeout outcome=success" in caplog.text
+    assert await source.read_only_call_pending(request_id) is False
+
+
+async def test_one_request_stays_pending_until_all_of_its_provider_calls_finish():
+    first_started = threading.Event()
+    second_started = threading.Event()
+    release_first = threading.Event()
+    release_second = threading.Event()
+
+    class SequentialClient:
+        def search_train(self, _dep, _arr, date, *_args, **_kwargs):
+            if date == "20260801":
+                first_started.set()
+                assert release_first.wait(timeout=2)
+            else:
+                second_started.set()
+                assert release_second.wait(timeout=2)
+            return [FakeTrain()]
+
+    source = SrtLiveSeatSource(
+        enabled=True,
+        cache_ttl_seconds=30,
+        timeout_seconds=1,
+        client_factory=SequentialClient,
+    )
+    request_id = new_log_id()
+    with bind_request_id(request_id):
+        first = asyncio.create_task(
+            source.overlay(
+                [timetable_item()],
+                origin="수서",
+                destination="부산",
+                departure_from=datetime(2026, 8, 1, 12, tzinfo=KOREA),
+                departure_to=datetime(2026, 8, 1, 18, tzinfo=KOREA),
+                passenger_count=1,
+            )
+        )
+        second = asyncio.create_task(
+            source.overlay(
+                [timetable_item(departure_at="2026-08-02T12:37:00+09:00")],
+                origin="수서",
+                destination="부산",
+                departure_from=datetime(2026, 8, 2, 12, tzinfo=KOREA),
+                departure_to=datetime(2026, 8, 2, 18, tzinfo=KOREA),
+                passenger_count=1,
+            )
+        )
+
+    assert await asyncio.to_thread(first_started.wait, 1)
+    assert await source.read_only_call_pending(request_id) is True
+    release_first.set()
+    assert await asyncio.to_thread(second_started.wait, 1)
+    await first
+
+    assert await source.read_only_call_pending(request_id) is True
+
+    release_second.set()
+    await second
+    assert await source.read_only_call_pending(request_id) is False
 
 
 async def test_timeout_logs_late_failure_without_exposing_provider_exception(
@@ -375,17 +522,20 @@ async def test_timeout_logs_late_failure_without_exposing_provider_exception(
     source = SrtLiveSeatSource(
         enabled=True,
         cache_ttl_seconds=30,
-        timeout_seconds=0.01,
+        timeout_seconds=0.1,
         client_factory=FailingClient,
     )
     caplog.set_level(logging.INFO, logger="rail_waitlist.srt_provider_adapter")
 
-    timed_out = await source.observe(
-        observation_request(),
-        origin="수서",
-        destination="부산",
+    observation = asyncio.create_task(
+        source.observe(
+            observation_request(),
+            origin="수서",
+            destination="부산",
+        )
     )
-    assert started.is_set()
+    assert await asyncio.to_thread(started.wait, 1)
+    timed_out = await observation
     assert timed_out[0].error_category == "timeout"
 
     release.set()
@@ -940,6 +1090,101 @@ async def test_provider_gate_limits_different_windows_to_one_concurrent_query():
     )
 
     assert maximum == 1
+
+
+async def test_expired_gate_waiter_never_starts_after_running_call_releases():
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls: list[str] = []
+
+    class BlockingFirstClient:
+        def search_train(self, _dep, _arr, date, *_args, **_kwargs):
+            calls.append(date)
+            if len(calls) == 1:
+                first_started.set()
+                assert release_first.wait(timeout=2)
+            return []
+
+    source = SrtLiveSeatSource(
+        enabled=True,
+        cache_ttl_seconds=30,
+        timeout_seconds=0.03,
+        client_factory=BlockingFirstClient,
+    )
+    first = asyncio.create_task(
+        source.overlay(
+            [timetable_item()],
+            origin="수서",
+            destination="부산",
+            departure_from=datetime(2026, 8, 1, 12, tzinfo=KOREA),
+            departure_to=datetime(2026, 8, 1, 18, tzinfo=KOREA),
+            passenger_count=1,
+        )
+    )
+    assert await asyncio.to_thread(first_started.wait, 1)
+    second = asyncio.create_task(
+        source.overlay(
+            [timetable_item(departure_at="2026-08-02T12:37:00+09:00")],
+            origin="수서",
+            destination="부산",
+            departure_from=datetime(2026, 8, 2, 12, tzinfo=KOREA),
+            departure_to=datetime(2026, 8, 2, 18, tzinfo=KOREA),
+            passenger_count=1,
+        )
+    )
+
+    await asyncio.gather(first, second)
+    assert calls == ["20260801"]
+
+    release_first.set()
+    await asyncio.wait_for(source.drain_pending_calls(), timeout=1)
+    assert calls == ["20260801"]
+    assert await source.observation_deferred_until() is None
+
+
+async def test_two_request_ids_join_one_explicit_provider_call_id(
+    caplog: pytest.LogCaptureFixture,
+):
+    first_request_id = new_log_id()
+    second_request_id = new_log_id()
+    source = SrtLiveSeatSource(
+        enabled=True,
+        cache_ttl_seconds=30,
+        client_factory=lambda: FakeClient([FakeTrain()], [], pause=0.05),
+    )
+    arguments = {
+        "origin": "수서",
+        "destination": "부산",
+        "departure_from": datetime(2026, 8, 1, 12, tzinfo=KOREA),
+        "departure_to": datetime(2026, 8, 1, 18, tzinfo=KOREA),
+        "passenger_count": 1,
+    }
+
+    async def search(request_id: str):
+        with bind_request_id(request_id):
+            return await source.search_timetable(**arguments)
+
+    with caplog.at_level(logging.DEBUG, logger="rail_waitlist.srt_provider_adapter"):
+        await asyncio.gather(search(first_request_id), search(second_request_id))
+
+    created = next(
+        record.getMessage()
+        for record in caplog.records
+        if "event=provider_call_created" in record.getMessage()
+    )
+    joined = next(
+        record.getMessage()
+        for record in caplog.records
+        if "event=provider_singleflight_joined" in record.getMessage()
+    )
+    created_call_id = re.search(r"provider_call_id=([0-9a-f]{32})", created)
+    joined_call_id = re.search(r"provider_call_id=([0-9a-f]{32})", joined)
+
+    assert f"request_id={first_request_id}" in created
+    assert f"request_id={second_request_id}" in joined
+    assert created_call_id is not None
+    assert joined_call_id is not None
+    assert created_call_id.group(1) == joined_call_id.group(1)
 
 
 def test_normalizes_train_and_time_and_maps_only_known_seat_states():

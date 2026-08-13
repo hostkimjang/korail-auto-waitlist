@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import base64
 import json
+import logging
 import pickle
 import subprocess
 import sys
@@ -13,11 +14,20 @@ import httpx
 import pytest
 
 from rail_waitlist import korail_browser_seat_source as legacy
-from rail_waitlist.korail_browser_automation import BrowserSeatSearchRequest
+from rail_waitlist.korail_browser_automation import (
+    BrowserSeatSearchRequest,
+    BrowserSeatSearchResult,
+)
 from rail_waitlist.korail_sidecar import client as owner
 from rail_waitlist.korail_sidecar.contracts import (
     KorailCredentialRequest,
     KorailReserveOnceRequest,
+)
+from rail_waitlist.provider_call_context import (
+    REQUEST_ID_HEADER,
+    REQUEST_TIMEOUT_MS_HEADER,
+    bind_request_id,
+    validated_log_id,
 )
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -65,9 +75,17 @@ class FakeHttpClient:
         self.response = response
         self.error = error
         self.requests: list[tuple[str, str, object | None]] = []
+        self.request_headers: list[dict[str, str] | None] = []
 
-    async def post(self, path: str, *, json: object) -> FakeResponse:
+    async def post(
+        self,
+        path: str,
+        *,
+        json: object,
+        headers: dict[str, str] | None = None,
+    ) -> FakeResponse:
         self.requests.append(("POST", path, json))
+        self.request_headers.append(headers)
         if self.error is not None:
             raise self.error
         assert self.response is not None
@@ -208,6 +226,7 @@ def test_transport_leaf_has_exact_legacy_aliases_and_import_boundary() -> None:
         ("browser_contracts", 1),
         ("reservations.contracts", 2),
         ("timetable_management.schemas", 2),
+        ("provider_call_context", 2),
         ("contracts", 1),
     }
 
@@ -355,6 +374,139 @@ async def test_search_transport_preserves_failure_classification() -> None:
     with pytest.raises(owner._AdapterFailure) as captured:
         await timeout.search(search_request())
     assert captured.value.reason == "source_unavailable"
+    assert captured.value.deadline_exceeded is True
+
+
+async def test_search_transport_propagates_ambient_request_and_deadline_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request_id = "4f7e5fa7b2aa4e70a8fd2cf4a535f1ee"
+    response = BrowserSeatSearchResult(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 3),
+        passenger_count=1,
+        observed_at=datetime(2026, 8, 3, tzinfo=UTC),
+        trains=[],
+    )
+    client = FakeHttpClient(FakeResponse(200, response.model_dump(mode="json")))
+    transport = transport_with(client)
+    monkeypatch.setattr(owner, "remaining_request_timeout_ms", lambda: 2234)
+
+    with caplog.at_level(logging.INFO), bind_request_id(request_id):
+        result = await transport.search(search_request())
+
+    assert result.trains == []
+    assert client.request_headers == [
+        {
+            REQUEST_ID_HEADER: request_id,
+            REQUEST_TIMEOUT_MS_HEADER: "1234",
+        }
+    ]
+    messages = [record.getMessage() for record in caplog.records]
+    lifecycle = [message for message in messages if "provider_sidecar_request_" in message]
+    assert len(lifecycle) == 2
+    assert all(f"request_id={request_id}" in message for message in lifecycle)
+    assert "event=provider_sidecar_request_started" in lifecycle[0]
+    assert "event=provider_sidecar_request_completed" in lifecycle[1]
+
+
+async def test_search_transport_generates_a_new_request_id_for_each_unbound_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = BrowserSeatSearchResult(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 3),
+        passenger_count=1,
+        observed_at=datetime(2026, 8, 3, tzinfo=UTC),
+        trains=[],
+    )
+    client = FakeHttpClient(FakeResponse(200, response.model_dump(mode="json")))
+    transport = transport_with(client)
+    monkeypatch.setattr(owner, "remaining_request_timeout_ms", lambda: None)
+
+    await transport.search(search_request())
+    await transport.search(search_request())
+
+    request_ids: list[str] = []
+    for headers in client.request_headers:
+        assert headers is not None
+        request_ids.append(headers[REQUEST_ID_HEADER])
+    assert len(set(request_ids)) == 2
+    assert all(validated_log_id(request_id) == request_id for request_id in request_ids)
+
+
+async def test_search_transport_skips_sidecar_when_ambient_deadline_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = FakeHttpClient(FakeResponse(200, {}))
+    transport = transport_with(client)
+    monkeypatch.setattr(owner, "remaining_request_timeout_ms", lambda: 1000)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(owner._AdapterFailure):
+        await transport.search(search_request())
+
+    assert client.requests == []
+    assert "event=provider_sidecar_request_failed" in caplog.text
+    assert "outcome=timeout" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("error", "outcome"),
+    [
+        (httpx.ReadTimeout("timeout"), "timeout"),
+        (httpx.ConnectError("offline"), "transport_error"),
+    ],
+)
+async def test_search_transport_logs_closed_transport_outcomes(
+    error: httpx.HTTPError,
+    outcome: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = transport_with(FakeHttpClient(error=error))
+
+    with caplog.at_level(logging.WARNING), pytest.raises(owner._AdapterFailure) as captured:
+        await transport.search(search_request())
+
+    assert "event=provider_sidecar_request_failed" in caplog.text
+    assert f"outcome={outcome}" in caplog.text
+    assert captured.value.deadline_exceeded is (outcome == "timeout")
+
+
+async def test_search_transport_projects_sidecar_deadline_as_typed_failure() -> None:
+    transport = transport_with(
+        FakeHttpClient(FakeResponse(504, {"detail": {"reason": "source_unavailable"}}))
+    )
+
+    with pytest.raises(owner._AdapterFailure) as captured:
+        await transport.search(search_request())
+
+    assert captured.value.reason == "source_unavailable"
+    assert captured.value.deadline_exceeded is True
+
+
+@pytest.mark.parametrize(
+    ("response", "outcome"),
+    [
+        (FakeResponse(500, {}), "http_status"),
+        (FakeResponse(200, {}), "validation_error"),
+    ],
+)
+async def test_search_transport_logs_closed_response_failures(
+    response: FakeResponse,
+    outcome: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = transport_with(FakeHttpClient(response))
+
+    with caplog.at_level(logging.WARNING), pytest.raises(owner._AdapterFailure):
+        await transport.search(search_request())
+
+    assert "event=provider_sidecar_request_failed" in caplog.text
+    assert f"outcome={outcome}" in caplog.text
 
 
 @pytest.mark.parametrize(

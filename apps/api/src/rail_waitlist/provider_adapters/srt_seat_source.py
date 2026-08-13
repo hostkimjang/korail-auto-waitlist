@@ -4,7 +4,7 @@ import asyncio
 import logging as _logging
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from typing import cast as _cast
@@ -22,6 +22,7 @@ from ..observations.contracts import (
     SeatObservationRequest,
     SeatObservationResult,
 )
+from ..provider_call_context import bind_provider_call_id, current_request_id, new_log_id
 from ..seat_status_cooldown import CooldownStore, MemoryCooldownStore
 from ..timetable_management.schemas import (
     SeatAvailabilityAction,
@@ -135,10 +136,32 @@ class _CacheEntry:
     snapshots: tuple[SrtSeatSnapshot, ...]
 
 
+_SearchKey = tuple[str, str, str, str, str, int]
+
+
+@dataclass
+class _InflightCall:
+    provider_call_id: str
+    task: asyncio.Task[tuple[SrtSeatSnapshot, ...]] | None = None
+    waiter_deadlines: dict[object, float] = field(default_factory=dict)
+    request_ids: set[str] = field(default_factory=set)
+    provider_started: bool = False
+    first_timeout_at: float | None = None
+    late_completion_logged: bool = False
+
+
 class _ProviderCooldown(RuntimeError):
     def __init__(self, reason: SeatAvailabilityNotObservedReason) -> None:
         self.reason = reason
         super().__init__(reason)
+
+
+class _CallerTimeout(TimeoutError):
+    """The local caller's observation budget expired, not the provider operation."""
+
+
+class _NoActiveWaiters(RuntimeError):
+    """A queued read-only provider call lost every live caller before it could start."""
 
 
 class _AccountlessSrtClient:
@@ -266,7 +289,7 @@ class SrtLiveSeatSource:
         cache_ttl_seconds: int,
         client_factory: SrtClientFactory = _default_client_factory,
         monotonic: Callable[[], float] = time.monotonic,
-        timeout_seconds: float = 8,
+        timeout_seconds: float = 25,
         rate_limit_cooldown_seconds: int = 300,
         protection_cooldown_seconds: int = 60,
         cooldown_store: CooldownStore | None = None,
@@ -279,13 +302,12 @@ class SrtLiveSeatSource:
         self.timeout_seconds = timeout_seconds
         self.rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
         self.protection_cooldown_seconds = protection_cooldown_seconds
-        self._cache: dict[tuple[str, str, str, str, str, int], _CacheEntry] = {}
-        self._inflight: dict[
-            tuple[str, str, str, str, str, int], asyncio.Task[tuple[SrtSeatSnapshot, ...]]
-        ] = {}
+        self._cache: dict[_SearchKey, _CacheEntry] = {}
+        self._inflight: dict[_SearchKey, _InflightCall] = {}
+        self._read_only_request_calls: dict[str, set[str]] = {}
         self._state_lock = asyncio.Lock()
         self._provider_gate = asyncio.Semaphore(1)
-        self._upstream_tasks: set[asyncio.Task[list[_SrtTrain]]] = set()
+        self._upstream_tasks: set[asyncio.Task[tuple[SrtSeatSnapshot, ...]]] = set()
         self._cooldown_store = cooldown_store or MemoryCooldownStore(monotonic)
         self._failure_count = 0
         self.source_name = source_name
@@ -346,6 +368,8 @@ class SrtLiveSeatSource:
         except SRTNetFunnelError as error:
             await self._open_cooldown("provider_access_restricted", error)
             return self._observation_error(request, "provider_unavailable")
+        except _CallerTimeout:
+            return self._observation_error(request, "timeout")
         except TimeoutError as error:
             await self._open_cooldown("source_unavailable", error)
             return self._observation_error(request, "timeout")
@@ -461,6 +485,8 @@ class SrtLiveSeatSource:
             # SRTrain rejects station names outside its maintained intercity catalog
             # with ValueError before issuing a provider request.
             return self._mark_not_observed(items, "unsupported_route")
+        except _CallerTimeout:
+            return self._mark_not_observed(items, "source_unavailable")
         except (
             TimeoutError,
             AttributeError,
@@ -549,6 +575,8 @@ class SrtLiveSeatSource:
         except SRTNetFunnelError as error:
             await self._open_cooldown("provider_access_restricted", error)
             raise SrtLiveTimetableUnavailable("SRT provider access is restricted") from error
+        except _CallerTimeout as error:
+            raise SrtLiveTimetableUnavailable("SRT timetable source timed out") from error
         except TimeoutError as error:
             await self._open_cooldown("source_unavailable", error)
             raise SrtLiveTimetableUnavailable("SRT timetable source timed out") from error
@@ -632,7 +660,7 @@ class SrtLiveSeatSource:
         departure_to: str,
         passenger_count: int,
     ) -> tuple[SrtSeatSnapshot, ...]:
-        key = (
+        key: _SearchKey = (
             origin,
             destination,
             departure_date,
@@ -640,6 +668,10 @@ class SrtLiveSeatSource:
             departure_to,
             passenger_count,
         )
+        request_id = current_request_id() or new_log_id()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.timeout_seconds
+        waiter = object()
         now = self._monotonic()
         async with self._state_lock:
             cached = self._cache.get(key)
@@ -648,46 +680,98 @@ class SrtLiveSeatSource:
             cooldown = await self._cooldown_store.get("srt")
             if cooldown is not None:
                 raise _ProviderCooldown(cooldown.reason)
-            task = self._inflight.get(key)
-            if task is None:
+            record = self._inflight.get(key)
+            created = record is None
+            if record is None:
+                record = _InflightCall(provider_call_id=new_log_id())
                 task = asyncio.create_task(
                     self._load(
                         key,
+                        record,
                         origin,
                         destination,
                         departure_date,
                         departure_from,
                         departure_to,
-                    )
+                    ),
                 )
-                self._inflight[key] = task
-        return await asyncio.shield(task)
+                record.task = task
+                self._inflight[key] = record
+                self._upstream_tasks.add(task)
+                task.add_done_callback(self._release_upstream_task)
+            record.waiter_deadlines[waiter] = deadline
+            record.request_ids.add(request_id)
+            self._read_only_request_calls.setdefault(request_id, set()).add(record.provider_call_id)
+            shared_task = record.task
+        if shared_task is None:
+            raise RuntimeError("SRT inflight provider task is unavailable")
+
+        if created:
+            _LOGGER.info(
+                "SRT 운영사 조회 작업을 생성합니다 "
+                "event=provider_call_created request_id=%s provider_call_id=%s",
+                request_id,
+                record.provider_call_id,
+            )
+        else:
+            _LOGGER.info(
+                "진행 중인 SRT 운영사 조회를 공유합니다 "
+                "event=provider_singleflight_joined request_id=%s provider_call_id=%s",
+                request_id,
+                record.provider_call_id,
+            )
+
+        outcome = "failed"
+        timeout_scope = asyncio.timeout_at(deadline)
+        try:
+            try:
+                async with timeout_scope:
+                    snapshots = await asyncio.shield(shared_task)
+            except TimeoutError as error:
+                if not timeout_scope.expired():
+                    raise
+                outcome = "timeout"
+                await self._record_caller_timeout(record, request_id=request_id)
+                raise _CallerTimeout from error
+            except _NoActiveWaiters as error:
+                outcome = "timeout"
+                await self._record_caller_timeout(record, request_id=request_id)
+                raise _CallerTimeout from error
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                raise
+            outcome = "success"
+            return snapshots
+        finally:
+            await self._release_waiter(key, record, waiter, request_id=request_id)
+            _LOGGER.debug(
+                "SRT 운영사 조회 대기자를 종료합니다 "
+                "event=provider_waiter_completed outcome=%s request_id=%s provider_call_id=%s",
+                outcome,
+                request_id,
+                record.provider_call_id,
+            )
 
     async def _load(
         self,
-        key: tuple[str, str, str, str, str, int],
+        key: _SearchKey,
+        record: _InflightCall,
         origin: str,
         destination: str,
         departure_date: str,
         departure_from: str,
         departure_to: str,
     ) -> tuple[SrtSeatSnapshot, ...]:
-        current_task = asyncio.current_task()
+        outcome = "failed"
         try:
-            upstream_task = asyncio.create_task(
-                self._search_with_provider_gate(
-                    origin,
-                    destination,
-                    departure_date,
-                    departure_from,
-                    departure_to,
-                )
-            )
-            self._upstream_tasks.add(upstream_task)
-            upstream_task.add_done_callback(self._release_upstream_task)
-            trains = await asyncio.wait_for(
-                asyncio.shield(upstream_task),
-                timeout=self.timeout_seconds,
+            trains = await self._search_with_provider_gate(
+                key,
+                record,
+                origin,
+                destination,
+                departure_date,
+                departure_from,
+                departure_to,
             )
             observed_at = datetime.now(UTC)
             snapshots_list: list[SrtSeatSnapshot] = []
@@ -711,27 +795,13 @@ class SrtLiveSeatSource:
                     expires_at=self._monotonic() + self.cache_ttl_seconds,
                     snapshots=snapshots,
                 )
+            outcome = "success"
             return snapshots
-        except TimeoutError:
-            upstream_still_running = not upstream_task.done()
-            _LOGGER.warning(
-                "SRT 운영사 조회 작업 제한 시간을 초과했습니다 "
-                "event=provider_call_timed_out timeout_seconds=%s upstream_still_running=%s",
-                self.timeout_seconds,
-                str(upstream_still_running).lower(),
-            )
-            if upstream_still_running:
-                started_at = self._monotonic()
-
-                def log_completion(completed: asyncio.Task[list[_SrtTrain]]) -> None:
-                    self._log_completion_after_timeout(completed, timeout_at=started_at)
-
-                upstream_task.add_done_callback(log_completion)
+        except asyncio.CancelledError:
+            outcome = "cancelled"
             raise
         finally:
-            async with self._state_lock:
-                if self._inflight.get(key) is current_task:
-                    self._inflight.pop(key, None)
+            await self._finish_provider_call(key, record, outcome=outcome)
 
     async def drain_pending_calls(self) -> None:
         """Wait until every started synchronous provider call has actually returned.
@@ -747,8 +817,16 @@ class SrtLiveSeatSource:
                 return_exceptions=True,
             )
 
+    async def read_only_call_pending(self, request_id: str) -> bool:
+        """Return whether this request still owns an unfinished provider call."""
+
+        async with self._state_lock:
+            return bool(self._read_only_request_calls.get(request_id))
+
     async def _search_with_provider_gate(
         self,
+        key: _SearchKey,
+        record: _InflightCall,
         origin: str,
         destination: str,
         departure_date: str,
@@ -758,34 +836,162 @@ class SrtLiveSeatSource:
         # Keep the provider-wide permit until the real thread returns, even if the
         # observation coroutine has already reported a timeout to its caller.
         async with self._provider_gate:
-            started_at = self._monotonic()
-            _LOGGER.info("SRT 운영사 조회를 시작합니다 event=provider_query_started")
-            try:
-                trains = await asyncio.to_thread(
-                    self._search_sync,
-                    origin,
-                    destination,
-                    departure_date,
-                    departure_from,
-                    departure_to,
+            loop = asyncio.get_running_loop()
+            async with self._state_lock:
+                current = self._inflight.get(key)
+                has_live_waiter = any(
+                    deadline > loop.time() for deadline in record.waiter_deadlines.values()
                 )
-            except Exception:
-                _LOGGER.warning(
+                if current is not record or not has_live_waiter:
+                    raise _NoActiveWaiters
+                record.provider_started = True
+
+            with bind_provider_call_id(record.provider_call_id):
+                started_at = self._monotonic()
+                _LOGGER.info(
+                    "SRT 운영사 조회를 시작합니다 event=provider_query_started provider_call_id=%s",
+                    record.provider_call_id,
+                )
+                try:
+                    trains = await asyncio.to_thread(
+                        self._search_sync,
+                        origin,
+                        destination,
+                        departure_date,
+                        departure_from,
+                        departure_to,
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "SRT 운영사 조회를 마쳤습니다 "
+                        "event=provider_query_completed outcome=failed "
+                        "provider_call_id=%s elapsed_ms=%s",
+                        record.provider_call_id,
+                        max(0, round((self._monotonic() - started_at) * 1000)),
+                    )
+                    raise
+                _LOGGER.info(
                     "SRT 운영사 조회를 마쳤습니다 "
-                    "event=provider_query_completed outcome=failed elapsed_ms=%s",
+                    "event=provider_query_completed outcome=success "
+                    "provider_call_id=%s train_count=%s elapsed_ms=%s",
+                    record.provider_call_id,
+                    len(trains),
                     max(0, round((self._monotonic() - started_at) * 1000)),
                 )
-                raise
-            _LOGGER.info(
-                "SRT 운영사 조회를 마쳤습니다 "
-                "event=provider_query_completed outcome=success "
-                "train_count=%s elapsed_ms=%s",
-                len(trains),
-                max(0, round((self._monotonic() - started_at) * 1000)),
-            )
-            return trains
+                return trains
 
-    def _release_upstream_task(self, task: asyncio.Task[list[_SrtTrain]]) -> None:
+    async def _record_caller_timeout(
+        self,
+        record: _InflightCall,
+        *,
+        request_id: str,
+    ) -> None:
+        timeout_at = self._monotonic()
+        late_outcome: str | None = None
+        async with self._state_lock:
+            if record.first_timeout_at is None:
+                record.first_timeout_at = timeout_at
+            task = record.task
+            provider_started = record.provider_started
+            upstream_still_running = task is not None and not task.done()
+            if (
+                provider_started
+                and task is not None
+                and task.done()
+                and not record.late_completion_logged
+            ):
+                record.late_completion_logged = True
+                late_outcome = self._completed_task_outcome(task)
+
+        phase = "provider_io" if provider_started else "provider_gate_wait"
+        _LOGGER.warning(
+            "SRT 운영사 조회 작업 제한 시간을 초과했습니다 "
+            "event=provider_call_timed_out provider_call_id=%s request_id=%s "
+            "phase=%s timeout_seconds=%s upstream_still_running=%s",
+            record.provider_call_id,
+            request_id,
+            phase,
+            self.timeout_seconds,
+            str(upstream_still_running).lower(),
+        )
+        if late_outcome is not None:
+            self._log_completion_after_timeout(
+                provider_call_id=record.provider_call_id,
+                outcome=late_outcome,
+                timeout_at=record.first_timeout_at or timeout_at,
+            )
+
+    async def _release_waiter(
+        self,
+        key: _SearchKey,
+        record: _InflightCall,
+        waiter: object,
+        *,
+        request_id: str,
+    ) -> None:
+        task_to_cancel: asyncio.Task[tuple[SrtSeatSnapshot, ...]] | None = None
+        async with self._state_lock:
+            record.waiter_deadlines.pop(waiter, None)
+            task = record.task
+            if (
+                not record.waiter_deadlines
+                and not record.provider_started
+                and task is not None
+                and not task.done()
+            ):
+                if self._inflight.get(key) is record:
+                    self._inflight.pop(key, None)
+                self._unlink_read_only_request_calls(record)
+                task_to_cancel = task
+        if task_to_cancel is not None:
+            task_to_cancel.cancel()
+            _LOGGER.info(
+                "대기자가 없는 SRT 운영사 조회를 시작 전에 취소합니다 "
+                "event=provider_call_abandoned_before_start "
+                "request_id=%s provider_call_id=%s",
+                request_id,
+                record.provider_call_id,
+            )
+
+    async def _finish_provider_call(
+        self,
+        key: _SearchKey,
+        record: _InflightCall,
+        *,
+        outcome: str,
+    ) -> None:
+        timeout_at: float | None = None
+        async with self._state_lock:
+            if (
+                record.provider_started
+                and record.first_timeout_at is not None
+                and not record.late_completion_logged
+            ):
+                record.late_completion_logged = True
+                timeout_at = record.first_timeout_at
+            if self._inflight.get(key) is record:
+                self._inflight.pop(key, None)
+            self._unlink_read_only_request_calls(record)
+        if timeout_at is not None:
+            self._log_completion_after_timeout(
+                provider_call_id=record.provider_call_id,
+                outcome=outcome,
+                timeout_at=timeout_at,
+            )
+
+    def _unlink_read_only_request_calls(self, record: _InflightCall) -> None:
+        for request_id in record.request_ids:
+            provider_call_ids = self._read_only_request_calls.get(request_id)
+            if provider_call_ids is None:
+                continue
+            provider_call_ids.discard(record.provider_call_id)
+            if not provider_call_ids:
+                self._read_only_request_calls.pop(request_id, None)
+
+    def _release_upstream_task(
+        self,
+        task: asyncio.Task[tuple[SrtSeatSnapshot, ...]],
+    ) -> None:
         self._upstream_tasks.discard(task)
         if task.cancelled():
             return
@@ -793,23 +999,25 @@ class SrtLiveSeatSource:
         # observation already returned a categorized timeout or provider error.
         task.exception()
 
+    @staticmethod
+    def _completed_task_outcome(task: asyncio.Task[tuple[SrtSeatSnapshot, ...]]) -> str:
+        if task.cancelled():
+            return "cancelled"
+        return "success" if task.exception() is None else "failed"
+
     def _log_completion_after_timeout(
         self,
-        task: asyncio.Task[list[_SrtTrain]],
         *,
+        provider_call_id: str,
+        outcome: str,
         timeout_at: float,
     ) -> None:
-        if task.cancelled():
-            outcome = "cancelled"
-        elif task.exception() is None:
-            outcome = "success"
-        else:
-            outcome = "failed"
         _LOGGER.info(
             "SRT 운영사 조회가 호출자 시간 초과 뒤 종료되었습니다 "
             "event=provider_call_finished_after_timeout "
-            "outcome=%s elapsed_after_timeout_ms=%s",
+            "outcome=%s provider_call_id=%s elapsed_after_timeout_ms=%s",
             outcome,
+            provider_call_id,
             max(0, round((self._monotonic() - timeout_at) * 1000)),
         )
 

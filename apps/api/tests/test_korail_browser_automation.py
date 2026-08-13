@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 import threading
 from contextlib import contextmanager
@@ -49,6 +50,7 @@ from rail_waitlist.korail_sidecar.browser_service_availability import (
     BrowserProviderUnavailable,
 )
 from rail_waitlist.korail_sidecar.playwright import search_form
+from rail_waitlist.provider_call_context import bind_request_id
 
 
 @pytest.mark.parametrize(
@@ -309,6 +311,7 @@ def test_browser_automation_uses_operational_cache_and_cooldown_defaults(
     monkeypatch.delenv("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", raising=False)
     monkeypatch.delenv("SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", raising=False)
     monkeypatch.delenv("SEAT_STATUS_PROVIDER_UNAVAILABLE_COOLDOWN_SECONDS", raising=False)
+    monkeypatch.delenv("KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", raising=False)
 
     automation = adapter_service.build_automation(browser_client=FakeClient())
 
@@ -316,6 +319,7 @@ def test_browser_automation_uses_operational_cache_and_cooldown_defaults(
     assert automation._rate_limit_cooldown_seconds == 300
     assert automation._protection_cooldown_seconds == 60
     assert automation._provider_unavailable_cooldown_seconds == 300
+    assert automation._search_timeout_seconds == 80
 
 
 def test_pydoll_engine_readiness_uses_selected_probe_without_network(
@@ -735,6 +739,247 @@ async def test_singleflight_and_cache_run_one_browser_search() -> None:
     assert client.calls == 1
 
 
+async def test_singleflight_links_two_request_ids_to_one_provider_call_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = FakeClient()
+    client.gate.clear()
+    automation = KorailBrowserAutomation(client)
+    first_request_id = "11111111111141118111111111111111"
+    second_request_id = "22222222222242228222222222222222"
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_automation")
+
+    with bind_request_id(first_request_id):
+        first = asyncio.create_task(automation.search(request()))
+    while client.calls == 0:
+        await asyncio.sleep(0)
+    with bind_request_id(second_request_id):
+        second = asyncio.create_task(automation.search(request()))
+    await asyncio.sleep(0)
+
+    created = next(
+        record.message
+        for record in caplog.records
+        if "event=provider_call_created" in record.message
+    )
+    joined = next(
+        record.message
+        for record in caplog.records
+        if "event=provider_query_singleflight_join" in record.message
+    )
+    created_call_id = re.search(r"provider_call_id=([0-9a-f]{32})", created)
+    joined_call_id = re.search(r"provider_call_id=([0-9a-f]{32})", joined)
+    assert created_call_id is not None
+    assert joined_call_id is not None
+    assert created_call_id.group(1) == joined_call_id.group(1)
+    assert f"request_id={first_request_id}" in created
+    assert f"request_id={second_request_id}" in joined
+
+    client.gate.set()
+    await asyncio.gather(first, second)
+    assert client.calls == 1
+
+
+async def test_shorter_singleflight_waiter_times_out_without_cancelling_shared_search() -> None:
+    client = FakeClient()
+    client.gate.clear()
+    automation = KorailBrowserAutomation(client, search_timeout_seconds=1)
+    first = asyncio.create_task(automation.search(request(), timeout_seconds=1))
+    while client.calls == 0:
+        await asyncio.sleep(0)
+
+    with pytest.raises(BrowserSourceUnavailable) as shorter:
+        await automation.search(request(), timeout_seconds=0.01)
+
+    assert shorter.value.stage == "caller_deadline"
+    assert not first.done()
+    assert client.calls == 1
+
+    client.gate.set()
+    assert await first == result()
+
+
+async def test_cancelled_different_key_waiter_is_discarded_before_browser_io(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = FakeClient()
+    client.gate.clear()
+    automation = KorailBrowserAutomation(client)
+    next_request = request().model_copy(update={"travel_date": date(2026, 8, 4)})
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_automation")
+    first = asyncio.create_task(automation.search(request()))
+    while client.calls == 0:
+        await asyncio.sleep(0)
+    queued = asyncio.create_task(automation.search(next_request))
+    await asyncio.sleep(0)
+
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+    await asyncio.sleep(0)
+
+    assert client.calls == 1
+    assert any(
+        "event=provider_query_skipped reason=no_active_waiters" in record.message
+        and "provider_call_id=" in record.message
+        for record in caplog.records
+    )
+
+    client.gate.set()
+    assert await first == result()
+    assert await automation.drain_pending_calls()
+
+
+async def test_different_key_expires_behind_browser_gate_without_provider_io(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = FakeClient()
+    client.gate.clear()
+    automation = KorailBrowserAutomation(client, search_timeout_seconds=1)
+    next_request = request().model_copy(update={"travel_date": date(2026, 8, 4)})
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_automation")
+
+    first = asyncio.create_task(automation.search(request(), timeout_seconds=1))
+    while client.calls == 0:
+        await asyncio.sleep(0)
+
+    with pytest.raises(BrowserSourceUnavailable) as expired:
+        await automation.search(next_request, timeout_seconds=0.01)
+
+    client.gate.set()
+    assert await first == result()
+    assert await automation.drain_pending_calls()
+
+    assert expired.value.stage in {"caller_deadline", "search_deadline"}
+    assert client.calls == 1
+    assert next_request.cache_key() not in automation._failure_backoffs
+    assert any(
+        "event=provider_query_skipped" in record.message and "provider_call_id=" in record.message
+        for record in caplog.records
+    )
+
+
+async def test_running_search_deadline_cancels_client_without_opening_backoff(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class DeadlineClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def search(self, data: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+            self.calls += 1
+            self.started.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+            return result()
+
+    client = DeadlineClient()
+    automation = KorailBrowserAutomation(client, search_timeout_seconds=0.02)
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_automation")
+
+    with pytest.raises(BrowserSourceUnavailable) as expired:
+        await automation.search(request())
+    assert expired.value.stage in {"caller_deadline", "search_deadline"}
+    await automation.drain_pending_calls()
+
+    assert client.cancelled.is_set()
+    assert automation._failure_backoffs == {}
+    assert any(
+        "event=provider_query_deadline" in record.message and "provider_call_id=" in record.message
+        for record in caplog.records
+    )
+
+    client.release.set()
+    assert await automation.search(request()) == result()
+    assert client.calls == 2
+
+
+async def test_search_deadline_waits_for_browser_cancellation_cleanup() -> None:
+    class SlowCleanupClient:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cleanup_started = asyncio.Event()
+            self.cleanup_finished = asyncio.Event()
+
+        async def search(self, data: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cleanup_started.set()
+                await asyncio.sleep(0.01)
+                self.cleanup_finished.set()
+                raise
+
+    client = SlowCleanupClient()
+    automation = KorailBrowserAutomation(client, search_timeout_seconds=0.3)
+
+    with pytest.raises(BrowserSourceUnavailable) as expired:
+        await automation.search(request())
+
+    assert expired.value.stage == "search_deadline"
+    assert client.cleanup_started.is_set()
+    assert client.cleanup_finished.is_set()
+    assert automation._inflight == {}
+
+
+async def test_last_cancelled_waiter_leaves_started_search_owned_until_deadline() -> None:
+    class SlowCleanupClient:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cleanup_finished = asyncio.Event()
+
+        async def search(self, data: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.01)
+                self.cleanup_finished.set()
+                raise
+
+    client = SlowCleanupClient()
+    automation = KorailBrowserAutomation(client, search_timeout_seconds=0.1)
+    caller = asyncio.create_task(automation.search(request()))
+    await client.started.wait()
+
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    assert not client.cleanup_finished.is_set()
+    assert await automation.drain_pending_calls()
+    assert client.cleanup_finished.is_set()
+    assert automation._inflight == {}
+
+
+async def test_cancellation_resistant_search_keeps_caller_bounded_and_rejects_late_success() -> (
+    None
+):
+    client = CancellationIgnoringClient()
+    automation = KorailBrowserAutomation(client, search_timeout_seconds=0.03)
+    caller = asyncio.create_task(automation.search(request()))
+    await client.started.wait()
+
+    with pytest.raises(BrowserSourceUnavailable) as expired:
+        await asyncio.wait_for(caller, timeout=0.15)
+
+    assert expired.value.stage == "caller_deadline"
+    assert request().cache_key() in automation._inflight
+
+    client.release.set()
+    assert await automation.drain_pending_calls()
+    assert request().cache_key() not in automation._cache
+
+    assert await automation.search(request()) == result()
+
+
 async def test_provider_query_logs_actual_start_and_success_without_request_identity(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -821,7 +1066,7 @@ async def test_provider_query_logs_cancellation_and_reraises_it(
     task = asyncio.create_task(automation.search(request()))
     while client.calls == 0:
         await asyncio.sleep(0)
-    owned_task = next(iter(automation._inflight.values()))
+    owned_task = next(iter(automation._inflight.values())).task
     owned_task.cancel()
 
     with pytest.raises(asyncio.CancelledError):

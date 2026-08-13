@@ -12,6 +12,10 @@ from ..watch_management.models import ReservationAttempt, SeatObservation, Watch
 from .attempt_timing_application import latest_candidate_seat_detected_at
 from .contracts import ReservationResult
 from .domain import ReservationAttemptResultPolicy
+from .progress_timing_policy import (
+    normalize_reservation_terminal_time,
+    persisted_reservation_progress_times,
+)
 from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -114,7 +118,13 @@ async def complete_reservation_attempt(
             raise ValueError("reservation confirmation provider does not match watch")
         dependencies.record_reservation_confirmation(attempt, confirmation)
     completed_at = dependencies.now()
-    attempt.finished_at = max(result.observed_at, completed_at)
+    attempt.finished_at = normalize_reservation_terminal_time(
+        max(result.observed_at, completed_at),
+        (
+            *(progress.occurred_at for progress in result.progress_stages),
+            *persisted_reservation_progress_times(attempt.progress_stages),
+        ),
+    )
     if (
         result.outcome is ReservationOutcome.UNKNOWN
         and confirmation is not None

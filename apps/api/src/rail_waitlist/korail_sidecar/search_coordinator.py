@@ -4,8 +4,14 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from ..provider_call_context import (
+    bind_provider_call_id,
+    bind_request_id,
+    current_request_id,
+    new_log_id,
+)
 from .browser_contracts import (
     AdapterErrorReason,
     BrowserAdapterError,
@@ -22,6 +28,7 @@ from .browser_service_availability import (
 )
 
 logger = logging.getLogger("rail_waitlist.korail_browser_automation")
+SEARCH_CLEANUP_GRACE_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,15 @@ class _Cooldown:
     provider_unavailable_trigger: ProviderUnavailableTrigger | None = None
 
 
+@dataclass
+class _InflightSearch:
+    task: asyncio.Task[BrowserSeatSearchResult]
+    provider_call_id: str
+    deadline: float
+    waiters: dict[str, str] = field(default_factory=dict)
+    query_started: bool = False
+
+
 class KorailBrowserAutomation:
     """Serialize browser work and collapse identical user-triggered searches."""
 
@@ -48,6 +64,7 @@ class KorailBrowserAutomation:
         rate_limit_cooldown_seconds: int = 300,
         protection_cooldown_seconds: int = 60,
         provider_unavailable_cooldown_seconds: int = 300,
+        search_timeout_seconds: float = 80,
         shutdown_drain_timeout_seconds: float = 70,
         shutdown_cancel_timeout_seconds: float = 10,
         monotonic: Callable[[], float] = time.monotonic,
@@ -57,24 +74,38 @@ class KorailBrowserAutomation:
         self._rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
         self._protection_cooldown_seconds = protection_cooldown_seconds
         self._provider_unavailable_cooldown_seconds = provider_unavailable_cooldown_seconds
+        if search_timeout_seconds <= 0:
+            raise ValueError("search_timeout_seconds must be positive")
+        self._search_timeout_seconds = search_timeout_seconds
         self._shutdown_drain_timeout_seconds = shutdown_drain_timeout_seconds
         self._shutdown_cancel_timeout_seconds = shutdown_cancel_timeout_seconds
         self._monotonic = monotonic
         self._cache: dict[tuple[str, str, str, str, str, int], _CacheEntry] = {}
-        self._inflight: dict[
-            tuple[str, str, str, str, str, int], asyncio.Task[BrowserSeatSearchResult]
-        ] = {}
+        self._inflight: dict[tuple[str, str, str, str, str, int], _InflightSearch] = {}
         self._state_lock = asyncio.Lock()
         self._browser_gate = asyncio.Semaphore(1)
         self._cooldown: _Cooldown | None = None
         self._failure_backoffs: dict[tuple[str, str, str, str, str, int], _Cooldown] = {}
         self._failure_counts: dict[tuple[str, str, str, str, str, int], int] = {}
 
-    async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+    async def search(
+        self,
+        request: BrowserSeatSearchRequest,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> BrowserSeatSearchResult:
         if request.passenger_count != 1:
             raise BrowserAdapterError("passenger_count_not_supported")
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise BrowserSourceUnavailable("caller_deadline")
         key = request.cache_key()
         now = self._monotonic()
+        request_id = current_request_id() or new_log_id()
+        waiter_token = new_log_id()
+        timeout = self._search_timeout_seconds
+        if timeout_seconds is not None:
+            timeout = min(timeout, timeout_seconds)
+        caller_deadline = now + timeout
         async with self._state_lock:
             expired_backoff_keys = [
                 failed_key
@@ -86,11 +117,13 @@ class KorailBrowserAutomation:
                 self._failure_counts.pop(failed_key, None)
             if self._cooldown is not None:
                 if self._cooldown.expires_at > now:
+                    skipped_call_id = new_log_id()
                     logger.info(
                         "KORAIL 운영사 조회를 생략합니다 "
                         "event=provider_query_skipped reason=provider_cooldown "
-                        "outcome=%s remaining_seconds=%s",
+                        "outcome=%s provider_call_id=%s remaining_seconds=%s",
                         self._cooldown.reason,
+                        skipped_call_id,
                         max(0, round(self._cooldown.expires_at - now)),
                     )
                     if self._cooldown.reason == "provider_access_restricted":
@@ -113,25 +146,116 @@ class KorailBrowserAutomation:
                 return cached.result
             failure_backoff = self._failure_backoffs.get(key)
             if failure_backoff is not None and failure_backoff.expires_at > now:
+                skipped_call_id = new_log_id()
                 logger.info(
                     "KORAIL 운영사 조회를 생략합니다 "
                     "event=provider_query_skipped reason=query_backoff "
-                    "outcome=source_unavailable remaining_seconds=%s",
+                    "outcome=source_unavailable provider_call_id=%s remaining_seconds=%s",
+                    skipped_call_id,
                     max(0, round(failure_backoff.expires_at - now)),
                 )
                 raise BrowserSourceUnavailable("query_backoff")
-            task = self._inflight.get(key)
-            if task is None:
-                task = asyncio.create_task(self._load(key, request))
-                self._inflight[key] = task
-        return await asyncio.shield(task)
+            inflight = self._inflight.get(key)
+            if inflight is not None and inflight.task.done():
+                self._inflight.pop(key, None)
+                inflight = None
+            if inflight is None:
+                provider_call_id = new_log_id()
+                cleanup_grace = min(SEARCH_CLEANUP_GRACE_SECONDS, timeout * 0.2)
+                provider_deadline = caller_deadline - cleanup_grace
+                inflight = _InflightSearch(
+                    task=asyncio.create_task(
+                        self._load(key, request, provider_call_id, provider_deadline)
+                    ),
+                    provider_call_id=provider_call_id,
+                    deadline=provider_deadline,
+                )
+                inflight.task.add_done_callback(self._consume_task_terminal)
+                self._inflight[key] = inflight
+                logger.info(
+                    "KORAIL 운영사 호출을 생성합니다 "
+                    "event=provider_call_created request_id=%s provider_call_id=%s",
+                    request_id,
+                    provider_call_id,
+                )
+            else:
+                logger.info(
+                    "KORAIL 운영사 단일 호출에 합류합니다 "
+                    "event=provider_query_singleflight_join request_id=%s provider_call_id=%s",
+                    request_id,
+                    inflight.provider_call_id,
+                )
+            inflight.waiters[waiter_token] = request_id
+        waiter_released = False
+        try:
+            remaining = caller_deadline - self._monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            async with asyncio.timeout(remaining):
+                return await asyncio.shield(inflight.task)
+        except TimeoutError:
+            logger.info(
+                "KORAIL 운영사 조회 caller deadline이 끝났습니다 "
+                "event=provider_query_waiter_deadline request_id=%s provider_call_id=%s",
+                request_id,
+                inflight.provider_call_id,
+            )
+            await self._release_waiter(key, inflight, waiter_token)
+            waiter_released = True
+            raise BrowserSourceUnavailable("caller_deadline") from None
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                logger.info(
+                    "KORAIL 운영사 조회 caller가 취소되었습니다 "
+                    "event=provider_query_waiter_cancelled request_id=%s provider_call_id=%s "
+                    "upstream_still_running=%s",
+                    request_id,
+                    inflight.provider_call_id,
+                    str(not inflight.task.done()).lower(),
+                )
+                raise
+            if inflight.query_started:
+                raise
+            await self._release_waiter(key, inflight, waiter_token)
+            waiter_released = True
+            remaining = caller_deadline - self._monotonic()
+            if remaining <= 0:
+                raise BrowserSourceUnavailable("caller_deadline") from None
+            with bind_request_id(request_id):
+                return await self.search(request, timeout_seconds=remaining)
+        finally:
+            if not waiter_released:
+                await self._release_waiter(key, inflight, waiter_token)
+
+    @staticmethod
+    def _consume_task_terminal(task: asyncio.Task[BrowserSeatSearchResult]) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    async def _release_waiter(
+        self,
+        key: tuple[str, str, str, str, str, int],
+        inflight: _InflightSearch,
+        waiter_token: str,
+    ) -> None:
+        async with self._state_lock:
+            inflight.waiters.pop(waiter_token, None)
+            if (
+                self._inflight.get(key) is inflight
+                and not inflight.waiters
+                and not inflight.query_started
+                and not inflight.task.done()
+                and not inflight.task.cancelling()
+            ):
+                inflight.task.cancel()
 
     async def drain_pending_calls(self) -> bool:
         """Wait for owned browser searches to finish before sidecar shutdown completes."""
         pending_cancellation: asyncio.CancelledError | None = None
         while True:
             async with self._state_lock:
-                tasks = tuple(self._inflight.values())
+                tasks = tuple(inflight.task for inflight in self._inflight.values())
             if not tasks:
                 if pending_cancellation is not None:
                     raise pending_cancellation
@@ -188,59 +312,84 @@ class KorailBrowserAutomation:
         self,
         key: tuple[str, str, str, str, str, int],
         request: BrowserSeatSearchRequest,
+        provider_call_id: str,
+        deadline: float,
     ) -> BrowserSeatSearchResult:
         current_task = asyncio.current_task()
         started_at = self._monotonic()
         query_started = False
         provider_unavailable_cooldown_opened = False
         try:
-            async with self._browser_gate:
-                queued_cooldown = await self._active_provider_cooldown()
-                if queued_cooldown is not None:
-                    now = self._monotonic()
-                    logger.info(
-                        "KORAIL 운영사 조회를 생략합니다 "
-                        "event=provider_query_skipped reason=queued_provider_cooldown "
-                        "outcome=%s remaining_seconds=%s",
-                        (
-                            "provider_unavailable"
-                            if queued_cooldown.provider_unavailable_trigger is not None
-                            else queued_cooldown.reason
-                        ),
-                        max(0, round(queued_cooldown.expires_at - now)),
-                    )
-                    if queued_cooldown.provider_unavailable_trigger is not None:
-                        raise BrowserProviderUnavailable(
-                            queued_cooldown.provider_unavailable_trigger,
-                            "provider_cooldown",
-                            retry_after_seconds=max(
-                                1,
-                                round(queued_cooldown.expires_at - now),
-                            ),
+            with bind_provider_call_id(provider_call_id):
+                remaining = deadline - self._monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                async with asyncio.timeout(remaining):
+                    async with self._browser_gate:
+                        queued_cooldown = await self._active_provider_cooldown()
+                        if queued_cooldown is not None:
+                            now = self._monotonic()
+                            logger.info(
+                                "KORAIL 운영사 조회를 생략합니다 "
+                                "event=provider_query_skipped "
+                                "provider_call_id=%s reason=queued_provider_cooldown "
+                                "outcome=%s remaining_seconds=%s",
+                                provider_call_id,
+                                (
+                                    "provider_unavailable"
+                                    if queued_cooldown.provider_unavailable_trigger is not None
+                                    else queued_cooldown.reason
+                                ),
+                                max(0, round(queued_cooldown.expires_at - now)),
+                            )
+                            if queued_cooldown.provider_unavailable_trigger is not None:
+                                raise BrowserProviderUnavailable(
+                                    queued_cooldown.provider_unavailable_trigger,
+                                    "provider_cooldown",
+                                    retry_after_seconds=max(
+                                        1,
+                                        round(queued_cooldown.expires_at - now),
+                                    ),
+                                )
+                            if queued_cooldown.reason == "provider_access_restricted":
+                                raise BrowserProtectionDetected()
+                            if queued_cooldown.reason == "rate_limited":
+                                raise BrowserRateLimited()
+                        if self._monotonic() >= deadline:
+                            raise TimeoutError
+                        async with self._state_lock:
+                            inflight = self._inflight.get(key)
+                            if inflight is None or not inflight.waiters:
+                                raise asyncio.CancelledError
+                            inflight.query_started = True
+                        started_at = self._monotonic()
+                        query_started = True
+                        logger.info(
+                            "KORAIL 운영사 조회를 시작합니다 "
+                            "event=provider_query_started provider_call_id=%s",
+                            provider_call_id,
                         )
-                    if queued_cooldown.reason == "provider_access_restricted":
-                        raise BrowserProtectionDetected()
-                    if queued_cooldown.reason == "rate_limited":
-                        raise BrowserRateLimited()
-                started_at = self._monotonic()
-                query_started = True
-                logger.info("KORAIL 운영사 조회를 시작합니다 event=provider_query_started")
-                try:
-                    result = await self._client.search(request)
-                except BrowserProviderUnavailable as error:
-                    # Publish the provider-wide hold before releasing the browser gate.
-                    # Otherwise a different queued query can slip into Chromium between
-                    # the first outage response and the outer exception handler.
-                    await self._open_cooldown(
-                        "source_unavailable",
-                        self._provider_unavailable_cooldown_seconds,
-                        provider_unavailable_trigger=error.trigger,
-                    )
-                    provider_unavailable_cooldown_opened = True
-                    raise error.with_retry_after(
-                        self._provider_unavailable_cooldown_seconds
-                    ) from None
+                        try:
+                            result = await self._client.search(request)
+                            if self._monotonic() >= deadline:
+                                raise TimeoutError
+                        except BrowserProviderUnavailable as error:
+                            # Publish the provider-wide hold before releasing the browser gate.
+                            # Otherwise a different queued query can slip into Chromium between
+                            # the first outage response and the outer exception handler.
+                            await self._open_cooldown(
+                                "source_unavailable",
+                                self._provider_unavailable_cooldown_seconds,
+                                provider_unavailable_trigger=error.trigger,
+                            )
+                            provider_unavailable_cooldown_opened = True
+                            raise error.with_retry_after(
+                                self._provider_unavailable_cooldown_seconds
+                            ) from None
             async with self._state_lock:
+                inflight = self._inflight.get(key)
+                if self._monotonic() >= deadline or inflight is None or not inflight.waiters:
+                    raise TimeoutError
                 self._failure_counts.pop(key, None)
                 self._failure_backoffs.pop(key, None)
                 self._cache[key] = _CacheEntry(
@@ -250,17 +399,44 @@ class KorailBrowserAutomation:
             logger.info(
                 "KORAIL 운영사 조회를 마쳤습니다 "
                 "event=provider_query_completed outcome=success "
-                "train_count=%s elapsed_ms=%s",
+                "train_count=%s provider_call_id=%s elapsed_ms=%s",
                 len(result.trains),
+                provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
             return result
+        except TimeoutError:
+            if query_started:
+                logger.info(
+                    "KORAIL 운영사 조회 deadline이 끝났습니다 "
+                    "event=provider_query_deadline outcome=deadline_exceeded "
+                    "provider_call_id=%s query_started=true elapsed_ms=%s",
+                    provider_call_id,
+                    max(0, round((self._monotonic() - started_at) * 1000)),
+                )
+            else:
+                logger.info(
+                    "KORAIL 운영사 조회를 생략합니다 "
+                    "event=provider_query_skipped reason=deadline_before_start "
+                    "outcome=deadline_exceeded provider_call_id=%s",
+                    provider_call_id,
+                )
+            raise BrowserSourceUnavailable("search_deadline") from None
         except asyncio.CancelledError:
             if query_started:
                 logger.info(
                     "KORAIL 운영사 조회를 중단합니다 "
-                    "event=provider_query_completed outcome=cancelled elapsed_ms=%s",
+                    "event=provider_query_completed outcome=cancelled "
+                    "provider_call_id=%s elapsed_ms=%s",
+                    provider_call_id,
                     max(0, round((self._monotonic() - started_at) * 1000)),
+                )
+            else:
+                logger.info(
+                    "KORAIL 운영사 조회를 생략합니다 "
+                    "event=provider_query_skipped reason=no_active_waiters "
+                    "outcome=cancelled provider_call_id=%s",
+                    provider_call_id,
                 )
             raise
         except BrowserRateLimited:
@@ -270,8 +446,9 @@ class KorailBrowserAutomation:
             logger.warning(
                 "KORAIL 운영사 조회를 중단합니다 "
                 "event=provider_query_completed outcome=rate_limited "
-                "cooldown_seconds=%s elapsed_ms=%s",
+                "cooldown_seconds=%s provider_call_id=%s elapsed_ms=%s",
                 self._rate_limit_cooldown_seconds,
+                provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
             raise
@@ -285,10 +462,11 @@ class KorailBrowserAutomation:
                 "KORAIL 운영사 조회를 중단합니다 "
                 "event=provider_query_completed outcome=provider_access_restricted "
                 "stage=%s trigger=%s "
-                "cooldown_seconds=%s elapsed_ms=%s",
+                "cooldown_seconds=%s provider_call_id=%s elapsed_ms=%s",
                 error.stage,
                 error.trigger,
                 self._protection_cooldown_seconds,
+                provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
             raise
@@ -304,10 +482,12 @@ class KorailBrowserAutomation:
             logger.warning(
                 "KORAIL 운영사 조회를 중단합니다 "
                 "event=provider_query_completed outcome=provider_unavailable "
-                "stage=%s trigger=%s cooldown_seconds=%s elapsed_ms=%s",
+                "stage=%s trigger=%s cooldown_seconds=%s "
+                "provider_call_id=%s elapsed_ms=%s",
                 error.stage,
                 error.trigger,
                 self._provider_unavailable_cooldown_seconds,
+                provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
             if error.retry_after_seconds is None:
@@ -318,9 +498,10 @@ class KorailBrowserAutomation:
             logger.warning(
                 "KORAIL 운영사 조회를 중단합니다 "
                 "event=provider_query_completed outcome=source_unavailable "
-                "stage=%s backoff_seconds=%s elapsed_ms=%s",
+                "stage=%s backoff_seconds=%s provider_call_id=%s elapsed_ms=%s",
                 error.stage,
                 backoff_seconds,
+                provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
             raise
@@ -329,9 +510,10 @@ class KorailBrowserAutomation:
             logger.warning(
                 "KORAIL 운영사 조회를 중단합니다 "
                 "event=provider_query_completed outcome=%s "
-                "backoff_seconds=%s elapsed_ms=%s",
+                "backoff_seconds=%s provider_call_id=%s elapsed_ms=%s",
                 error.reason,
                 backoff_seconds,
+                provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
             raise
@@ -341,14 +523,16 @@ class KorailBrowserAutomation:
                 "KORAIL 운영사 조회를 중단합니다 "
                 "event=provider_query_completed outcome=source_unavailable "
                 "stage=unexpected_backend_error "
-                "backoff_seconds=%s elapsed_ms=%s",
+                "backoff_seconds=%s provider_call_id=%s elapsed_ms=%s",
                 backoff_seconds,
+                provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
             raise BrowserSourceUnavailable() from error
         finally:
             async with self._state_lock:
-                if self._inflight.get(key) is current_task:
+                inflight = self._inflight.get(key)
+                if inflight is not None and inflight.task is current_task:
                     self._inflight.pop(key, None)
 
     async def _open_cooldown(

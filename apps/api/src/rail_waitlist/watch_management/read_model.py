@@ -10,6 +10,10 @@ from ..provider_account_management.models import RailProviderAccount
 from ..provider_registry.application import get_execution_provider
 from ..reservations.domain import reservation_attempt_result_policy
 from ..reservations.payment_hold_application import payment_hold_end_reason
+from ..reservations.progress_timing_policy import (
+    normalize_reservation_terminal_time,
+    persisted_reservation_progress_times,
+)
 from .models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
 from .schemas import WatchRead
 
@@ -36,12 +40,19 @@ def reservation_attempt_projection(
     automatic_hold_retry = (
         payment_hold_ended and reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
     )
+    progress_stages = attempt.progress_stages or []
+    finished_at = attempt.finished_at
+    if finished_at is not None:
+        finished_at = normalize_reservation_terminal_time(
+            finished_at,
+            persisted_reservation_progress_times(progress_stages),
+        )
     return {
         "outcome": attempt.outcome,
         "confirmation_outcome": attempt.confirmation_outcome,
         "started_at": attempt.started_at,
-        "finished_at": attempt.finished_at,
-        "progress_stages": attempt.progress_stages or [],
+        "finished_at": finished_at,
+        "progress_stages": progress_stages,
         "reserved_seats": attempt.reserved_seats or [],
         "post_deadline_reconciled_at": attempt.post_deadline_reconciled_at,
         "payment_hold_end_reason": hold_end_reason,

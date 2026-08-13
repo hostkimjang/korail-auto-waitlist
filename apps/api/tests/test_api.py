@@ -1786,6 +1786,51 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
     assert [candidate["latest_reservation_attempt"] for candidate in listed_candidates] == attempts
 
 
+async def test_watch_reads_normalize_terminal_time_after_progress_clock_rollback(app, client):
+    travel_date = (datetime.now(ZoneInfo("Asia/Seoul")).date() + timedelta(days=7)).isoformat()
+    created = await client.post(
+        "/api/v1/watches",
+        json=watch_payload(
+            reservation_policy="reserve_once_before_payment",
+            travel_date=travel_date,
+        ),
+    )
+    assert created.status_code == 201, created.text
+    candidate_id = created.json()["candidates"][0]["id"]
+    started_at = datetime(2030, 8, 1, 0, 15, tzinfo=UTC)
+    finished_at = started_at + timedelta(seconds=2)
+    latest_progress_at = finished_at + timedelta(milliseconds=673)
+
+    async with app.state.test_session_factory() as session:
+        session.add(
+            ReservationAttempt(
+                candidate_id=candidate_id,
+                attempt_sequence=1,
+                episode_key="clock-rollback-episode",
+                idempotency_key="clock-rollback-attempt",
+                started_at=started_at,
+                finished_at=finished_at,
+                outcome=ReservationOutcome.FAILED,
+                progress_stages=[
+                    {
+                        "stage": "authenticated_session_ready",
+                        "occurred_at": latest_progress_at.isoformat(),
+                    }
+                ],
+            )
+        )
+        await session.commit()
+
+    detail = await client.get(f"/api/v1/watches/{created.json()['id']}")
+    listed = await client.get("/api/v1/watches")
+
+    assert detail.status_code == 200, detail.text
+    assert listed.status_code == 200, listed.text
+    projected = detail.json()["candidates"][0]["latest_reservation_attempt"]
+    assert projected["finished_at"] == latest_progress_at.isoformat().replace("+00:00", "Z")
+    assert listed.json()[0]["candidates"][0]["latest_reservation_attempt"] == projected
+
+
 async def test_watch_read_projects_ended_srt_374_hold_as_new_episode_retry(app, client):
     travel_date = (datetime.now(ZoneInfo("Asia/Seoul")).date() + timedelta(days=7)).isoformat()
     created = await client.post(

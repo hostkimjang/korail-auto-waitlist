@@ -30,6 +30,7 @@ from rail_waitlist.korail_search_bootstrap import (
 from rail_waitlist.provider_accounts import ProviderCredentials
 from rail_waitlist.provider_login_verification import ProviderLoginVerificationOutcome
 from rail_waitlist.schemas import (
+    ReservationProgressStage,
     ReservationRequest,
     SeatAvailabilityProvenance,
     SeatClassAvailability,
@@ -348,10 +349,17 @@ async def test_reservation_preserves_verified_phone_login_method() -> None:
 
 
 async def test_uncertain_progress_stream_failure_is_a_no_replay_unknown_fence() -> None:
+    latest_progress_at = datetime.now(UTC) + timedelta(seconds=1)
     transport = FakeTransport(
         error=_AdapterFailure(
             "source_unavailable",
             reservation_command_uncertain=True,
+            progress_stages=(
+                ReservationProgressStage(
+                    stage="authenticated_session_ready",
+                    occurred_at=latest_progress_at,
+                ),
+            ),
         )
     )
     departure_at = datetime(2026, 8, 3, 15, 45, tzinfo=KOREA)
@@ -384,6 +392,8 @@ async def test_uncertain_progress_stream_failure_is_a_no_replay_unknown_fence() 
     )
 
     assert result.outcome is ReservationOutcome.UNKNOWN
+    assert result.observed_at == latest_progress_at
+    assert tuple(stage.occurred_at for stage in result.progress_stages) == (latest_progress_at,)
     assert len(transport.reservation_requests) == 1
 
 

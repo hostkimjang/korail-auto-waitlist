@@ -192,6 +192,9 @@ def build_automation(
     )
     return KorailBrowserAutomation(
         client,
+        search_timeout_seconds=float_setting(
+            "KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", 80, minimum=30, maximum=170
+        ),
         cache_ttl_seconds=integer_setting(
             "KORAIL_BROWSER_CACHE_TTL_SECONDS", 1, minimum=1, maximum=300
         ),

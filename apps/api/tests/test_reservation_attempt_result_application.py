@@ -230,6 +230,42 @@ async def test_terminal_result_reuses_progress_already_persisted_during_provider
     assert result_payload["progress_stages"] == attempt.progress_stages
 
 
+async def test_terminal_time_covers_progress_persisted_before_wall_clock_rollback() -> None:
+    transitions: list[tuple[WatchStatus, str | None]] = []
+    events: list[dict[str, object]] = []
+    watch = make_watch()
+    candidate = make_candidate()
+    attempt = make_attempt()
+    latest_progress_at = COMPLETED_AT + timedelta(milliseconds=673)
+    attempt.progress_stages = [
+        {
+            "stage": "authenticated_session_ready",
+            "occurred_at": latest_progress_at.isoformat(),
+        }
+    ]
+    result = ReservationResult(
+        outcome=ReservationOutcome.FAILED,
+        source="korail.owner-test",
+        observed_at=OBSERVED_AT,
+    )
+
+    await complete_reservation_attempt_application(
+        cast(AsyncSession, ResultSession()),
+        watch,
+        candidate,
+        attempt,
+        result,
+        dependencies=make_dependencies(transitions, events),
+    )
+
+    assert attempt.finished_at == latest_progress_at
+    result_event = next(
+        event for event in events if event["event_type"] == "watch.reservation_result"
+    )
+    result_payload = cast(dict[str, object], result_event["payload"])
+    assert result_payload["attempt_finished_at"] == latest_progress_at.isoformat()
+
+
 async def test_expired_success_deadline_becomes_unknown_manual_check_fence() -> None:
     transitions: list[tuple[WatchStatus, str | None]] = []
     events: list[dict[str, object]] = []

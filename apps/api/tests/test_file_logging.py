@@ -88,6 +88,39 @@ def test_configure_service_file_logging_enables_application_info_events(
     assert payload["level"] == "INFO"
     assert payload["logger"] == "rail_waitlist.korail_pydoll_browser"
     assert "event=search_succeeded" in payload["message"]
+    assert payload["event"] == "search_succeeded"
+
+
+def test_service_file_handler_promotes_only_valid_correlation_fields(tmp_path) -> None:
+    output = tmp_path / "correlation.log"
+    logger = logging.getLogger("test.file_logging.correlation")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    handler = ServiceFileHandler(output, service="worker", max_bytes=4096, backup_count=2)
+    logger.addHandler(handler)
+
+    request_id = "550e8400e29b41d4a716446655440000"
+    provider_call_id = "2f1c43d91be94a89a7bf97789c62d52f"
+    logger.info(
+        "조회 대기 event=provider_call_joined request_id=%s provider_call_id=%s",
+        request_id,
+        provider_call_id,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["event"] == "provider_call_joined"
+    assert payload["request_id"] == request_id
+    assert payload["provider_call_id"] == provider_call_id
+
+    logger.info(
+        "거절 입력 event=BAD request_id=not-a-uuid provider_call_id=%s",
+        "f" * 33,
+    )
+    rejected = json.loads(output.read_text(encoding="utf-8").splitlines()[1])
+    assert "event" not in rejected
+    assert "request_id" not in rejected
+    assert "provider_call_id" not in rejected
 
 
 def test_configure_service_console_logging_is_sanitized_and_idempotent(monkeypatch) -> None:

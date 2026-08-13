@@ -48,6 +48,7 @@ PLAYWRIGHT_SEARCH_FORM_MODULE = "rail_waitlist.korail_sidecar.playwright.search_
 PAGE_CONTRACT_MODULE = "rail_waitlist.korail_sidecar.browser_page_contracts"
 
 COORDINATOR_SYMBOLS = {"_CacheEntry", "_Cooldown", "KorailBrowserAutomation"}
+COORDINATOR_DEFINITIONS = COORDINATOR_SYMBOLS | {"_InflightSearch"}
 PLAYWRIGHT_CLIENT_SYMBOLS = {
     "PlaywrightKorailBrowserClient",
     "probe_chromium",
@@ -426,7 +427,7 @@ def test_legacy_facade_has_no_definitions_and_preserves_the_exact_68_object_surf
 
 def test_moved_symbols_have_exact_canonical_owners() -> None:
     assert _top_level_definitions(PACKAGE_ROOT / "korail_sidecar" / "search_coordinator.py") == (
-        COORDINATOR_SYMBOLS
+        COORDINATOR_DEFINITIONS
     )
     assert (
         _top_level_definitions(PACKAGE_ROOT / "korail_sidecar" / "playwright" / "client.py")

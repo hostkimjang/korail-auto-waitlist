@@ -8,6 +8,8 @@ from typing import Literal
 from SRT.errors import SRTNetFunnelError  # type: ignore[import-untyped]
 from SRT.netfunnel import NetFunnelHelper  # type: ignore[import-untyped]
 
+from ..provider_call_context import current_provider_call_id
+
 _LOGGER = logging.getLogger("rail_waitlist.srt_provider_adapter")
 
 
@@ -35,7 +37,8 @@ class LoggingNetFunnelHelper(NetFunnelHelper):  # type: ignore[misc]
                 _LOGGER.warning(
                     "SRT 공식 접속 대기열 처리에 실패했습니다 "
                     "event=provider_queue_failed "
-                    "flow=%s outcome=failed elapsed_ms=%s",
+                    "provider_call_id=%s flow=%s outcome=failed elapsed_ms=%s",
+                    self._log_provider_call_id(),
                     self._flow,
                     self._elapsed_ms(),
                 )
@@ -49,7 +52,8 @@ class LoggingNetFunnelHelper(NetFunnelHelper):  # type: ignore[misc]
                 _LOGGER.info(
                     "SRT 공식 접속 대기열이 끝나 운영사 요청을 계속합니다 "
                     "event=provider_queue_released "
-                    "flow=%s elapsed_ms=%s",
+                    "provider_call_id=%s flow=%s elapsed_ms=%s",
+                    self._log_provider_call_id(),
                     self._flow,
                     self._elapsed_ms(),
                 )
@@ -66,16 +70,19 @@ class LoggingNetFunnelHelper(NetFunnelHelper):  # type: ignore[misc]
             self._last_waiting_count = waiting_count
             _LOGGER.info(
                 "SRT 공식 접속 대기열에 들어갑니다 "
-                "event=provider_queue_entered flow=%s waiting_count=%s",
+                "event=provider_queue_entered provider_call_id=%s "
+                "flow=%s waiting_count=%s",
+                self._log_provider_call_id(),
                 self._flow,
                 "unknown" if waiting_count is None else waiting_count,
             )
         elif waiting_count != self._last_waiting_count:
             self._last_waiting_count = waiting_count
-            _LOGGER.debug(
+            _LOGGER.info(
                 "SRT 공식 접속 대기 인원이 변경되었습니다 "
                 "event=provider_queue_waiting_count_changed "
-                "flow=%s waiting_count=%s",
+                "provider_call_id=%s flow=%s waiting_count=%s",
+                self._log_provider_call_id(),
                 self._flow,
                 "unknown" if waiting_count is None else waiting_count,
             )
@@ -94,6 +101,10 @@ class LoggingNetFunnelHelper(NetFunnelHelper):  # type: ignore[misc]
         if self._queue_started_at is None:
             return 0
         return max(0, round((self._monotonic() - self._queue_started_at) * 1000))
+
+    @staticmethod
+    def _log_provider_call_id() -> str:
+        return current_provider_call_id() or "unavailable"
 
     def _reset_queue_observation(self) -> None:
         self._queue_started_at = None

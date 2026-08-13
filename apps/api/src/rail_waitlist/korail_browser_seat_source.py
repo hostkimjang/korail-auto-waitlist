@@ -133,6 +133,9 @@ class KorailBrowserSeatSource:
         _reservation_policy_owner.project_reservation_failure
     )
     _project_reservation_result = staticmethod(_reservation_policy_owner.project_reservation_result)
+    _normalize_reservation_terminal_time = staticmethod(
+        _reservation_policy_owner.normalize_reservation_terminal_time
+    )
     _select_browser_departure_from = staticmethod(
         _window_policy_owner.select_browser_departure_from
     )
@@ -157,6 +160,11 @@ class KorailBrowserSeatSource:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
         self.protection_cooldown_seconds = protection_cooldown_seconds
+        safety_margin_seconds = min(5.0, timeout_seconds * 0.1)
+        self._query_timeout_seconds = max(
+            0.001,
+            min(80.0, timeout_seconds - safety_margin_seconds),
+        )
         self._transport = transport or HttpBrowserAdapterTransport(
             adapter_url,
             timeout_seconds,
@@ -342,10 +350,14 @@ class KorailBrowserSeatSource:
             result = await self._transport.reserve_with_progress(internal_request, on_progress)
         except _AdapterFailure as error:
             if error.reservation_command_uncertain:
+                terminal_at = self._normalize_reservation_terminal_time(
+                    datetime.now(UTC),
+                    (progress.occurred_at for progress in error.progress_stages),
+                )
                 return ReservationResult(
                     outcome=ReservationOutcome.UNKNOWN,
                     source="korail-pydoll-reservation",
-                    observed_at=datetime.now(UTC),
+                    observed_at=terminal_at,
                     progress_stages=error.progress_stages,
                 )
             return self._project_reservation_failure(
@@ -503,6 +515,7 @@ class KorailBrowserSeatSource:
             load=lambda key, value: self._load(key, value),
             monotonic=lambda: self._monotonic(),
             cooldown_store=lambda: self._cooldown_store,
+            timeout_seconds=self._query_timeout_seconds,
         )
 
     async def _load(

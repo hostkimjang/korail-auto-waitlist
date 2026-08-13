@@ -1,16 +1,73 @@
 import ast
 import inspect
+import logging
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 
 import rail_waitlist.korail_browser_adapter_service as compatibility_service
 from rail_waitlist.korail_sidecar import http as canonical_http
+from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserSeatSearchRequest,
+    BrowserSeatSearchResult,
+    BrowserSourceUnavailable,
+)
+from rail_waitlist.provider_call_context import (
+    REQUEST_ID_HEADER,
+    REQUEST_TIMEOUT_MS_HEADER,
+    current_request_id,
+    validated_log_id,
+)
 
 SOURCE_ROOT = Path(__file__).parents[1] / "src" / "rail_waitlist"
+TOKEN = "k" * 32
+
+
+class CapturingAutomation:
+    def __init__(self, *, failure_stage: str | None = None) -> None:
+        self.failure_stage = failure_stage
+        self.calls: list[tuple[float | None, str | None]] = []
+
+    async def search(
+        self,
+        request: BrowserSeatSearchRequest,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> BrowserSeatSearchResult:
+        self.calls.append((timeout_seconds, current_request_id()))
+        if self.failure_stage is not None:
+            raise BrowserSourceUnavailable(self.failure_stage)
+        return BrowserSeatSearchResult(
+            origin=request.origin,
+            destination=request.destination,
+            travel_date=request.travel_date,
+            passenger_count=1,
+            observed_at=datetime(2026, 8, 13, tzinfo=UTC),
+            trains=[],
+        )
+
+    async def close(self) -> None:
+        return
+
+
+async def ready_probe() -> None:
+    return
+
+
+def seat_snapshot_payload() -> dict[str, object]:
+    return BrowserSeatSearchRequest(
+        origin="서울",
+        destination="부산",
+        travel_date=date(2026, 8, 13),
+        departure_from=time(12),
+        departure_to=time(14),
+        passenger_count=1,
+    ).model_dump(mode="json")
 
 
 def test_sidecar_facade_references_the_canonical_http_factory() -> None:
@@ -135,6 +192,91 @@ def test_sidecar_routes_are_owned_by_the_canonical_http_module() -> None:
     assert compatibility_service.app.openapi_url is None
     assert compatibility_service.app.docs_url is None
     assert compatibility_service.app.redoc_url is None
+
+
+def test_seat_snapshot_validates_request_and_timeout_headers_and_resets_context(
+    caplog,
+) -> None:
+    automation = CapturingAutomation()
+    app = compatibility_service.create_adapter_app(
+        automation=cast(canonical_http.KorailBrowserAutomation, automation),
+        token=TOKEN,
+        readiness_probe=ready_probe,
+    )
+    request_id = "42b41ae2322242b18e98ec989d09a994"
+    malicious = "bad request_id=ffffffffffffffffffffffffffffffff"
+
+    with caplog.at_level(logging.INFO), TestClient(app) as client:
+        accepted = client.post(
+            "/v1/seat-snapshot",
+            json=seat_snapshot_payload(),
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                REQUEST_ID_HEADER: request_id,
+                REQUEST_TIMEOUT_MS_HEADER: "1234",
+            },
+        )
+        replaced = client.post(
+            "/v1/seat-snapshot",
+            json=seat_snapshot_payload(),
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                REQUEST_ID_HEADER: malicious,
+                REQUEST_TIMEOUT_MS_HEADER: "999999",
+            },
+        )
+        unauthorized = client.post(
+            "/v1/seat-snapshot",
+            json=seat_snapshot_payload(),
+            headers={REQUEST_ID_HEADER: request_id},
+        )
+        invalid_timeout = client.post(
+            "/v1/seat-snapshot",
+            json=seat_snapshot_payload(),
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                REQUEST_TIMEOUT_MS_HEADER: "1000000",
+            },
+        )
+
+    generated_request_id = replaced.headers[REQUEST_ID_HEADER]
+    assert accepted.status_code == 200
+    assert accepted.headers[REQUEST_ID_HEADER] == request_id
+    assert automation.calls[0] == (1.234, request_id)
+    assert replaced.status_code == 200
+    assert validated_log_id(generated_request_id) == generated_request_id
+    assert generated_request_id != malicious
+    assert automation.calls[1] == (None, generated_request_id)
+    assert unauthorized.status_code == 401
+    assert REQUEST_ID_HEADER not in unauthorized.headers
+    assert invalid_timeout.status_code == 422
+    assert invalid_timeout.json() == {"detail": "request_validation_failed"}
+    assert "1000000" not in invalid_timeout.text
+    assert len(automation.calls) == 2
+    assert malicious not in caplog.text
+    assert current_request_id() is None
+
+
+def test_seat_snapshot_projects_internal_deadlines_as_bounded_504() -> None:
+    automation = CapturingAutomation(failure_stage="caller_deadline")
+    app = compatibility_service.create_adapter_app(
+        automation=cast(canonical_http.KorailBrowserAutomation, automation),
+        token=TOKEN,
+        readiness_probe=ready_probe,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/seat-snapshot",
+            json=seat_snapshot_payload(),
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+    assert response.status_code == 504
+    assert response.json() == {"detail": {"reason": "source_unavailable"}}
+    assert validated_log_id(response.headers[REQUEST_ID_HEADER]) is not None
+    assert automation.calls[0][0] is None
+    assert current_request_id() is None
 
 
 def test_sidecar_dependency_direction_and_lazy_pydoll_imports_are_fixed() -> None:

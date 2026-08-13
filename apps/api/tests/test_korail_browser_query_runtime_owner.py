@@ -7,6 +7,7 @@ import json
 import pickle
 import subprocess
 import sys
+import time as time_module
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -20,6 +21,11 @@ from rail_waitlist.korail_browser_automation import (
     BrowserTrainSnapshot,
 )
 from rail_waitlist.provider_adapters import korail_browser_query_runtime as owner
+from rail_waitlist.provider_call_context import (
+    bind_request_id,
+    current_request_deadline,
+    current_request_id,
+)
 
 API_ROOT = Path(__file__).resolve().parents[1]
 KOREA = ZoneInfo("Asia/Seoul")
@@ -92,15 +98,24 @@ class ControlledTransport:
         self.result = result
         self.calls = 0
         self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
         self.release = asyncio.Event()
         if not blocked:
             self.release.set()
         self.events: list[str] = []
+        self.request_ids: list[str | None] = []
+        self.deadlines: list[float | None] = []
 
     async def search(self, _request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
         self.calls += 1
+        self.request_ids.append(current_request_id())
+        self.deadlines.append(current_request_deadline())
         self.started.set()
-        await self.release.wait()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
         return self.result
 
     async def close(self) -> None:
@@ -256,6 +271,182 @@ async def test_cancelled_waiter_keeps_shared_load_until_runtime_drain() -> None:
     await asyncio.wait_for(drain, timeout=1)
     assert source._query_runtime._inflight == {}
     assert transport.calls == 1
+
+
+async def test_different_key_waiter_deadline_discards_queued_main_query() -> None:
+    first_request = _request()
+    second_request = _request(origin="대전", destination="서울")
+    transport = ControlledTransport(_result(first_request), blocked=True)
+    source = _source(transport)
+    first = asyncio.create_task(source._search(first_request))
+    await asyncio.wait_for(transport.started.wait(), timeout=1)
+    source._query_timeout_seconds = 0.01
+
+    with pytest.raises(legacy._AdapterFailure) as expired:
+        await source._search(second_request)
+
+    assert expired.value.deadline_exceeded is True
+    await source._open_cooldown(expired.value, second_request.cache_key())
+    assert second_request.cache_key() not in source._query_cooldowns
+    assert transport.calls == 1
+
+    transport.release.set()
+    assert await first == _result(first_request)
+    await source.drain_pending_calls()
+    assert source._query_runtime._inflight == {}
+
+
+async def test_cancelled_different_key_waiter_is_discarded_before_sidecar_http() -> None:
+    first_request = _request()
+    second_request = _request(origin="대전", destination="서울")
+    transport = ControlledTransport(_result(first_request), blocked=True)
+    source = _source(transport)
+    first = asyncio.create_task(source._search(first_request))
+    await asyncio.wait_for(transport.started.wait(), timeout=1)
+    queued = asyncio.create_task(source._search(second_request))
+    await asyncio.sleep(0)
+
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+    await asyncio.sleep(0)
+
+    assert transport.calls == 1
+    transport.release.set()
+    assert await first == _result(first_request)
+    await source.drain_pending_calls()
+    assert source._query_runtime._inflight == {}
+
+
+async def test_started_main_query_deadline_cancels_transport_and_does_not_back_off() -> None:
+    data = _request()
+    transport = ControlledTransport(_result(data), blocked=True)
+    source = _source(transport)
+    source._query_timeout_seconds = 0.02
+    request_id = "33333333333343338333333333333333"
+
+    with bind_request_id(request_id), pytest.raises(legacy._AdapterFailure) as expired:
+        await source._search(data)
+    await source.drain_pending_calls()
+
+    assert expired.value.deadline_exceeded is True
+    assert transport.cancelled.is_set()
+    assert transport.request_ids == [request_id]
+    assert transport.deadlines[0] is not None
+    await source._open_cooldown(expired.value, data.cache_key())
+    assert source._query_cooldowns == {}
+    assert source._query_runtime._inflight == {}
+
+
+async def test_main_deadline_waits_for_transport_cancellation_cleanup() -> None:
+    class SlowCleanupTransport(ControlledTransport):
+        def __init__(self, result: BrowserSeatSearchResult) -> None:
+            super().__init__(result, blocked=True)
+            self.cleanup_finished = asyncio.Event()
+
+        async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+            try:
+                return await super().search(request)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.01)
+                self.cleanup_finished.set()
+                raise
+
+    data = _request()
+    transport = SlowCleanupTransport(_result(data))
+    source = _source(transport)
+    source._query_timeout_seconds = 0.3
+
+    with pytest.raises(legacy._AdapterFailure) as expired:
+        await source._search(data)
+
+    assert expired.value.deadline_exceeded is True
+    assert transport.cleanup_finished.is_set()
+    assert source._query_runtime._inflight == {}
+
+
+async def test_main_cancellation_resistant_transport_rejects_late_success() -> None:
+    class CancellationResistantTransport(ControlledTransport):
+        async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+            self.calls += 1
+            self.started.set()
+            while not self.release.is_set():
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    continue
+            return self.result
+
+    data = _request()
+    transport = CancellationResistantTransport(_result(data), blocked=True)
+    source = _source(transport)
+    source._monotonic = time_module.monotonic
+    source._query_timeout_seconds = 0.03
+    caller = asyncio.create_task(source._search(data))
+    await transport.started.wait()
+
+    with pytest.raises(legacy._AdapterFailure) as expired:
+        await asyncio.wait_for(caller, timeout=0.15)
+
+    assert expired.value.deadline_exceeded is True
+    assert data.cache_key() in source._query_runtime._inflight
+
+    transport.release.set()
+    await source.drain_pending_calls()
+    assert data.cache_key() not in source._query_runtime._cache
+    assert await source._search(data) == _result(data)
+
+
+async def test_main_singleflight_preserves_creator_request_context() -> None:
+    data = _request()
+    transport = ControlledTransport(_result(data), blocked=True)
+    source = _source(transport)
+    first_request_id = "44444444444444448444444444444444"
+    second_request_id = "55555555555545559555555555555555"
+
+    with bind_request_id(first_request_id):
+        first = asyncio.create_task(source._search(data))
+    await asyncio.wait_for(transport.started.wait(), timeout=1)
+    with bind_request_id(second_request_id):
+        second = asyncio.create_task(source._search(data))
+    await asyncio.sleep(0)
+
+    transport.release.set()
+    await asyncio.gather(first, second)
+
+    assert transport.calls == 1
+    assert transport.request_ids == [first_request_id]
+
+
+async def test_main_query_binds_the_original_absolute_deadline_after_cooldown_reads() -> None:
+    class AdvancingClock:
+        def __init__(self) -> None:
+            self.value = 100.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    class DelayingCooldownStore:
+        def __init__(self, clock: AdvancingClock) -> None:
+            self.clock = clock
+
+        async def get(self, _key: str) -> None:
+            self.clock.value += 0.2
+            return None
+
+        async def set(self, _key: str, _reason: str, _seconds: int) -> None:
+            return
+
+    data = _request()
+    clock = AdvancingClock()
+    transport = ControlledTransport(_result(data))
+    source = _source(transport)
+    source._monotonic = clock
+    source._cooldown_store = DelayingCooldownStore(clock)
+
+    assert await source._search(data) == _result(data)
+
+    assert transport.deadlines == [pytest.approx(100.8)]
 
 
 async def test_close_uses_public_drain_seam_before_transport_close() -> None:

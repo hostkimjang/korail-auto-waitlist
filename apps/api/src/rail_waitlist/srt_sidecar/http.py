@@ -6,12 +6,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import cast
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import RequestResponseEndpoint
 
+from ..provider_call_context import REQUEST_ID_HEADER, bind_request_id, validated_log_id
 from .application import (
     SrtLoginExceptionTypes,
     SrtProviderExecutor,
@@ -28,6 +29,9 @@ from .contracts import (
     SrtLoginResult,
     SrtObserveRequest,
     SrtObserveResult,
+    SrtReadOnlyCallRegistrationRequest,
+    SrtReadOnlyCallRegistrationResult,
+    SrtReadOnlyCallStatus,
     SrtReservationConfirmationResult,
     SrtReserveOnceRequest,
     SrtReserveOnceResult,
@@ -39,6 +43,11 @@ from .contracts import (
     SrtTimetableTrain,
 )
 from .ports import EnvironmentReader, RedisResource
+from .read_only_lifecycle import READ_ONLY_CALL_ID_HEADER, SrtReadOnlyCallRegistry
+
+_TRACKED_READ_ONLY_PATHS = frozenset(
+    {"/v1/observe", "/v1/timetable-overlay", "/v1/timetable-search"}
+)
 
 
 @dataclass(frozen=True)
@@ -68,6 +77,7 @@ def create_srt_provider_adapter_app(
             app.state.source, app.state.redis = dependencies.build_default_source()
         else:
             app.state.source = source
+        app.state.read_only_registry = SrtReadOnlyCallRegistry(app.state.source)
         app.state.executor = executor or dependencies.default_executor()
         app.state.ready = True
         try:
@@ -111,10 +121,33 @@ def create_srt_provider_adapter_app(
                     content={"detail": "unauthorized"},
                     headers={"Cache-Control": "no-store"},
                 )
-        response = await call_next(request)
-        if request.url.path.startswith("/v1/"):
+            supplied_request_id = validated_log_id(request.headers.get(REQUEST_ID_HEADER))
+            with bind_request_id(supplied_request_id) as request_id:
+                tracked_call_id = request.headers.get(READ_ONLY_CALL_ID_HEADER)
+                registry = cast(SrtReadOnlyCallRegistry, request.app.state.read_only_registry)
+                response: Response
+                if request.url.path in _TRACKED_READ_ONLY_PATHS and tracked_call_id is not None:
+                    if validated_log_id(tracked_call_id) is None:
+                        response = JSONResponse(
+                            status_code=422,
+                            content={"detail": "request_validation_failed"},
+                        )
+                    elif not await registry.begin(tracked_call_id, request_id):
+                        response = JSONResponse(
+                            status_code=409,
+                            content={"detail": "read_only_call_not_registered"},
+                        )
+                    else:
+                        try:
+                            response = await call_next(request)
+                        finally:
+                            await registry.finish(tracked_call_id)
+                else:
+                    response = await call_next(request)
             response.headers["Cache-Control"] = "no-store"
-        return response
+            response.headers[REQUEST_ID_HEADER] = request_id
+            return response
+        return await call_next(request)
 
     @app.get("/readyz", include_in_schema=False)
     async def readyz(request: Request) -> dict[str, str]:
@@ -128,6 +161,36 @@ def create_srt_provider_adapter_app(
             cast(SrtProviderSource, request.app.state.source),
             cast(SrtProviderExecutor, request.app.state.executor),
             monotonic=monotonic,
+        )
+
+    @app.post(
+        "/v1/read-only-call-register",
+        response_model=SrtReadOnlyCallRegistrationResult,
+    )
+    async def register_read_only_call(
+        data: SrtReadOnlyCallRegistrationRequest,
+        request: Request,
+    ) -> SrtReadOnlyCallRegistrationResult:
+        if validated_log_id(data.call_id) is None or validated_log_id(data.request_id) is None:
+            raise HTTPException(422, "request_validation_failed")
+        registry = cast(SrtReadOnlyCallRegistry, request.app.state.read_only_registry)
+        accepted = await registry.register(data.call_id, data.request_id)
+        return SrtReadOnlyCallRegistrationResult(
+            accepted=accepted,
+            instance_id=registry.instance_id,
+        )
+
+    @app.get("/v1/read-only-call-status", response_model=SrtReadOnlyCallStatus)
+    async def read_only_call_status(
+        request: Request,
+        call_id: str = Query(min_length=32, max_length=32),
+    ) -> SrtReadOnlyCallStatus:
+        if validated_log_id(call_id) is None:
+            raise HTTPException(422, "request_validation_failed")
+        registry = cast(SrtReadOnlyCallRegistry, request.app.state.read_only_registry)
+        return SrtReadOnlyCallStatus(
+            state=await registry.status(call_id),
+            instance_id=registry.instance_id,
         )
 
     @app.post("/v1/prewarm-or-verify-login", response_model=SrtLoginResult)

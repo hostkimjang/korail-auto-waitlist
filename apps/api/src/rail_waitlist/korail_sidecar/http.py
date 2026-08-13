@@ -23,6 +23,12 @@ from ..korail_sidecar.browser_contracts import (
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
 )
+from ..provider_call_context import (
+    REQUEST_ID_HEADER,
+    REQUEST_TIMEOUT_MS_HEADER,
+    bind_request_id,
+    validated_log_id,
+)
 from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
@@ -58,6 +64,7 @@ from .runtime import KorailBrowserEngine
 from .search_coordinator import KorailBrowserAutomation
 
 NO_STORE_HEADERS = {"Cache-Control": "no-store"}
+MAX_SEAT_SNAPSHOT_TIMEOUT_MS = 170_000
 
 
 class _ReservationClient(Protocol):
@@ -315,6 +322,7 @@ def create_adapter_app(
         error: RequestValidationError,
     ) -> Response:
         if request.url.path in {
+            "/v1/seat-snapshot",
             "/v1/verify-login",
             "/v1/prewarm-login",
             "/v1/reserve-once",
@@ -383,33 +391,67 @@ def create_adapter_app(
         request: BrowserSeatSearchRequest,
         response: Response,
         authorization: str | None = Header(default=None),
+        rail_request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
+        rail_timeout_ms: str | None = Header(
+            default=None,
+            alias=REQUEST_TIMEOUT_MS_HEADER,
+            max_length=6,
+        ),
     ) -> BrowserSeatSearchResult:
         response.headers["Cache-Control"] = "no-store"
         expected = f"Bearer {app.state.token}"
         if authorization is None or not hmac.compare_digest(authorization, expected):
             raise HTTPException(401, "unauthorized", headers=NO_STORE_HEADERS)
-        if not app.state.readiness.ready:
-            raise HTTPException(503, "not_ready", headers=NO_STORE_HEADERS)
-        try:
-            automation_owner = cast(KorailBrowserAutomation, app.state.automation)
-            return await automation_owner.search(request)
-        except BrowserRateLimited as error:
-            raise HTTPException(429, {"reason": error.reason}, headers=NO_STORE_HEADERS) from None
-        except BrowserProtectionDetected as error:
-            raise HTTPException(423, {"reason": error.reason}, headers=NO_STORE_HEADERS) from None
-        except BrowserProviderUnavailable as error:
-            retry_after = error.retry_after_seconds
-            headers = dict(NO_STORE_HEADERS)
-            if retry_after is not None:
-                headers["Retry-After"] = str(retry_after)
-            raise HTTPException(503, {"reason": error.reason}, headers=headers) from None
-        except BrowserSourceUnavailable as error:
-            raise HTTPException(503, {"reason": error.reason}, headers=NO_STORE_HEADERS) from None
-        except BrowserAdapterError as error:
-            status = 422 if error.reason == "passenger_count_not_supported" else 503
-            raise HTTPException(
-                status, {"reason": error.reason}, headers=NO_STORE_HEADERS
-            ) from None
+        with bind_request_id(validated_log_id(rail_request_id)) as request_id:
+            response.headers[REQUEST_ID_HEADER] = request_id
+            response_headers = {**NO_STORE_HEADERS, REQUEST_ID_HEADER: request_id}
+            if not app.state.readiness.ready:
+                raise HTTPException(503, "not_ready", headers=response_headers)
+            timeout_ms = None
+            if (
+                rail_timeout_ms is not None
+                and rail_timeout_ms.isascii()
+                and rail_timeout_ms.isdigit()
+            ):
+                parsed_timeout_ms = int(rail_timeout_ms)
+                if 1 <= parsed_timeout_ms <= MAX_SEAT_SNAPSHOT_TIMEOUT_MS:
+                    timeout_ms = parsed_timeout_ms
+            try:
+                automation_owner = cast(KorailBrowserAutomation, app.state.automation)
+                if timeout_ms is None:
+                    return await automation_owner.search(request)
+                return await automation_owner.search(request, timeout_seconds=timeout_ms / 1000)
+            except BrowserRateLimited as error:
+                raise HTTPException(
+                    429,
+                    {"reason": error.reason},
+                    headers=response_headers,
+                ) from None
+            except BrowserProtectionDetected as error:
+                raise HTTPException(
+                    423,
+                    {"reason": error.reason},
+                    headers=response_headers,
+                ) from None
+            except BrowserProviderUnavailable as error:
+                retry_after = error.retry_after_seconds
+                headers = dict(response_headers)
+                if retry_after is not None:
+                    headers["Retry-After"] = str(retry_after)
+                raise HTTPException(503, {"reason": error.reason}, headers=headers) from None
+            except BrowserSourceUnavailable as error:
+                raise HTTPException(
+                    504 if error.stage in {"caller_deadline", "search_deadline"} else 503,
+                    {"reason": error.reason},
+                    headers=response_headers,
+                ) from None
+            except BrowserAdapterError as error:
+                status = 422 if error.reason == "passenger_count_not_supported" else 503
+                raise HTTPException(
+                    status,
+                    {"reason": error.reason},
+                    headers=response_headers,
+                ) from None
 
     @app.post(
         "/v1/reserve-once",

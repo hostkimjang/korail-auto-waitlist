@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
+from .provider_call_context import validated_log_id
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows unit tests use the thread lock.
@@ -40,6 +42,11 @@ _BEARER = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
 _URL_QUERY = re.compile(r"(https?://[^\s?]+)\?[^\s]+", re.IGNORECASE)
 _RELATIVE_URL_QUERY = re.compile(r"(?P<path>/[^\s?\"]+)\?[^\s\"]+")
 _URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", re.IGNORECASE)
+_STRUCTURED_EVENT = re.compile(r"(?:^|\s)event=(?P<value>[a-z][a-z0-9_]{0,63})(?:\s|$)")
+_STRUCTURED_LOG_ID = {
+    name: re.compile(rf"(?:^|\s){name}=(?P<value>[0-9a-f]{{32}})(?:\s|$)")
+    for name in ("request_id", "provider_call_id")
+}
 _handler_cache: dict[str, ServiceFileHandler] = {}
 _handler_cache_lock = threading.Lock()
 
@@ -77,13 +84,23 @@ class SafeJsonFormatter(logging.Formatter):
         self._service = service
 
     def format(self, record: logging.LogRecord) -> str:
+        message = _sanitize(record.getMessage())
         payload: dict[str, str] = {
             "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "service": self._service,
             "level": record.levelname,
             "logger": record.name,
-            "message": _sanitize(record.getMessage()),
+            "message": message,
         }
+        event_match = _STRUCTURED_EVENT.search(message)
+        if event_match is not None:
+            payload["event"] = event_match.group("value")
+        for field, pattern in _STRUCTURED_LOG_ID.items():
+            identifier_match = pattern.search(message)
+            if identifier_match is not None:
+                identifier = validated_log_id(identifier_match.group("value"))
+                if identifier is not None:
+                    payload[field] = identifier
         if record.exc_info is not None and record.exc_info[0] is not None:
             payload["error_type"] = record.exc_info[0].__name__
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 import rail_waitlist.korail_browser_adapter_service as compatibility_service
 from rail_waitlist.korail_sidecar import runtime
 
@@ -72,6 +74,26 @@ def test_build_browser_client_forwards_dialog_auto_action_setting(
     )
 
     assert captured["auto_handle_dialogs"] is True
+
+
+def test_search_timeout_setting_accepts_only_the_internal_budget_range(monkeypatch) -> None:
+    class FakeClient:
+        pass
+
+    browser_client = FakeClient()
+    monkeypatch.setenv("KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", "79.5")
+
+    automation = runtime.build_automation(browser_client=browser_client)
+
+    assert automation._search_timeout_seconds == 79.5
+
+    for invalid in ("29.9", "170.1"):
+        monkeypatch.setenv("KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", invalid)
+        with pytest.raises(
+            RuntimeError,
+            match="KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS must be between 30 and 170",
+        ):
+            runtime.build_automation(browser_client=browser_client)
 
 
 def test_sidecar_runtime_does_not_reverse_depend_on_http_or_the_compatibility_facade() -> None:

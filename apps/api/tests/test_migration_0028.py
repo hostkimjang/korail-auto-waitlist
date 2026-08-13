@@ -18,7 +18,7 @@ def test_migration_0028_adds_unique_web_push_device_key(tmp_path, monkeypatch) -
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == ("0033_observation_in_flight")
+    assert ScriptDirectory.from_config(config).get_current_head() == ("0034_progress_terminal_time")
 
     command.upgrade(config, "head")
     with sqlite3.connect(database_path) as connection:

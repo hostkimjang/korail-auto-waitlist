@@ -55,11 +55,11 @@ class Settings(BaseSettings):
     srt_reservation_once_enabled: bool = False
     srt_fullstack_fixture_url: str | None = None
     srt_seat_status_cache_ttl_seconds: int = Field(default=1, ge=1, le=300)
-    srt_seat_status_timeout_seconds: float = Field(default=8, ge=3, le=30)
+    srt_seat_status_timeout_seconds: float = Field(default=25, ge=3, le=30)
     srt_provider_adapter_enabled: bool = False
     srt_provider_adapter_url: str = "http://srt-provider-adapter:8002"
     srt_provider_adapter_token: str | None = None
-    srt_provider_adapter_timeout_seconds: float = Field(default=30, ge=3, le=120)
+    srt_provider_adapter_timeout_seconds: float = Field(default=35, ge=3, le=120)
     seat_status_rate_limit_cooldown_seconds: int = Field(default=300, ge=60, le=86400)
     seat_status_protection_cooldown_seconds: int = Field(default=60, ge=60, le=86400)
     korail_browser_bridge_enabled: bool = False
@@ -163,6 +163,11 @@ class Settings(BaseSettings):
         self.srt_provider_adapter_url = "http://srt-provider-adapter:8002"
         if not self.srt_provider_adapter_enabled:
             return self
+        if self.srt_provider_adapter_timeout_seconds <= self.srt_seat_status_timeout_seconds:
+            raise ValueError(
+                "SRT_PROVIDER_ADAPTER_TIMEOUT_SECONDS must be greater than "
+                "SRT_SEAT_STATUS_TIMEOUT_SECONDS"
+            )
         token = self.srt_provider_adapter_token
         if token is None or len(token.encode("utf-8")) < 32:
             raise ValueError(

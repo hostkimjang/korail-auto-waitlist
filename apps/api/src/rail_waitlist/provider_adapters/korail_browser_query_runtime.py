@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..korail_sidecar.browser_contracts import BrowserSeatSearchRequest, BrowserSeatSearchResult
 from ..korail_sidecar.client import _AdapterFailure
+from ..provider_call_context import (
+    bind_request_deadline_at,
+    bind_request_id,
+    current_request_deadline,
+    current_request_id,
+    new_log_id,
+)
 from ..seat_status_cooldown import (
     KORAIL_BROWSER_COOLDOWN_KEY,
     KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY,
@@ -27,6 +35,8 @@ SecondsReader = Callable[[], int]
 CooldownObserver = Callable[[_AdapterFailure, QueryKey], Awaitable[None]]
 
 SOURCE_FAILURE_COOLDOWN_MAX_SECONDS = 300
+MAIN_QUERY_CLEANUP_GRACE_SECONDS = 1.0
+logger = logging.getLogger("rail_waitlist.korail_browser_query_runtime")
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,15 @@ class _QueryCooldown:
     reason: SeatAvailabilityNotObservedReason
 
 
+@dataclass
+class _InflightQuery:
+    task: asyncio.Task[BrowserSeatSearchResult]
+    shared_request_id: str
+    deadline: float
+    waiters: dict[str, str] = field(default_factory=dict)
+    provider_started: bool = False
+
+
 class _ProviderCooldown(RuntimeError):
     def __init__(self, reason: SeatAvailabilityNotObservedReason) -> None:
         self.reason = reason
@@ -52,7 +71,7 @@ class KorailBrowserQueryRuntime:
 
     def __init__(self) -> None:
         self._cache: dict[QueryKey, _CacheEntry] = {}
-        self._inflight: dict[QueryKey, asyncio.Task[BrowserSeatSearchResult]] = {}
+        self._inflight: dict[QueryKey, _InflightQuery] = {}
         self._state_lock = asyncio.Lock()
         self._provider_gate = asyncio.Semaphore(1)
         self._failure_count = 0
@@ -72,9 +91,18 @@ class KorailBrowserQueryRuntime:
         load: QueryLoad,
         monotonic: Monotonic,
         cooldown_store: CooldownStoreReader,
+        timeout_seconds: float,
     ) -> BrowserSeatSearchResult:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         key = request.cache_key()
         now = monotonic()
+        request_id = current_request_id() or new_log_id()
+        waiter_token = new_log_id()
+        inherited_deadline = current_request_deadline()
+        caller_deadline = now + timeout_seconds
+        if inherited_deadline is not None:
+            caller_deadline = min(caller_deadline, inherited_deadline)
         async with self._state_lock:
             expired_query_keys = [
                 query_key
@@ -99,11 +127,110 @@ class KorailBrowserQueryRuntime:
             query_cooldown = self._query_cooldowns.get(key)
             if query_cooldown is not None:
                 raise _ProviderCooldown(query_cooldown.reason)
-            task = self._inflight.get(key)
-            if task is None:
-                task = asyncio.create_task(load(key, request))
-                self._inflight[key] = task
-        return await asyncio.shield(task)
+            inflight = self._inflight.get(key)
+            if inflight is not None and inflight.task.done():
+                self._inflight.pop(key, None)
+                inflight = None
+            if inflight is None:
+                remaining_budget = max(0.0, caller_deadline - monotonic())
+                cleanup_grace = min(
+                    MAIN_QUERY_CLEANUP_GRACE_SECONDS,
+                    remaining_budget * 0.2,
+                )
+                provider_deadline = caller_deadline - cleanup_grace
+                with (
+                    bind_request_id(request_id),
+                    bind_request_deadline_at(provider_deadline) as deadline,
+                ):
+                    task = asyncio.create_task(load(key, request))
+                task.add_done_callback(self._consume_task_terminal)
+                inflight = _InflightQuery(
+                    task=task,
+                    shared_request_id=request_id,
+                    deadline=deadline,
+                )
+                self._inflight[key] = inflight
+                logger.info(
+                    "KORAIL main query task created event=main_query_created request_id=%s",
+                    request_id,
+                )
+            else:
+                logger.info(
+                    "KORAIL main singleflight joined "
+                    "event=main_query_singleflight_join request_id=%s shared_request_id=%s",
+                    request_id,
+                    inflight.shared_request_id,
+                )
+            inflight.waiters[waiter_token] = request_id
+        waiter_released = False
+        try:
+            remaining = caller_deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            async with asyncio.timeout(remaining):
+                return await asyncio.shield(inflight.task)
+        except TimeoutError:
+            logger.info(
+                "KORAIL main query waiter deadline ended "
+                "event=main_query_waiter_deadline request_id=%s shared_request_id=%s",
+                request_id,
+                inflight.shared_request_id,
+            )
+            await self._release_waiter(key, inflight, waiter_token)
+            waiter_released = True
+            raise _AdapterFailure("source_unavailable", deadline_exceeded=True) from None
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                logger.info(
+                    "KORAIL main query caller cancelled "
+                    "event=main_query_waiter_cancelled request_id=%s shared_request_id=%s "
+                    "upstream_still_running=%s",
+                    request_id,
+                    inflight.shared_request_id,
+                    str(not inflight.task.done()).lower(),
+                )
+                raise
+            if inflight.provider_started:
+                raise
+            await self._release_waiter(key, inflight, waiter_token)
+            waiter_released = True
+            remaining = caller_deadline - monotonic()
+            if remaining <= 0:
+                raise _AdapterFailure("source_unavailable", deadline_exceeded=True) from None
+            with bind_request_id(request_id):
+                return await self.search(
+                    request,
+                    load=load,
+                    monotonic=monotonic,
+                    cooldown_store=cooldown_store,
+                    timeout_seconds=remaining,
+                )
+        finally:
+            if not waiter_released:
+                await self._release_waiter(key, inflight, waiter_token)
+
+    @staticmethod
+    def _consume_task_terminal(task: asyncio.Task[BrowserSeatSearchResult]) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    async def _release_waiter(
+        self,
+        key: QueryKey,
+        inflight: _InflightQuery,
+        waiter_token: str,
+    ) -> None:
+        async with self._state_lock:
+            inflight.waiters.pop(waiter_token, None)
+            if (
+                self._inflight.get(key) is inflight
+                and not inflight.waiters
+                and not inflight.provider_started
+                and not inflight.task.done()
+                and not inflight.task.cancelling()
+            ):
+                inflight.task.cancel()
 
     async def load(
         self,
@@ -117,17 +244,43 @@ class KorailBrowserQueryRuntime:
         cache_ttl_seconds: SecondsReader,
     ) -> BrowserSeatSearchResult:
         current_task = asyncio.current_task()
+        provider_started = False
         try:
-            async with self._provider_gate:
-                outage = await cooldown_store().get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
-                if outage is not None:
-                    raise _ProviderCooldown("source_unavailable")
-                try:
-                    result = await provider_search()
-                except _AdapterFailure as error:
-                    if error.cooldown_scope == "provider":
-                        await observe_cooldown(error, key)
-                    raise
+            deadline = current_request_deadline()
+            if deadline is None:
+                raise RuntimeError("KORAIL query task is missing its request deadline")
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise _AdapterFailure("source_unavailable", deadline_exceeded=True)
+            try:
+                async with asyncio.timeout(remaining):
+                    async with self._provider_gate:
+                        outage = await cooldown_store().get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
+                        if outage is not None:
+                            raise _ProviderCooldown("source_unavailable")
+                        if monotonic() >= deadline:
+                            raise TimeoutError
+                        async with self._state_lock:
+                            inflight = self._inflight.get(key)
+                            if inflight is None or not inflight.waiters:
+                                raise asyncio.CancelledError
+                            inflight.provider_started = True
+                        provider_started = True
+                        try:
+                            result = await provider_search()
+                            if monotonic() >= deadline:
+                                raise TimeoutError
+                        except _AdapterFailure as error:
+                            if error.cooldown_scope == "provider":
+                                await observe_cooldown(error, key)
+                            raise
+            except TimeoutError:
+                logger.info(
+                    "KORAIL main query deadline ended "
+                    "event=main_query_deadline outcome=deadline_exceeded query_started=%s",
+                    str(provider_started).lower(),
+                )
+                raise _AdapterFailure("source_unavailable", deadline_exceeded=True) from None
             if (
                 result.origin != request.origin
                 or result.destination != request.destination
@@ -136,6 +289,18 @@ class KorailBrowserQueryRuntime:
             ):
                 raise _AdapterFailure("source_unavailable")
             async with self._state_lock:
+                inflight = self._inflight.get(key)
+                if monotonic() >= deadline or inflight is None or not inflight.waiters:
+                    logger.info(
+                        "KORAIL main query deadline ended "
+                        "event=main_query_deadline outcome=deadline_exceeded "
+                        "query_started=%s",
+                        str(provider_started).lower(),
+                    )
+                    raise _AdapterFailure(
+                        "source_unavailable",
+                        deadline_exceeded=True,
+                    )
                 self._failure_count = 0
                 self._query_failure_counts.pop(key, None)
                 self._query_cooldowns.pop(key, None)
@@ -146,7 +311,8 @@ class KorailBrowserQueryRuntime:
             return result
         finally:
             async with self._state_lock:
-                if self._inflight.get(key) is current_task:
+                inflight = self._inflight.get(key)
+                if inflight is not None and inflight.task is current_task:
                     self._inflight.pop(key, None)
 
     async def open_cooldown(
@@ -159,6 +325,8 @@ class KorailBrowserQueryRuntime:
         rate_limit_seconds: SecondsReader,
         protection_seconds: SecondsReader,
     ) -> None:
+        if error.deadline_exceeded:
+            return
         if error.cooldown_scope == "provider":
             duration = error.retry_after_seconds or SOURCE_FAILURE_COOLDOWN_MAX_SECONDS
             await cooldown_store().set(
@@ -195,7 +363,7 @@ class KorailBrowserQueryRuntime:
 
         while True:
             async with self._state_lock:
-                tasks = tuple(self._inflight.values())
+                tasks = tuple(inflight.task for inflight in self._inflight.values())
             if not tasks:
                 return
             await asyncio.gather(*tasks, return_exceptions=True)

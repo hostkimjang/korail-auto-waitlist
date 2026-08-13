@@ -65,6 +65,8 @@
 - [x] Docker Compose 실행과 health check
 - [x] `.env.example` 기반 KORAIL·SRT 좌석 조회·감시 기본 활성화, 예약 gate 분리, 300초 호출 제한·60초 보호 cooldown과 숫자형 설정 범위 문서화
 - [x] SRT 공식 접속 대기 진입·통과와 caller timeout 뒤 provider 종료를 구분하고, KORAIL 실제 조회 시작·성공·보호·호출 제한·source 실패를 분류하는 secret-free 구조화 로그
+- [x] SRT·KORAIL 읽기 조회의 gate 포함 내부 deadline, caller가 사라진 미시작 작업 폐기, deadline 비-cooldown 분류와 request/provider-call UUID correlation 회귀 및 experimental profile 재빌드·healthy 재생성
+- [x] SRT sidecar 읽기 호출의 인증 사전 등록·tri-state terminal 확인, status 장애 fail-closed 재시도와 취소 중 execution lease 조기 해제 방지 회귀
 - [x] 2026년 8월 13일 KORAIL 정기점검 중 `source_unavailable` 관측을 좌석 발견으로 오인하지 않고 01:30~02:17 KST 신규 예약 시도 0건으로 닫은 fail-closed 운영 확인
 - [x] KORAIL `rejectservice_job.html`·서비스 중단 HTML을 내부 전용 상태로 분류하고 Pydoll·Playwright·HTTP replay, 서로 다른 queued query·이전 좌석 cache와 API Redis hold까지 provider-wide cooldown으로 차단하는 fixture·경쟁조건 회귀 및 experimental profile 재배포
 - [ ] KORAIL 점검 종료와 기존 cooldown 해제 뒤 읽기 조회 1회에서 fresh `official_provider` 관측·성공 lifecycle·신규 예약 시도 0건 확인
@@ -79,7 +81,7 @@
 - [x] 효과 없는 KORAIL accountless 설정·앱 조립 제거와 browser sidecar HTTP client 기능 owner 분리
 - [x] KORAIL browser adapter service의 route/runtime 정책 분리 완료와 top-level ASGI composition root·Docker entrypoint 유지 계약 고정
 - [x] KORAIL browser companion HTTP/UoW와 read-only snapshot overlay owner 분리, canonical consumer·legacy import/pickle 호환 보존
-- [ ] KORAIL browser companion snapshot 422 응답에서 거절된 입력값을 제외하는 validation detail redaction 보강
+- [x] KORAIL browser companion snapshot 422 응답에서 거절된 입력값을 제외하는 고정 validation detail redaction
 - [x] KORAIL browser 요청·결과·오류 계약과 Playwright·Pydoll·HTTP replay 공통 보호 판정 leaf owner 분리
 - [x] KORAIL browser 검색 coordinator·공유 page 계약·Playwright direct-CDP/DOM owner 분리와 top-level exact facade 보존
 - [x] KORAIL Playwright 결과 row·좌석 snapshot reader 분리와 client private wrapper·legacy exact alias 보존
@@ -114,6 +116,7 @@
 - [x] KORAIL browser KST 조회 시작 시간창 순수 policy owner 분리와 기존 picker method·clock late-dispatch 보존
 - [x] KORAIL browser 관측 request·정확 열차/시각 결과 순수 policy owner 분리와 source late-dispatch 보존
 - [x] KORAIL browser 예약 request/result 순수 policy owner 분리와 source late-dispatch 호환 wrapper 보존
+- [x] KORAIL 예약 진행·완료의 프로세스 간 wall-clock 역행 정규화, 기존 행 `0034` 보정과 대기 목록 500 회귀 검증
 - [x] KORAIL browser source를 stateful provider composition shell로 동결하고 strict typing·canonical owner 단방향 의존 고정
 - [x] 중앙 `services.py`를 production consumer·직접 SQL/UoW 없는 14-wrapper compatibility composition facade로 동결하고 strict typing 고정
 - [x] 철도 provider account 암복호화·CRUD·generation CAS·watch 재개 UoW를 feature application owner로 이동하고 legacy import·pickle 호환 보존
@@ -192,6 +195,7 @@
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
 - [ ] 실제 SRT 혼잡 시간대에 접속 대기 진입→통과→조회 재개 또는 caller timeout→late 종료 로그 순서와 비밀값 미노출 확인
+- [ ] 새 25/35초 timeout과 UUID correlation 배포 뒤 실제 SRT 혼잡 시간대에서 조기 caller 실패 감소, queue→query→late 종료의 동일 `provider_call_id`와 secret-free 로그 확인
 - [x] Playwright v1.55.0 Chromium seccomp 프로필과 최소 `SYS_CHROOT` capability를 KORAIL adapter에만 적용하고 `pwuser`·읽기 전용 루트·`cap_drop: ALL`·`no-new-privileges`를 보존한 재배포 확인
 - [x] OCI ARM64 네이티브 환경에서 KORAIL sidecar `/readyz`와 보호 응답 뒤 HTTP 423 cooldown·fail-closed 동작 확인
 - [x] OCI ARM64 네이티브 환경의 Pydoll GUI/non-headless 1회 읽기 조회에서 서울→부산 열차 13개와 좌석 상태 판독, page·desktop 캡처 확인

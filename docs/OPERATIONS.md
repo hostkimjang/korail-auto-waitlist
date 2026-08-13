@@ -329,21 +329,82 @@ docker compose -f compose.yml logs -f --tail=200 api worker maintenance-worker n
 ```
 
 서비스별 파일 로그는 `logs/<service>/current.log`에 기록됩니다. 파일은 자동으로 회전하며 `logs/README.md`만 Git에 포함됩니다.
+조회 lifecycle 메시지의 검증된 `event`, `request_id`, `provider_call_id`는 JSON 최상위 필드에도 복제됩니다.
+`request_id`는 API·worker가 시작한 내부 sidecar 호출 한 번, `provider_call_id`는 cache miss 뒤 만들어진 실제
+운영사 호출 후보 한 번을 뜻합니다. gate에서 폐기되면 I/O 없이도 ID가 존재하므로 실제 접근 여부는
+`provider_query_started`로 판별합니다. singleflight에서는 여러 `request_id`가 같은 `provider_call_id`에
+연결되는 것이 정상입니다.
+두 값은 운영 추적 전용 임시 UUID이므로 metric label이나 인증·lease 식별자로 사용하지 않습니다.
 
-SRT의 `event=provider_queue_entered`는 SRTrain이 공식 접속 대기를 시작했다는 뜻이고,
+SRT의 accountless 읽기 조회에서 `event=provider_queue_entered`는 SRTrain이 공식 접속 대기를 시작했다는 뜻이고,
 `event=provider_queue_released`는 대기 통과와 NetFunnel 완료 통지가 성공해 운영사 요청을 계속한다는
-뜻입니다. 다만 `event=provider_call_timed_out`가 먼저 기록되면 동기 provider 작업이 백그라운드에서
-마무리되더라도 그 결과는 이미 끝난 API 요청에 반영되지 않습니다. 이때
-`upstream_still_running=true`이면 실제 종료 여부를 `event=provider_call_finished_after_timeout`에서
-확인합니다. 로그에는 대기 인원·경과시간·고정된 결과 분류만 넣고 NetFunnel key와 응답 원문은 넣지
-않습니다. 이 제한시간에는 로컬 provider gate 대기도 포함되므로, 실제 운영사 I/O 시작 여부는 같은 구간의
-`event=provider_query_started`로 구분합니다.
+뜻입니다. `provider_queue_waiting_count_changed`는 검증된 대기 인원이 실제로 달라질 때만 INFO로 남습니다.
+세 event의 같은 `provider_call_id`를 따라가면 vendor가 stdout에 출력하는 ID 없는 안내와 구분할 수 있습니다.
+인증 예약 흐름도 같은 queue helper를 사용하지만 현재 read-only correlation 범위 밖이므로 이 필드는
+`unavailable`이며, 예약 로그를 accountless 조회 lifecycle에 합치지 않습니다.
+다만 `event=provider_call_timed_out`가 먼저 기록되면 동기 provider 작업은 백그라운드에서 마무리될 수
+있습니다. 이때
+`phase=provider_io upstream_still_running=true`이면 실제 종료 여부를
+`event=provider_call_finished_after_timeout`에서 확인합니다. `phase=provider_gate_wait`는
+`provider_call_abandoned_before_start`로 끝날 수 있고 이때 late 종료 event는 없습니다. 늦은 성공은 이미
+timeout된 응답을 바꾸지 않지만 같은 실제 작업의 짧은 cache에는 저장됩니다.
+로그에는 대기 인원·경과시간·고정된 결과 분류만 넣고 NetFunnel key와 응답 원문은 넣지 않습니다. 이
+제한시간에는 로컬 provider gate 대기도 포함되므로, 실제 운영사 I/O 시작 여부는 같은 구간의
+`event=provider_query_started`로 구분합니다. gate에서 만료되거나 모든 waiter가 사라진 작업에는 이 시작
+event가 없어야 합니다.
+
+기본 timeout 순서는 SRT 실제 조회 25초 < sidecar HTTP 35초, KORAIL main/sidecar 읽기 조회 80초 < sidecar
+HTTP 90초입니다. 내부 deadline은 gate 대기를 포함하고 남은 KORAIL budget도 sidecar로 전달합니다. 값을
+조정할 때도 실제 provider budget < 내부 HTTP timeout < 120초 execution lease 관계를 유지합니다.
+KORAIL browser 작업이 deadline 취소에 즉시 응답하지 않는 경우에도 호출자는 bounded timeout으로 끝나지만,
+해당 inflight owner와 drain은 실제 작업이 terminal이 될 때까지 소유권을 유지합니다. 이때 늦은 성공은 cache에
+반영하지 않으며 caller timeout만으로 provider cooldown을 열지 않습니다.
+
+SRT sidecar client는 accountless `observe`·`timetable-overlay`·`timetable-search`를 보내기 전에 인증된
+`read_only_call_id` 등록을 먼저 확인합니다. 원 호출이 35초 외부 timeout이나 취소로 끝나도 client는 등록 ID를
+버리지 않고 request-scoped status를 poll합니다. 상태의 의미는 다음과 같습니다.
+
+- `pending`: 원 HTTP handler 또는 연결된 SRTrain provider call이 아직 끝나지 않았습니다.
+- `terminal`: handler와 연결 provider call이 모두 끝났고 300초 bounded tombstone 안에서 확인됐습니다.
+- `unknown`: 등록된 적이 없거나 tombstone이 만료돼 종료를 증명할 수 없습니다.
+
+terminal tombstone은 만료 시간과 별개로 최근 4096개까지만 유지합니다. 한도를 넘어 제거된 ID도 `unknown`으로
+닫혀 client가 성공으로 오판하지 않습니다.
+
+status poll의 header에는 원 `request_id`가 아닌 새 correlation ID를 사용합니다. poll timeout, transport 오류,
+401·5xx, malformed 응답과 같은 instance의 `unknown`은 모두 fail-closed로 재시도합니다. sidecar instance ID가
+바뀐 경우에만 이전 process와 그 thread가 함께 종료된 것으로 보고 정리합니다. worker drain이 취소되더라도
+terminal 확인까지 취소 전파를 보류하므로 `group_runtime`은 그 전에 execution lease를 명시적으로 release하지
+않습니다. 이는 sidecar 전체 drain이 아니라 해당 client가 사전 등록한 읽기 호출만 기다리는 계약입니다. instance
+교체 판정은 현재 Compose처럼 고정 내부 origin에 SRT sidecar가 단일 replica인 경우에만 안전합니다. 다중 replica나
+load balancer를 도입하기 전에는 instance affinity와 terminal 저장소를 별도로 설계해야 합니다.
+
+인증된 구형 직접 호출은 lifecycle header 없이도 호환 목적으로 수용하지만 request-scoped drain 대상이 아닙니다.
+worker와 API에서 raw sidecar HTTP를 만들지 말고 canonical `SrtProviderAdapterClient`를 사용하세요.
+
+계속되는 `event=provider_sidecar_drain_status_unavailable`은 상태를 확인할 수 없어 lease 정리가 대기 중이라는
+뜻입니다. sidecar 인증 token·health·네트워크를 확인하되 worker를 반복 강제 종료하지 마세요. 등록 뒤 원 요청이
+도착하지 않으면 sidecar는 60초 뒤 terminal tombstone으로 닫고, 전송 전 등록 자체가 실패한 client는 원 provider
+요청을 보내지 않습니다.
+
+현재 DB execution lease는 120초 고정이며 drain 중 자동 renewal은 없습니다. 따라서 SRTrain thread 또는 status
+장애가 120초를 넘는 경우 명시적 release는 지연돼도 lease 자연 만료를 막지는 못합니다. sidecar의 provider gate는
+같은 process의 실제 SRT 조회를 직렬화하지만 DB fencing 연장과 동일하지 않습니다. 또한 이 terminal 계약은
+accountless 읽기 3개 endpoint만 다루며 로그인·예약·예약 확인 thread에는 적용되지 않습니다.
 
 KORAIL은 SRT와 같은 공식 접속 대기를 기다려 통과하는 흐름이 아닙니다. 실제 cache-miss 조회는
 `event=provider_query_started`와 `event=provider_query_completed`로 경계를 확인합니다. NetFunnel 등
 보호 표면이 감지되면 `outcome=provider_access_restricted`로 조회를 중단하고 provider-wide cooldown을
 적용하며, 보호 화면을 우회하거나 같은 요청에서 계속 진행하지 않습니다. 두 sidecar의 이 구조화 로그는
 서비스별 파일과 Docker stdout/stderr에 함께 남습니다.
+
+2026년 8월 13일 SRT sidecar 파일 로그 표본에서는 기존 8초 caller timeout 88건이 모두 실제 provider의
+late success로 끝났고, timeout 뒤 완료까지 중앙값 2.455초·최대 11.621초였습니다. 한 대표 흐름도 공식 queue
+통과 뒤 전체 8.485초에 성공해 caller보다 약 0.485초 늦었습니다. 이는 외부 30초 HTTP 실패가 아니라 내부
+budget이 정상 queue 시간을 먼저 끊은 사례였습니다. 이에 기본 budget을 25/35초로 정렬하고, caller
+deadline으로 source cooldown을 열지 않으며, 시작 전 만료 작업을 폐기하는 계약을 추가했습니다. 이 표본은
+기존 장애 원인과 late 종료를 확인한 근거이고 새 배포의 실제 혼잡 시간대 correlation 동작 확인을 대신하지
+않습니다.
 
 KORAIL 정기점검 시간에는 성공 경로 스모크를 반복하지 않습니다. 공식 HTTPS KORAIL host의
 `rejectservice_job.html` 또는 결과 행 없이 `서비스 일시중지`와 `승차권 예약 및 발매서비스` 문구가 함께 보이면
@@ -510,6 +571,7 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 - 앱을 보고 있는 동안 `실시간 알림`이 갱신되지 않으면 네트워크 연결과 `/events` SSE 또는 대기 목록 갱신이 정상인지 확인합니다. Push 내용 자체를 현재 좌석 상태로 사용하지 않습니다.
 - `실시간 알림`의 X로 닫은 과거 카드가 재접속 뒤 다시 나타나면 같은 브라우저 origin인지, 사이트 데이터가 삭제됐거나 localStorage가 차단되지 않았는지 확인합니다. 닫기 ledger는 기기 간 동기화하지 않으며 같은 subject의 더 최신 revision은 정상적으로 다시 표시합니다.
 - KORAIL 예매 카드가 `자동 예매 요청 시작`이나 `철도사 응답·공식 결과 대기`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed`·`watch.reservation_result` outbox, 같은 시각의 `GET /watches` 최신 attempt를 함께 확인합니다. 최신 attempt가 아직 `PENDING`이면 worker·maintenance 경로를 점검하고, 이미 `finished_at`과 `NOT_AVAILABLE`·`FAILED`·`UNKNOWN`을 가진다면 canonical 목록 갱신이 같은 watch의 진행 카드를 결과 카드로 교체해야 합니다. cursor 없는 신규 `/events`는 현재 outbox tail에서 시작해야 하므로 과거 outbox 행 수에 비례해 최신 event가 늦어지면 구버전 API 이미지가 섞였는지 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다. Pydoll의 `Page load timeout ... LOAD_EVENT_FIRED` 뒤 `KORAIL direct navigation load signal timed out; validating current DOM`이 남으면 로드 완료 신호만 늦은 상태를 현재 DOM·정확 열차 검증으로 이어간 것입니다. 후속 진행 또는 결과 이벤트를 함께 확인하세요.
+- `GET /api/v1/watches`가 `progress_stages cannot occur after finished_at`으로 500을 반환하면 KORAIL sidecar와 main API 사이의 짧은 wall-clock 역행으로 저장된 과거 attempt인지 확인합니다. 현행 코드는 결과 저장과 조회 투영에서 `finished_at`을 모든 진행 시각 이상으로 정규화하고, `0034_progress_terminal_time` 마이그레이션이 기존 행을 보정합니다. 배포 뒤 Alembic head가 `0034_progress_terminal_time`인지, terminal attempt 가운데 진행 시각이 `finished_at`보다 늦은 행이 0건인지 확인합니다. 진행 시각을 삭제하거나 임의로 현재 시각으로 덮어쓰지 않습니다.
 - provider 호출, rail worker 또는 외부 알림 발송이 멈춰도 시작 후 5분이 지난 `PENDING`은 전용 `maintenance-worker`가 다음 30초 주기 안에 `UNKNOWN`과 수동 확인 상태로 닫습니다. 5분 30초가 지나도 진행 카드가 유지되면 scheduler의 `recover-stale-reservation-attempts`, `maintenance-worker`의 `maintenance` 큐 수신 상태, `watch.reservation_result_requires_manual_check` outbox를 확인합니다. 이 복구는 예약 POST를 다시 보내지 않으며, 새로고침 뒤에도 확인된 단계와 수동 확인 카드를 canonical REST에서 복원합니다. 출발시간 경과로 감시가 끝났다면 카드도 감시 재개를 주장하지 않고 종료 상태와 공식 결과 수동 확인을 표시합니다.
 - sidecar의 `/v1/reserve-once/stream` 연결이 terminal frame 전에 끊긴 경우 예약 POST를 재전송하지 않습니다. sidecar는 이미 시작한 예약 task를 종료까지 보존하고, main API는 불확실 결과를 `UNKNOWN`으로 기록해 즉시 재예매를 차단합니다. sidecar의 `reserve-once stream completed` 로그에서 닫힌 outcome/reason과 `reservation confirmation completed`의 purpose/outcome/source를 확인합니다. 최초 공식 확인이 `NOT_FOUND` 또는 `INCONCLUSIVE`이면 최소 30초 뒤 읽기 전용 확인이 예약되어야 합니다. 최초 `NOT_FOUND` 뒤 reconciliation도 `NOT_FOUND`이면 부재 확인을 닫고, 최초 결과가 `INCONCLUSIVE`였다면 첫 `NOT_FOUND` 뒤 30초 후 다시 `NOT_FOUND`여야 닫습니다. 그 뒤 같은 후보에 새 공식 `AVAILABLE`·`LIMITED`가 관측된 경우에만 `confirmed-absent-retry:<attempt_id>` episode가 한 번 생성되며, 같은 episode 또는 그 복구 시도의 재귀 반복은 허용되지 않습니다.
 - KORAIL 예약 팝업은 `KORAIL reservation dialog phase=... kind=... control_shape=... dialog_count=... action=...`처럼 원문 없는 닫힌 필드로 기록합니다. `reservation_information`, `post_request_notice` 또는 명시적 운영 동의가 필요한 `generic_acknowledgement`에서 `dismiss_succeeded`면 공식 단일 확인을 예매 전후 단계·유형별 한 번 닫고 최신 DOM을 다시 본 것입니다. `reservation_information_consent`·`delay_consent`의 `consent_accept_succeeded`는 운영자가 `KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED=true`로 예약 안내와 지연배상 제한을 수락한 상태에서 정확한 `네`를 단계·유형별 한 번 누른 뒤 최신 DOM을 다시 보는 중입니다. 이후 `payment_required`면 정확한 결제 상세를 확인한 것입니다. `official_post_dialog_action_unresolved`, `official_notice_persisted`, `reservation_information_consent_persisted`, `delay_consent_persisted`, `...accept_result_unknown`, `...dismiss_result_unknown` 또는 버튼 판독 실패는 새 성공 근거가 없어 수동 확인으로 닫은 것이므로 다시 누르거나 예매 요청을 재전송하지 않습니다. 동의가 없거나 `kind=existing_reservation_choice|unknown`, `dialog_count=multiple`이면 추가 자동 동작을 하지 않습니다. `reserve-once stream completed outcome=action_required`를 좌석 미감지나 전송 실패로 바꾸지 말고 같은 시각의 최초 공식 확인을 함께 확인하며, `NOT_FOUND`이면 예약 요청을 반복하지 않습니다. 2026년 8월 13일 240편 사례 당시 대화상자의 정확한 DOM·문구는 확보하지 못했고, 새 정책 배포 뒤 실제 팝업의 자연 재발은 아직 운영 확인 전입니다. 검증을 위해 예약을 인위적으로 만들지 않으며 자연 재발 때 닫힌 로그와 최종 공식 확인만 대조합니다.

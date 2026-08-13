@@ -10,6 +10,7 @@ from SRT.netfunnel import NetFunnelHelper
 
 from rail_waitlist.provider_adapters import srt_netfunnel_logging as logging_module
 from rail_waitlist.provider_adapters.srt_netfunnel_logging import LoggingNetFunnelHelper
+from rail_waitlist.provider_call_context import bind_provider_call_id, new_log_id
 
 LOGGER_NAME = "rail_waitlist.srt_provider_adapter"
 
@@ -37,7 +38,7 @@ def test_queue_logs_entry_changed_count_and_release_without_provider_material(
     monkeypatch.setattr(NetFunnelHelper, "_wait_until_complete", vendor_wait)
     monkeypatch.setattr(NetFunnelHelper, "generate_netfunnel_key", vendor_generate)
 
-    with caplog.at_level(logging.DEBUG, logger=LOGGER_NAME):
+    with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         assert helper.generate_netfunnel_key(use_cache=False) == "secret-pass"
 
     messages = [record.getMessage() for record in caplog.records if record.name == LOGGER_NAME]
@@ -49,6 +50,37 @@ def test_queue_logs_entry_changed_count_and_release_without_provider_material(
     assert any("waiting_count=2" in message for message in messages)
     assert any("elapsed_ms=750" in message for message in messages)
     assert "secret-" not in "\n".join(messages)
+    assert all(record.levelno == logging.INFO for record in caplog.records)
+
+
+def test_queue_lifecycle_logs_keep_bound_provider_call_id(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_call_id = new_log_id()
+    helper = LoggingNetFunnelHelper(flow="accountless")
+
+    monkeypatch.setattr(
+        NetFunnelHelper,
+        "_wait_until_complete",
+        lambda _self, key, _nwait: key,
+    )
+
+    def vendor_generate(_self: NetFunnelHelper, _use_cache: bool) -> str:
+        helper._wait_until_complete("secret-entry", "2")
+        return "secret-pass"
+
+    monkeypatch.setattr(NetFunnelHelper, "generate_netfunnel_key", vendor_generate)
+
+    with (
+        bind_provider_call_id(provider_call_id),
+        caplog.at_level(logging.INFO, logger=LOGGER_NAME),
+    ):
+        assert helper.generate_netfunnel_key(use_cache=False) == "secret-pass"
+
+    messages = [record.getMessage() for record in caplog.records if record.name == LOGGER_NAME]
+    assert messages
+    assert all(f"provider_call_id={provider_call_id}" in message for message in messages)
 
 
 def test_queue_failure_is_sanitized_without_claiming_release(

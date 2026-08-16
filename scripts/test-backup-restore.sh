@@ -38,8 +38,10 @@ docker run --detach --name "$postgres_name" --network "$network_name" \
 
 postgres_ready=false
 for _ in $(seq 1 30); do
-    if docker exec "$postgres_name" pg_isready \
-        --username "$database_user" --dbname "$database_name" >/dev/null 2>&1; then
+    if docker exec --env "PGPASSWORD=${database_password}" "$postgres_name" \
+        psql --username "$database_user" --dbname "$database_name" \
+        --tuples-only --no-align --set ON_ERROR_STOP=1 \
+        --command 'SELECT 1;' >/dev/null 2>&1; then
         postgres_ready=true
         break
     fi

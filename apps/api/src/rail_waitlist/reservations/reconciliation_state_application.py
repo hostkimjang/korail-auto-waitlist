@@ -7,17 +7,29 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..domain import ReservationOutcome, ReservationPolicy, WatchStatus
+from ..domain import (
+    Provider,
+    ReservationOutcome,
+    ReservationPolicy,
+    ReservationResultReasonCode,
+    WatchStatus,
+    reservation_result_reason_code_for_outcome,
+)
+from ..provider_account_management.schemas import RailProviderAuthStatus
 from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from .exact_paid_application import apply_exact_paid_resolution
 from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
+    effective_reservation_confirmation_diagnostic_code,
 )
 from .reconciliation_policy import (
     PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
     RESERVATION_RECONCILIATION_INTERVAL,
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
+    ReservationReconciliationResolution,
     payment_hold_reconciliation_retry_interval,
     unknown_reconciliation_retry_interval,
 )
@@ -25,6 +37,36 @@ from .reconciliation_policy import (
 
 class ReservationReconciliationNotEligible(Exception):
     """Raised when a terminal attempt receives a reconciliation result."""
+
+
+def _validated_correlation_seat_payload(
+    value: object,
+    *,
+    passenger_count: int,
+) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) != passenger_count:
+        return []
+    seats: list[ReservationConfirmationSeat] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"car_number", "seat_number"}:
+            return []
+        car_number = item.get("car_number")
+        seat_number = item.get("seat_number")
+        if not isinstance(car_number, str) or not isinstance(seat_number, str):
+            return []
+        try:
+            seats.append(
+                ReservationConfirmationSeat(
+                    car_number=car_number,
+                    seat_number=seat_number,
+                )
+            )
+        except ValueError:
+            return []
+    keys = {(seat.car_number, seat.seat_number) for seat in seats}
+    if len(keys) != len(seats):
+        return []
+    return [{"car_number": seat.car_number, "seat_number": seat.seat_number} for seat in seats]
 
 
 class ApplyWatchTransition(Protocol):
@@ -63,6 +105,17 @@ class RecordReservationConfirmation(Protocol):
     ) -> None: ...
 
 
+class UpdateProviderAuthStatusInTransaction(Protocol):
+    async def __call__(
+        self,
+        session: AsyncSession,
+        provider: Provider,
+        status: RailProviderAuthStatus,
+        *,
+        expected_credential_version: int,
+    ) -> bool: ...
+
+
 class UtcInstant(Protocol):
     def __call__(self, value: datetime) -> datetime: ...
 
@@ -72,7 +125,96 @@ class ReservationReconciliationStateDependencies:
     apply_watch_transition: ApplyWatchTransition
     add_outbox_event: AddOutboxEvent
     record_reservation_confirmation: RecordReservationConfirmation
+    update_provider_auth_status: UpdateProviderAuthStatusInTransaction
     utc_instant: UtcInstant
+
+
+async def _add_reconciliation_outbox_event(
+    session: AsyncSession,
+    watch: Watch,
+    candidate: WatchCandidate,
+    attempt: ReservationAttempt,
+    confirmation: ReservationConfirmationResult,
+    *,
+    reconciled_at: datetime,
+    dependencies: ReservationReconciliationStateDependencies,
+) -> None:
+    fresh_confirmed_payment_deadline = (
+        confirmation.payment_deadline
+        if confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+        else None
+    )
+    effective_payment_deadline = (
+        fresh_confirmed_payment_deadline or watch.payment_deadline or attempt.payment_deadline
+    )
+    payment_actionable = (
+        watch.status is WatchStatus.PAYMENT_REQUIRED
+        and candidate.state == "payment_required"
+        and attempt.outcome
+        in {
+            ReservationOutcome.PAYMENT_REQUIRED,
+            ReservationOutcome.RESERVED,
+        }
+        and attempt.post_deadline_reconciled_at is None
+        and (
+            effective_payment_deadline is None
+            or dependencies.utc_instant(effective_payment_deadline)
+            > dependencies.utc_instant(reconciled_at)
+        )
+    )
+    await dependencies.add_outbox_event(
+        session,
+        aggregate_type="watch",
+        aggregate_id=watch.id,
+        event_type="watch.reservation_reconciled",
+        payload={
+            "watch_id": watch.id,
+            "candidate_id": candidate.id,
+            "attempt_sequence": attempt.attempt_sequence,
+            "attempt_started_at": dependencies.utc_instant(attempt.started_at).isoformat(),
+            "attempt_finished_at": (
+                dependencies.utc_instant(attempt.finished_at).isoformat()
+                if attempt.finished_at is not None
+                else None
+            ),
+            "outcome": attempt.outcome.value,
+            "result_reason_code": attempt.result_reason_code.value,
+            "payment_actionable": payment_actionable,
+            "confirmation_outcome": confirmation.outcome.value,
+            "confirmation_diagnostic_code": (
+                diagnostic.value
+                if (
+                    diagnostic := effective_reservation_confirmation_diagnostic_code(
+                        confirmation.outcome,
+                        confirmation.diagnostic_code,
+                    )
+                )
+                is not None
+                else None
+            ),
+            "confirmation_observed_at": confirmation.observed_at.isoformat(),
+            "reconciliation_attempt_count": attempt.reconciliation_attempt_count,
+            "reconciliation_resolution": (
+                attempt.reconciliation_resolution.value
+                if attempt.reconciliation_resolution is not None
+                else None
+            ),
+            "next_reconcile_at": (
+                dependencies.utc_instant(attempt.next_reconcile_at).isoformat()
+                if attempt.next_reconcile_at is not None
+                else None
+            ),
+            "payment_deadline": (
+                dependencies.utc_instant(effective_payment_deadline).isoformat()
+                if effective_payment_deadline is not None
+                else None
+            ),
+            "progress_stages": attempt.progress_stages or [],
+            "reserved_seats": attempt.reserved_seats or [],
+            "retryable": False,
+        },
+        dedupe_key=f"reservation-reconciled:{attempt.id}:{confirmation.observed_at.isoformat()}",
+    )
 
 
 async def apply_reservation_reconciliation(
@@ -94,6 +236,110 @@ async def apply_reservation_reconciliation(
         raise ReservationReconciliationNotEligible
     if confirmation.provider != watch.provider:
         raise ValueError("reservation confirmation provider does not match watch")
+    reconciliation_auth_status: RailProviderAuthStatus | None
+    if confirmation.outcome is ReservationConfirmationOutcome.AUTH_REQUIRED:
+        reconciliation_auth_status = "auth_required"
+    elif confirmation.outcome is ReservationConfirmationOutcome.PROVIDER_BLOCKED:
+        reconciliation_auth_status = "provider_blocked"
+    else:
+        reconciliation_auth_status = None
+    reconciliation_auth_failure = (
+        attempt.outcome
+        in {
+            ReservationOutcome.UNKNOWN,
+            ReservationOutcome.PAYMENT_REQUIRED,
+        }
+        and reconciliation_auth_status is not None
+    )
+    if reconciliation_auth_failure:
+        assert reconciliation_auth_status is not None
+        if attempt.credential_version is None:
+            return
+        account_updated = await dependencies.update_provider_auth_status(
+            session,
+            watch.provider,
+            reconciliation_auth_status,
+            expected_credential_version=attempt.credential_version,
+        )
+        if not account_updated:
+            return
+        if attempt.result_reason_code is None:
+            attempt.result_reason_code = reservation_result_reason_code_for_outcome(attempt.outcome)
+        dependencies.record_reservation_confirmation(
+            attempt,
+            confirmation,
+            reconciled_at=reconciled_at,
+        )
+        attempt.reconciliation_resolution = None
+        attempt.next_reconcile_at = None
+        is_unknown_attempt = attempt.outcome is ReservationOutcome.UNKNOWN
+        is_latest_watch_attempt = False
+        if is_unknown_attempt:
+            latest_watch_attempt_id = await session.scalar(
+                select(ReservationAttempt.id)
+                .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+                .where(WatchCandidate.watch_id == watch.id)
+                .order_by(
+                    ReservationAttempt.started_at.desc(),
+                    ReservationAttempt.attempt_sequence.desc(),
+                    ReservationAttempt.id.desc(),
+                )
+                .limit(1)
+                .with_for_update(of=ReservationAttempt)
+            )
+            is_latest_watch_attempt = latest_watch_attempt_id == attempt.id
+        watch_candidates = list(
+            (
+                await session.scalars(
+                    select(WatchCandidate).where(WatchCandidate.watch_id == watch.id)
+                )
+            ).all()
+        )
+        for watch_candidate in watch_candidates:
+            watch_candidate.manual_rearm_source_attempt_id = None
+            watch_candidate.manual_rearm_authorized_at = None
+        if is_latest_watch_attempt and watch.status in {
+            WatchStatus.SCHEDULED,
+            WatchStatus.WATCHING,
+        }:
+            if watch.status is WatchStatus.SCHEDULED:
+                await dependencies.apply_watch_transition(
+                    session,
+                    watch,
+                    WatchStatus.WATCHING,
+                    reason="worker_claimed_reconciliation",
+                )
+            watch.next_check_at = None
+            watch.observation_in_flight_until = None
+            await dependencies.apply_watch_transition(
+                session,
+                watch,
+                WatchStatus.AUTH_REQUIRED,
+                reason=(
+                    "reservation_reconciliation_auth_required"
+                    if reconciliation_auth_status == "auth_required"
+                    else "reservation_reconciliation_provider_blocked"
+                ),
+            )
+        await _add_reconciliation_outbox_event(
+            session,
+            watch,
+            candidate,
+            attempt,
+            confirmation,
+            reconciled_at=reconciled_at,
+            dependencies=dependencies,
+        )
+        return
+    if attempt.outcome is ReservationOutcome.UNKNOWN and watch.status is WatchStatus.SCHEDULED:
+        await dependencies.apply_watch_transition(
+            session,
+            watch,
+            WatchStatus.WATCHING,
+            reason="worker_claimed_reconciliation",
+        )
+    if attempt.result_reason_code is None:
+        attempt.result_reason_code = reservation_result_reason_code_for_outcome(attempt.outcome)
     payment_deadline = watch.payment_deadline
     if payment_deadline is not None and (
         payment_deadline.tzinfo is None or payment_deadline.utcoffset() is None
@@ -155,11 +401,24 @@ async def apply_reservation_reconciliation(
         and confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
         and previous_confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
     )
-    confirmed_paid = (
-        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
-        and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
-        and watch.status is WatchStatus.PAYMENT_REQUIRED
+    exhausted_unresolved_unknown = (
+        attempt.outcome is ReservationOutcome.UNKNOWN
+        and attempt.reconciliation_attempt_count >= UNKNOWN_RECONCILIATION_MAX_ATTEMPTS
+        and (
+            confirmation.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+            or (
+                confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
+                and not confirmed_absent_unknown
+            )
+        )
     )
+    if confirmed_absent_unknown:
+        attempt.reconciliation_resolution = ReservationReconciliationResolution.CONFIRMED_ABSENT
+    elif exhausted_unresolved_unknown:
+        attempt.reconciliation_resolution = ReservationReconciliationResolution.EXHAUSTED_UNRESOLVED
+    confirmed_paid = confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    if confirmed_paid:
+        attempt.reconciliation_resolution = None
     terminal_confirmation = (
         confirmed_hold_has_usable_deadline
         or confirmed_absent_unknown
@@ -187,10 +446,13 @@ async def apply_reservation_reconciliation(
         and confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
         and not confirmed_absent_unknown
     ):
-        reconciliation_anchor = attempt.last_reconciled_at
-        if reconciliation_anchor is None:
-            raise RuntimeError("reconciliation must persist a reconciliation timestamp")
-        attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
+        if exhausted_unresolved_unknown:
+            attempt.next_reconcile_at = None
+        else:
+            reconciliation_anchor = attempt.last_reconciled_at
+            if reconciliation_anchor is None:
+                raise RuntimeError("reconciliation must persist a reconciliation timestamp")
+            attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
     elif confirmed_hold_has_usable_deadline or (
         known_future_payment_hold
         and confirmation.outcome
@@ -253,49 +515,22 @@ async def apply_reservation_reconciliation(
         )
     )
     if confirmed_paid:
-        attempt.next_reconcile_at = None
-        candidate.state = "expired"
-        candidate.suppressed_by_candidate_id = None
-        suppressed_candidates = list(
-            (
-                await session.scalars(
-                    select(WatchCandidate).where(
-                        WatchCandidate.watch_id == watch.id,
-                        WatchCandidate.state == "suppressed_by_priority",
-                        WatchCandidate.suppressed_by_candidate_id == candidate.id,
-                    )
-                )
-            ).all()
-        )
-        for suppressed in suppressed_candidates:
-            suppressed.state = "expired"
-            suppressed.suppressed_by_candidate_id = None
-        watch.payment_deadline = None
-        watch.official_booking_url = None
-        watch.next_check_at = None
-        await dependencies.apply_watch_transition(
+        await apply_exact_paid_resolution(
             session,
             watch,
-            WatchStatus.COMPLETED,
-            reason="reservation_reconciliation_confirmed_paid",
+            candidate,
+            attempt,
+            apply_watch_transition=dependencies.apply_watch_transition,
+            add_outbox_event=dependencies.add_outbox_event,
         )
-        await dependencies.add_outbox_event(
+        await _add_reconciliation_outbox_event(
             session,
-            aggregate_type="watch",
-            aggregate_id=watch.id,
-            event_type="watch.payment_completed",
-            payload={
-                "watch_id": watch.id,
-                "candidate_id": candidate.id,
-                "terminal": True,
-                "status": WatchStatus.COMPLETED.value,
-                "from": WatchStatus.PAYMENT_REQUIRED.value,
-                "to": WatchStatus.COMPLETED.value,
-                "reason": "confirmed_paid",
-                "message": "공식 예약 내역에서 결제 완료를 확인했습니다.",
-                "automatic_reservation_retry": False,
-            },
-            dedupe_key=f"payment-completed:{attempt.id}",
+            watch,
+            candidate,
+            attempt,
+            confirmation,
+            reconciled_at=reconciled_at,
+            dependencies=dependencies,
         )
         return
     if payment_hold_ended_confirmation:
@@ -363,9 +598,9 @@ async def apply_reservation_reconciliation(
                     else "confirmed_payment_hold_no_longer_present"
                 ),
                 "message": (
-                    "임시 예약이 결제기한 안에 결제되지 않아 취소되었습니다."
+                    "공식 확인에서 결제 가능 기한이 지난 임시 예약을 확인했습니다."
                     if expired_confirmed_hold
-                    else "공식 예약 목록에서 미결제 보류가 종료된 것을 확인했습니다."
+                    else "공식 예약 목록에서 대상 임시 예약을 더 이상 찾지 못했습니다."
                 ),
                 "payment_deadline": (
                     confirmation.payment_deadline.isoformat()
@@ -377,15 +612,50 @@ async def apply_reservation_reconciliation(
             },
             dedupe_key=f"payment-hold-ended:{attempt.id}",
         )
+        await _add_reconciliation_outbox_event(
+            session,
+            watch,
+            candidate,
+            attempt,
+            confirmation,
+            reconciled_at=reconciled_at,
+            dependencies=dependencies,
+        )
         return
     if confirmation.outcome is not ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED:
+        await _add_reconciliation_outbox_event(
+            session,
+            watch,
+            candidate,
+            attempt,
+            confirmation,
+            reconciled_at=reconciled_at,
+            dependencies=dependencies,
+        )
         return
     if confirmation.official_handoff_url is None:
         raise RuntimeError("confirmed reservation requires an official handoff URL")
     if confirmation.payment_deadline is not None and confirmation.payment_deadline <= reconciled_at:
+        await _add_reconciliation_outbox_event(
+            session,
+            watch,
+            candidate,
+            attempt,
+            confirmation,
+            reconciled_at=reconciled_at,
+            dependencies=dependencies,
+        )
         return
 
+    correlation_seats = _validated_correlation_seat_payload(
+        attempt.confirmation_correlation_seats,
+        passenger_count=watch.passenger_count,
+    )
+    if attempt.outcome is ReservationOutcome.UNKNOWN and correlation_seats:
+        attempt.reserved_seats = correlation_seats
+    attempt.confirmation_correlation_seats = []
     attempt.outcome = ReservationOutcome.PAYMENT_REQUIRED
+    attempt.result_reason_code = ReservationResultReasonCode.PAYMENT_HOLD_CREATED
     attempt.payment_deadline = confirmation.payment_deadline
     attempt.official_handoff_url = confirmation.official_handoff_url
     if (
@@ -424,22 +694,12 @@ async def apply_reservation_reconciliation(
             lower.state = "suppressed_by_priority"
             lower.suppressed_by_candidate_id = candidate.id
 
-    await dependencies.add_outbox_event(
+    await _add_reconciliation_outbox_event(
         session,
-        aggregate_type="watch",
-        aggregate_id=watch.id,
-        event_type="watch.reservation_reconciled",
-        payload={
-            "watch_id": watch.id,
-            "candidate_id": candidate.id,
-            "attempt_sequence": attempt.attempt_sequence,
-            "confirmation_outcome": confirmation.outcome.value,
-            "payment_deadline": (
-                confirmation.payment_deadline.isoformat()
-                if confirmation.payment_deadline is not None
-                else None
-            ),
-            "retryable": False,
-        },
-        dedupe_key=f"reservation-reconciled:{attempt.id}:{confirmation.observed_at.isoformat()}",
+        watch,
+        candidate,
+        attempt,
+        confirmation,
+        reconciled_at=reconciled_at,
+        dependencies=dependencies,
     )

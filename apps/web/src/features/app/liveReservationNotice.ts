@@ -1,5 +1,14 @@
 import type { AppNotificationInput } from "./notificationCenter";
-import { normalizeReservedSeats } from "../../domain/reservationAttempt";
+import {
+  isReservationConfirmationOutcome,
+  isReservationResultReasonCode,
+  normalizeReservationConfirmationDiagnosticCode,
+  normalizeReservedSeats,
+  type ReservationAttemptOutcome,
+  type ReservationConfirmationDiagnosticCode,
+  type ReservationConfirmationOutcome,
+  type ReservationResultReasonCode,
+} from "../../domain/reservationAttempt";
 import {
   buildReservationRecoveryToast,
   buildWatchActionToast,
@@ -25,6 +34,20 @@ interface LiveEventRecord {
   payload?: unknown;
 }
 
+interface ReservationResultEvidence {
+  resultReasonCode: ReservationResultReasonCode | null;
+  confirmationOutcome: ReservationConfirmationOutcome | null;
+  confirmationDiagnosticCode: ReservationConfirmationDiagnosticCode | null;
+  confirmationObservedAt: string | null;
+  reconciliationAttemptCount: number;
+  nextReconcileAt: string | null;
+}
+
+interface ReservationReconciledEvidence extends ReservationResultEvidence {
+  outcome: ReservationAttemptOutcome | null;
+  paymentActionable: boolean;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -36,6 +59,102 @@ function text(value: unknown): string | null {
 function eventInstant(value: unknown): string | null {
   const candidate = text(value);
   return candidate !== null && Number.isFinite(Date.parse(candidate)) ? candidate : null;
+}
+
+function awareEventInstant(value: unknown): string | null {
+  const candidate = text(value);
+  if (candidate === null || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(candidate)) return null;
+  return Number.isFinite(Date.parse(candidate)) ? candidate : null;
+}
+
+function reservationResultEvidence(
+  payload: Record<string, unknown>,
+): ReservationResultEvidence | null {
+  const reasonValue = payload.result_reason_code;
+  if (
+    reasonValue !== null
+    && reasonValue !== undefined
+    && !isReservationResultReasonCode(reasonValue)
+  ) return null;
+  const confirmationValue = payload.confirmation_outcome;
+  if (
+    confirmationValue !== null
+    && confirmationValue !== undefined
+    && !isReservationConfirmationOutcome(confirmationValue)
+  ) return null;
+  const confirmationOutcome = isReservationConfirmationOutcome(confirmationValue)
+    ? confirmationValue
+    : null;
+  const observedValue = payload.confirmation_observed_at;
+  const confirmationObservedAt = observedValue === null || observedValue === undefined
+    ? null
+    : awareEventInstant(observedValue);
+  if (observedValue !== null && observedValue !== undefined && confirmationObservedAt === null) {
+    return null;
+  }
+  const countValue = payload.reconciliation_attempt_count;
+  if (
+    countValue !== undefined
+    && (
+      !Number.isInteger(countValue)
+      || Number(countValue) < 0
+      || Number(countValue) > 6
+    )
+  ) return null;
+  const nextValue = payload.next_reconcile_at;
+  const nextReconcileAt = nextValue === null || nextValue === undefined
+    ? null
+    : awareEventInstant(nextValue);
+  if (nextValue !== null && nextValue !== undefined && nextReconcileAt === null) return null;
+  return {
+    resultReasonCode: isReservationResultReasonCode(reasonValue) ? reasonValue : null,
+    confirmationOutcome,
+    confirmationDiagnosticCode: normalizeReservationConfirmationDiagnosticCode(
+      confirmationOutcome,
+      payload.confirmation_diagnostic_code,
+    ),
+    confirmationObservedAt,
+    reconciliationAttemptCount: countValue === undefined ? 0 : Number(countValue),
+    nextReconcileAt,
+  };
+}
+
+function reservationAttemptOutcome(value: unknown): ReservationAttemptOutcome | null {
+  switch (value) {
+    case "pending":
+    case "payment_required":
+    case "reserved":
+    case "not_available":
+    case "auth_required":
+    case "provider_blocked":
+    case "failed":
+    case "unknown":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function reservationReconciledEvidence(
+  payload: Record<string, unknown>,
+): ReservationReconciledEvidence | null {
+  const evidence = reservationResultEvidence(payload);
+  if (evidence === null) return null;
+  const outcomeValue = payload.outcome;
+  if (
+    outcomeValue !== null
+    && outcomeValue !== undefined
+    && reservationAttemptOutcome(outcomeValue) === null
+  ) return null;
+  const paymentActionableValue = payload.payment_actionable;
+  if (paymentActionableValue !== undefined && typeof paymentActionableValue !== "boolean") {
+    return null;
+  }
+  return {
+    ...evidence,
+    outcome: reservationAttemptOutcome(outcomeValue),
+    paymentActionable: paymentActionableValue === true,
+  };
 }
 
 const reservationProgressStageNames: ReadonlySet<ReservationProgressStageName> = new Set([
@@ -96,15 +215,6 @@ function monotonicReservationProgress(
     previous = current;
     return true;
   });
-}
-
-function candidateContext(
-  watch: WatchLifecycleSnapshot,
-  candidateId: string | null,
-): Partial<WatchActionTransition> {
-  if (candidateId === null) return {};
-  const candidate = watch.reservationCandidateContexts[candidateId];
-  return candidate ?? {};
 }
 
 interface ExistingPaymentAttemptContext {
@@ -175,11 +285,16 @@ function transitionFromEvent(
   status: WatchActionTransition["status"],
 ): WatchActionTransition | null {
   if (!isRecord(event.payload)) return null;
-  const watchId = text(event.payload.watch_id) ?? text(event.aggregate_id);
-  if (watchId === null) return null;
+  const evidence = reservationResultEvidence(event.payload);
+  if (evidence === null) return null;
+  const watchId = text(event.payload.watch_id);
+  const aggregateId = text(event.aggregate_id);
+  const candidateId = text(event.payload.candidate_id);
+  if (watchId === null || aggregateId !== watchId || candidateId === null) return null;
   const watch = watches.find((item) => item.id === watchId);
   if (watch === undefined) return null;
-  const candidateId = text(event.payload.candidate_id);
+  const candidate = watch.reservationCandidateContexts[candidateId];
+  if (candidate === undefined) return null;
   const revisionAt = eventInstant(event.created_at);
   const revision = text(event.id) ?? revisionAt ?? `${status}:${watchId}`;
   const reportedStartedAt = eventTimeNoLaterThan(event.payload.attempt_started_at, revisionAt);
@@ -200,9 +315,7 @@ function transitionFromEvent(
     revisionAt,
   );
   const monitoringResumed = event.payload.monitoring_resumed;
-  const reservedSeats = status === "payment_required"
-    ? normalizeReservedSeats(event.payload.reserved_seats)
-    : [];
+  const reservedSeats = normalizeReservedSeats(event.payload.reserved_seats);
   return {
     id: watchId,
     provider: watch.provider,
@@ -214,7 +327,7 @@ function transitionFromEvent(
     arrival: watch.arrival,
     reservationPolicy: watch.reservationPolicy,
     paymentDeadline: text(event.payload.payment_deadline),
-    ...candidateContext(watch, candidateId),
+    ...candidate,
     status,
     revision,
     ...(revisionAt === null ? {} : { revisionAt }),
@@ -224,6 +337,7 @@ function transitionFromEvent(
     ...(progress.length === 0 ? {} : { reservationProgress: progress }),
     ...(reservedSeats.length === 0 ? {} : { reservedSeats }),
     ...(typeof monitoringResumed === "boolean" ? { monitoringResumed } : {}),
+    ...evidence,
   };
 }
 
@@ -324,11 +438,16 @@ function recoveryResult(payload: Record<string, unknown>): ReservationRecoveryRe
     || retryConditionValue === "provider_account_reverified"
     ? retryConditionValue
     : null;
+  const evidence = reservationResultEvidence(payload);
+  if (evidence === null) return null;
   return {
     outcome: outcome as ReservationResultOutcome,
     retryable: payload.retryable === true,
-    manualCheckRequired: payload.manual_check_required === true,
+    manualCheckRequired: typeof payload.manual_check_required === "boolean"
+      ? payload.manual_check_required
+      : true,
     retryCondition,
+    ...evidence,
   };
 }
 
@@ -387,6 +506,7 @@ function buildLiveReservationNoticeFromLifecycle(
     const attemptContext = watch === undefined || candidateId === null || revisionAt === null
       ? null
       : existingPaymentAttemptContext(watch, candidateId, revisionAt);
+    const fromStatus = text(event.payload.from);
     if (
       watchId === null
       || aggregateId !== watchId
@@ -397,9 +517,10 @@ function buildLiveReservationNoticeFromLifecycle(
       || watch.reservationCandidateContexts[candidateId] === undefined
       || attemptContext === null
       || event.payload.terminal !== true
-      || text(event.payload.from) !== "payment_required"
+      || (fromStatus !== "payment_required" && fromStatus !== "watching")
       || text(event.payload.to) !== "completed"
       || text(event.payload.status) !== "completed"
+      || text(event.payload.reason) !== "confirmed_paid"
       || event.payload.automatic_reservation_retry !== false
     ) return null;
     const transition = transitionFromEvent(event, watches, "payment_completed");
@@ -413,12 +534,58 @@ function buildLiveReservationNoticeFromLifecycle(
   }
   if (eventType === "watch.reservation_result_requires_manual_check") {
     const transition = transitionFromEvent(event, watches, "monitoring_resumed");
-    return transition === null ? null : buildReservationRecoveryToast(transition, {
+    const evidence = reservationResultEvidence(event.payload);
+    return transition === null || evidence === null ? null : buildReservationRecoveryToast(transition, {
       outcome: "unknown",
       retryable: false,
       manualCheckRequired: true,
       retryCondition: null,
+      ...evidence,
     });
+  }
+  if (eventType === "watch.reservation_reconciled") {
+    const watchId = text(event.payload.watch_id) ?? text(event.aggregate_id);
+    const watch = watchId === null ? undefined : watches.find((item) => item.id === watchId);
+    const evidence = reservationReconciledEvidence(event.payload);
+    if (watch === undefined || watch.latestReservationAttempt === null || evidence === null) return null;
+    // 결제 완료 알림은 전용 terminal event 또는 REST status edge에서만 만든다.
+    // reconciliation evidence가 먼저 도착해 완료 상태를 앞서 합성하면 안 된다.
+    if (evidence.confirmationOutcome === "confirmed_paid") return null;
+    const reconciledCandidateId = text(event.payload.candidate_id);
+    const isUnknownAuthenticationReconciliation = evidence.outcome === "unknown"
+      && (
+        evidence.confirmationOutcome === "auth_required"
+        || evidence.confirmationOutcome === "provider_blocked"
+      );
+    if (isUnknownAuthenticationReconciliation) {
+      if (
+        watch.latestReservationAttempt.outcome !== "unknown"
+        || reconciledCandidateId === null
+        || watch.latestReservationAttemptCandidateId !== reconciledCandidateId
+        || evidence.confirmationObservedAt === null
+        || evidence.reconciliationAttemptCount < 1
+        || evidence.nextReconcileAt !== null
+      ) return null;
+      const transition = transitionFromEvent(event, watches, "auth_required");
+      return transition === null ? null : buildWatchActionToast(transition);
+    }
+    if (
+      evidence.paymentActionable
+      && (evidence.outcome === "payment_required" || evidence.outcome === "reserved")
+    ) {
+      // 재확인 이벤트가 지닌 exact attempt context만 사용한다. REST latest attempt는 같은
+      // candidate의 다른 sequence일 수 있어 시간·단계·좌석·기한을 fallback하지 않는다.
+      const transition = transitionFromEvent(event, watches, "payment_required");
+      return transition === null ? null : buildWatchActionToast(transition);
+    }
+    const result = recoveryResult(event.payload);
+    const transition = transitionFromEvent(event, watches, "monitoring_resumed");
+    return transition === null || result === null
+      ? null
+      : buildReservationRecoveryToast({
+          ...transition,
+          monitoringResumed: transition.monitoringResumed ?? watch.status === "watching",
+        }, result);
   }
   if (eventType !== "watch.reservation_result") return null;
   const outcome = text(event.payload.outcome);

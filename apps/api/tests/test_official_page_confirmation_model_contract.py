@@ -157,6 +157,7 @@ def test_official_page_confirmation_preserves_constraints_indexes_and_enums() ->
                 "AVAILABLE",
                 "LIMITED",
                 "STANDING_PLUS_SEAT",
+                "STANDING_ONLY",
                 "NOT_ENOUGH_SEATS",
                 "SOLD_OUT",
                 "WAITLIST_AVAILABLE",

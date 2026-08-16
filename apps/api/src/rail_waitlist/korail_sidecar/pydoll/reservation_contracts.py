@@ -78,3 +78,4 @@ class KorailReservationResult:
     seat_selected_at: datetime | None = None
     reservation_requested_at: datetime | None = None
     reserved_seats: tuple[KorailReservedSeat, ...] = ()
+    confirmation_correlation_seats: tuple[KorailReservedSeat, ...] = ()

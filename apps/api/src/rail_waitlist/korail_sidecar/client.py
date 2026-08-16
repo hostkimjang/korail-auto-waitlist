@@ -130,6 +130,90 @@ class HttpBrowserAdapterTransport:
             headers=headers,
         )
 
+    @staticmethod
+    def _begin_correlated_request(operation: str) -> str:
+        request_id = current_request_id() or new_log_id()
+        _LOGGER.info(
+            "Provider sidecar request started event=provider_sidecar_request_started "
+            "provider=KORAIL operation=%s request_id=%s",
+            operation,
+            request_id,
+        )
+        return request_id
+
+    @staticmethod
+    def _log_correlated_failure(
+        operation: str,
+        request_id: str,
+        outcome: str,
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        if status_code is None:
+            _LOGGER.warning(
+                "Provider sidecar request failed event=provider_sidecar_request_failed "
+                "provider=KORAIL operation=%s request_id=%s outcome=%s",
+                operation,
+                request_id,
+                outcome,
+            )
+            return
+        _LOGGER.warning(
+            "Provider sidecar request failed event=provider_sidecar_request_failed "
+            "provider=KORAIL operation=%s request_id=%s outcome=%s status_code=%s",
+            operation,
+            request_id,
+            outcome,
+            status_code,
+        )
+
+    @staticmethod
+    def _log_correlated_http_failure(
+        operation: str,
+        request_id: str,
+        status_code: int,
+    ) -> None:
+        if status_code == 429:
+            outcome = "rate_limited"
+        elif status_code in {403, 423}:
+            outcome = "provider_blocked"
+        else:
+            outcome = "http_status"
+        HttpBrowserAdapterTransport._log_correlated_failure(
+            operation,
+            request_id,
+            outcome,
+            status_code=status_code,
+        )
+
+    @staticmethod
+    def _log_correlated_completion(
+        operation: str,
+        request_id: str,
+        terminal_outcome: str,
+        *,
+        diagnostic_code: str | None = None,
+    ) -> None:
+        if diagnostic_code is not None:
+            _LOGGER.info(
+                "Provider sidecar request completed event=provider_sidecar_request_completed "
+                "provider=KORAIL operation=%s request_id=%s outcome=completed "
+                "terminal_outcome=%s diagnostic_code=%s phase=completed",
+                operation,
+                request_id,
+                terminal_outcome,
+                diagnostic_code,
+            )
+            return
+        _LOGGER.info(
+            "Provider sidecar request completed event=provider_sidecar_request_completed "
+            "provider=KORAIL operation=%s request_id=%s outcome=completed "
+            "terminal_outcome=%s",
+            operation,
+            request_id,
+            terminal_outcome,
+        )
+
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
         request_id = current_request_id() or new_log_id()
         _LOGGER.info(
@@ -231,6 +315,8 @@ class HttpBrowserAdapterTransport:
         return result
 
     async def reserve(self, request: KorailReserveOnceRequest) -> KorailReserveOnceResult:
+        operation = "reserve_once"
+        request_id = self._begin_correlated_request(operation)
         payload = request.model_dump(mode="json", exclude={"credential"})
         payload["credential"] = {
             "login_method": request.credential.login_method,
@@ -239,9 +325,19 @@ class HttpBrowserAdapterTransport:
             "version": request.credential.version,
         }
         try:
-            response = await self._client.post("/v1/reserve-once", json=payload)
-        except (httpx.TimeoutException, httpx.TransportError) as error:
+            response = await self._client.post(
+                "/v1/reserve-once",
+                json=payload,
+                headers={REQUEST_ID_HEADER: request_id},
+            )
+        except httpx.TimeoutException as error:
+            self._log_correlated_failure(operation, request_id, "timeout")
             raise _AdapterFailure("source_unavailable") from error
+        except httpx.TransportError as error:
+            self._log_correlated_failure(operation, request_id, "transport_error")
+            raise _AdapterFailure("source_unavailable") from error
+        if response.status_code != 200:
+            self._log_correlated_http_failure(operation, request_id, response.status_code)
         if response.status_code == 429:
             raise _AdapterFailure("provider_access_restricted", rate_limited=True)
         if response.status_code in {403, 423}:
@@ -249,15 +345,20 @@ class HttpBrowserAdapterTransport:
         if response.status_code != 200:
             raise _AdapterFailure("source_unavailable")
         try:
-            return KorailReserveOnceResult.model_validate(response.json())
+            result = KorailReserveOnceResult.model_validate(response.json())
         except (ValueError, ValidationError) as error:
+            self._log_correlated_failure(operation, request_id, "validation_error")
             raise _AdapterFailure("source_unavailable") from error
+        self._log_correlated_completion(operation, request_id, result.outcome)
+        return result
 
     async def reserve_with_progress(
         self,
         request: KorailReserveOnceRequest,
         on_progress: ReservationProgressCallback,
     ) -> KorailReserveOnceResult:
+        operation = "reserve_once_stream"
+        request_id = self._begin_correlated_request(operation)
         payload = request.model_dump(mode="json", exclude={"credential"})
         payload["credential"] = {
             "login_method": request.credential.login_method,
@@ -278,7 +379,10 @@ class HttpBrowserAdapterTransport:
                 "POST",
                 "/v1/reserve-once/stream",
                 json=payload,
+                headers={REQUEST_ID_HEADER: request_id},
             ) as response:
+                if response.status_code != 200:
+                    self._log_correlated_http_failure(operation, request_id, response.status_code)
                 if response.status_code == 429:
                     raise _AdapterFailure("provider_access_restricted", rate_limited=True)
                 if response.status_code in {403, 423}:
@@ -292,7 +396,7 @@ class HttpBrowserAdapterTransport:
                         raise ValueError("frame received after terminal result")
                     raw = json.loads(line)
                     if not isinstance(raw, dict):
-                        raise ValueError("stream frame must be an object")
+                        raise TypeError("stream frame must be an object")
                     if raw.get("type") == "progress":
                         frame = KorailReserveProgressFrame.model_validate(raw)
                         if len(progress) >= len(expected_stages):
@@ -313,19 +417,29 @@ class HttpBrowserAdapterTransport:
                         raise ValueError("unknown reservation stream frame")
         except _AdapterFailure:
             raise
-        except (httpx.TimeoutException, httpx.TransportError) as error:
+        except httpx.TimeoutException as error:
+            self._log_correlated_failure(operation, request_id, "timeout")
+            raise _AdapterFailure(
+                "source_unavailable",
+                reservation_command_uncertain=True,
+                progress_stages=tuple(progress),
+            ) from error
+        except httpx.TransportError as error:
+            self._log_correlated_failure(operation, request_id, "transport_error")
             raise _AdapterFailure(
                 "source_unavailable",
                 reservation_command_uncertain=True,
                 progress_stages=tuple(progress),
             ) from error
         except (json.JSONDecodeError, TypeError, ValueError, ValidationError) as error:
+            self._log_correlated_failure(operation, request_id, "validation_error")
             raise _AdapterFailure(
                 "source_unavailable",
                 reservation_command_uncertain=True,
                 progress_stages=tuple(progress),
             ) from error
         if terminal is None:
+            self._log_correlated_failure(operation, request_id, "missing_terminal")
             raise _AdapterFailure(
                 "source_unavailable",
                 reservation_command_uncertain=True,
@@ -344,11 +458,13 @@ class HttpBrowserAdapterTransport:
         ]
         actual_progress = [(item.stage, item.occurred_at) for item in progress]
         if actual_progress != expected_progress:
+            self._log_correlated_failure(operation, request_id, "validation_error")
             raise _AdapterFailure(
                 "source_unavailable",
                 reservation_command_uncertain=True,
                 progress_stages=tuple(progress),
             )
+        self._log_correlated_completion(operation, request_id, terminal.outcome)
         return terminal
 
     async def verify_login(self, request: KorailLoginVerifyRequest) -> KorailLoginVerifyResult:
@@ -401,13 +517,22 @@ class HttpBrowserAdapterTransport:
         self,
         request: KorailReservationConfirmationRequest,
     ) -> KorailReservationConfirmationResult:
+        operation = "confirm_reservation"
+        request_id = self._begin_correlated_request(operation)
         try:
             response = await self._client.post(
                 "/v1/confirm-reservation",
                 json=request.model_dump(mode="json"),
+                headers={REQUEST_ID_HEADER: request_id},
             )
-        except (httpx.TimeoutException, httpx.TransportError) as error:
+        except httpx.TimeoutException as error:
+            self._log_correlated_failure(operation, request_id, "timeout")
             raise _AdapterFailure("source_unavailable") from error
+        except httpx.TransportError as error:
+            self._log_correlated_failure(operation, request_id, "transport_error")
+            raise _AdapterFailure("source_unavailable") from error
+        if response.status_code != 200:
+            self._log_correlated_http_failure(operation, request_id, response.status_code)
         if response.status_code == 429:
             raise _AdapterFailure("provider_access_restricted", rate_limited=True)
         if response.status_code in {403, 423}:
@@ -415,9 +540,19 @@ class HttpBrowserAdapterTransport:
         if response.status_code != 200:
             raise _AdapterFailure("source_unavailable")
         try:
-            return KorailReservationConfirmationResult.model_validate(response.json())
+            result = KorailReservationConfirmationResult.model_validate(response.json())
         except (ValueError, ValidationError) as error:
+            self._log_correlated_failure(operation, request_id, "validation_error")
             raise _AdapterFailure("source_unavailable") from error
+        self._log_correlated_completion(
+            operation,
+            request_id,
+            result.outcome,
+            diagnostic_code=(
+                result.diagnostic_code.value if result.diagnostic_code is not None else "none"
+            ),
+        )
+        return result
 
     async def close(self) -> None:
         await self._client.aclose()

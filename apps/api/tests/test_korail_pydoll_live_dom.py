@@ -228,7 +228,7 @@ def test_browser_keeps_live_dom_aliases_surface_and_legacy_pickles() -> None:
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")
     }
-    assert len(private_names) == 29
+    assert len(private_names) == 30
     assert "_live_dom_owner" not in private_names
     assert not hasattr(browser, "__all__")
 

@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
-from typing import Annotated
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
-from sqlalchemy import select
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Response
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from ..auth import require_admin
 from ..celery_app import celery_app
 from ..database import get_session
-from ..domain import Provider, ReservationOutcome, WatchStatus
+from ..domain import TERMINAL_STATUSES, Provider, ReservationOutcome, WatchStatus
 from ..idempotency.application import IdempotencyConflict
 from ..provider_registry.application import get_timetable_provider
 from ..reservations.attempt_result_application import ReservationAttemptAlreadyCompleted
@@ -20,11 +21,13 @@ from ..reservations.attempt_runtime import (
     complete_reservation_attempt,
 )
 from ..reservations.contracts import ReservationResult
+from ..reservations.domain import reservation_attempt_result_policy
 from ..reservations.manual_rearm_application import (
     ManualReservationRearmNotFound,
     ManualReservationRearmRejected,
 )
 from ..reservations.manual_rearm_runtime import authorize_manual_reservation_rearm
+from ..reservations.provider_confirmation.contracts import ReservationConfirmationOutcome
 from .application import should_enqueue_after_policy_update, should_enqueue_after_start
 from .cancel_application import WatchCancellationInProgress
 from .cancel_runtime import cancel_watch as cancel_watch_runtime
@@ -38,7 +41,13 @@ from .lookup_application import WatchLookupNotFound
 from .lookup_application import find_watch as find_watch_application
 from .models import ReservationAttempt, Watch, WatchCandidate
 from .read_model import watch_read, watch_reads
-from .schemas import RegistrationEvidenceConflictDetail, WatchCreate, WatchRead, WatchUpdate
+from .schemas import (
+    ManualReservationRearmRequest,
+    RegistrationEvidenceConflictDetail,
+    WatchCreate,
+    WatchRead,
+    WatchUpdate,
+)
 from .transition_application import WatchTransitionRejected
 from .transition_command_application import WatchTransitionCommandNotFound
 from .transition_runtime import transition_watch as transition_watch_runtime
@@ -53,6 +62,55 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 IdempotencyKey = Annotated[str | None, Header(alias="Idempotency-Key", max_length=100)]
 LOGGER = logging.getLogger(__name__)
 _PROCESS_WATCH_NOW_TASK = "rail_waitlist.worker.process_watch_now"
+_LIVE_TERMINAL_RECONCILIATION_WINDOW = timedelta(hours=24)
+_MANUAL_CHECK_RESERVATION_OUTCOMES = tuple(
+    outcome
+    for outcome in ReservationOutcome
+    if reservation_attempt_result_policy(outcome).manual_check_required
+)
+
+
+def _live_watch_condition(read_at: datetime) -> ColumnElement[bool]:
+    latest_watch_attempt_id = (
+        select(ReservationAttempt.id)
+        .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+        .where(WatchCandidate.watch_id == Watch.id)
+        .order_by(
+            ReservationAttempt.started_at.desc(),
+            ReservationAttempt.attempt_sequence.desc(),
+            ReservationAttempt.id.desc(),
+        )
+        .limit(1)
+        .correlate(Watch)
+        .scalar_subquery()
+    )
+    has_latest_attempt_requiring_manual_check = exists(
+        select(ReservationAttempt.id).where(
+            ReservationAttempt.id == latest_watch_attempt_id,
+            ReservationAttempt.outcome.in_(_MANUAL_CHECK_RESERVATION_OUTCOMES),
+            ReservationAttempt.confirmation_outcome.is_distinct_from(
+                ReservationConfirmationOutcome.CONFIRMED_PAID
+            ),
+        )
+    )
+    has_any_exact_paid_confirmation = exists(
+        select(ReservationAttempt.id)
+        .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+        .where(
+            WatchCandidate.watch_id == Watch.id,
+            ReservationAttempt.confirmation_outcome
+            == ReservationConfirmationOutcome.CONFIRMED_PAID,
+        )
+        .correlate(Watch)
+    )
+    return or_(
+        Watch.updated_at >= read_at - _LIVE_TERMINAL_RECONCILIATION_WINDOW,
+        ~has_any_exact_paid_confirmation
+        & or_(
+            Watch.status.not_in(tuple(TERMINAL_STATUSES)),
+            has_latest_attempt_requiring_manual_check,
+        ),
+    )
 
 
 async def _find_watch_or_404(session: AsyncSession, watch_id: str) -> Watch:
@@ -184,10 +242,13 @@ async def watches_create(
 async def watches_list(
     session: Session,
     watch_status: Annotated[WatchStatus | None, Query(alias="status")] = None,
+    watch_view: Annotated[Literal["all", "live"], Query(alias="view")] = "all",
 ) -> list[WatchRead]:
     query = select(Watch).order_by(Watch.created_at.desc())
     if watch_status:
         query = query.where(Watch.status == watch_status)
+    if watch_view == "live":
+        query = query.where(_live_watch_condition(datetime.now(UTC)))
     return await watch_reads(session, list((await session.scalars(query)).all()))
 
 
@@ -275,11 +336,19 @@ async def watches_cancel(
 async def watches_reservation_rearm(
     watch_id: str,
     session: Session,
+    data: Annotated[ManualReservationRearmRequest | None, Body()] = None,
     _idempotency_key: IdempotencyKey = None,
 ) -> WatchRead:
-    """Authorize one retry after an officially confirmed payment-hold end."""
+    """Authorize one retry after a bounded official-state confirmation."""
     try:
-        result = await authorize_manual_reservation_rearm(session, watch_id)
+        result = await authorize_manual_reservation_rearm(
+            session,
+            watch_id,
+            reason=data.reason if data is not None else None,
+            official_reservation_state_confirmed=(
+                data.official_reservation_state_confirmed is True if data is not None else False
+            ),
+        )
     except ManualReservationRearmNotFound as error:
         raise HTTPException(404, str(error)) from None
     except ManualReservationRearmRejected as error:

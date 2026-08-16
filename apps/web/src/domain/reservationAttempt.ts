@@ -28,7 +28,7 @@ export interface ReservedSeat {
   seatNumber: string;
 }
 
-type ReservationConfirmationOutcome =
+export type ReservationConfirmationOutcome =
   | "confirmed_payment_required"
   | "confirmed_paid"
   | "not_found"
@@ -36,12 +36,46 @@ type ReservationConfirmationOutcome =
   | "provider_blocked"
   | "inconclusive";
 
+export type ReservationConfirmationDiagnosticCode =
+  | "official_read_unavailable"
+  | "credential_context_mismatch"
+  | "official_record_ambiguous"
+  | "official_evidence_insufficient"
+  | "unspecified";
+
+export type ReservationResultReasonCode =
+  | "reservation_pending"
+  | "payment_hold_created"
+  | "target_not_available"
+  | "target_ambiguous"
+  | "seat_not_available"
+  | "reservation_control_unavailable"
+  | "seat_selection_lost"
+  | "delay_consent_required"
+  | "existing_reservation_action_required"
+  | "provider_notice_action_required"
+  | "authentication_required"
+  | "provider_blocked"
+  | "provider_unavailable"
+  | "provider_response_invalid"
+  | "reservation_request_result_unknown"
+  | "reservation_failed";
+
 export type PaymentHoldEndReason =
   | "confirmed_payment_deadline_elapsed"
   | "confirmed_payment_hold_no_longer_present";
 
+export type ManualRearmReason =
+  | "payment_hold_ended"
+  | "unknown_result_unresolved";
+
+export type ReservationReconciliationResolution =
+  | "confirmed_absent"
+  | "exhausted_unresolved";
+
 export interface LatestReservationAttempt {
   outcome: ReservationAttemptOutcome;
+  resultReasonCode?: ReservationResultReasonCode | null;
   startedAt: string;
   finishedAt: string | null;
   retryable: boolean;
@@ -49,7 +83,14 @@ export interface LatestReservationAttempt {
   retryCondition: ReservationRetryCondition | null;
   paymentHoldEndedAt: string | null;
   manualRearmAvailable?: boolean;
+  manualRearmReason?: ManualRearmReason | null;
   paymentHoldEndReason?: PaymentHoldEndReason | null;
+  confirmationOutcome?: ReservationConfirmationOutcome | null;
+  confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
+  confirmationObservedAt?: string | null;
+  reconciliationAttemptCount?: number;
+  reconciliationResolution?: ReservationReconciliationResolution | null;
+  nextReconcileAt?: string | null;
   progressStages?: ReadonlyArray<ReservationProgressStage>;
   reservedSeats?: ReadonlyArray<ReservedSeat>;
 }
@@ -76,6 +117,100 @@ const confirmationOutcomes: ReadonlySet<string> = new Set([
   "provider_blocked",
   "inconclusive",
 ]);
+const confirmationDiagnosticCodes: ReadonlySet<string> = new Set([
+  "official_read_unavailable",
+  "credential_context_mismatch",
+  "official_record_ambiguous",
+  "official_evidence_insufficient",
+  "unspecified",
+]);
+const resultReasonCodes: ReadonlySet<string> = new Set([
+  "reservation_pending",
+  "payment_hold_created",
+  "target_not_available",
+  "target_ambiguous",
+  "seat_not_available",
+  "reservation_control_unavailable",
+  "seat_selection_lost",
+  "delay_consent_required",
+  "existing_reservation_action_required",
+  "provider_notice_action_required",
+  "authentication_required",
+  "provider_blocked",
+  "provider_unavailable",
+  "provider_response_invalid",
+  "reservation_request_result_unknown",
+  "reservation_failed",
+]);
+const manualRearmReasons: ReadonlySet<string> = new Set([
+  "payment_hold_ended",
+  "unknown_result_unresolved",
+]);
+const reconciliationResolutions: ReadonlySet<string> = new Set([
+  "confirmed_absent",
+  "exhausted_unresolved",
+]);
+
+export function validatedManualRearmReason(
+  attempt: LatestReservationAttempt,
+): ManualRearmReason | null {
+  if (attempt.manualRearmAvailable !== true) return null;
+  if (
+    attempt.manualRearmReason === "payment_hold_ended"
+    && attempt.outcome === "payment_required"
+    && attempt.paymentHoldEndedAt !== null
+    && attempt.paymentHoldEndReason !== null
+    && attempt.paymentHoldEndReason !== undefined
+  ) return attempt.manualRearmReason;
+  if (
+    attempt.manualRearmReason === "unknown_result_unresolved"
+    && attempt.outcome === "unknown"
+    && attempt.finishedAt !== null
+    && attempt.manualCheckRequired
+    && attempt.confirmationObservedAt !== null
+    && attempt.confirmationObservedAt !== undefined
+    && (
+      (
+        attempt.confirmationOutcome === "inconclusive"
+        && (attempt.reconciliationAttemptCount ?? 0) >= 3
+        && attempt.reconciliationResolution !== "confirmed_absent"
+      )
+      || (
+        attempt.confirmationOutcome === "not_found"
+        && attempt.reconciliationAttemptCount === 6
+        && attempt.nextReconcileAt === null
+        && attempt.reconciliationResolution === "exhausted_unresolved"
+      )
+    )
+  ) return attempt.manualRearmReason;
+  return null;
+}
+
+export function isReservationConfirmationOutcome(
+  value: unknown,
+): value is ReservationConfirmationOutcome {
+  return typeof value === "string" && confirmationOutcomes.has(value);
+}
+
+export function isReservationConfirmationDiagnosticCode(
+  value: unknown,
+): value is ReservationConfirmationDiagnosticCode {
+  return typeof value === "string" && confirmationDiagnosticCodes.has(value);
+}
+
+export function normalizeReservationConfirmationDiagnosticCode(
+  confirmationOutcome: ReservationConfirmationOutcome | null,
+  value: unknown,
+): ReservationConfirmationDiagnosticCode | null {
+  if (confirmationOutcome !== "inconclusive") return null;
+  return isReservationConfirmationDiagnosticCode(value) ? value : "unspecified";
+}
+
+export function isReservationResultReasonCode(
+  value: unknown,
+): value is ReservationResultReasonCode {
+  return typeof value === "string" && resultReasonCodes.has(value);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -197,18 +332,73 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
   const retryCondition = typeof retryConditionValue === "string"
     ? retryConditionValue.toLowerCase() as ReservationRetryCondition
     : null;
+  const resultReasonCodeValue = value.result_reason_code;
+  if (
+    resultReasonCodeValue !== null
+    && resultReasonCodeValue !== undefined
+    && !isReservationResultReasonCode(resultReasonCodeValue)
+  ) return null;
+  const resultReasonCode = isReservationResultReasonCode(resultReasonCodeValue)
+    ? resultReasonCodeValue
+    : null;
   const confirmationOutcomeValue = value.confirmation_outcome;
   if (
     confirmationOutcomeValue !== null
     && confirmationOutcomeValue !== undefined
     && (
       typeof confirmationOutcomeValue !== "string"
-      || !confirmationOutcomes.has(confirmationOutcomeValue.toLowerCase())
+      || !isReservationConfirmationOutcome(confirmationOutcomeValue.toLowerCase())
     )
   ) return null;
   const confirmationOutcome = typeof confirmationOutcomeValue === "string"
     ? confirmationOutcomeValue.toLowerCase() as ReservationConfirmationOutcome
     : null;
+  const confirmationDiagnosticCode = normalizeReservationConfirmationDiagnosticCode(
+    confirmationOutcome,
+    value.confirmation_diagnostic_code,
+  );
+  const confirmationObservedAt = value.confirmation_observed_at === null
+    || value.confirmation_observed_at === undefined
+    ? null
+    : awareTimestamp(value.confirmation_observed_at);
+  if (
+    value.confirmation_observed_at !== null
+    && value.confirmation_observed_at !== undefined
+    && confirmationObservedAt === null
+  ) return null;
+  const reconciliationAttemptCountValue = value.reconciliation_attempt_count;
+  if (
+    reconciliationAttemptCountValue !== undefined
+    && (
+      !Number.isInteger(reconciliationAttemptCountValue)
+      || Number(reconciliationAttemptCountValue) < 0
+      || Number(reconciliationAttemptCountValue) > 6
+    )
+  ) return null;
+  const reconciliationAttemptCount = reconciliationAttemptCountValue === undefined
+    ? 0
+    : Number(reconciliationAttemptCountValue);
+  const reconciliationResolutionValue = value.reconciliation_resolution;
+  if (
+    reconciliationResolutionValue !== null
+    && reconciliationResolutionValue !== undefined
+    && (
+      typeof reconciliationResolutionValue !== "string"
+      || !reconciliationResolutions.has(reconciliationResolutionValue)
+    )
+  ) return null;
+  const reconciliationResolution = typeof reconciliationResolutionValue === "string"
+    ? reconciliationResolutionValue as ReservationReconciliationResolution
+    : null;
+  const nextReconcileAt = value.next_reconcile_at === null
+    || value.next_reconcile_at === undefined
+    ? null
+    : awareTimestamp(value.next_reconcile_at);
+  if (
+    value.next_reconcile_at !== null
+    && value.next_reconcile_at !== undefined
+    && nextReconcileAt === null
+  ) return null;
   const postDeadlineReconciledAt = value.post_deadline_reconciled_at === null
     || value.post_deadline_reconciled_at === undefined
     ? null
@@ -246,18 +436,43 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
   const reservedSeats = outcome === "payment_required" || outcome === "reserved"
     ? normalizeReservedSeats(value.reserved_seats)
     : [];
-
-  return {
+  const manualRearmReasonValue = value.manual_rearm_reason;
+  if (
+    manualRearmReasonValue !== null
+    && manualRearmReasonValue !== undefined
+    && (
+      typeof manualRearmReasonValue !== "string"
+      || !manualRearmReasons.has(manualRearmReasonValue)
+    )
+  ) return null;
+  const requestedManualRearmReason = typeof manualRearmReasonValue === "string"
+    ? manualRearmReasonValue as ManualRearmReason
+    : null;
+  const mappedAttempt: LatestReservationAttempt = {
     outcome: outcome as ReservationAttemptOutcome,
+    resultReasonCode,
     startedAt,
     finishedAt,
     retryable: value.retryable,
     manualCheckRequired: value.manual_check_required,
     retryCondition,
     paymentHoldEndedAt,
-    manualRearmAvailable: paymentHoldEndedAt !== null && value.manual_rearm_available === true,
+    manualRearmAvailable: value.manual_rearm_available === true,
+    manualRearmReason: requestedManualRearmReason,
+    confirmationOutcome,
+    confirmationDiagnosticCode,
+    confirmationObservedAt,
+    reconciliationAttemptCount,
+    reconciliationResolution,
+    nextReconcileAt,
     progressStages,
     reservedSeats,
     ...(paymentHoldEndedAt === null ? {} : { paymentHoldEndReason }),
+  };
+  const manualRearmReason = validatedManualRearmReason(mappedAttempt);
+  return {
+    ...mappedAttempt,
+    manualRearmAvailable: manualRearmReason !== null,
+    manualRearmReason,
   };
 }

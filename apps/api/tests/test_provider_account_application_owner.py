@@ -169,8 +169,8 @@ CANONICAL_CONSUMERS = {
     "rail_waitlist/watch_management/application.py": {
         "has_authenticated_provider_account",
     },
-    "rail_waitlist/reservations/manual_rearm_runtime.py": {
-        "has_authenticated_provider_account",
+    "rail_waitlist/reservations/reconciliation_state_runtime.py": {
+        "update_provider_auth_status",
     },
     "rail_waitlist/worker.py": {"update_provider_auth_status"},
     "scripts/check_reservation_credential_fencing_postgres.py": {

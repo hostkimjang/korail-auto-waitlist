@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
-from datetime import date, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,11 @@ from rail_waitlist.korail_pydoll_browser import (
     KorailSessionActorState,
     PydollKorailBrowserClient,
     PydollPageSnapshot,
+)
+from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
+from rail_waitlist.korail_sidecar.pydoll.reservation_contracts import (
+    KorailReservationProgress,
+    KorailReservationProgressCallback,
 )
 
 
@@ -58,6 +63,8 @@ class _ReservationSession:
     async def reserve_once(
         self,
         _request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
         self.events.append("reserve")
         return KorailReservationResult(
@@ -66,6 +73,40 @@ class _ReservationSession:
             seat_clicked=True,
             reservation_clicked=True,
         )
+
+
+class _ProgressThenSourceUnavailableSession(_ReservationSession):
+    def __init__(self, *, error_stage: str = "session_keepalive") -> None:
+        super().__init__()
+        self.error_stage = error_stage
+        self.received_progress_callback = False
+        self.progress = (
+            KorailReservationProgress(
+                "target_rechecked",
+                datetime(2026, 8, 13, 6, 54, 40, 500_000, tzinfo=UTC),
+            ),
+            KorailReservationProgress(
+                "seat_selected",
+                datetime(2026, 8, 13, 6, 54, 40, 600_000, tzinfo=UTC),
+            ),
+            KorailReservationProgress(
+                "reservation_requested",
+                datetime(2026, 8, 13, 6, 54, 40, 700_000, tzinfo=UTC),
+            ),
+        )
+
+    async def reserve_once(
+        self,
+        _request: KorailReservationRequest,
+        *,
+        on_progress: KorailReservationProgressCallback | None = None,
+    ) -> KorailReservationResult:
+        self.events.append("reserve")
+        self.received_progress_callback = on_progress is not None
+        assert on_progress is not None
+        for progress in self.progress:
+            on_progress(progress)
+        raise BrowserSourceUnavailable(self.error_stage)
 
 
 class _ReservationContext:
@@ -200,6 +241,91 @@ async def test_reservation_cancellation_marks_session_stale_and_closes_context_o
 
     assert client.session_snapshot().state is KorailSessionActorState.STALE
     assert session.closed == 1
+
+
+@pytest.mark.parametrize(
+    "with_external_callback",
+    [False, True],
+    ids=["without_external_callback", "with_external_callback"],
+)
+@pytest.mark.asyncio
+async def test_reservation_preserves_inner_progress_when_source_becomes_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    with_external_callback: bool,
+) -> None:
+    async def identity_guard(
+        _session: object,
+        _request: KorailReservationRequest,
+        _stage: str,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_reservation_identity",
+        staticmethod(identity_guard),
+    )
+    session = _ProgressThenSourceUnavailableSession()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _ReservationContext(session),  # type: ignore[arg-type]
+    )
+    observed_progress: list[KorailReservationProgress] = []
+
+    if with_external_callback:
+        result = await client.reserve_once(_request(), on_progress=observed_progress.append)
+    else:
+        result = await client.reserve_once(_request())
+
+    assert result.outcome is KorailReservationOutcome.FAILED
+    assert result.reason == "source_unavailable:session_keepalive"
+    assert result.seat_clicked is True
+    assert result.reservation_clicked is True
+    assert result.session_ready_at is not None
+    assert result.target_rechecked_at == session.progress[0].occurred_at
+    assert result.seat_selected_at == session.progress[1].occurred_at
+    assert result.reservation_requested_at == session.progress[2].occurred_at
+    assert session.received_progress_callback is True
+    assert [progress.stage for progress in observed_progress] == (
+        [
+            "authenticated_session_ready",
+            "target_rechecked",
+            "seat_selected",
+            "reservation_requested",
+        ]
+        if with_external_callback
+        else []
+    )
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_reservation_does_not_expose_an_unsafe_source_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def identity_guard(
+        _session: object,
+        _request: KorailReservationRequest,
+        _stage: str,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_reservation_identity",
+        staticmethod(identity_guard),
+    )
+    session = _ProgressThenSourceUnavailableSession(
+        error_stage="credential=fixture-password",
+    )
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _ReservationContext(session),  # type: ignore[arg-type]
+    )
+
+    result = await client.reserve_once(_request())
+
+    assert result.reason == "source_unavailable:reserve_once"
+    assert "fixture-password" not in result.reason
 
 
 def test_browser_keeps_reservation_contract_compatibility_exports() -> None:

@@ -55,11 +55,11 @@ class Settings(BaseSettings):
     srt_reservation_once_enabled: bool = False
     srt_fullstack_fixture_url: str | None = None
     srt_seat_status_cache_ttl_seconds: int = Field(default=1, ge=1, le=300)
-    srt_seat_status_timeout_seconds: float = Field(default=25, ge=3, le=30)
+    srt_seat_status_timeout_seconds: float = Field(default=60, ge=3, le=90)
     srt_provider_adapter_enabled: bool = False
     srt_provider_adapter_url: str = "http://srt-provider-adapter:8002"
     srt_provider_adapter_token: str | None = None
-    srt_provider_adapter_timeout_seconds: float = Field(default=35, ge=3, le=120)
+    srt_provider_adapter_timeout_seconds: float = Field(default=90, ge=3, le=120)
     seat_status_rate_limit_cooldown_seconds: int = Field(default=300, ge=60, le=86400)
     seat_status_protection_cooldown_seconds: int = Field(default=60, ge=60, le=86400)
     korail_browser_bridge_enabled: bool = False

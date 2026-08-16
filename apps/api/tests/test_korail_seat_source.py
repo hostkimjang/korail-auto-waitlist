@@ -104,7 +104,17 @@ def test_korail_seat_code_mapping_is_fail_closed() -> None:
     assert map_korail_seat_state("00") == "not_offered"
     assert map_korail_seat_state("13", "매진임박") == "limited"
     assert map_korail_seat_state("13", "입석+예매") == "standing_plus_seat"
+    assert map_korail_seat_state("13", "입석") == "standing_only"
     assert map_korail_seat_state("unexpected") == "unknown"
+
+
+async def test_standing_only_keeps_official_handoff_and_seated_ticket_watch() -> None:
+    client = FakeClient([FakeTrain(general_seat="13", reserve_possible_name="입석")])
+    result = await source(client).overlay([timetable_item()], **overlay_arguments())
+
+    standard = result[0].seat_classes[0]
+    assert standard.status == "standing_only"
+    assert [action.kind for action in standard.actions] == ["official_check", "add_to_watch"]
 
 
 def test_default_transport_replaces_requests_none_timeout() -> None:

@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -8,8 +9,17 @@ from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcom
 from rail_waitlist.reservations.attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
     CONFIRMED_ABSENT_RETRY_OBSERVATIONS,
+    MANUAL_PAYMENT_HOLD_REARM_EPISODE_PREFIX,
+    MANUAL_UNKNOWN_REARM_EPISODE_PREFIX,
+    PAYMENT_HOLD_RETRY_EPISODE_PREFIX,
     RESERVATION_RETRY_EDGE_OBSERVATIONS,
     is_confirmed_absent_retry_source,
+    is_unresolved_unknown_manual_rearm_source,
+    manual_unknown_rearm_episode_key,
+    parse_manual_unknown_rearm_episode_key,
+)
+from rail_waitlist.reservations.reconciliation_policy import (
+    ReservationReconciliationResolution,
 )
 from rail_waitlist.services import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX as LEGACY_CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
@@ -32,6 +42,7 @@ def make_attempt(
     payment_deadline: datetime | None = None,
     post_deadline_reconciled_at: datetime | None = None,
     reconciliation_attempt_count: int = 0,
+    reconciliation_resolution: ReservationReconciliationResolution | None = None,
 ) -> ReservationAttempt:
     return ReservationAttempt(
         candidate_id="candidate-1",
@@ -47,6 +58,7 @@ def make_attempt(
         payment_deadline=payment_deadline,
         post_deadline_reconciled_at=post_deadline_reconciled_at,
         reconciliation_attempt_count=reconciliation_attempt_count,
+        reconciliation_resolution=reconciliation_resolution,
     )
 
 
@@ -66,6 +78,7 @@ def test_reconciled_unknown_exact_absence_rearms_only_a_non_retry_episode() -> N
             ReservationOutcome.UNKNOWN,
             last_reconciled_at=reconciled_at,
             reconciliation_attempt_count=1,
+            reconciliation_resolution=(ReservationReconciliationResolution.CONFIRMED_ABSENT),
         )
     )
     assert not is_confirmed_absent_retry_source(
@@ -74,6 +87,7 @@ def test_reconciled_unknown_exact_absence_rearms_only_a_non_retry_episode() -> N
             episode_key=f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}attempt-0",
             last_reconciled_at=reconciled_at,
             reconciliation_attempt_count=1,
+            reconciliation_resolution=(ReservationReconciliationResolution.CONFIRMED_ABSENT),
         )
     )
 
@@ -126,6 +140,7 @@ def test_retry_edge_statuses_are_only_conclusive_non_actionable_observations() -
     assert RESERVATION_RETRY_EDGE_OBSERVATIONS == {
         SeatObservationStatus.UNAVAILABLE,
         SeatObservationStatus.NOT_ENOUGH_SEATS,
+        SeatObservationStatus.STANDING_ONLY,
         SeatObservationStatus.SOLD_OUT,
         SeatObservationStatus.NOT_OFFERED,
         SeatObservationStatus.DEPARTED,
@@ -138,3 +153,114 @@ def test_confirmed_absent_unknown_requires_fresh_bookable_seat_inventory() -> No
         SeatObservationStatus.AVAILABLE,
         SeatObservationStatus.LIMITED,
     }
+
+
+def test_unresolved_unknown_manual_rearm_opens_at_three_inconclusive_reads() -> None:
+    reconciled_at = datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC)
+
+    assert is_unresolved_unknown_manual_rearm_source(
+        make_attempt(
+            ReservationOutcome.UNKNOWN,
+            confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            last_reconciled_at=reconciled_at,
+            next_reconcile_at=datetime(2026, 8, 5, 0, 5, 1, tzinfo=UTC),
+            reconciliation_attempt_count=3,
+        )
+    )
+    assert not is_unresolved_unknown_manual_rearm_source(
+        make_attempt(
+            ReservationOutcome.UNKNOWN,
+            confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            last_reconciled_at=reconciled_at,
+            reconciliation_attempt_count=2,
+        )
+    )
+
+
+def test_exhausted_final_not_found_is_manual_only_and_confirmed_absence_is_not() -> None:
+    reconciled_at = datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC)
+    exhausted = make_attempt(
+        ReservationOutcome.UNKNOWN,
+        last_reconciled_at=reconciled_at,
+        reconciliation_attempt_count=6,
+        reconciliation_resolution=ReservationReconciliationResolution.EXHAUSTED_UNRESOLVED,
+    )
+    confirmed_absent = make_attempt(
+        ReservationOutcome.UNKNOWN,
+        last_reconciled_at=reconciled_at,
+        reconciliation_attempt_count=2,
+        reconciliation_resolution=ReservationReconciliationResolution.CONFIRMED_ABSENT,
+    )
+
+    assert is_unresolved_unknown_manual_rearm_source(exhausted)
+    assert not is_unresolved_unknown_manual_rearm_source(confirmed_absent)
+    assert is_confirmed_absent_retry_source(confirmed_absent)
+
+
+def test_manual_unknown_episode_key_is_exact_and_nonrecursive() -> None:
+    key = manual_unknown_rearm_episode_key("attempt-1", "candidate-1", "observation-1")
+
+    assert key == "manual-unknown:attempt-1:candidate-1:observation-1"
+    assert parse_manual_unknown_rearm_episode_key(key) == (
+        "attempt-1",
+        "candidate-1",
+        "observation-1",
+    )
+    assert parse_manual_unknown_rearm_episode_key("manual-unknown:missing") is None
+    assert not is_unresolved_unknown_manual_rearm_source(
+        make_attempt(
+            ReservationOutcome.UNKNOWN,
+            episode_key=key,
+            confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            last_reconciled_at=datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC),
+            reconciliation_attempt_count=3,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("episode_key", "expected"),
+    [
+        ("availability:first", True),
+        ("availability-after:unavailable-observation", True),
+        ("auth:1:authenticated-generation", True),
+        (f"{PAYMENT_HOLD_RETRY_EPISODE_PREFIX}hold-attempt:unavailable-observation", True),
+        (f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}source-attempt", False),
+        (
+            f"{MANUAL_UNKNOWN_REARM_EPISODE_PREFIX}source-attempt:candidate:observation",
+            False,
+        ),
+        (
+            f"{MANUAL_PAYMENT_HOLD_REARM_EPISODE_PREFIX}source-attempt:candidate:observation",
+            False,
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "policy",
+    [is_confirmed_absent_retry_source, is_unresolved_unknown_manual_rearm_source],
+)
+def test_unknown_recovery_episode_prefix_matrix_is_nonrecursive(
+    episode_key: str,
+    expected: bool,
+    policy: Callable[[ReservationAttempt], bool],
+) -> None:
+    reconciled_at = datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC)
+    if policy is is_confirmed_absent_retry_source:
+        attempt = make_attempt(
+            ReservationOutcome.UNKNOWN,
+            episode_key=episode_key,
+            last_reconciled_at=reconciled_at,
+            reconciliation_attempt_count=2,
+            reconciliation_resolution=ReservationReconciliationResolution.CONFIRMED_ABSENT,
+        )
+    else:
+        attempt = make_attempt(
+            ReservationOutcome.UNKNOWN,
+            episode_key=episode_key,
+            confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            last_reconciled_at=reconciled_at,
+            reconciliation_attempt_count=3,
+        )
+
+    assert policy(attempt) is expected

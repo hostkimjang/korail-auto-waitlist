@@ -9,13 +9,31 @@ import {
 import { createPortal } from "react-dom";
 
 import { useDocumentScrollLock } from "../../hooks/useDocumentScrollLock";
+import type {
+  ManualRearmReason,
+  PaymentHoldEndReason,
+} from "../../domain/reservationAttempt";
+
+export type ReservationRearmMode =
+  | {
+    kind: "payment_hold";
+    reason: "payment_hold_ended";
+    paymentHoldEndReason: PaymentHoldEndReason;
+  }
+  | {
+    kind: "unknown";
+    reason: "unknown_result_unresolved";
+  };
 
 export interface ReservationRearmConfirmProps {
   watchId: string;
   trainLabel: string;
+  travelDate: string;
+  departure: string;
   seatClassLabel: string;
+  mode: ReservationRearmMode;
   mutationPending?: boolean;
-  onConfirm: (watchId: string) => void | Promise<void>;
+  onConfirm: (watchId: string, reason: ManualRearmReason) => void | Promise<void>;
 }
 
 function restoreFocus(
@@ -34,12 +52,16 @@ function restoreFocus(
 export function ReservationRearmConfirm({
   watchId,
   trainLabel,
+  travelDate,
+  departure,
   seatClassLabel,
+  mode,
   mutationPending = false,
   onConfirm,
 }: ReservationRearmConfirmProps): ReactElement {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [absenceConfirmed, setAbsenceConfirmed] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const safeId = watchId.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -53,6 +75,7 @@ export function ReservationRearmConfirm({
     const trigger = triggerRef.current;
     const fallbackRow = trigger?.closest<HTMLElement>(".watch-row") ?? null;
     setOpen(false);
+    setAbsenceConfirmed(false);
     restoreFocus(trigger, fallbackRow);
   };
 
@@ -78,13 +101,14 @@ export function ReservationRearmConfirm({
   }, [open]);
 
   const confirm = async (): Promise<void> => {
-    if (pending) return;
+    if (pending || !absenceConfirmed) return;
     const trigger = triggerRef.current;
     const fallbackRow = trigger?.closest<HTMLElement>(".watch-row") ?? null;
     setSubmitting(true);
     try {
-      await onConfirm(watchId);
+      await onConfirm(watchId, mode.reason);
       setOpen(false);
+      setAbsenceConfirmed(false);
       restoreFocus(trigger, fallbackRow);
     } catch {
       // 호출자가 사용자 피드백을 표시하며, 실패 시 같은 확인 dialog를 유지합니다.
@@ -101,7 +125,7 @@ export function ReservationRearmConfirm({
     }
     if (event.key !== "Tab" || !dialogRef.current) return;
     const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+      'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
     )];
     const first = focusable[0];
     const last = focusable.at(-1);
@@ -125,7 +149,10 @@ export function ReservationRearmConfirm({
         aria-expanded={open}
         aria-busy={mutationPending}
         disabled={mutationPending}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setAbsenceConfirmed(false);
+          setOpen(true);
+        }}
       >
         <ArrowClockwise aria-hidden="true" /> 자동 예매 다시 시도
       </button>
@@ -160,18 +187,46 @@ export function ReservationRearmConfirm({
             </header>
             <div className="official-handoff-summary" aria-label="재시도 대상">
               <div><span>열차</span><strong>{trainLabel}</strong></div>
+              <div><span>날짜</span><strong>{travelDate}</strong></div>
+              <div><span>출발</span><strong>{departure}</strong></div>
               <div><span>좌석</span><strong>{seatClassLabel}</strong></div>
             </div>
             <div className="official-handoff-warning">
               <WarningCircle size={23} weight="fill" aria-hidden="true" />
               <div>
-                <strong>이전 예약은 결제되지 않은 것으로 확인됐습니다</strong>
-                <span>공식 예약·승차권 내역에 결제할 예약이 남아 있지 않은지 먼저 확인해 주세요.</span>
+                <strong>
+                  {mode.kind === "unknown"
+                    ? "예약 결과를 자동으로 확인할 수 없습니다"
+                    : mode.paymentHoldEndReason === "confirmed_payment_deadline_elapsed"
+                      ? "공식 확인에서 결제 가능 기한이 종료됐습니다"
+                      : "공식 내역에서 대상 임시 예약을 더 이상 찾지 못했습니다"}
+                </strong>
+                <span>
+                  {mode.kind === "unknown"
+                    ? "공식 앱/홈에서 해당 열차·좌석 등급의 예약이 없는지 직접 확인해 주세요."
+                    : "공식 예약·승차권 내역에 결제할 예약이 남아 있는지 먼저 확인해 주세요."}
+                </span>
               </div>
             </div>
             <p id={descriptionId} className="official-handoff-description">
-              확인하면 좌석 감시를 즉시 실행하고, 이후 같은 좌석 등급이 공식 관측에서 다시 예매 가능해질 때 한 번 자동 예매를 시도합니다. 현재 좌석 확보나 예매 성공을 보장하지 않으며 결제는 공식 플랫폼에서 직접 완료해야 합니다.
+              {mode.kind === "unknown"
+                ? "확인하면 좌석 감시를 즉시 실행하고, 이후 같은 좌석 등급이 공식 관측에서 다시 예매 가능해질 때 한 번 자동 예매를 시도합니다. 자동 재확인은 계속되며, 그 사이 예약이 확인되면 재시도를 중단합니다. 현재 좌석 확보나 예매 성공을 보장하지 않으며 결제는 공식 플랫폼에서 직접 완료해야 합니다."
+                : "확인하면 좌석 감시를 즉시 실행하고, 이후 같은 좌석 등급이 공식 관측에서 다시 예매 가능해질 때 한 번 자동 예매를 시도합니다. 현재 좌석 확보나 예매 성공을 보장하지 않으며 결제는 공식 플랫폼에서 직접 완료해야 합니다."}
             </p>
+            <label className="reservation-rearm-acknowledgement">
+              <input
+                type="checkbox"
+                checked={absenceConfirmed}
+                disabled={pending}
+                onChange={(event) => setAbsenceConfirmed(event.currentTarget.checked)}
+              />
+              <span>
+                {mode.kind === "payment_hold"
+                  && mode.paymentHoldEndReason === "confirmed_payment_deadline_elapsed"
+                  ? "공식 앱/홈에서 이 예약을 더 이상 결제할 수 없음을 확인했습니다."
+                  : "공식 앱/홈의 예약·승차권 내역에서 이 열차와 좌석 등급의 예약이 없음을 확인했습니다."}
+              </span>
+            </label>
             <footer className="official-handoff-actions">
               <button type="button" className="button button-outline" disabled={pending} onClick={close}>
                 취소
@@ -180,7 +235,7 @@ export function ReservationRearmConfirm({
                 type="button"
                 className="button button-primary"
                 aria-busy={pending}
-                disabled={pending}
+                disabled={pending || !absenceConfirmed}
                 onClick={() => { void confirm(); }}
               >
                 <ArrowClockwise aria-hidden="true" />

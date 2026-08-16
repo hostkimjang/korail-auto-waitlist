@@ -1,6 +1,9 @@
+export type LiveDataReloadUrgency = "routine" | "immediate";
+
 export interface LiveDataReloadCoordinator {
   start: () => void;
-  request: () => void;
+  request: (urgency: LiveDataReloadUrgency) => void;
+  isVisible: () => boolean;
   dispose: () => void;
 }
 
@@ -22,7 +25,7 @@ export function createLiveDataReloadCoordinator(
 ): LiveDataReloadCoordinator {
   let active = true;
   let inFlight = false;
-  let pending = false;
+  let pendingUrgency: LiveDataReloadUrgency | null = null;
   let timer: number | null = null;
   let pollTimer: number | null = null;
   const pollIntervalMs = options.pollIntervalMs;
@@ -31,6 +34,10 @@ export function createLiveDataReloadCoordinator(
 
   const pollingEnabled = Number.isFinite(pollIntervalMs) && Number(pollIntervalMs) > 0;
   const isVisible = (): boolean => visibilityTarget?.visibilityState !== "hidden";
+
+  const markPending = (urgency: LiveDataReloadUrgency): void => {
+    if (urgency === "immediate" || pendingUrgency === null) pendingUrgency = urgency;
+  };
 
   const clearPollTimer = (): void => {
     if (pollTimer !== null) window.clearTimeout(pollTimer);
@@ -47,21 +54,30 @@ export function createLiveDataReloadCoordinator(
     if (!active || !pollingEnabled || !isVisible()) return;
     pollTimer = window.setTimeout(() => {
       pollTimer = null;
-      void runReload();
+      void runReload("routine");
     }, Number(pollIntervalMs));
   };
 
-  const runReload = async (): Promise<void> => {
+  const scheduleRequest = (urgency: LiveDataReloadUrgency): void => {
+    if (!active || !isVisible() || timer !== null) return;
+    timer = window.setTimeout(() => {
+      timer = null;
+      void runReload(urgency);
+    }, burstDelayMs);
+  };
+
+  const runReload = async (triggerUrgency: LiveDataReloadUrgency): Promise<void> => {
     if (!active) return;
     if (inFlight) {
-      pending = true;
+      markPending(triggerUrgency);
       return;
     }
     if (!isVisible()) {
-      pending = true;
+      markPending(triggerUrgency);
       return;
     }
-    pending = false;
+    pendingUrgency = null;
+    clearRequestTimer();
     clearPollTimer();
     inFlight = true;
     try {
@@ -71,56 +87,60 @@ export function createLiveDataReloadCoordinator(
       // transient refresh failure keeps the last successful snapshot visible.
     } finally {
       inFlight = false;
-      if (active && pending && isVisible()) {
-        pending = false;
-        timer = window.setTimeout(() => {
-          timer = null;
-          void runReload();
-        }, burstDelayMs);
-      } else if (isVisible()) {
-        schedulePoll();
+      if (active && isVisible()) {
+        if (pendingUrgency === "immediate") {
+          scheduleRequest("immediate");
+        } else if (pollingEnabled) {
+          // Routine invalidations share the next recovery poll. This bounds
+          // canonical GET starts without delaying state-changing events.
+          schedulePoll();
+        } else if (pendingUrgency === "routine") {
+          scheduleRequest("routine");
+        }
       }
     }
   };
 
-  const request = (): void => {
-    pending = true;
-    if (!isVisible() || inFlight || timer !== null) return;
-    timer = window.setTimeout(() => {
-      timer = null;
-      void runReload();
-    }, burstDelayMs);
+  const request = (urgency: LiveDataReloadUrgency): void => {
+    markPending(urgency);
+    if (!isVisible() || inFlight) return;
+    if (urgency === "immediate") {
+      scheduleRequest("immediate");
+    } else if (pollingEnabled) {
+      if (pollTimer === null) schedulePoll();
+    } else {
+      scheduleRequest("routine");
+    }
   };
 
   const handleVisibilityChange = (): void => {
-    if (!active || !pollingEnabled) return;
+    if (!active) return;
     if (!isVisible()) {
       clearPollTimer();
       clearRequestTimer();
       return;
     }
     clearPollTimer();
-    void runReload();
+    void runReload("immediate");
   };
 
-  if (pollingEnabled) {
-    visibilityTarget?.addEventListener("visibilitychange", handleVisibilityChange);
-  }
+  visibilityTarget?.addEventListener("visibilitychange", handleVisibilityChange);
 
   return {
     start: () => {
       if (!isVisible()) {
-        pending = true;
+        markPending("immediate");
         return;
       }
-      void runReload();
+      void runReload("immediate");
     },
     request,
+    isVisible,
     dispose: () => {
       active = false;
       clearRequestTimer();
       clearPollTimer();
-      pending = false;
+      pendingUrgency = null;
       visibilityTarget?.removeEventListener("visibilitychange", handleVisibilityChange);
     },
   };

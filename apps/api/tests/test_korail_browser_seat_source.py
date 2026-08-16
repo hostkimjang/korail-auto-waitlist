@@ -392,6 +392,7 @@ async def test_uncertain_progress_stream_failure_is_a_no_replay_unknown_fence() 
     )
 
     assert result.outcome is ReservationOutcome.UNKNOWN
+    assert result.result_reason_code.value == "provider_unavailable"
     assert result.observed_at == latest_progress_at
     assert tuple(stage.occurred_at for stage in result.progress_stages) == (latest_progress_at,)
     assert len(transport.reservation_requests) == 1

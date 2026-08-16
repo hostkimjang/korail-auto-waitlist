@@ -83,6 +83,25 @@ describe("readCurrentKorailResults", () => {
     }
   });
 
+  it("reads standing statuses before stale sold-out classes", () => {
+    const document = renderedDocument();
+    const standard = requiredElement(document, ".price_box.gen");
+    const first = requiredElement(document, ".price_box.spe");
+    standard.textContent = "일반실 입석";
+    first.classList.remove("sold_out_soon");
+    first.classList.add("sold_out");
+    first.textContent = "특실 입석+좌석";
+
+    const result = readCurrentKorailResults(document);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.trains[0]).toMatchObject({
+        standard: "standing_only",
+        first: "standing_plus_seat",
+      });
+    }
+  });
+
   it("uses gen/spe identity instead of DOM order", () => {
     const document = renderedDocument();
     const inner = requiredElement(document, ".tck_inner");

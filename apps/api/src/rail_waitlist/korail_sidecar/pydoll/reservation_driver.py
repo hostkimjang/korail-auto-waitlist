@@ -34,6 +34,10 @@ from .reservation_contracts import (
     KorailReservationResult,
     KorailReservedSeat,
 )
+from .session_auth_policy import is_korail_session_authenticated
+
+_LOGIN_ROUTE_OFFICIAL_PROBE_INITIAL_BACKOFF_SECONDS = 0.25
+_LOGIN_ROUTE_OFFICIAL_PROBE_MAX_BACKOFF_SECONDS = 1.0
 
 __all__ = (
     "KORAIL_ROUTE_HEADING",
@@ -80,6 +84,9 @@ class ReservationAttemptState:
     login_attempted: bool = False
     pre_login_route_check_attempted: bool = False
     pre_login_route_authenticated: bool = False
+    login_route_auth_unavailable_stage: str | None = None
+    login_route_auth_unavailable_attempts: int = 0
+    login_route_auth_next_official_probe_at: float = 0.0
     post_submit_check_attempted: bool = False
     post_submit_authenticated: bool = False
     preserved_selection_checked: bool = False
@@ -316,6 +323,7 @@ class PydollReservationDomDriver:
         self._utc_now = utc_now
         self._event_logger = event_logger
         self._auto_handle_dialogs = auto_handle_dialogs
+        self._confirmation_correlation_baseline: tuple[KorailReservedSeat, ...] | None = None
 
     async def reserve_once(
         self,
@@ -323,6 +331,7 @@ class PydollReservationDomDriver:
         *,
         on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
+        self._confirmation_correlation_baseline = None
         target_rechecked_at: datetime | None = None
         seat_selected_at: datetime | None = None
         reservation_requested_at: datetime | None = None
@@ -334,6 +343,7 @@ class PydollReservationDomDriver:
             seat_clicked: bool = False,
             reservation_clicked: bool = False,
             reserved_seats: tuple[KorailReservedSeat, ...] = (),
+            confirmation_correlation_seats: tuple[KorailReservedSeat, ...] = (),
         ) -> KorailReservationResult:
             return KorailReservationResult(
                 outcome=outcome,
@@ -344,6 +354,7 @@ class PydollReservationDomDriver:
                 seat_selected_at=seat_selected_at,
                 reservation_requested_at=reservation_requested_at,
                 reserved_seats=reserved_seats,
+                confirmation_correlation_seats=confirmation_correlation_seats,
             )
 
         rows = await self._visible_elements("li.tckList")
@@ -368,6 +379,9 @@ class PydollReservationDomDriver:
             return result(KorailReservationOutcome.UNAVAILABLE, "seat_not_available")
 
         seat = seat_controls[0]
+        self._confirmation_correlation_baseline = (
+            await self._read_reserved_seats_from_preserved_state(request)
+        )
         await seat.click()
         seat_selected_at = self._utc_now()
         if on_progress is not None:
@@ -379,29 +393,60 @@ class PydollReservationDomDriver:
             if terminal is not None:
                 if terminal.outcome is KorailReservationOutcome.AUTH_REQUIRED:
                     if attempt.login_attempted:
+                        auth_correlation_seats = (
+                            await self.confirmation_correlation_seats_from_fresh_state(request)
+                            if attempt.reservation_clicked
+                            else ()
+                        )
                         return result(
                             KorailReservationOutcome.AUTH_REQUIRED,
                             "authentication_required",
                             seat_clicked=True,
                             reservation_clicked=attempt.reservation_clicked,
+                            confirmation_correlation_seats=auth_correlation_seats,
                         )
                     attempt.login_attempted = True
                     if not await self._port._authenticate_in_place(request.credential, attempt):
+                        auth_correlation_seats = (
+                            await self.confirmation_correlation_seats_from_fresh_state(request)
+                            if attempt.reservation_clicked
+                            else ()
+                        )
                         return result(
                             KorailReservationOutcome.AUTH_REQUIRED,
                             "authentication_required",
                             seat_clicked=True,
                             reservation_clicked=attempt.reservation_clicked,
+                            confirmation_correlation_seats=auth_correlation_seats,
                         )
                     deadline = self._monotonic() + self._timeout_seconds
                     continue
+                correlation_seats: tuple[KorailReservedSeat, ...] = ()
+                if (
+                    attempt.reservation_clicked
+                    and terminal.outcome
+                    in {
+                        KorailReservationOutcome.CONSENT_REQUIRED,
+                        KorailReservationOutcome.ACTION_REQUIRED,
+                        KorailReservationOutcome.PROVIDER_BLOCKED,
+                        KorailReservationOutcome.FAILED,
+                    }
+                    and not terminal.reserved_seats
+                ):
+                    correlation_seats = await self.confirmation_correlation_seats_from_fresh_state(
+                        request
+                    )
                 return result(
                     terminal.outcome,
                     terminal.reason,
                     seat_clicked=True,
                     reservation_clicked=attempt.reservation_clicked,
                     reserved_seats=terminal.reserved_seats,
+                    confirmation_correlation_seats=correlation_seats,
                 )
+            if attempt.login_route_auth_unavailable_stage is not None:
+                await self._sleep(0.1)
+                continue
             relevant_dialog_deadlines = tuple((attempt.dialog_settle_deadlines or {}).values()) + (
                 (attempt.post_dialog_action_followup_deadline,)
                 if attempt.post_dialog_action_followup_deadline is not None
@@ -476,17 +521,32 @@ class PydollReservationDomDriver:
                     deadline = self._monotonic() + self._timeout_seconds
                     continue
             await self._sleep(0.1)
+        if attempt.login_route_auth_unavailable_stage is not None:
+            correlation_seats = (
+                await self.confirmation_correlation_seats_from_fresh_state(request)
+                if attempt.reservation_clicked
+                else ()
+            )
+            return result(
+                KorailReservationOutcome.FAILED,
+                f"source_unavailable:{attempt.login_route_auth_unavailable_stage}",
+                seat_clicked=True,
+                reservation_clicked=attempt.reservation_clicked,
+                confirmation_correlation_seats=correlation_seats,
+            )
         if not attempt.reservation_clicked:
             return result(
                 KorailReservationOutcome.FAILED,
                 "reservation_control_timeout",
                 seat_clicked=True,
             )
+        correlation_seats = await self.confirmation_correlation_seats_from_fresh_state(request)
         return result(
             KorailReservationOutcome.FAILED,
             "reservation_result_unknown",
             seat_clicked=True,
             reservation_clicked=True,
+            confirmation_correlation_seats=correlation_seats,
         )
 
     async def has_exact_preserved_booking_state(
@@ -541,6 +601,24 @@ class PydollReservationDomDriver:
         self,
         request: KorailReservationRequest,
     ) -> tuple[KorailReservedSeat, ...]:
+        return (await self._read_reserved_seats_from_preserved_state(request)) or ()
+
+    async def confirmation_correlation_seats_from_fresh_state(
+        self,
+        request: KorailReservationRequest,
+    ) -> tuple[KorailReservedSeat, ...]:
+        baseline = self._confirmation_correlation_baseline
+        if baseline is None:
+            return ()
+        current = await self._read_reserved_seats_from_preserved_state(request)
+        if current is None or not current or current == baseline:
+            return ()
+        return current
+
+    async def _read_reserved_seats_from_preserved_state(
+        self,
+        request: KorailReservationRequest,
+    ) -> tuple[KorailReservedSeat, ...] | None:
         script = """
             (() => {
               const isPlainRecord = (value) => {
@@ -595,16 +673,16 @@ class PydollReservationDomDriver:
                 timeout=self._timeout_ms,
             )
             if not isinstance(response, Mapping):
-                return ()
+                return None
             command_result = response.get("result")
             if not isinstance(command_result, Mapping):
-                return ()
+                return None
             script_result = command_result.get("result")
             if not isinstance(script_result, Mapping):
-                return ()
+                return None
             return _reserved_seats_from_history_state(script_result.get("value"), request)
         except Exception:  # noqa: BLE001 -- changed official state fails closed.
-            return ()
+            return None
 
     async def actionable_seat_controls(
         self,
@@ -791,17 +869,59 @@ class PydollReservationDomDriver:
 
         path = urlsplit(snapshot.url).path
         authenticated_login_route = False
-        if path.rstrip("/") == "/ticket/login":
+        if path.rstrip("/") != "/ticket/login":
+            attempt.login_route_auth_unavailable_stage = None
+            attempt.login_route_auth_unavailable_attempts = 0
+            attempt.login_route_auth_next_official_probe_at = 0.0
+        else:
             authenticated = attempt.post_submit_authenticated
             if not authenticated:
                 if not attempt.pre_login_route_check_attempted:
+                    now = self._monotonic()
+                    if (
+                        attempt.login_route_auth_unavailable_stage is not None
+                        and now < attempt.login_route_auth_next_official_probe_at
+                    ):
+                        try:
+                            authenticated = await self._port._has_authenticated_header()
+                        except BrowserSourceUnavailable as error:
+                            attempt.login_route_auth_unavailable_stage = (
+                                error.stage
+                                if error.stage != "unspecified"
+                                and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error.stage) is not None
+                                else "session_keepalive"
+                            )
+                            return None
+                        if not authenticated:
+                            return None
+                    else:
+                        try:
+                            authenticated = await is_korail_session_authenticated(self._port)
+                        except BrowserSourceUnavailable as error:
+                            attempt.login_route_auth_unavailable_stage = (
+                                error.stage
+                                if error.stage != "unspecified"
+                                and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error.stage) is not None
+                                else "session_keepalive"
+                            )
+                            attempt.login_route_auth_unavailable_attempts += 1
+                            exponent = min(
+                                attempt.login_route_auth_unavailable_attempts - 1,
+                                2,
+                            )
+                            backoff_seconds = min(
+                                _LOGIN_ROUTE_OFFICIAL_PROBE_MAX_BACKOFF_SECONDS,
+                                _LOGIN_ROUTE_OFFICIAL_PROBE_INITIAL_BACKOFF_SECONDS * (2**exponent),
+                            )
+                            attempt.login_route_auth_next_official_probe_at = now + backoff_seconds
+                            return None
                     attempt.pre_login_route_check_attempted = True
-                    attempt.pre_login_route_authenticated = (
-                        await self._port._probe_official_authenticated_session()
-                    )
-                authenticated = attempt.pre_login_route_authenticated
-            if not authenticated:
-                authenticated = await self._port._has_authenticated_header()
+                    attempt.pre_login_route_authenticated = authenticated
+                else:
+                    authenticated = attempt.pre_login_route_authenticated
+            attempt.login_route_auth_unavailable_stage = None
+            attempt.login_route_auth_unavailable_attempts = 0
+            attempt.login_route_auth_next_official_probe_at = 0.0
             if not authenticated:
                 return KorailReservationResult(
                     KorailReservationOutcome.AUTH_REQUIRED,

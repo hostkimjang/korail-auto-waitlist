@@ -27,14 +27,19 @@ async def update_provider_auth_status_in_reservation_transaction(
     *,
     expected_credential_version: int,
     persist_auth_status: PersistProviderAuthStatus,
-) -> None:
+) -> bool:
     # Reservation state and provider authentication metadata must commit or roll back
     # together. The persistence dependency owns locking/flush details; this adapter
     # fixes the transaction boundary without depending on the legacy service module.
-    await persist_auth_status(
+    account = await persist_auth_status(
         session,
         provider,
         status,
         expected_credential_version=expected_credential_version,
         commit=False,
+    )
+    return (
+        account is not None
+        and account.credential_version == expected_credential_version
+        and account.last_auth_status == status
     )

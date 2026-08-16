@@ -1756,7 +1756,13 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
     ]
     assert attempts[0] == {
         "outcome": "not_available",
+        "result_reason_code": "target_not_available",
         "confirmation_outcome": None,
+        "confirmation_diagnostic_code": None,
+        "confirmation_observed_at": None,
+        "reconciliation_attempt_count": 0,
+        "reconciliation_resolution": None,
+        "next_reconcile_at": None,
         "started_at": started_at.isoformat().replace("+00:00", "Z"),
         "finished_at": (started_at + timedelta(seconds=4)).isoformat().replace("+00:00", "Z"),
         "progress_stages": [],
@@ -1766,6 +1772,7 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
         "retryable": True,
         "manual_check_required": False,
         "manual_rearm_available": False,
+        "manual_rearm_reason": None,
         "retry_condition": "new_availability_episode",
     }
     assert attempts[1]["outcome"] == "failed"
@@ -1881,7 +1888,13 @@ async def test_watch_read_projects_ended_srt_374_hold_as_new_episode_retry(app, 
     attempt = response.json()["candidates"][0]["latest_reservation_attempt"]
     assert attempt == {
         "outcome": "payment_required",
+        "result_reason_code": "payment_hold_created",
         "confirmation_outcome": "not_found",
+        "confirmation_diagnostic_code": None,
+        "confirmation_observed_at": reconciled_at.isoformat().replace("+00:00", "Z"),
+        "reconciliation_attempt_count": 0,
+        "reconciliation_resolution": None,
+        "next_reconcile_at": None,
         "started_at": started_at.isoformat().replace("+00:00", "Z"),
         "finished_at": (started_at + timedelta(seconds=2)).isoformat().replace("+00:00", "Z"),
         "progress_stages": [],
@@ -1891,6 +1904,7 @@ async def test_watch_read_projects_ended_srt_374_hold_as_new_episode_retry(app, 
         "retryable": True,
         "manual_check_required": False,
         "manual_rearm_available": False,
+        "manual_rearm_reason": None,
         "retry_condition": "new_availability_episode",
     }
 

@@ -6,6 +6,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
+)
+
 KorailReservationSeatClassValue = Literal["general", "special"]
 KorailLoginMethodValue = Literal["membership_number", "email", "phone"]
 KorailReservationOutcomeValue = Literal[
@@ -23,7 +27,11 @@ KorailReservationProgressStageValue = Literal[
     "seat_selected",
     "reservation_requested",
 ]
-KorailConfirmationPurposeValue = Literal["initial", "payment_follow_up"]
+KorailConfirmationPurposeValue = Literal[
+    "initial",
+    "payment_follow_up",
+    "unknown_result_follow_up",
+]
 KorailLoginVerificationOutcomeValue = Literal[
     "authenticated",
     "auth_required",
@@ -87,6 +95,10 @@ class KorailReservationConfirmationRequest(_InternalModel):
     credential_version: int = Field(ge=1)
     purpose: KorailConfirmationPurposeValue = "initial"
     reserved_seats: list[KorailReservedSeat] = Field(default_factory=list, max_length=1)
+    confirmation_correlation_seats: list[KorailReservedSeat] = Field(
+        default_factory=list,
+        max_length=1,
+    )
 
     @field_validator("departure_at", "arrival_at")
     @classmethod
@@ -101,8 +113,14 @@ class KorailReservationConfirmationRequest(_InternalModel):
             raise ValueError("origin and destination must differ")
         if self.arrival_at is not None and self.arrival_at <= self.departure_at:
             raise ValueError("arrival_at must be later than departure_at")
-        if self.purpose == "initial" and self.reserved_seats:
-            raise ValueError("only payment follow-up may carry reserved seats")
+        if self.purpose == "initial" and (
+            self.reserved_seats or self.confirmation_correlation_seats
+        ):
+            raise ValueError("initial confirmation cannot carry seat identity")
+        if self.purpose == "payment_follow_up" and self.confirmation_correlation_seats:
+            raise ValueError("payment follow-up cannot carry uncertain correlation seats")
+        if self.purpose == "unknown_result_follow_up" and self.reserved_seats:
+            raise ValueError("unknown result follow-up cannot carry confirmed reserved seats")
         return self
 
 
@@ -115,6 +133,7 @@ class KorailReservationConfirmationResult(_InternalModel):
         "provider_blocked",
         "inconclusive",
     ]
+    diagnostic_code: ReservationConfirmationDiagnosticCode | None = None
     source: Literal[
         "korail-same-session-detail",
         "korail-reservation-list",
@@ -133,6 +152,8 @@ class KorailReservationConfirmationResult(_InternalModel):
 
     @model_validator(mode="after")
     def require_confirmed_handoff_fields(self) -> "KorailReservationConfirmationResult":
+        if (self.outcome == "inconclusive") != (self.diagnostic_code is not None):
+            raise ValueError("only inconclusive confirmation requires a diagnostic code")
         confirmed = self.outcome == "confirmed_payment_required"
         if confirmed != (self.official_handoff_url is not None):
             raise ValueError("only confirmed payment holds may contain a handoff URL")
@@ -191,6 +212,10 @@ class KorailReserveOnceResult(_InternalModel):
     seat_selected_at: datetime | None = None
     reservation_requested_at: datetime | None = None
     reserved_seats: list[KorailReservedSeat] = Field(default_factory=list, max_length=1)
+    confirmation_correlation_seats: list[KorailReservedSeat] = Field(
+        default_factory=list,
+        max_length=1,
+    )
 
     @field_validator(
         "session_ready_at",
@@ -225,8 +250,26 @@ class KorailReserveOnceResult(_InternalModel):
         seat_keys = [(seat.car_number, seat.seat_number) for seat in self.reserved_seats]
         if len(seat_keys) != len(set(seat_keys)):
             raise ValueError("reserved_seats must contain unique car and seat pairs")
+        unknown_with_exact_post_request_seat = (
+            self.outcome
+            in {
+                "auth_required",
+                "provider_blocked",
+                "consent_required",
+                "action_required",
+                "failed",
+            }
+            and self.reservation_clicked
+            and self.reservation_requested_at is not None
+        )
         if self.outcome != "payment_required" and self.reserved_seats:
             raise ValueError("only payment_required can contain reserved seats")
+        if self.confirmation_correlation_seats and not unknown_with_exact_post_request_seat:
+            raise ValueError(
+                "correlation seats require a post-request ambiguous reservation result"
+            )
+        if self.outcome == "payment_required" and self.confirmation_correlation_seats:
+            raise ValueError("payment_required cannot contain uncertain correlation seats")
         return self
 
 

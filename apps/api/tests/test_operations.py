@@ -4,6 +4,8 @@ import uuid
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from rail_waitlist.domain import (
     OutboxStatus,
     Provider,
@@ -28,6 +30,7 @@ from rail_waitlist.operation_summary.schemas import (
 )
 from rail_waitlist.operations import RESERVATION_REASON_CODES
 from rail_waitlist.reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
 )
 from rail_waitlist.schemas import OperationsSummary as CompatibilityOperationsSummary
@@ -40,13 +43,13 @@ def test_operations_summary_schema_keeps_compatibility_export():
 def test_operations_summary_has_a_closed_reason_for_every_reservation_outcome():
     assert RESERVATION_REASON_CODES == {
         ReservationOutcome.PENDING: "reservation_pending",
-        ReservationOutcome.PAYMENT_REQUIRED: "reservation_payment_required",
-        ReservationOutcome.RESERVED: "reservation_reserved",
-        ReservationOutcome.NOT_AVAILABLE: "reservation_not_available",
-        ReservationOutcome.AUTH_REQUIRED: "reservation_auth_required",
-        ReservationOutcome.PROVIDER_BLOCKED: "reservation_provider_blocked",
+        ReservationOutcome.PAYMENT_REQUIRED: "payment_hold_created",
+        ReservationOutcome.RESERVED: "payment_hold_created",
+        ReservationOutcome.NOT_AVAILABLE: "target_not_available",
+        ReservationOutcome.AUTH_REQUIRED: "authentication_required",
+        ReservationOutcome.PROVIDER_BLOCKED: "provider_blocked",
         ReservationOutcome.FAILED: "reservation_failed",
-        ReservationOutcome.UNKNOWN: "reservation_unknown",
+        ReservationOutcome.UNKNOWN: "reservation_request_result_unknown",
     }
 
 
@@ -257,6 +260,7 @@ async def test_operations_summary_is_source_backed_and_sanitized(app, client):
         entry for entry in contextual_entries if entry["kind"] == "reservation_attempt"
     )
     assert failed_attempt_entry["reason_code"] == "reservation_failed"
+    assert failed_attempt_entry["confirmation_diagnostic_code"] is None
 
     serialized = response.text
     for forbidden in (
@@ -271,6 +275,63 @@ async def test_operations_summary_is_source_backed_and_sanitized(app, client):
         "official_handoff_url",
     ):
         assert forbidden not in serialized
+
+
+async def test_operations_summary_exposes_only_closed_confirmation_diagnostic(app, client):
+    now = datetime.now(UTC)
+    hidden_source = "private-provider-screen-reader"
+    watch = Watch(
+        id=str(uuid.uuid4()),
+        provider=Provider.KORAIL,
+        origin="대전",
+        destination="서울",
+        travel_date=(now + timedelta(days=1)).date(),
+        time_from=time(8),
+        time_to=time(12),
+        seat_class="standard",
+        passenger_count=1,
+        train_numbers=["86"],
+        notification_channel_ids=[],
+        mode="real",
+        status=WatchStatus.WATCHING,
+        dedupe_key="diagnostic-operations-watch",
+        created_at=now - timedelta(hours=1),
+        updated_at=now - timedelta(minutes=1),
+    )
+    candidate = WatchCandidate(
+        id=str(uuid.uuid4()),
+        watch=watch,
+        train_number="86",
+        departure_at=now + timedelta(days=1),
+        seat_class="standard",
+        priority=1,
+    )
+    attempt = ReservationAttempt(
+        candidate=candidate,
+        idempotency_key="diagnostic-operations-attempt",
+        started_at=now - timedelta(minutes=3),
+        finished_at=now - timedelta(minutes=2),
+        outcome=ReservationOutcome.UNKNOWN,
+        confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        confirmation_diagnostic_code=(
+            ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+        ),
+        confirmation_source=hidden_source,
+        confirmation_observed_at=now - timedelta(minutes=2),
+    )
+
+    async with app.state.test_session_factory() as session:
+        session.add_all([watch, candidate, attempt])
+        await session.commit()
+
+    response = await client.get("/api/v1/operations/summary")
+    assert response.status_code == 200
+    entry = next(
+        item for item in response.json()["recent_entries"] if item["kind"] == "reservation_attempt"
+    )
+
+    assert entry["confirmation_diagnostic_code"] == "official_read_unavailable"
+    assert hidden_source not in response.text
 
 
 async def test_recent_entries_exclude_routine_observations_before_source_limit(app, client):
@@ -316,6 +377,7 @@ async def test_recent_entries_exclude_routine_observations_before_source_limit(a
         SeatObservationStatus.AVAILABLE,
         SeatObservationStatus.LIMITED,
         SeatObservationStatus.STANDING_PLUS_SEAT,
+        SeatObservationStatus.STANDING_ONLY,
         SeatObservationStatus.NOT_ENOUGH_SEATS,
         SeatObservationStatus.SOLD_OUT,
         SeatObservationStatus.WAITLIST_AVAILABLE,
@@ -386,8 +448,7 @@ async def test_recent_entries_exclude_routine_observations_before_source_limit(a
 
     assert {entry["status"] for entry in observation_entries} == {"error", "unknown", "stale"}
     assert any(
-        entry["kind"] == "reservation_attempt"
-        and entry["reason_code"] == "reservation_auth_required"
+        entry["kind"] == "reservation_attempt" and entry["reason_code"] == "authentication_required"
         for entry in payload["recent_entries"]
     )
     expected_observation_count = (
@@ -527,9 +588,18 @@ async def test_operations_summary_distinguishes_safe_payment_hold_end_reasons(ap
     assert raw_transition_reason not in str(payload)
 
 
+@pytest.mark.parametrize(
+    ("attempt_outcome", "from_status"),
+    [
+        (ReservationOutcome.PAYMENT_REQUIRED, WatchStatus.PAYMENT_REQUIRED),
+        (ReservationOutcome.UNKNOWN, WatchStatus.WATCHING),
+    ],
+)
 async def test_operations_summary_projects_confirmed_payment_without_raw_transition_reason(
     app,
     client,
+    attempt_outcome: ReservationOutcome,
+    from_status: WatchStatus,
 ):
     now = datetime.now(UTC)
     watch = Watch(
@@ -547,7 +617,7 @@ async def test_operations_summary_projects_confirmed_payment_without_raw_transit
         mode="real",
         reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
         status=WatchStatus.COMPLETED,
-        dedupe_key="confirmed-paid-watch",
+        dedupe_key=f"confirmed-paid-watch-{attempt_outcome.value}",
         created_at=now - timedelta(hours=1),
         updated_at=now - timedelta(minutes=2),
     )
@@ -562,10 +632,10 @@ async def test_operations_summary_projects_confirmed_payment_without_raw_transit
     )
     attempt = ReservationAttempt(
         candidate=candidate,
-        idempotency_key="confirmed-paid-attempt",
+        idempotency_key=f"confirmed-paid-attempt-{attempt_outcome.value}",
         started_at=now - timedelta(minutes=20),
         finished_at=now - timedelta(minutes=19),
-        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        outcome=attempt_outcome,
         confirmation_outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
         confirmation_source="safe-paid-source",
         confirmation_observed_at=now - timedelta(hours=25),
@@ -574,7 +644,7 @@ async def test_operations_summary_projects_confirmed_payment_without_raw_transit
     raw_transition_reason = "reservation_reconciliation_confirmed_paid"
     transition = WatchTransitionHistory(
         watch=watch,
-        from_status=WatchStatus.PAYMENT_REQUIRED,
+        from_status=from_status,
         to_status=WatchStatus.COMPLETED,
         reason=raw_transition_reason,
         created_at=now - timedelta(minutes=2),
@@ -605,6 +675,7 @@ async def test_operations_summary_projects_confirmed_payment_without_raw_transit
         "departure_at": candidate.departure_at.astimezone(ZoneInfo("Asia/Seoul")).isoformat(),
         "seat_class": "first",
         "reason_code": "payment_completed",
+        "confirmation_diagnostic_code": None,
     }
     assert raw_transition_reason not in str(payload)
 

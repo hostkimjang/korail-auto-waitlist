@@ -9,6 +9,7 @@ from ..provider_contracts import ProviderUnavailable
 from ..provider_registry.contracts import ProviderCapabilities
 from ..reservations.contracts import ReservationRequest, ReservationResult
 from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
@@ -103,6 +104,7 @@ class RailProviderAdapter(ABC):
         return ReservationConfirmationResult(
             provider=self.provider,
             outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE,
             source="provider-confirmation-unavailable",
             observed_at=datetime.now(timezone.utc),
         )

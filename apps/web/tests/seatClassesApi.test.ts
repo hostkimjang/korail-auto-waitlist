@@ -76,6 +76,35 @@ describe("seat class API normalization contract", () => {
     expect(seatAt(seats, 1).status).toBe("unknown");
   });
 
+  it("preserves standing-only as observed without promoting it to direct availability", () => {
+    const seat = seatAt(normalizeSeatClasses({
+      provider: "korail",
+      official_booking_url: "https://www.korail.com/ticket/search",
+      seat_classes: [{
+        seat_class: "standard",
+        status: "standing_only",
+        registration_evidence_id: "evidence-standing-only",
+        provenance: {
+          kind: "official_provider",
+          source: "korail-official-page-browser",
+          observed_at: "2026-08-15T00:00:00Z",
+        },
+        actions: [
+          { kind: "official_check", url: "https://www.korail.com/ticket/search" },
+          { kind: "add_to_watch", url: null },
+        ],
+      }],
+    }));
+
+    expect(seat).toMatchObject({
+      status: "standing_only",
+      actions: [
+        { kind: "official_check" },
+        { kind: "add_to_watch", url: null },
+      ],
+    });
+  });
+
   it("keeps an observed official status visible but disables registration without evidence", () => {
     const seat = seatAt(normalizeSeatClasses({
       provider: "srt",

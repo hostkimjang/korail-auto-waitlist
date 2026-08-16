@@ -75,7 +75,7 @@ def _seat_class(
     fare: int | None = None,
 ) -> SeatClassAvailability:
     actions: list[SeatAvailabilityAction] = []
-    if status in {"available", "limited", "standing_plus_seat"}:
+    if status in {"available", "limited", "standing_plus_seat", "standing_only"}:
         normalized_url = AnyHttpUrl(str(official_url))
         actions.extend(
             [

@@ -38,6 +38,9 @@ from .reservation_contracts import (
 from .reservation_contracts import (
     KorailReservationProgress as _KorailReservationProgress,
 )
+from .reservation_contracts import (
+    KorailReservedSeat as _KorailReservedSeat,
+)
 
 __all__ = (
     "KorailReservationOutcome",
@@ -87,6 +90,11 @@ class PydollReservationSession(_PydollAuthenticationSession, Protocol):
         *,
         on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult: ...
+
+    async def confirmation_correlation_seats_from_fresh_state(
+        self,
+        request: KorailReservationRequest,
+    ) -> tuple[_KorailReservedSeat, ...]: ...
 
 
 class AcquireReservationSession[Session: PydollReservationSession](Protocol):
@@ -240,6 +248,38 @@ class PydollReservationActor[Session: PydollReservationSession]:
             seat_clicked = False
             reservation_clicked = False
             session_ready_at: datetime | None = None
+            target_rechecked_at: datetime | None = None
+            seat_selected_at: datetime | None = None
+            reservation_requested_at: datetime | None = None
+
+            def track_progress(progress: _KorailReservationProgress) -> None:
+                nonlocal target_rechecked_at
+                nonlocal seat_clicked, seat_selected_at
+                nonlocal reservation_clicked, reservation_requested_at
+
+                if progress.stage == "target_rechecked":
+                    target_rechecked_at = progress.occurred_at
+                elif progress.stage == "seat_selected":
+                    seat_clicked = True
+                    seat_selected_at = progress.occurred_at
+                elif progress.stage == "reservation_requested":
+                    # Reaching the reservation request proves both preceding clicks.
+                    seat_clicked = True
+                    reservation_clicked = True
+                    reservation_requested_at = progress.occurred_at
+                if on_progress is not None:
+                    on_progress(progress)
+
+            async def uncertain_result_correlation_seats() -> tuple[_KorailReservedSeat, ...]:
+                if lease is None or not reservation_clicked or reservation_requested_at is None:
+                    return ()
+                try:
+                    return await lease.session.confirmation_correlation_seats_from_fresh_state(
+                        request
+                    )
+                except Exception:  # noqa: BLE001 -- correlation evidence is optional and fail-closed.
+                    return ()
+
             try:
                 lease = await self._acquire_session(
                     credential_version=request.credential.version,
@@ -256,13 +296,12 @@ class PydollReservationActor[Session: PydollReservationSession]:
                         reason="authentication_required",
                     )
                 session_ready_at = self._utc_now()
-                if on_progress is not None:
-                    on_progress(
-                        _KorailReservationProgress(
-                            stage="authenticated_session_ready",
-                            occurred_at=session_ready_at,
-                        )
+                track_progress(
+                    _KorailReservationProgress(
+                        stage="authenticated_session_ready",
+                        occurred_at=session_ready_at,
                     )
+                )
                 if direct_url is not None and lease.authenticated:
                     stage = "direct_navigation"
                     self._response_safety_guard(
@@ -294,12 +333,9 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     )
                     self._response_safety_guard(snapshot, stage)
                 stage = "reserve_once"
-                if on_progress is None:
-                    result = await session.reserve_once(request)
-                else:
-                    result = await session.reserve_once(request, on_progress=on_progress)
-                seat_clicked = result.seat_clicked
-                reservation_clicked = result.reservation_clicked
+                result = await session.reserve_once(request, on_progress=track_progress)
+                seat_clicked = seat_clicked or result.seat_clicked
+                reservation_clicked = reservation_clicked or result.reservation_clicked
                 if result.outcome in {
                     KorailReservationOutcome.AUTH_REQUIRED,
                     KorailReservationOutcome.PROVIDER_BLOCKED,
@@ -309,7 +345,17 @@ class PydollReservationActor[Session: PydollReservationSession]:
                         if result.outcome is KorailReservationOutcome.AUTH_REQUIRED
                         else KorailSessionActorState.BLOCKED,
                     )
-                return replace(result, session_ready_at=session_ready_at)
+                return replace(
+                    result,
+                    seat_clicked=seat_clicked,
+                    reservation_clicked=reservation_clicked,
+                    session_ready_at=session_ready_at,
+                    target_rechecked_at=result.target_rechecked_at or target_rechecked_at,
+                    seat_selected_at=result.seat_selected_at or seat_selected_at,
+                    reservation_requested_at=(
+                        result.reservation_requested_at or reservation_requested_at
+                    ),
+                )
             except asyncio.CancelledError:
                 await self._discard_with_state(KorailSessionActorState.STALE)
                 raise
@@ -321,15 +367,29 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     seat_clicked=seat_clicked,
                     reservation_clicked=reservation_clicked,
                     session_ready_at=session_ready_at,
+                    target_rechecked_at=target_rechecked_at,
+                    seat_selected_at=seat_selected_at,
+                    reservation_requested_at=reservation_requested_at,
+                    confirmation_correlation_seats=(await uncertain_result_correlation_seats()),
                 )
-            except BrowserSourceUnavailable:
+            except BrowserSourceUnavailable as error:
                 # An uncertain result after the reservation button is never retried.
+                source_stage = (
+                    error.stage
+                    if error.stage != "unspecified"
+                    and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error.stage) is not None
+                    else stage
+                )
                 return KorailReservationResult(
                     outcome=KorailReservationOutcome.FAILED,
-                    reason=f"source_unavailable:{stage}",
+                    reason=f"source_unavailable:{source_stage}",
                     seat_clicked=seat_clicked,
                     reservation_clicked=reservation_clicked,
                     session_ready_at=session_ready_at,
+                    target_rechecked_at=target_rechecked_at,
+                    seat_selected_at=seat_selected_at,
+                    reservation_requested_at=reservation_requested_at,
+                    confirmation_correlation_seats=(await uncertain_result_correlation_seats()),
                 )
             except Exception:  # noqa: BLE001 -- browser backend errors are intentionally opaque.
                 return KorailReservationResult(
@@ -338,6 +398,10 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     seat_clicked=seat_clicked,
                     reservation_clicked=reservation_clicked,
                     session_ready_at=session_ready_at,
+                    target_rechecked_at=target_rechecked_at,
+                    seat_selected_at=seat_selected_at,
+                    reservation_requested_at=reservation_requested_at,
+                    confirmation_correlation_seats=(await uncertain_result_correlation_seats()),
                 )
             finally:
                 if lease is not None and not lease.persistent:

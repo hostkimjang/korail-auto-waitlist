@@ -120,6 +120,7 @@ def test_confirmation_request_preserves_time_route_and_arrival_validation() -> N
     assert valid.departure_at.tzinfo is UTC
     assert valid.purpose == "initial"
     assert valid.reserved_seats == []
+    assert valid.confirmation_correlation_seats == []
     payload = valid.model_dump()
     payload["departure_at"] = valid.departure_at.replace(tzinfo=None)
     with pytest.raises(ValidationError, match="reservation times must include a timezone"):
@@ -140,13 +141,30 @@ def test_confirmation_request_preserves_time_route_and_arrival_validation() -> N
         }
     )
     assert follow_up.reserved_seats[0].seat_number == "8A"
-    with pytest.raises(ValidationError, match="only payment follow-up"):
+    with pytest.raises(ValidationError, match="initial confirmation cannot carry seat identity"):
         canonical.KorailReservationConfirmationRequest.model_validate(
             {
                 **valid.model_dump(),
                 "reserved_seats": [{"car_number": "4", "seat_number": "8A"}],
             }
         )
+    empty_unknown_follow_up = canonical.KorailReservationConfirmationRequest.model_validate(
+        {
+            **valid.model_dump(),
+            "purpose": "unknown_result_follow_up",
+        }
+    )
+    assert empty_unknown_follow_up.reserved_seats == []
+    assert empty_unknown_follow_up.confirmation_correlation_seats == []
+    correlated_unknown_follow_up = canonical.KorailReservationConfirmationRequest.model_validate(
+        {
+            **valid.model_dump(),
+            "purpose": "unknown_result_follow_up",
+            "confirmation_correlation_seats": [{"car_number": "4", "seat_number": "8A"}],
+        }
+    )
+    assert correlated_unknown_follow_up.reserved_seats == []
+    assert correlated_unknown_follow_up.confirmation_correlation_seats[0].seat_number == "8A"
 
 
 def test_confirmation_result_preserves_handoff_and_deadline_shape() -> None:
@@ -166,6 +184,26 @@ def test_confirmation_result_preserves_handoff_and_deadline_shape() -> None:
     )
     assert paid.payment_deadline is None
     assert paid.official_handoff_url is None
+    inconclusive = canonical.KorailReservationConfirmationResult(
+        outcome="inconclusive",
+        diagnostic_code="official_record_ambiguous",
+        source="korail-reservation-list",
+        observed_at=now,
+    )
+    assert inconclusive.model_dump(mode="json")["diagnostic_code"] == ("official_record_ambiguous")
+    with pytest.raises(ValidationError, match="requires a diagnostic code"):
+        canonical.KorailReservationConfirmationResult(
+            outcome="inconclusive",
+            source="korail-reservation-list",
+            observed_at=now,
+        )
+    with pytest.raises(ValidationError, match="requires a diagnostic code"):
+        canonical.KorailReservationConfirmationResult(
+            outcome="not_found",
+            diagnostic_code="official_evidence_insufficient",
+            source="korail-reservation-list",
+            observed_at=now,
+        )
     with pytest.raises(ValidationError, match="confirmed paid requires issued-ticket"):
         canonical.KorailReservationConfirmationResult(
             outcome="confirmed_paid",

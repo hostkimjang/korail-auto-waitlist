@@ -12,13 +12,20 @@ from ..domain import (
     Provider,
     ReservationOutcome,
     ReservationPolicy,
+    ReservationResultReasonCode,
     SeatClass,
     SeatObservationMode,
     SeatObservationStatus,
     WatchStatus,
+    reservation_result_reason_code_for_outcome,
 )
 from ..observations.contracts import ObservationErrorCategory
 from ..reservations.contracts import ReservationProgressStage, ReservedSeat
+from ..reservations.manual_rearm_contracts import ManualReservationRearmReason
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
+)
+from ..reservations.reconciliation_policy import ReservationReconciliationResolution
 from ..schema_base import ApiModel
 from ..timetable_management.schemas import TimetableSeatEvidenceRead
 
@@ -156,8 +163,16 @@ class WatchUpdate(ApiModel):
         return value
 
 
+class ManualReservationRearmRequest(ApiModel):
+    reason: ManualReservationRearmReason | None = None
+    official_reservation_state_confirmed: Literal[True] | None = None
+
+
 class WatchCandidateLatestReservationAttemptRead(ApiModel):
     outcome: ReservationOutcome
+    result_reason_code: ReservationResultReasonCode = (
+        ReservationResultReasonCode.RESERVATION_PENDING
+    )
     confirmation_outcome: (
         Literal[
             "confirmed_payment_required",
@@ -169,6 +184,11 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
         ]
         | None
     ) = None
+    confirmation_diagnostic_code: ReservationConfirmationDiagnosticCode | None = None
+    confirmation_observed_at: datetime | None = None
+    reconciliation_attempt_count: int = Field(default=0, ge=0, le=6)
+    reconciliation_resolution: ReservationReconciliationResolution | None = None
+    next_reconcile_at: datetime | None = None
     started_at: datetime
     finished_at: datetime | None
     progress_stages: list[ReservationProgressStage] = Field(default_factory=list)
@@ -184,6 +204,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
     retryable: bool
     manual_check_required: bool
     manual_rearm_available: bool = False
+    manual_rearm_reason: ManualReservationRearmReason | None = None
     retry_condition: (
         Literal[
             "new_availability_episode",
@@ -195,6 +216,8 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
     @field_validator(
         "started_at",
         "finished_at",
+        "confirmation_observed_at",
+        "next_reconcile_at",
         "post_deadline_reconciled_at",
         mode="before",
     )
@@ -206,6 +229,21 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
 
     @model_validator(mode="after")
     def validate_attempt_time_range(self) -> Self:
+        if "result_reason_code" not in self.model_fields_set:
+            self.result_reason_code = reservation_result_reason_code_for_outcome(self.outcome)
+        if self.confirmation_outcome == "inconclusive":
+            self.confirmation_diagnostic_code = (
+                self.confirmation_diagnostic_code
+                or ReservationConfirmationDiagnosticCode.UNSPECIFIED
+            )
+        elif self.confirmation_diagnostic_code is not None:
+            raise ValueError(
+                "confirmation_diagnostic_code requires an inconclusive confirmation outcome"
+            )
+        if self.manual_rearm_available != (self.manual_rearm_reason is not None):
+            raise ValueError(
+                "manual_rearm_available and manual_rearm_reason must be projected together"
+            )
         stage_order = {
             "authenticated_session_ready": 0,
             "target_rechecked": 1,
@@ -215,6 +253,8 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
         for name, value in (
             ("started_at", self.started_at),
             ("finished_at", self.finished_at),
+            ("confirmation_observed_at", self.confirmation_observed_at),
+            ("next_reconcile_at", self.next_reconcile_at),
             ("post_deadline_reconciled_at", self.post_deadline_reconciled_at),
         ):
             if value is not None and (value.tzinfo is None or value.utcoffset() is None):

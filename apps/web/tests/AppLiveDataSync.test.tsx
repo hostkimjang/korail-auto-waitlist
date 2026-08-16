@@ -68,6 +68,43 @@ describe("App live data synchronization", () => {
     providerAccountsApi.fetchProviderAccounts.mockResolvedValue([]);
   });
 
+  it("uses the live collection outside history and reloads the full collection for reservations", async () => {
+    liveApi.fetchWatches.mockResolvedValue([]);
+    liveApi.subscribeToEvents.mockReturnValue(() => undefined);
+    render(<App />);
+
+    await waitFor(() => {
+      expect(liveApi.fetchWatches).toHaveBeenCalledWith({ view: "live" });
+    });
+    expect(liveApi.subscribeToEvents).toHaveBeenCalledTimes(1);
+
+    const newWaitButton = screen.getAllByRole("button", { name: "새 대기" })[0];
+    if (!newWaitButton) throw new Error("새 대기 탐색 버튼을 찾지 못했습니다.");
+    fireEvent.click(newWaitButton);
+    await screen.findByRole("heading", { name: "어디로 떠나세요?" });
+    await act(async () => Promise.resolve());
+    expect(liveApi.fetchWatches).toHaveBeenCalledTimes(1);
+    expect(liveApi.subscribeToEvents).toHaveBeenCalledTimes(1);
+
+    const reservationsButton = screen.getAllByRole("button", { name: "내 예약" })[0];
+    if (!reservationsButton) throw new Error("내 예약 탐색 버튼을 찾지 못했습니다.");
+    fireEvent.click(reservationsButton);
+    await screen.findByRole("heading", { name: "내 예약", level: 1 });
+    await waitFor(() => {
+      expect(liveApi.fetchWatches).toHaveBeenCalledWith({ view: "all" });
+    });
+    expect(liveApi.subscribeToEvents).toHaveBeenCalledTimes(2);
+
+    const homeButton = screen.getAllByRole("button", { name: "홈" })[0];
+    if (!homeButton) throw new Error("홈 탐색 버튼을 찾지 못했습니다.");
+    fireEvent.click(homeButton);
+    await screen.findByText("활동 중인 대기");
+    await waitFor(() => {
+      expect(liveApi.fetchWatches).toHaveBeenLastCalledWith({ view: "live" });
+    });
+    expect(liveApi.subscribeToEvents).toHaveBeenCalledTimes(3);
+  });
+
   it("opens the existing notification center from the mobile bell even when empty", async () => {
     liveApi.fetchWatches.mockResolvedValue([]);
     liveApi.subscribeToEvents.mockReturnValue(() => undefined);
@@ -352,6 +389,50 @@ describe("App live data synchronization", () => {
       .toBeTruthy();
   });
 
+  it("removes a stale sticky booking action when the live canonical list drops its watch", async () => {
+    let onEvent: ((event?: unknown) => void) | undefined;
+    const reserving = {
+      id: "stale-reservation-progress",
+      provider: "KORAIL",
+      route: "대전 → 서울",
+      train: "KTX 038",
+      date: "8월 3일 (월)",
+      departure: "14:35",
+      arrival: "15:39",
+      status: "reserving",
+      statusLabel: "예매 진행 중",
+      seatClass: "standard",
+      seatClassLabel: "일반실",
+      seatEvidenceLabel: "일반실 · 예매 진행 중",
+      lastCheckedAt: "2026-08-03T05:30:00Z",
+      lastCheckedLabel: "최근 확인 14:30",
+      seatFoundObservation: null,
+    };
+    liveApi.fetchWatches
+      .mockResolvedValueOnce([reserving])
+      .mockResolvedValue([]);
+    liveApi.subscribeToEvents.mockImplementation((handler: (event?: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+
+    render(<App />);
+    await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(1));
+    const center = await screen.findByRole("region", { name: "실시간 알림" });
+    fireEvent.click(within(center).getByRole("button", { name: "실시간 알림 펼치기" }));
+    expect(within(center).getByText("예매를 진행하고 있습니다")).toBeTruthy();
+
+    act(() => onEvent?.({ event_type: "watch.status_changed" }));
+    await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(within(center).queryByText("예매를 진행하고 있습니다")).toBeNull();
+    });
+    expect(within(center).getByText("새 실시간 알림이 없습니다.")).toBeTruthy();
+    expect(screen.queryByText("결제가 완료되었습니다")).toBeNull();
+    expect(screen.queryByText("예매에 실패했습니다")).toBeNull();
+    expect(screen.queryByText("예매 결과를 직접 확인해야 합니다")).toBeNull();
+  });
+
   it("shows fast attempted and result SSE stages even when REST never exposes reserving", async () => {
     let onEvent: ((event?: unknown) => void) | undefined;
     const watching = {
@@ -404,6 +485,8 @@ describe("App live data synchronization", () => {
       });
     });
     expect(await screen.findByText("예매를 진행하고 있습니다")).toBeTruthy();
+    const center = screen.getByRole("region", { name: "실시간 알림" });
+    fireEvent.click(within(center).getByRole("button", { name: "자세히" }));
     expect(screen.getByText("자동 예매 요청 시작").closest("li")?.textContent)
       .toContain("21:09:45감지 후 0.5초");
     expect(screen.queryByLabelText("예매 작업 시간")).toBeNull();
@@ -518,6 +601,8 @@ describe("App live data synchronization", () => {
 
     act(() => { onEvent?.(); });
     expect(await screen.findByText("로그인 확인이 필요합니다")).toBeTruthy();
+    const center = screen.getByRole("region", { name: "실시간 알림" });
+    fireEvent.click(within(center).getByRole("button", { name: "자세히" }));
     expect(screen.getByText(/로그인 확인 후 감시를 재개합니다/)).toBeTruthy();
 
     act(() => { onEvent?.(); });

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,7 +13,16 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import RequestResponseEndpoint
 
-from ..provider_call_context import REQUEST_ID_HEADER, bind_request_id, validated_log_id
+from ..provider_call_context import (
+    REQUEST_ID_HEADER,
+    bind_request_id,
+    current_request_id,
+    validated_log_id,
+)
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
+)
+from ..reservations.provider_confirmation.srt import SRT_RESERVATION_LIST_SOURCE
 from .application import (
     SrtLoginExceptionTypes,
     SrtProviderExecutor,
@@ -48,6 +58,7 @@ from .read_only_lifecycle import READ_ONLY_CALL_ID_HEADER, SrtReadOnlyCallRegist
 _TRACKED_READ_ONLY_PATHS = frozenset(
     {"/v1/observe", "/v1/timetable-overlay", "/v1/timetable-search"}
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -279,13 +290,32 @@ def create_srt_provider_adapter_app(
         request: Request,
     ) -> SrtConfirmReservationResult:
         executor_owner = cast(SrtProviderExecutor, request.app.state.executor)
+        request_id = current_request_id() or "unbound"
         try:
             result = await executor_owner.confirm_reservation(
                 data.target.to_domain(),
                 data.credential.to_credentials(),
             )
         except Exception as error:
+            _LOGGER.error(
+                "SRT reservation confirmation failed "
+                "event=provider_confirmation_failed provider=SRT operation=confirm_reservation "
+                "request_id=%s outcome=inconclusive diagnostic_code=%s "
+                "source=%s phase=official_read",
+                request_id,
+                ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE.value,
+                SRT_RESERVATION_LIST_SOURCE,
+            )
             raise HTTPException(503, "adapter_unavailable") from error
+        _LOGGER.info(
+            "SRT reservation confirmation completed "
+            "event=provider_confirmation_completed provider=SRT operation=confirm_reservation "
+            "request_id=%s outcome=%s diagnostic_code=%s source=%s phase=completed",
+            request_id,
+            result.outcome.value,
+            result.diagnostic_code.value if result.diagnostic_code is not None else "none",
+            result.source,
+        )
         return SrtConfirmReservationResult(
             result=SrtReservationConfirmationResult.from_domain(result)
         )

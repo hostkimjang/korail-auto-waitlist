@@ -165,6 +165,16 @@ def test_primary_projection_keeps_window_url_fare_actions_and_provenance() -> No
         "not a URL",
     )
     assert [action.kind for action in invalid_url_sold_out.actions] == ["add_to_watch"]
+    standing_only = owner._seat_class(
+        SeatClass.STANDARD,
+        "standing_only",
+        datetime(2026, 8, 1, 4, tzinfo=UTC),
+        "https://www.korail.com/ticket/search/general",
+    )
+    assert [action.kind for action in standing_only.actions] == [
+        "official_check",
+        "add_to_watch",
+    ]
 
 
 def test_overlay_projection_uses_last_exact_snapshot_and_preserves_item_order() -> None:

@@ -7,7 +7,12 @@ import httpx
 import pytest
 
 from rail_waitlist.config import Settings
-from rail_waitlist.domain import Provider, ReservationOutcome, SeatClass
+from rail_waitlist.domain import (
+    Provider,
+    ReservationOutcome,
+    ReservationResultReasonCode,
+    SeatClass,
+)
 from rail_waitlist.korail_execution import default_korail_execution_source
 from rail_waitlist.provider_accounts import ProviderCredentials
 from rail_waitlist.providers import (
@@ -181,56 +186,66 @@ async def test_official_tago_adapter_resolves_stations_filters_provider_and_cach
         calls.append(request.url.path)
         assert request.url.params["serviceKey"] == "decoded-key"
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(200, json=tago_response([
-                {"citycode": "11", "cityname": "서울특별시"},
-                {"citycode": "26", "cityname": "부산광역시"},
-            ]))
+            return httpx.Response(
+                200,
+                json=tago_response(
+                    [
+                        {"citycode": "11", "cityname": "서울특별시"},
+                        {"citycode": "26", "cityname": "부산광역시"},
+                    ]
+                ),
+            )
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
             city = request.url.params["cityCode"]
-            return httpx.Response(200, json=tago_response(
-                [{"nodeid": "N1", "nodename": "서울"}, {"nodeid": "N2", "nodename": "수서"}]
-                if city == "11" else [{"nodeid": "N3", "nodename": "부산"}]
-            ))
+            return httpx.Response(
+                200,
+                json=tago_response(
+                    [{"nodeid": "N1", "nodename": "서울"}, {"nodeid": "N2", "nodename": "수서"}]
+                    if city == "11"
+                    else [{"nodeid": "N3", "nodename": "부산"}]
+                ),
+            )
         assert request.url.params["depPlaceId"] == "N1"
         assert request.url.params["arrPlaceId"] == "N3"
-        return httpx.Response(200, json=tago_response([
-            {
-                "trainno": "101",
-                "traingradename": "KTX",
-                "depplandtime": "20260801090000",
-                "arrplandtime": "20260801113000",
-                "depplacename": "서울",
-                "arrplacename": "부산",
-                "adultcharge": "59,800",
-            },
-            {
-                "trainno": "201",
-                "traingradename": "SRT",
-                "depplandtime": "20260801100000",
-                "arrplandtime": "20260801123000",
-                "depplacename": "수서",
-                "arrplacename": "부산",
-            },
-            {
-                "trainno": "301",
-                "traingradename": "ITX-새마을",
-                "depplandtime": "20260801110000",
-                "arrplandtime": "20260801150000",
-                "depplacename": "서울",
-                "arrplacename": "부산",
-            },
-        ]))
+        return httpx.Response(
+            200,
+            json=tago_response(
+                [
+                    {
+                        "trainno": "101",
+                        "traingradename": "KTX",
+                        "depplandtime": "20260801090000",
+                        "arrplandtime": "20260801113000",
+                        "depplacename": "서울",
+                        "arrplacename": "부산",
+                        "adultcharge": "59,800",
+                    },
+                    {
+                        "trainno": "201",
+                        "traingradename": "SRT",
+                        "depplandtime": "20260801100000",
+                        "arrplandtime": "20260801123000",
+                        "depplacename": "수서",
+                        "arrplacename": "부산",
+                    },
+                    {
+                        "trainno": "301",
+                        "traingradename": "ITX-새마을",
+                        "depplandtime": "20260801110000",
+                        "arrplandtime": "20260801150000",
+                        "depplacename": "서울",
+                        "arrplacename": "부산",
+                    },
+                ]
+            ),
+        )
 
     settings = Settings(tago_service_key="decoded-key", tago_cache_ttl_seconds=300)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         tago = TagoClient(settings, http_client)
         adapter = OfficialTimetableAdapter(Provider.KORAIL, settings, tago)
-        first = await adapter.timetable(
-            "서울역", "부산", datetime(2026, 8, 1, 8), "N1", "N3"
-        )
-        second = await adapter.timetable(
-            "서울", "부산역", datetime(2026, 8, 1, 8), "N1", "N3"
-        )
+        first = await adapter.timetable("서울역", "부산", datetime(2026, 8, 1, 8), "N1", "N3")
+        second = await adapter.timetable("서울", "부산역", datetime(2026, 8, 1, 8), "N1", "N3")
     assert [item.train_number for item in first] == ["101"]
     assert [item.train_number for item in second] == ["101"]
     assert first[0].train_type == "KTX"
@@ -244,10 +259,7 @@ async def test_official_tago_adapter_resolves_stations_filters_provider_and_cach
     ]
     assert {seat.status for seat in first[0].seat_classes} == {"unknown"}
     assert all(seat.provenance.kind == "not_observed" for seat in first[0].seat_classes)
-    assert all(
-        seat.provenance.reason == "source_not_configured"
-        for seat in first[0].seat_classes
-    )
+    assert all(seat.provenance.reason == "source_not_configured" for seat in first[0].seat_classes)
     assert all(seat.provenance.source is None for seat in first[0].seat_classes)
     assert all(seat.provenance.observed_at is None for seat in first[0].seat_classes)
     assert all(seat.fare is None for seat in first[0].seat_classes)
@@ -271,32 +283,40 @@ async def test_official_timetable_collects_every_page_and_filters_cached_raw_day
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
             return httpx.Response(
                 200,
-                json=tago_response([
-                    {"nodeid": "N1", "nodename": "서울"},
-                    {"nodeid": "N3", "nodename": "부산"},
-                ]),
+                json=tago_response(
+                    [
+                        {"nodeid": "N1", "nodename": "서울"},
+                        {"nodeid": "N3", "nodename": "부산"},
+                    ]
+                ),
             )
 
         page = int(request.url.params["pageNo"])
         timetable_pages.append(page)
-        rows = [
-            {
-                "trainno": f"ITX-{index:03d}",
-                "traingradename": "ITX-새마을",
-                "depplandtime": "20260801070000",
-                "arrplandtime": "20260801090000",
-                "depplacename": "서울",
-                "arrplacename": "부산",
-            }
-            for index in range(100)
-        ] if page == 1 else [{
-            "trainno": "999",
-            "traingradename": "KTX",
-            "depplandtime": "20260801200000",
-            "arrplandtime": "20260801223000",
-            "depplacename": "서울",
-            "arrplacename": "부산",
-        }]
+        rows = (
+            [
+                {
+                    "trainno": f"ITX-{index:03d}",
+                    "traingradename": "ITX-새마을",
+                    "depplandtime": "20260801070000",
+                    "arrplandtime": "20260801090000",
+                    "depplacename": "서울",
+                    "arrplacename": "부산",
+                }
+                for index in range(100)
+            ]
+            if page == 1
+            else [
+                {
+                    "trainno": "999",
+                    "traingradename": "KTX",
+                    "depplandtime": "20260801200000",
+                    "arrplandtime": "20260801223000",
+                    "depplacename": "서울",
+                    "arrplacename": "부산",
+                }
+            ]
+        )
         return httpx.Response(
             200,
             json=tago_response(
@@ -346,10 +366,12 @@ async def test_official_timetable_includes_both_exact_departure_window_boundarie
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
             return httpx.Response(
                 200,
-                json=tago_response([
-                    {"nodeid": "N1", "nodename": "서울"},
-                    {"nodeid": "N3", "nodename": "부산"},
-                ]),
+                json=tago_response(
+                    [
+                        {"nodeid": "N1", "nodename": "서울"},
+                        {"nodeid": "N3", "nodename": "부산"},
+                    ]
+                ),
             )
         rows = [
             {
@@ -399,21 +421,30 @@ async def test_official_timetable_does_not_reuse_raw_cache_across_service_dates(
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
             return httpx.Response(
                 200,
-                json=tago_response([
-                    {"nodeid": "N1", "nodename": "서울"},
-                    {"nodeid": "N3", "nodename": "부산"},
-                ]),
+                json=tago_response(
+                    [
+                        {"nodeid": "N1", "nodename": "서울"},
+                        {"nodeid": "N3", "nodename": "부산"},
+                    ]
+                ),
             )
         service_date = request.url.params["depPlandTime"]
         requested_service_dates.append(service_date)
-        return httpx.Response(200, json=tago_response([{
-            "trainno": service_date,
-            "traingradename": "KTX",
-            "depplandtime": f"{service_date}090000",
-            "arrplandtime": f"{service_date}113000",
-            "depplacename": "서울",
-            "arrplacename": "부산",
-        }]))
+        return httpx.Response(
+            200,
+            json=tago_response(
+                [
+                    {
+                        "trainno": service_date,
+                        "traingradename": "KTX",
+                        "depplandtime": f"{service_date}090000",
+                        "arrplandtime": f"{service_date}113000",
+                        "depplacename": "서울",
+                        "arrplacename": "부산",
+                    }
+                ]
+            ),
+        )
 
     settings = Settings(tago_service_key="decoded-key", tago_cache_ttl_seconds=300)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -468,9 +499,7 @@ async def test_official_adapter_without_service_key_fails_instead_of_synthesizin
     settings = Settings(tago_service_key=None, tago_service_key_file="missing-test-key")
     adapter = OfficialTimetableAdapter(Provider.KORAIL, settings, TagoClient(settings))
     with pytest.raises(ProviderUnavailable, match="service key"):
-        await adapter.timetable(
-            "서울", "부산", datetime(2026, 8, 1, 8), "N1", "N3"
-        )
+        await adapter.timetable("서울", "부산", datetime(2026, 8, 1, 8), "N1", "N3")
 
 
 async def test_official_station_catalog_is_cached_and_does_not_infer_provider_membership():
@@ -479,20 +508,28 @@ async def test_official_station_catalog_is_cached_and_does_not_infer_provider_me
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request.url.path)
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(200, json=tago_response([
-                {"citycode": "11", "cityname": "서울특별시"},
-                {"citycode": "26", "cityname": "부산광역시"},
-            ]))
+            return httpx.Response(
+                200,
+                json=tago_response(
+                    [
+                        {"citycode": "11", "cityname": "서울특별시"},
+                        {"citycode": "26", "cityname": "부산광역시"},
+                    ]
+                ),
+            )
         city = request.url.params["cityCode"]
-        return httpx.Response(200, json=tago_response(
-            [
-                {"nodeid": "N2", "nodename": "수서"},
-                {"nodeid": "N1", "nodename": "서울"},
-                {"nodeid": "", "nodename": "잘못된 역"},
-            ]
-            if city == "11"
-            else [{"nodeid": "N3", "nodename": "부산"}]
-        ))
+        return httpx.Response(
+            200,
+            json=tago_response(
+                [
+                    {"nodeid": "N2", "nodename": "수서"},
+                    {"nodeid": "N1", "nodename": "서울"},
+                    {"nodeid": "", "nodename": "잘못된 역"},
+                ]
+                if city == "11"
+                else [{"nodeid": "N3", "nodename": "부산"}]
+            ),
+        )
 
     settings = Settings(tago_service_key="decoded-key")
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -648,22 +685,31 @@ async def test_station_node_pairs_are_validated_and_skip_name_resolution():
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
             return httpx.Response(
                 200,
-                json=tago_response([
-                    {"nodeid": "N1", "nodename": "서울"},
-                    {"nodeid": "N2", "nodename": "수서"},
-                    {"nodeid": "N3", "nodename": "부산"},
-                ]),
+                json=tago_response(
+                    [
+                        {"nodeid": "N1", "nodename": "서울"},
+                        {"nodeid": "N2", "nodename": "수서"},
+                        {"nodeid": "N3", "nodename": "부산"},
+                    ]
+                ),
             )
         departure = request.url.params["depPlaceId"]
         grade = "SRT" if departure == "N1" else "KTX"
-        return httpx.Response(200, json=tago_response([{
-            "trainno": "101",
-            "traingradename": grade,
-            "depplandtime": "20260801090000",
-            "arrplandtime": "20260801113000",
-            "depplacename": "서울" if departure == "N1" else "수서",
-            "arrplacename": "부산",
-        }]))
+        return httpx.Response(
+            200,
+            json=tago_response(
+                [
+                    {
+                        "trainno": "101",
+                        "traingradename": grade,
+                        "depplandtime": "20260801090000",
+                        "arrplandtime": "20260801113000",
+                        "depplacename": "서울" if departure == "N1" else "수서",
+                        "arrplacename": "부산",
+                    }
+                ]
+            ),
+        )
 
     settings = Settings(tago_service_key="decoded-key")
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -676,9 +722,9 @@ async def test_station_node_pairs_are_validated_and_skip_name_resolution():
         srt_from_seoul = await OfficialTimetableAdapter(Provider.SRT, settings, tago).timetable(
             "서울", "부산", datetime(2026, 8, 1, 8), "N1", "N3"
         )
-        ktx_from_suseo = await OfficialTimetableAdapter(
-            Provider.KORAIL, settings, tago
-        ).timetable("수서", "부산", datetime(2026, 8, 1, 8), "N2", "N3")
+        ktx_from_suseo = await OfficialTimetableAdapter(Provider.KORAIL, settings, tago).timetable(
+            "수서", "부산", datetime(2026, 8, 1, 8), "N2", "N3"
+        )
 
     assert [item.train_type for item in srt_from_seoul] == ["SRT"]
     assert [item.train_type for item in ktx_from_suseo] == ["KTX"]
@@ -695,10 +741,12 @@ async def test_station_node_pair_rejects_mismatch_partial_and_same_node():
             )
         return httpx.Response(
             200,
-            json=tago_response([
-                {"nodeid": "N1", "nodename": "서울"},
-                {"nodeid": "N3", "nodename": "부산"},
-            ]),
+            json=tago_response(
+                [
+                    {"nodeid": "N1", "nodename": "서울"},
+                    {"nodeid": "N3", "nodename": "부산"},
+                ]
+            ),
         )
 
     from rail_waitlist.providers import RouteValidationError
@@ -709,17 +757,11 @@ async def test_station_node_pair_rejects_mismatch_partial_and_same_node():
             Provider.KORAIL, settings, TagoClient(settings, http_client)
         )
         with pytest.raises(RouteValidationError, match="require both"):
-            await adapter.timetable(
-                "서울", "부산", datetime(2026, 8, 1, 8), origin_node_id="N1"
-            )
+            await adapter.timetable("서울", "부산", datetime(2026, 8, 1, 8), origin_node_id="N1")
         with pytest.raises(RouteValidationError, match="nodes must differ"):
-            await adapter.timetable(
-                "서울", "부산", datetime(2026, 8, 1, 8), "N1", "N1"
-            )
+            await adapter.timetable("서울", "부산", datetime(2026, 8, 1, 8), "N1", "N1")
         with pytest.raises(RouteValidationError, match="must match"):
-            await adapter.timetable(
-                "수서", "부산", datetime(2026, 8, 1, 8), "N1", "N3"
-            )
+            await adapter.timetable("수서", "부산", datetime(2026, 8, 1, 8), "N1", "N3")
 
 
 async def test_official_timetable_requires_node_ids_even_when_names_are_resolvable():
@@ -737,9 +779,7 @@ async def test_srt_unsupported_route_keeps_basic_station_identity_validation():
     with pytest.raises(RouteValidationError, match="require both"):
         await adapter.timetable("대전", "서울", datetime(2026, 8, 1, 8))
     with pytest.raises(RouteValidationError, match="nodes must differ"):
-        await adapter.timetable(
-            "대전", "서울", datetime(2026, 8, 1, 8), "N-DAEJEON", "N-DAEJEON"
-        )
+        await adapter.timetable("대전", "서울", datetime(2026, 8, 1, 8), "N-DAEJEON", "N-DAEJEON")
 
 
 async def test_korail_and_srt_share_raw_timetable_single_flight():
@@ -755,31 +795,38 @@ async def test_korail_and_srt_share_raw_timetable_single_flight():
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
             return httpx.Response(
                 200,
-                json=tago_response([
-                    {"nodeid": "N1", "nodename": "대전"},
-                    {"nodeid": "N3", "nodename": "부산"},
-                ]),
+                json=tago_response(
+                    [
+                        {"nodeid": "N1", "nodename": "대전"},
+                        {"nodeid": "N3", "nodename": "부산"},
+                    ]
+                ),
             )
         timetable_calls += 1
         await asyncio.sleep(0.02)
-        return httpx.Response(200, json=tago_response([
-            {
-                "trainno": "101",
-                "traingradename": "KTX",
-                "depplandtime": "20260801090000",
-                "arrplandtime": "20260801113000",
-                "depplacename": "대전",
-                "arrplacename": "부산",
-            },
-            {
-                "trainno": "201",
-                "traingradename": "SRT",
-                "depplandtime": "20260801100000",
-                "arrplandtime": "20260801123000",
-                "depplacename": "대전",
-                "arrplacename": "부산",
-            },
-        ]))
+        return httpx.Response(
+            200,
+            json=tago_response(
+                [
+                    {
+                        "trainno": "101",
+                        "traingradename": "KTX",
+                        "depplandtime": "20260801090000",
+                        "arrplandtime": "20260801113000",
+                        "depplacename": "대전",
+                        "arrplacename": "부산",
+                    },
+                    {
+                        "trainno": "201",
+                        "traingradename": "SRT",
+                        "depplandtime": "20260801100000",
+                        "arrplandtime": "20260801123000",
+                        "depplacename": "대전",
+                        "arrplacename": "부산",
+                    },
+                ]
+            ),
+        )
 
     settings = Settings(tago_service_key="decoded-key")
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -818,21 +865,14 @@ async def test_mock_station_catalog_is_explicitly_marked_as_mock():
 async def test_mock_adapter_returns_observed_per_class_statuses_and_legacy_availability():
     items = await MockProviderAdapter().timetable("서울", "부산", datetime(2026, 8, 1, 8))
 
-    assert [
-        [seat.status for seat in item.seat_classes]
-        for item in items
-    ] == [
+    assert [[seat.status for seat in item.seat_classes] for item in items] == [
         ["available", "sold_out"],
         ["sold_out", "waitlist_available"],
         ["stale", "error"],
     ]
     assert all(item.availability.status == "available" for item in items)
     assert [seat.fare for seat in items[0].seat_classes] == [59_800, 83_700]
-    assert all(
-        seat.fare_currency == "KRW"
-        for item in items
-        for seat in item.seat_classes
-    )
+    assert all(seat.fare_currency == "KRW" for item in items for seat in item.seat_classes)
     assert all(
         seat.provenance.kind == "mock"
         and seat.provenance.source == "mock"
@@ -848,9 +888,7 @@ async def test_mock_adapter_returns_observed_per_class_statuses_and_legacy_avail
         "official_waitlist",
         "add_to_watch",
     ]
-    assert [action.kind for action in items[2].seat_classes[0].actions] == [
-        "retry_provider"
-    ]
+    assert [action.kind for action in items[2].seat_classes[0].actions] == ["retry_provider"]
 
 
 async def test_mock_adapter_generates_every_fixture_in_the_departure_window():
@@ -863,12 +901,9 @@ async def test_mock_adapter_generates_every_fixture_in_the_departure_window():
 
     assert len(items) == 7
     assert items[0].departure_at == datetime(2026, 8, 1, 8, tzinfo=items[0].departure_at.tzinfo)
-    assert items[-1].departure_at == datetime(
-        2026, 8, 1, 12, tzinfo=items[-1].departure_at.tzinfo
-    )
+    assert items[-1].departure_at == datetime(2026, 8, 1, 12, tzinfo=items[-1].departure_at.tzinfo)
     assert all(
-        items[index].departure_at < items[index + 1].departure_at
-        for index in range(len(items) - 1)
+        items[index].departure_at < items[index + 1].departure_at for index in range(len(items) - 1)
     )
 
 
@@ -962,9 +997,7 @@ async def test_official_provider_contract_methods_fail_closed(provider):
 
 
 async def test_experimental_provider_contract_methods_fail_closed_even_when_enabled():
-    adapter = ExperimentalRailAdapter(
-        Provider.KORAIL, Settings(experimental_rail_enabled=True)
-    )
+    adapter = ExperimentalRailAdapter(Provider.KORAIL, Settings(experimental_rail_enabled=True))
     observation = mock_observation_request(provider=Provider.KORAIL)
     reservation = ReservationRequest(
         **observation.model_dump(),
@@ -1020,7 +1053,19 @@ class FakeSrtSeatObserver:
             outcome=ReservationOutcome.NOT_AVAILABLE,
             source="test-korail-reservation",
             observed_at=datetime.now(UTC),
-            credential_version=credentials.credential_version,
+        )
+
+    async def reserve_once_with_progress(
+        self,
+        _request,
+        _credentials,
+        _on_progress,
+    ) -> ReservationResult:
+        return ReservationResult(
+            outcome=ReservationOutcome.UNKNOWN,
+            result_reason_code=ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+            source="test-korail-reservation",
+            observed_at=datetime.now(UTC),
         )
 
 
@@ -1145,6 +1190,43 @@ async def test_korail_reservation_result_reports_the_actual_credential_generatio
     result = await adapter.reserve_once(request)
 
     assert result.outcome is ReservationOutcome.NOT_AVAILABLE
+    assert result.credential_version == 7
+
+
+async def test_korail_uncertain_progress_result_keeps_reason_and_credential_generation():
+    source = FakeSrtSeatObserver()
+    settings = Settings(
+        _env_file=None,
+        EXPERIMENTAL_RAIL_ENABLED=True,
+        korail_browser_adapter_enabled=True,
+        korail_seat_monitoring_enabled=True,
+        korail_reservation_once_enabled=True,
+        korail_browser_adapter_token="b" * 32,
+    )
+
+    async def credentials(provider):
+        assert provider is Provider.KORAIL
+        return ProviderCredentials("fixture-account", "fixture-password", 7)
+
+    adapter = KorailBrowserExecutionAdapter(
+        settings,
+        source,
+        credential_loader=credentials,
+    )
+    observation = mock_observation_request(provider=Provider.KORAIL)
+    request = ReservationRequest(
+        **observation.model_dump(),
+        candidate_id="candidate-korail-progress-generation",
+        idempotency_key="reservation-attempt-korail-progress-generation",
+    )
+
+    async def on_progress(_stage) -> None:
+        return None
+
+    result = await adapter.reserve_once_with_progress(request, on_progress)
+
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert result.result_reason_code is ReservationResultReasonCode.PROVIDER_UNAVAILABLE
     assert result.credential_version == 7
 
 

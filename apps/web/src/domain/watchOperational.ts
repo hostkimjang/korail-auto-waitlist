@@ -50,6 +50,7 @@ const bookingWindowStatuses: ReadonlySet<string> = new Set([
 const supersedingUnavailableObservationStatuses: ReadonlySet<string> = new Set([
   "unavailable",
   "sold_out",
+  "standing_only",
   "not_enough_seats",
   "not_offered",
   "departed",
@@ -60,6 +61,7 @@ const successfulObservationStatuses: ReadonlySet<string> = new Set([
   "available",
   "limited",
   "standing_plus_seat",
+  "standing_only",
   "not_enough_seats",
   "sold_out",
   "waitlist_available",

@@ -234,7 +234,12 @@ async def upsert_provider_account(
     try:
         # ``resume_watches...`` can issue queries that autoflush a first-time insert, so the
         # uniqueness race and the final commit must share the same conflict boundary.
-        await resume_watches_after_verified_provider_login(session, provider, now)
+        await resume_watches_after_verified_provider_login(
+            session,
+            provider,
+            now,
+            credential_version=verified_credential_version,
+        )
         await session.commit()
     except IntegrityError as error:
         # Two first-time account updates can both verify generation 1 before either inserts.

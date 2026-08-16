@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 import rail_waitlist.korail_browser_seat_source as legacy_source
-from rail_waitlist.domain import Provider, ReservationOutcome, SeatClass
+from rail_waitlist.domain import (
+    Provider,
+    ReservationOutcome,
+    ReservationResultReasonCode,
+    SeatClass,
+)
 from rail_waitlist.korail_sidecar.contracts import KorailReserveOnceResult
 from rail_waitlist.provider_account_management.contracts import ProviderCredentials
 from rail_waitlist.provider_adapters import korail_browser_reservation_policy as policy
@@ -355,6 +360,9 @@ def test_click_error_remains_unknown_without_claiming_request_progress() -> None
     assert wire.reservation_clicked is False
     assert wire.reservation_requested_at is None
     assert result.outcome is ReservationOutcome.UNKNOWN
+    assert (
+        result.result_reason_code is ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+    )
     assert [stage.stage for stage in result.progress_stages] == [
         "authenticated_session_ready",
         "target_rechecked",
@@ -375,3 +383,94 @@ def test_result_projection_survives_wall_clock_rollback_after_progress() -> None
     assert result.outcome is ReservationOutcome.UNKNOWN
     assert result.observed_at == PROGRESS_TIMES[-1]
     assert tuple(stage.occurred_at for stage in result.progress_stages) == PROGRESS_TIMES
+
+
+@pytest.mark.parametrize(
+    ("wire", "expected_outcome", "expected_reason"),
+    [
+        (
+            _wire_result("consent_required", reason="delay_consent_required"),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.DELAY_CONSENT_REQUIRED,
+        ),
+        (
+            _wire_result(
+                "action_required",
+                reason="existing_reservation_action_required",
+            ),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.EXISTING_RESERVATION_ACTION_REQUIRED,
+        ),
+        (
+            _wire_result("action_required", reason="official_dialog_ambiguous"),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.PROVIDER_NOTICE_ACTION_REQUIRED,
+        ),
+        (
+            _wire_result(
+                "action_required",
+                reason="official_post_dialog_action_unresolved",
+                reservation_clicked=True,
+            ),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+        ),
+        (
+            _wire_result("unavailable", reason="seat_not_available"),
+            ReservationOutcome.NOT_AVAILABLE,
+            ReservationResultReasonCode.SEAT_NOT_AVAILABLE,
+        ),
+        (
+            _wire_result("unavailable", reason="target_not_unique"),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.TARGET_AMBIGUOUS,
+        ),
+        (
+            _wire_result("failed", reason="reservation_selection_not_preserved"),
+            ReservationOutcome.FAILED,
+            ReservationResultReasonCode.SEAT_SELECTION_LOST,
+        ),
+        (
+            _wire_result("failed", reason="source_unavailable:reserve_once"),
+            ReservationOutcome.FAILED,
+            ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            _wire_result("failed", reason="browser_error:reserve_once"),
+            ReservationOutcome.FAILED,
+            ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            _wire_result("failed", reason="reservation_backend_error"),
+            ReservationOutcome.FAILED,
+            ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            _wire_result(
+                "failed",
+                reason="source_unavailable:session_keepalive",
+                reservation_clicked=True,
+            ),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            _wire_result(
+                "failed",
+                reason="reservation_result_unknown",
+                reservation_clicked=True,
+            ),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+        ),
+    ],
+)
+def test_provider_reasons_map_to_closed_provider_neutral_codes(
+    wire: KorailReserveOnceResult,
+    expected_outcome: ReservationOutcome,
+    expected_reason: ReservationResultReasonCode,
+) -> None:
+    result = policy.project_reservation_result(wire, observed_at=OBSERVED_AT)
+
+    assert result.outcome is expected_outcome
+    assert result.result_reason_code is expected_reason

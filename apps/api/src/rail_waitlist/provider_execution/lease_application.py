@@ -17,7 +17,7 @@ from .contracts import ExecutionLeaseGrant
 from .models import ProviderExecutionLease
 
 ANONYMOUS_PUBLIC_ACCOUNT_SCOPE = "anonymous/public"
-PROVIDER_EXECUTION_LEASE_DURATION = timedelta(minutes=2)
+PROVIDER_EXECUTION_LEASE_DURATION = timedelta(minutes=5)
 _EXTERNAL_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
 
 
@@ -276,7 +276,7 @@ async def acquire_anonymous_public_execution_lease(
     *,
     dependencies: ExecutionLeaseAcquisitionDependencies,
 ) -> tuple[ProviderExecutionLeaseService, ExecutionLeaseGrant | None]:
-    """Acquire the canonical two-minute public execution epoch for one provider.
+    """Acquire the canonical five-minute public execution epoch for one provider.
 
     A fresh owner token is generated for every attempt, including a busy result. This
     keeps retries independent and preserves the worker's anonymous/public lease policy.

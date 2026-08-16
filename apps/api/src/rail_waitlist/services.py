@@ -288,6 +288,8 @@ async def resume_watches_after_verified_provider_login(
     session: AsyncSession,
     provider: Provider,
     authenticated_at: datetime,
+    *,
+    credential_version: int | None = None,
 ) -> list[str]:
     dependencies = ProviderAuthRecoveryDependencies(
         apply_watch_transition=apply_watch_transition,
@@ -296,6 +298,7 @@ async def resume_watches_after_verified_provider_login(
         session,
         provider,
         authenticated_at,
+        credential_version=credential_version,
         dependencies=dependencies,
     )
 

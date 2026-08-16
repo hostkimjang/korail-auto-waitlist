@@ -184,6 +184,7 @@ function seatStatusMeta(status: string, notObservedReason: unknown = null): Seat
   if (status === "available") return { label: "예매 가능", helper: "공식 예매 화면에서 최종 좌석을 확인하세요." };
   if (status === "limited") return { label: "매진 임박", helper: "잔여 좌석이 빠르게 바뀔 수 있습니다." };
   if (status === "standing_plus_seat") return { label: "입석+좌석", helper: "일부 구간은 입석으로 배정될 수 있으니 공식 예매 화면에서 확인하세요." };
+  if (status === "standing_only") return { label: "입석만 가능", helper: "좌석은 매진이며 입석만 예매할 수 있습니다. 공식 예매 화면에서 확인하세요." };
   if (status === "sold_out") return { label: "매진", helper: "취소표나 공식 예약대기 가능 여부를 확인하세요." };
   if (status === "waitlist_available") return { label: "예약대기 가능", helper: "공식 예약대기 접수 여부를 확인하세요." };
   if (status === "stale") return { label: "확인 필요", helper: "표시 시각이 오래되어 다시 확인해야 합니다." };
@@ -288,11 +289,11 @@ export function SeatClassPanel({
     && selectable
     && (isDemoSeat
       || canRegisterDirectReservation
-      || ["sold_out", "waitlist_available"].includes(seat.status))
+      || ["standing_only", "sold_out", "waitlist_available"].includes(seat.status))
     && actions.some((action) => action.kind === "add_to_watch");
   const officialActionKind = seat.status === "waitlist_available"
     ? "official_waitlist"
-    : ["available", "limited", "standing_plus_seat"].includes(seat.status)
+    : ["available", "limited", "standing_plus_seat", "standing_only"].includes(seat.status)
       ? "official_check"
       : null;
   const officialAction = officialActionKind
@@ -327,9 +328,11 @@ export function SeatClassPanel({
       ? `${seatClassNames[seat.seat_class]} 자동 예매`
       : seat.status === "waitlist_available"
         ? `${seatClassNames[seat.seat_class]} 예약대기`
-        : seat.status === "sold_out"
-          ? `${seatClassNames[seat.seat_class]} 취소표 대기`
-          : `${seatClassNames[seat.seat_class]}로 대기`;
+        : seat.status === "standing_only"
+          ? `${seatClassNames[seat.seat_class]} 취소좌석 대기`
+          : seat.status === "sold_out"
+            ? `${seatClassNames[seat.seat_class]} 취소표 대기`
+            : `${seatClassNames[seat.seat_class]}로 대기`;
   const hasActiveRegistration = registered || cancelling;
   const handoffTrain = officialHandoffTrain(train);
   return (

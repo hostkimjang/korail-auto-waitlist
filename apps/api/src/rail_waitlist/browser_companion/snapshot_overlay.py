@@ -122,6 +122,11 @@ async def overlay_korail_browser_snapshots(
 
 
 def _seat_actions(status: str, official_booking_url: AnyHttpUrl) -> list[SeatAvailabilityAction]:
+    if status == "standing_only":
+        return [
+            SeatAvailabilityAction(kind="official_check", url=official_booking_url),
+            SeatAvailabilityAction(kind="add_to_watch"),
+        ]
     if status in {"available", "limited", "standing_plus_seat"}:
         return [SeatAvailabilityAction(kind="official_check", url=official_booking_url)]
     if status == "sold_out":

@@ -47,11 +47,14 @@ export function statusFromSeatBox(
   if (classes.includes("sold_out_soon") || /매진\s*임박/.test(normalized)) {
     return "limited";
   }
-  if (classes.includes("sold_out") || /매진/.test(normalized)) {
-    return "sold_out";
-  }
   if (/입석\s*\+\s*(?:좌석|예매)/.test(normalized)) {
     return "standing_plus_seat";
+  }
+  if (/^(?:일반실\s*)?입석(?:\s*예매)?$/.test(normalized)) {
+    return "standing_only";
+  }
+  if (classes.includes("sold_out") || /매진/.test(normalized)) {
+    return "sold_out";
   }
   if (
     !normalized

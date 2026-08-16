@@ -77,10 +77,12 @@ def status_from_seat_box(text: str, classes: set[str]) -> SeatStatus | None:
         return "waitlist_available"
     if "sold_out_soon" in classes or re.search(r"매진\s*임박", normalized):
         return "limited"
-    if "sold_out" in classes or re.search(r"매진", normalized):
-        return "sold_out"
     if re.search(r"입석\s*\+\s*(?:좌석|예매)", normalized):
         return "standing_plus_seat"
+    if re.fullmatch(r"(?:일반실\s*)?입석(?:\s*예매)?", normalized):
+        return "standing_only"
+    if "sold_out" in classes or re.search(r"매진", normalized):
+        return "sold_out"
     if not normalized or re.fullmatch(r"(?:일반실|특실)?\s*[-–—]\s*", normalized):
         return "not_offered"
     if re.search(r"(?:좌석\s*)?(?:없음|없습니다)|해당\s*없음|미운행|미운영", normalized):

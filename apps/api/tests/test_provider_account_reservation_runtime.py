@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -42,7 +43,10 @@ async def test_reservation_auth_adapter_forwards_identity_and_forces_shared_tran
             expected_credential_version=expected_credential_version,
             commit=commit,
         )
-        return object()
+        return SimpleNamespace(
+            credential_version=expected_credential_version,
+            last_auth_status=status_arg,
+        )
 
     result = await update_provider_auth_status_in_reservation_transaction(
         session,
@@ -52,7 +56,7 @@ async def test_reservation_auth_adapter_forwards_identity_and_forces_shared_tran
         persist_auth_status=persist_auth_status,
     )
 
-    assert result is None
+    assert result is True
     assert captured == {
         "session": session,
         "provider": Provider.SRT,

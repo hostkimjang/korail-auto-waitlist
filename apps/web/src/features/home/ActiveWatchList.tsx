@@ -2,6 +2,7 @@ import { ArrowRight, ArrowsClockwise, Clock, Pause, Play, Plus, Trash } from "@p
 import type { ReactElement, ReactNode } from "react";
 
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
+import type { ManualRearmReason } from "../../domain/reservationAttempt";
 import { formatTrainIdentity } from "../../domain/watch";
 import { StatusPill } from "../../shared/ui/StatusPill";
 import {
@@ -9,7 +10,10 @@ import {
   presentActiveWatchRow,
   type ActiveWatch,
 } from "./activeWatchViewModel";
-import { ReservationRearmConfirm } from "./ReservationRearmConfirm";
+import {
+  ReservationRearmConfirm,
+  type ReservationRearmMode,
+} from "./ReservationRearmConfirm";
 
 export type { WatchStatus } from "../../domain/watch";
 export type {
@@ -25,7 +29,10 @@ export interface WatchRowProps {
   onCancel: (watchId: string) => void | Promise<void>;
   onOpenRailAccounts?: () => void;
   onChangeReservationPolicy?: (watchId: string, policy: ReservationPolicy) => void | Promise<void>;
-  onManualReservationRearm?: (watchId: string) => void | Promise<void>;
+  onManualReservationRearm?: (
+    watchId: string,
+    reason: ManualRearmReason,
+  ) => void | Promise<void>;
   isReservationPolicyUpdating?: boolean;
   isMutationPending?: boolean;
   renderSeatFoundAction?: (watch: ActiveWatch) => ReactNode;
@@ -62,6 +69,17 @@ export function WatchRow({
   renderSeatFoundAction,
 }: WatchRowProps): ReactElement {
   const presentation = presentActiveWatchRow(watch, isReservationPolicyUpdating);
+  const rearmContext = presentation.canManualRearmReservation
+    ? watch.latestReservationAttemptContext ?? null
+    : null;
+  const paymentHoldEndReason = watch.latestReservationAttempt?.paymentHoldEndReason ?? null;
+  const rearmMode: ReservationRearmMode | null = presentation.manualRearmReason
+    === "unknown_result_unresolved"
+    ? { kind: "unknown", reason: "unknown_result_unresolved" }
+    : presentation.manualRearmReason === "payment_hold_ended"
+      && paymentHoldEndReason !== null
+      ? { kind: "payment_hold", reason: "payment_hold_ended", paymentHoldEndReason }
+      : null;
   const seatFoundAction = presentation.canRenderSeatFoundAction
     ? renderSeatFoundAction?.(watch)
     : null;
@@ -141,14 +159,17 @@ export function WatchRow({
           ) : null}
         </div>
         {(seatFoundAction || (
-          presentation.canManualRearmReservation && onManualReservationRearm
+          rearmContext && rearmMode && onManualReservationRearm
         )) && <div className="watch-booking-action">
           {seatFoundAction}
-          {presentation.canManualRearmReservation && onManualReservationRearm ? (
+          {rearmContext && rearmMode && onManualReservationRearm ? (
             <ReservationRearmConfirm
               watchId={watch.id}
-              trainLabel={formatTrainIdentity(watch.trainType, watch.train)}
-              seatClassLabel={watch.seatClassLabel}
+              trainLabel={formatTrainIdentity(rearmContext.trainType, rearmContext.train)}
+              travelDate={rearmContext.date}
+              departure={rearmContext.departure}
+              seatClassLabel={rearmContext.seatClassLabel}
+              mode={rearmMode}
               mutationPending={isMutationPending}
               onConfirm={onManualReservationRearm}
             />

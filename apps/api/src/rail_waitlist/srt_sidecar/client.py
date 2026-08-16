@@ -380,13 +380,30 @@ class SrtProviderAdapterClient:
             raise SrtProviderAdapterUnavailable(
                 "SRT provider adapter returned an invalid response"
             ) from error
-        _LOGGER.info(
-            "Provider sidecar request completed event=provider_sidecar_request_completed "
-            "provider=SRT operation=%s "
-            "request_id=%s outcome=success",
-            operation,
-            request_id,
-        )
+        if isinstance(result, SrtConfirmReservationResult):
+            confirmation = result.result
+            _LOGGER.info(
+                "Provider sidecar request completed event=provider_sidecar_request_completed "
+                "provider=SRT operation=%s request_id=%s outcome=success "
+                "terminal_outcome=%s diagnostic_code=%s source=%s phase=completed",
+                operation,
+                request_id,
+                confirmation.outcome.value,
+                (
+                    confirmation.diagnostic_code.value
+                    if confirmation.diagnostic_code is not None
+                    else "none"
+                ),
+                confirmation.source,
+            )
+        else:
+            _LOGGER.info(
+                "Provider sidecar request completed event=provider_sidecar_request_completed "
+                "provider=SRT operation=%s "
+                "request_id=%s outcome=success",
+                operation,
+                request_id,
+            )
         return result
 
     async def _register_read_only_call(self, call_id: str, request_id: str) -> str:

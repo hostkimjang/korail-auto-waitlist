@@ -15,9 +15,11 @@ from ...provider_adapters.srt_identity import (
 )
 from ...provider_registry.official_url_policy import require_official_handoff_url
 from .contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 
@@ -43,6 +45,7 @@ class SrtReservationRecord:
     paid: bool
     seat_class: SeatClass | None = None
     passenger_count: int | None = None
+    seats: tuple[ReservationConfirmationSeat, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +101,19 @@ def _matches_target(record: SrtReservationRecord, target: ReservationConfirmatio
     )
 
 
+def _matches_unknown_result_correlation(
+    record: SrtReservationRecord,
+    target: ReservationConfirmationTarget,
+) -> bool:
+    if len(record.seats) != target.passenger_count:
+        return False
+    record_seats = {(seat.car_number, seat.seat_number) for seat in record.seats}
+    target_seats = {
+        (seat.car_number, seat.seat_number) for seat in target.confirmation_correlation_seats
+    }
+    return len(record_seats) == target.passenger_count and record_seats == target_seats
+
+
 def normalize_srt_reservation_records(
     target: ReservationConfirmationTarget,
     evidence: SrtReservationListEvidence,
@@ -126,6 +142,7 @@ def normalize_srt_reservation_records(
         return ReservationConfirmationResult(
             provider=target.provider,
             outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=(ReservationConfirmationDiagnosticCode.CREDENTIAL_CONTEXT_MISMATCH),
             source=source,
             observed_at=evidence.observed_at,
         )
@@ -139,25 +156,54 @@ def normalize_srt_reservation_records(
         )
     matches = tuple(record for record in trip_matches if _matches_target(record, target))
     if len(matches) != 1:
+        missing_identity = any(
+            record.seat_class is None or record.passenger_count is None for record in trip_matches
+        )
         return ReservationConfirmationResult(
             provider=target.provider,
             outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=(
+                ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+                if missing_identity
+                else ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+            ),
             source=source,
             observed_at=evidence.observed_at,
         )
-    if matches[0].paid and target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP:
+    matched_record = matches[0]
+    if (
+        target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+        and not _matches_unknown_result_correlation(matched_record, target)
+    ):
         return ReservationConfirmationResult(
             provider=target.provider,
-            outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=(
+                ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+                if len(matched_record.seats) != target.passenger_count
+                else ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+            ),
             source=source,
             observed_at=evidence.observed_at,
         )
-    if matches[0].paid:
+    if matched_record.paid:
+        paid_evidence_is_correlated = (
+            target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+            or target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+        )
+        if paid_evidence_is_correlated:
+            return ReservationConfirmationResult(
+                provider=target.provider,
+                outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+                source=source,
+                observed_at=evidence.observed_at,
+            )
         # An initial probe cannot tie a paid row to the just-issued hold. Treat a
-        # same-itinerary historical ticket as ambiguous until a bounded follow-up.
+        # same-itinerary historical ticket, or one with different seats, as ambiguous.
         return ReservationConfirmationResult(
             provider=target.provider,
             outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS,
             source=source,
             observed_at=evidence.observed_at,
         )
@@ -166,7 +212,7 @@ def normalize_srt_reservation_records(
         outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
         source=source,
         observed_at=evidence.observed_at,
-        payment_deadline=_payment_deadline(matches[0]),
+        payment_deadline=_payment_deadline(matched_record),
         official_handoff_url=require_official_handoff_url(
             Provider.SRT,
             SRT_RESERVATION_HANDOFF_URL,
@@ -211,6 +257,7 @@ def normalize_srt_reserve_result(
                     paid=record.paid,
                     seat_class=record.seat_class,
                     passenger_count=record.passenger_count,
+                    seats=record.seats,
                 ),
             ),
         ),

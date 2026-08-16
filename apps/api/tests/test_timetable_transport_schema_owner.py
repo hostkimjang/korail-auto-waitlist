@@ -115,6 +115,7 @@ def test_timetable_literal_contracts_are_unchanged() -> None:
         "available",
         "limited",
         "standing_plus_seat",
+        "standing_only",
         "not_enough_seats",
         "sold_out",
         "waitlist_available",
@@ -142,7 +143,7 @@ def test_timetable_literal_contracts_are_unchanged() -> None:
     [
         (
             canonical.SeatAvailability,
-            "0f5e1f68db4379e07e18ea3683b3e0a2ca988a09e0b398d2720e49c628c9ba09",
+            "45f6e802ee428fee411d390cce2034f6e9846ab01c39d06fd4435bbcba18cdec",
         ),
         (
             canonical.SeatAvailabilityProvenance,
@@ -154,15 +155,15 @@ def test_timetable_literal_contracts_are_unchanged() -> None:
         ),
         (
             canonical.SeatClassAvailability,
-            "0ecebb4b97181c81f7cda68b3a559ca46667afcced4562de3564e10eb70e5a57",
+            "452484d566eed92b7b12fe22ca538ad46da4b818ea9397be6642590e58c20ba0",
         ),
         (
             canonical.TimetableSeatEvidenceRead,
-            "3813275f7384824c6e1291187d873b09a86cc8404b3d370041678d6300d0ded1",
+            "ddf9ee45dce2f90d16c94d507886b558328b6886043ac29a491aa3298c3c4fbe",
         ),
         (
             canonical.TimetableItem,
-            "724293b4c2dc692f3da55ab796d1c7adf79c882f3f5868646f948a79b0201a82",
+            "ed750b197b96e32d69f72cbc4d8e18baadcb0ea77cde42ca0bac67b0150cecc7",
         ),
     ],
 )

@@ -45,6 +45,8 @@ describe("statusFromSeatBox", () => {
     expect(statusFromSeatBox("특실 예약대기", [])).toBe("waitlist_available");
     expect(statusFromSeatBox("일반실 입석+좌석", [])).toBe("standing_plus_seat");
     expect(statusFromSeatBox("일반실 입석 + 예매", [])).toBe("standing_plus_seat");
+    expect(statusFromSeatBox("일반실 입석", [])).toBe("standing_only");
+    expect(statusFromSeatBox("일반실 입석 예매", [])).toBe("standing_only");
     expect(statusFromSeatBox("좌석 없음", [])).toBe("not_offered");
     expect(statusFromSeatBox("-", [])).toBe("not_offered");
     expect(statusFromSeatBox("일반실 59,800원", [])).toBe("available");
@@ -56,8 +58,16 @@ describe("statusFromSeatBox", () => {
     expect(statusFromSeatBox("특실 매진 예약대기", ["sold_out"])).toBe("waitlist_available");
   });
 
+  it("uses rendered standing text before a generic sold-out class", () => {
+    expect(statusFromSeatBox("일반실 입석+좌석", ["sold_out"])).toBe("standing_plus_seat");
+    expect(statusFromSeatBox("일반실 입석", ["sold_out"])).toBe("standing_only");
+    expect(statusFromSeatBox("일반실 입석 예매", ["sold_out"])).toBe("standing_only");
+  });
+
   it("fails closed for an unrecognized non-empty seat box", () => {
     expect(statusFromSeatBox("상태를 확인하세요", [])).toBeNull();
     expect(statusFromSeatBox("예매 불가", [])).toBeNull();
+    expect(statusFromSeatBox("입석 없음", [])).toBe("not_offered");
+    expect(statusFromSeatBox("입석 예매 불가", [])).toBeNull();
   });
 });

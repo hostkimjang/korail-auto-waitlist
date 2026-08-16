@@ -122,6 +122,7 @@ def test_departed_seat_response_projects_fresh_terminal_operation() -> None:
         SeatObservationStatus.AVAILABLE,
         SeatObservationStatus.LIMITED,
         SeatObservationStatus.STANDING_PLUS_SEAT,
+        SeatObservationStatus.STANDING_ONLY,
         SeatObservationStatus.NOT_ENOUGH_SEATS,
         SeatObservationStatus.RESERVATION_COMPLETED,
     ],

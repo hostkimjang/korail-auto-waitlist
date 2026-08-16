@@ -36,6 +36,10 @@ describe("payment-required view model", () => {
           retryable: false,
           manual_check_required: false,
           retry_condition: null,
+          confirmation_outcome: "confirmed_payment_required",
+          confirmation_observed_at: "2026-08-08T01:00:04Z",
+          reconciliation_attempt_count: 2,
+          next_reconcile_at: "2026-08-08T01:01:04Z",
           reserved_seats: [{ car_number: "3", seat_number: "12A" }],
         },
       }, {
@@ -54,6 +58,10 @@ describe("payment-required view model", () => {
           retryable: false,
           manual_check_required: false,
           retry_condition: null,
+          confirmation_outcome: "confirmed_paid",
+          confirmation_observed_at: "2026-08-08T01:05:04Z",
+          reconciliation_attempt_count: 6,
+          next_reconcile_at: null,
           reserved_seats: [{ car_number: "8", seat_number: "4D" }],
         },
       }],
@@ -64,6 +72,10 @@ describe("payment-required view model", () => {
       train: "101",
       trainType: "KTX-산천",
       reservedSeats: [{ carNumber: "3", seatNumber: "12A" }],
+      confirmationOutcome: "confirmed_payment_required",
+      confirmationObservedAt: "2026-08-08T01:00:04Z",
+      reconciliationAttemptCount: 2,
+      nextReconcileAt: "2026-08-08T01:01:04Z",
     });
   });
 
@@ -108,6 +120,11 @@ describe("payment-required view model", () => {
       reservedSeats: [],
       paymentDeadline: "2026-08-08T12:10:00+09:00",
       officialBookingUrl: "https://www.korail.com/ticket/search/general",
+      confirmationOutcome: null,
+      confirmationDiagnosticCode: null,
+      confirmationObservedAt: null,
+      reconciliationAttemptCount: 0,
+      nextReconcileAt: null,
     });
     expect(mapped).not.toHaveProperty("payment_deadline");
     expect(mapped).not.toHaveProperty("official_booking_url");
@@ -132,6 +149,11 @@ describe("payment-required view model", () => {
       seatClassLabel: null,
       paymentDeadline: null,
       officialBookingUrl: null,
+      confirmationOutcome: null,
+      confirmationDiagnosticCode: null,
+      confirmationObservedAt: null,
+      reconciliationAttemptCount: 0,
+      nextReconcileAt: null,
     });
   });
 });

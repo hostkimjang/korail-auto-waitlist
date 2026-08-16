@@ -16,7 +16,9 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from ...reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationPurpose,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 from ...reservations.provider_confirmation.korail import (
@@ -25,11 +27,17 @@ from ...reservations.provider_confirmation.korail import (
     KORAIL_RESERVATION_LIST_SOURCE,
     KorailSameSessionDetailEvidence,
 )
+from ..browser_contracts import (
+    BrowserProtectionDetected,
+    BrowserRateLimited,
+    BrowserSourceUnavailable,
+)
 from ..browser_protection import (
     is_rate_limit_response,
     protection_trigger_from_http_response,
     protection_trigger_from_text,
 )
+from .session_auth_policy import is_korail_session_authenticated
 
 
 class KorailConfirmationSnapshot(Protocol):
@@ -134,11 +142,18 @@ async def read_korail_same_session_confirmation(
     parser = payment_deadline_parser or _parse_korail_payment_deadline
     observed_at = datetime.now(UTC)
     snapshot: KorailConfirmationSnapshot | None = None
+    source_unavailable_error: BrowserSourceUnavailable | None = None
     try:
         snapshot = await session._snapshot()
+    except (BrowserProtectionDetected, BrowserRateLimited):
+        raise
+    except BrowserSourceUnavailable as error:
+        source_unavailable_error = error
     except Exception:  # noqa: BLE001 -- provider backend errors stay opaque.
-        if target.purpose is ReservationConfirmationPurpose.INITIAL:
-            return _inconclusive_evidence(observed_at, credential_version)
+        # A failed detail snapshot does not prevent the read-only official list
+        # fallback from reaching a conclusive exact/empty result. Preserve a
+        # closed stage so an inconclusive fallback remains diagnosable.
+        source_unavailable_error = BrowserSourceUnavailable("confirmation_detail_snapshot")
 
     if snapshot is None:
         detail = _inconclusive_evidence(observed_at, credential_version)
@@ -147,32 +162,56 @@ async def read_korail_same_session_confirmation(
             return _blocked_evidence(observed_at, KORAIL_CONFIRMATION_SOURCE)
 
         path = urlsplit(snapshot.url).path.rstrip("/")
-        if path == "/ticket/login" and not await _session_is_authenticated(session):
-            return _auth_required_evidence(
-                observed_at,
-                credential_version,
-                KORAIL_CONFIRMATION_SOURCE,
+        if path == "/ticket/login":
+            try:
+                authenticated = await _session_is_authenticated(session)
+            except BrowserSourceUnavailable as error:
+                source_unavailable_error = error
+                detail = _inconclusive_evidence(observed_at, credential_version)
+            else:
+                if not authenticated:
+                    return _auth_required_evidence(
+                        observed_at,
+                        credential_version,
+                        KORAIL_CONFIRMATION_SOURCE,
+                    )
+                detail = _confirmation_evidence_from_text(
+                    target=target,
+                    text=snapshot.body_text,
+                    observed_at=observed_at,
+                    credential_version=credential_version,
+                    source=KORAIL_CONFIRMATION_SOURCE,
+                    required_path_matched=False,
+                    payment_deadline_parser=parser,
+                )
+        else:
+            detail = _confirmation_evidence_from_text(
+                target=target,
+                text=snapshot.body_text,
+                observed_at=observed_at,
+                credential_version=credential_version,
+                source=KORAIL_CONFIRMATION_SOURCE,
+                required_path_matched=path == "/ticket/reservation/detail",
+                payment_deadline_parser=parser,
             )
-
-        detail = _confirmation_evidence_from_text(
-            target=target,
-            text=snapshot.body_text,
-            observed_at=observed_at,
-            credential_version=credential_version,
-            source=KORAIL_CONFIRMATION_SOURCE,
-            required_path_matched=path == "/ticket/reservation/detail",
-            payment_deadline_parser=parser,
-        )
+    paid_confirmation_seats = _paid_confirmation_seats(target)
     issued_target_absence_confirmed = False
-    if target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP:
-        (
-            issued_evidence,
-            issued_target_absence_confirmed,
-        ) = await _payment_follow_up_issued_ticket_probe(
-            session=session,
-            target=target,
-            credential_version=credential_version,
-        )
+    if target.purpose in {
+        ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+        ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+    }:
+        try:
+            (
+                issued_evidence,
+                issued_target_absence_confirmed,
+            ) = await _payment_follow_up_issued_ticket_probe(
+                session=session,
+                target=target,
+                credential_version=credential_version,
+            )
+        except BrowserSourceUnavailable as error:
+            source_unavailable_error = error
+            issued_evidence = None
         if issued_evidence is not None:
             return issued_evidence
         # Never reaffirm a payment hold from the captured detail DOM. Only the
@@ -182,22 +221,33 @@ async def read_korail_same_session_confirmation(
         return detail
 
     if not isinstance(session, KorailReservationListSession):
+        if source_unavailable_error is not None:
+            raise source_unavailable_error
         return detail
     try:
         list_snapshot = await session.read_reservation_list()
+    except (BrowserProtectionDetected, BrowserRateLimited):
+        raise
+    except BrowserSourceUnavailable:
+        raise
     except Exception:  # noqa: BLE001 -- provider backend errors stay opaque.
-        return detail
+        # This is the final read surface for every unresolved branch. Preserve
+        # its closed leaf stage for the sidecar log instead of collapsing the
+        # failure into the public diagnostic alone. Earlier exact evidence has
+        # already returned above, so this never overrides a conclusive result.
+        raise BrowserSourceUnavailable("confirmation_reservation_list") from None
     list_observed_at = datetime.now(UTC)
     if _reservation_list_snapshot_is_blocked(list_snapshot):
         return _blocked_evidence(list_observed_at, KORAIL_RESERVATION_LIST_SOURCE)
 
     list_path = urlsplit(list_snapshot.url).path.rstrip("/")
-    if list_path == "/ticket/login" and not await _session_is_authenticated(session):
-        return _auth_required_evidence(
-            list_observed_at,
-            credential_version,
-            KORAIL_RESERVATION_LIST_SOURCE,
-        )
+    if list_path == "/ticket/login":
+        if not await _session_is_authenticated(session):
+            return _auth_required_evidence(
+                list_observed_at,
+                credential_version,
+                KORAIL_RESERVATION_LIST_SOURCE,
+            )
 
     list_read_completed = (
         list_path == "/ticket/reservation/list" and list_snapshot.official_read_completed
@@ -224,7 +274,7 @@ async def read_korail_same_session_confirmation(
     matches = tuple(
         evidence for evidence in identity_matches if evidence.payment_pending_markers_present
     )
-    if len(matches) == 1:
+    if len(identity_matches) == 1 and len(matches) == 1:
         return matches[0]
     if identity_matches:
         # An exact row without the expected pending-payment controls may be a
@@ -238,6 +288,9 @@ async def read_korail_same_session_confirmation(
             seat_class_match_required=False,
             official_list_read_completed=list_read_completed,
             official_list_target_absent=False,
+            inconclusive_diagnostic_code=(
+                ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+            ),
             source=KORAIL_RESERVATION_LIST_SOURCE,
         )
     else:
@@ -248,20 +301,43 @@ async def read_korail_same_session_confirmation(
             payment_pending_markers_present=False,
             seat_class_match_required=False,
             official_list_read_completed=list_read_completed,
-            official_list_target_absent=(list_read_completed and len(matches) == 0),
+            official_list_target_absent=(
+                list_read_completed and target.arrival_at is not None and len(matches) == 0
+            ),
             source=KORAIL_RESERVATION_LIST_SOURCE,
         )
 
     if (
-        target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        target.purpose
+        in {
+            ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+            ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+        }
         and list_evidence.official_list_target_absent
-        and (not target.reserved_seats or not issued_target_absence_confirmed)
+        and (not paid_confirmation_seats or not issued_target_absence_confirmed)
     ):
         # A negative unpaid-list read is safe only after a complete issued-ticket
         # read also ruled out this exact persisted seat. Otherwise the ticket may
         # be paid but hidden behind an incomplete or ambiguous issued-card read.
+        if source_unavailable_error is not None:
+            raise source_unavailable_error
         return _inconclusive_evidence(list_observed_at, credential_version)
+    if (
+        source_unavailable_error is not None
+        and not list_evidence.official_list_target_absent
+        and list_evidence.inconclusive_diagnostic_code
+        is not ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+    ):
+        raise source_unavailable_error
     return list_evidence
+
+
+def _paid_confirmation_seats(
+    target: ReservationConfirmationTarget,
+) -> tuple[ReservationConfirmationSeat, ...]:
+    if target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP:
+        return target.confirmation_correlation_seats
+    return target.reserved_seats
 
 
 async def _payment_follow_up_issued_ticket_probe(
@@ -272,18 +348,29 @@ async def _payment_follow_up_issued_ticket_probe(
 ) -> tuple[KorailSameSessionDetailEvidence | None, bool]:
     """Return paid evidence or a trustworthy exact-seat absence signal."""
 
+    paid_confirmation_seats = _paid_confirmation_seats(target)
     if (
-        target.purpose is not ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        target.purpose
+        not in {
+            ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+            ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+        }
         or target.passenger_count != 1
         or target.arrival_at is None
-        or len(target.reserved_seats) != 1
+        or len(paid_confirmation_seats) != 1
         or not isinstance(session, KorailIssuedTicketListSession)
     ):
         return None, False
     try:
         snapshot = await session.read_issued_ticket_list()
+    except (
+        BrowserProtectionDetected,
+        BrowserRateLimited,
+        BrowserSourceUnavailable,
+    ):
+        raise
     except Exception:  # noqa: BLE001 -- provider backend errors stay opaque.
-        return None, False
+        raise BrowserSourceUnavailable("confirmation_issued_ticket_list") from None
     observed_at = datetime.now(UTC)
     if _issued_ticket_snapshot_is_blocked(snapshot):
         return _blocked_evidence(observed_at, KORAIL_ISSUED_TICKET_LIST_SOURCE), False
@@ -308,7 +395,21 @@ async def _payment_follow_up_issued_ticket_probe(
         complete_empty = snapshot.rendered_card_count == 0 and not snapshot.tickets
         return None, complete_empty
     matches = tuple(ticket for ticket in snapshot.tickets if _issued_ticket_matches(target, ticket))
-    if len(matches) != 1:
+    if len(matches) > 1:
+        return (
+            KorailSameSessionDetailEvidence(
+                observed_at=observed_at,
+                credential_version=credential_version,
+                exact_identity_matched=False,
+                payment_pending_markers_present=False,
+                inconclusive_diagnostic_code=(
+                    ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+                ),
+                source=KORAIL_ISSUED_TICKET_LIST_SOURCE,
+            ),
+            False,
+        )
+    if not matches:
         return None, False
     return (
         KorailSameSessionDetailEvidence(
@@ -351,11 +452,12 @@ def _issued_ticket_matches(
 ) -> bool:
     if ticket.returned or ticket.operation_stopped or ticket.transferred:
         return False
-    if target.arrival_at is None or len(target.reserved_seats) > 1:
+    expected_seats = _paid_confirmation_seats(target)
+    if target.arrival_at is None or len(expected_seats) != 1:
         return False
     local_departure = target.departure_at.astimezone(ZoneInfo("Asia/Seoul"))
     local_arrival = target.arrival_at.astimezone(ZoneInfo("Asia/Seoul"))
-    expected_seat = target.reserved_seats[0] if target.reserved_seats else None
+    expected_seat = expected_seats[0]
     expected_class = "standard" if target.seat_class.value == "standard" else "first"
     return (
         ticket.service_date == local_departure.date()
@@ -367,13 +469,8 @@ def _issued_ticket_matches(
         and ticket.arrival_time.strftime("%H:%M") == local_arrival.strftime("%H:%M")
         and ticket.seat_class == expected_class
         and ticket.passenger_count == target.passenger_count == 1
-        and (
-            expected_seat is None
-            or (
-                ticket.car_number.strip().upper() == expected_seat.car_number
-                and ticket.seat_number.strip().upper() == expected_seat.seat_number
-            )
-        )
+        and ticket.car_number.strip().upper() == expected_seat.car_number
+        and ticket.seat_number.strip().upper() == expected_seat.seat_number
     )
 
 
@@ -385,9 +482,7 @@ def _normalized_train_number(value: str) -> str:
 async def _session_is_authenticated(session: KorailConfirmationSession) -> bool:
     """A transient login route is only unauthenticated when both signals agree."""
 
-    officially_authenticated = await session._probe_official_authenticated_session()
-    header_authenticated = await session._has_authenticated_header()
-    return officially_authenticated or header_authenticated
+    return await is_korail_session_authenticated(session)
 
 
 def _inconclusive_evidence(

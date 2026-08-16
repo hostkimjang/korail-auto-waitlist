@@ -219,7 +219,10 @@ def _message_detail(
             if target == WatchStatus.WATCHING
             else "해당 1회성 작업을 종료합니다."
         )
-        return f"임시 예약이 결제기한 안에 결제되지 않아 취소되었습니다. {follow_up}"
+        return (
+            "공식 확인 결과 기존 결제 안내를 종료했습니다. "
+            f"공식 예약 내역을 직접 확인해 주세요. {follow_up}"
+        )
     return f"작업 상태: {target.value}"
 
 

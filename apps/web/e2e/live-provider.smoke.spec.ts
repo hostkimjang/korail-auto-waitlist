@@ -151,6 +151,7 @@ async function assertSeatActions(
     name: /공식 예약대기 전 안내 열기$/,
   });
   const cancellationWatch = panel.getByRole("button", { name: /취소표 대기$/ });
+  const standingCancellationWatch = panel.getByRole("button", { name: /취소좌석 대기$/ });
   const waitlistWatch = panel.getByRole("button", {
     name: /^(?:일반실|특실) 예약대기$/,
   });
@@ -163,9 +164,13 @@ async function assertSeatActions(
 
   if (actions.includes("add_to_watch")) {
     if (seat.status === "sold_out") await expect(cancellationWatch).toBeVisible();
+    else if (seat.status === "standing_only") {
+      await expect(standingCancellationWatch).toBeVisible();
+    }
     else await expect(waitlistWatch).toBeVisible();
   } else {
     await expect(cancellationWatch).toHaveCount(0);
+    await expect(standingCancellationWatch).toHaveCount(0);
     await expect(waitlistWatch).toHaveCount(0);
   }
 }
@@ -174,6 +179,7 @@ const seatStatusLabels: Record<LiveKorailSeatObservation["status"], string> = {
   available: "예매 가능",
   limited: "매진 임박",
   standing_plus_seat: "입석+좌석",
+  standing_only: "입석만 가능",
   sold_out: "매진",
   waitlist_available: "예약대기 가능",
   not_offered: "예매 불가",

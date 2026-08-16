@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
-from ..domain import ReservationOutcome, WatchStatus
+from ..domain import ReservationOutcome, ReservationResultReasonCode, WatchStatus
 from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
 
 RESERVATION_ATTEMPT_STALE_AFTER = timedelta(minutes=5)
@@ -89,6 +89,9 @@ async def recover_stale_reservation_attempts(
     )
     for attempt, candidate, watch in rows:
         attempt.outcome = ReservationOutcome.UNKNOWN
+        attempt.result_reason_code = ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+        if attempt.reconciliation_attempt_count is None:
+            attempt.reconciliation_attempt_count = 0
         attempt.finished_at = now
         if watch.status == WatchStatus.RESERVING:
             # UNKNOWN remains a durable ambiguous-result fence. Observation may
@@ -119,6 +122,12 @@ async def recover_stale_reservation_attempts(
                 "attempt_started_at": attempt.started_at.isoformat(),
                 "attempt_finished_at": now.isoformat(),
                 "outcome": ReservationOutcome.UNKNOWN.value,
+                "result_reason_code": attempt.result_reason_code.value,
+                "confirmation_outcome": None,
+                "confirmation_diagnostic_code": None,
+                "confirmation_observed_at": None,
+                "reconciliation_attempt_count": attempt.reconciliation_attempt_count,
+                "next_reconcile_at": None,
                 "retryable": False,
                 "manual_check_required": True,
                 "retry_condition": None,

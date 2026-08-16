@@ -14,6 +14,7 @@ from typing import Protocol
 from ...domain import Provider
 from ...provider_registry.official_url_policy import require_official_handoff_url
 from .contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
@@ -45,6 +46,9 @@ class KorailSameSessionDetailEvidence:
     seat_class_match_required: bool = True
     official_list_read_completed: bool = False
     official_list_target_absent: bool = False
+    inconclusive_diagnostic_code: ReservationConfirmationDiagnosticCode = (
+        ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
     auth_required: bool = False
     provider_blocked: bool = False
     issued_ticket_exact_match: bool = False
@@ -68,6 +72,12 @@ class KorailSameSessionDetailEvidence:
             self.source != KORAIL_RESERVATION_LIST_SOURCE or not self.official_list_read_completed
         ):
             raise ValueError("official list target absence requires a completed official list read")
+        if self.inconclusive_diagnostic_code not in {
+            ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE,
+            ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS,
+            ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT,
+        }:
+            raise ValueError("unsupported KORAIL inconclusive diagnostic code")
         if self.issued_ticket_exact_match and (
             self.source != KORAIL_ISSUED_TICKET_LIST_SOURCE
             or not self.exact_identity_matched
@@ -112,15 +122,25 @@ def normalize_korail_same_session_detail(
         return ReservationConfirmationResult(
             provider=target.provider,
             outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=(ReservationConfirmationDiagnosticCode.CREDENTIAL_CONTEXT_MISMATCH),
             source=evidence.source,
             observed_at=evidence.observed_at,
         )
+    paid_confirmation_seats = (
+        target.confirmation_correlation_seats
+        if target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+        else target.reserved_seats
+    )
     if (
         evidence.source == KORAIL_ISSUED_TICKET_LIST_SOURCE
         and evidence.issued_ticket_exact_match
-        and target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        and target.purpose
+        in {
+            ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+            ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+        }
         and target.passenger_count == 1
-        and len(target.reserved_seats) == 1
+        and len(paid_confirmation_seats) == 1
     ):
         return ReservationConfirmationResult(
             provider=target.provider,
@@ -129,7 +149,8 @@ def normalize_korail_same_session_detail(
             observed_at=evidence.observed_at,
         )
     if (
-        evidence.exact_identity_matched
+        target.purpose is not ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+        and evidence.exact_identity_matched
         and (not evidence.seat_class_match_required or evidence.seat_class_matched)
         and evidence.passenger_count_matched
         and evidence.payment_pending_markers_present
@@ -149,6 +170,7 @@ def normalize_korail_same_session_detail(
         evidence.source == KORAIL_RESERVATION_LIST_SOURCE
         and evidence.official_list_read_completed
         and evidence.official_list_target_absent
+        and target.arrival_at is not None
     ):
         # A successfully loaded authenticated official reservation list is the one
         # surface where absence of the exact target is meaningful. This still does
@@ -162,9 +184,23 @@ def normalize_korail_same_session_detail(
         )
     # Absence from a same-tab detail page or an uncertain list load is not an
     # official negative result.
+    complete_identity = (
+        evidence.exact_identity_matched
+        and (not evidence.seat_class_match_required or evidence.seat_class_matched)
+        and evidence.passenger_count_matched
+    )
     return ReservationConfirmationResult(
         provider=target.provider,
         outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        diagnostic_code=(
+            ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+            if (
+                evidence.inconclusive_diagnostic_code
+                is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+                or complete_identity
+            )
+            else evidence.inconclusive_diagnostic_code
+        ),
         source=evidence.source,
         observed_at=evidence.observed_at,
     )

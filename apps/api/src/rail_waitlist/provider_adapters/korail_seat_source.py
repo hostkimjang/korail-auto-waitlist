@@ -148,6 +148,8 @@ def map_korail_seat_state(code: object, label: object = "") -> SeatAvailabilityS
         return "limited"
     if "입석+좌석" in normalized_label or "입석+예매" in normalized_label:
         return "standing_plus_seat"
+    if normalized_label in {"입석", "일반실입석", "입석예매", "일반실입석예매"}:
+        return "standing_only"
     normalized_code = str(code).strip()
     if normalized_code == "11":
         return "available"
@@ -450,7 +452,7 @@ class KorailLiveSeatSource:
         )
         for seat_class, status in seat_states:
             actions: list[SeatAvailabilityAction] = []
-            if status in {"available", "limited", "standing_plus_seat"}:
+            if status in {"available", "limited", "standing_plus_seat", "standing_only"}:
                 actions.extend(
                     [
                         SeatAvailabilityAction(kind="official_check", url=official_booking_url),

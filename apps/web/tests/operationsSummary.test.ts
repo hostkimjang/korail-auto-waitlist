@@ -113,6 +113,19 @@ export function operationsPayload() {
         seat_class: "standard",
         reason_code: "reservation_auth_required",
       },
+      {
+        occurred_at: "2026-07-29T03:24:00Z",
+        kind: "reservation_attempt",
+        level: "warning",
+        status: "unknown",
+        error_category: null,
+        provider: "korail",
+        train_number: "86",
+        departure_at: "2026-08-14T00:24:00Z",
+        seat_class: "standard",
+        reason_code: "delay_consent_required",
+        confirmation_diagnostic_code: "official_record_ambiguous",
+      },
     ],
     limitations: [
       "http_and_process_errors_are_not_durably_recorded",
@@ -163,6 +176,11 @@ describe("operations summary API contract", () => {
       status: "auth_required",
       reasonCode: "reservation_auth_required",
     });
+    expect(result.recentEntries[5]).toMatchObject({
+      status: "unknown",
+      reasonCode: "delay_consent_required",
+      confirmationDiagnosticCode: "official_record_ambiguous",
+    });
   });
 
   it("fails closed for unknown enums and malformed timestamps", () => {
@@ -190,6 +208,7 @@ describe("operations summary API contract", () => {
       departure_at: "2026-08-15T04:57:00",
       seat_class: "vip",
       reason_code: "raw_provider_reason",
+      confirmation_diagnostic_code: "future_diagnostic_code",
     };
 
     const result = mapOperationsSummary(payload);
@@ -202,6 +221,7 @@ describe("operations summary API contract", () => {
       departureAt: null,
       seatClass: null,
       reasonCode: null,
+      confirmationDiagnosticCode: null,
       provider: null,
     });
     expect(result.isPartial).toBe(true);

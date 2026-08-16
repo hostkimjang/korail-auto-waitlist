@@ -40,7 +40,10 @@ def test_migration_0011_korail_browser_snapshots_round_trip(tmp_path, monkeypatc
         ).fetchone()[0]
         assert "source = 'korail-official-browser-companion'" in batch_sql
         assert "fresh_until > observed_at" in batch_sql
-        assert "'AVAILABLE', 'LIMITED', 'STANDING_PLUS_SEAT', 'SOLD_OUT'" in snapshot_sql
+        assert (
+            "'AVAILABLE', 'LIMITED', 'STANDING_PLUS_SEAT', 'STANDING_ONLY', 'SOLD_OUT'"
+            in snapshot_sql
+        )
         assert "official_page_browser_companion" in evidence_sql
         assert "source = 'korail-official-browser-companion'" in evidence_sql
         unique_columns = []

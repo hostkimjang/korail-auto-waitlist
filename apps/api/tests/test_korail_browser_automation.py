@@ -377,6 +377,9 @@ def test_seat_text_contract_is_fail_closed() -> None:
     assert status_from_seat_box("매진", {"sold_out"}) == "sold_out"
     assert status_from_seat_box("특실 매진임박", {"sold_out_soon"}) == "limited"
     assert status_from_seat_box("입석 + 예매", set()) == "standing_plus_seat"
+    assert status_from_seat_box("입석 + 좌석", {"sold_out"}) == "standing_plus_seat"
+    assert status_from_seat_box("입석", set()) == "standing_only"
+    assert status_from_seat_box("일반실 입석 예매", {"sold_out"}) == "standing_only"
     assert status_from_seat_box("예약대기", set()) == "waitlist_available"
     assert status_from_seat_box("새로운 알 수 없는 문구", set()) is None
 

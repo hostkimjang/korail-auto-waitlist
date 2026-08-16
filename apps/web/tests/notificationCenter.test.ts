@@ -97,6 +97,56 @@ describe("notification center lifecycle", () => {
     },
   );
 
+  it("replaces a visible equal-time terminal notice with a distinct same-phase revision", () => {
+    const generic = pushNotifications(initialNotificationCenterState, [notice({
+      title: "공식 결과 확인 필요",
+      description: "공식 예약 내역 확인으로 결과를 확정하지 못했습니다.",
+      revisionKey: "watch:one:manual:unspecified",
+      revisionAt: "2026-08-03T12:10:00Z",
+      kind: "manual_check",
+    })]);
+    const specific = pushNotifications(generic, [notice({
+      title: "공식 결과 확인 필요",
+      description: "공식 내역에서 이번 예매 시도와 정확히 일치하는 항목을 구분하지 못했습니다.",
+      revisionKey: "watch:one:manual:ambiguous",
+      revisionAt: "2026-08-03T12:10:00Z",
+      kind: "manual_check",
+    })]);
+
+    expect(specific.notices).toHaveLength(1);
+    expect(specific.notices[0]).toMatchObject({
+      revisionKey: "watch:one:manual:ambiguous",
+      description: "공식 내역에서 이번 예매 시도와 정확히 일치하는 항목을 구분하지 못했습니다.",
+    });
+    expect(specific.sequence).toBe(generic.sequence + 1);
+  });
+
+  it("does not reopen an equal-time same-phase revision after the visible notice was dismissed", () => {
+    const initial = pushNotifications(initialNotificationCenterState, [notice({
+      title: "공식 결과 확인 필요",
+      revisionKey: "watch:one:manual:unspecified-dismissed",
+      revisionAt: "2026-08-03T12:10:00Z",
+      kind: "manual_check",
+    })]);
+    const initialNotice = initial.notices[0];
+    expect(initialNotice).toBeDefined();
+    if (initialNotice === undefined) throw new Error("manual-check notice was not created");
+    const dismissed = notificationCenterReducer(initial, {
+      type: "dismiss",
+      id: initialNotice.id,
+    });
+    const sameTimeRevision = pushNotifications(dismissed, [notice({
+      title: "더 구체적인 공식 결과",
+      revisionKey: "watch:one:manual:ambiguous-after-dismissal",
+      revisionAt: "2026-08-03T12:10:00Z",
+      kind: "manual_check",
+    })]);
+
+    expect(sameTimeRevision.notices).toEqual([]);
+    expect(sameTimeRevision.seenRevisionKeys)
+      .toContain("watch:one:manual:ambiguous-after-dismissal");
+  });
+
   it("keeps a dismissed terminal watermark from reopening older reservation progress", () => {
     const terminal = pushNotifications(initialNotificationCenterState, [notice({
       title: "공식 결과 확인 필요",
@@ -238,6 +288,57 @@ describe("notification center lifecycle", () => {
     expect(dismissed.notices.map((item) => item.kind)).toEqual(["seat_found", "reserving"]);
   });
 
+  it("automatically prunes only stale sticky subjects without recording a dismissal", () => {
+    const state = pushNotifications(initialNotificationCenterState, [
+      notice({
+        title: "결제 직전까지 예매되었습니다",
+        subjectKey: "watch:gone",
+        revisionKey: "watch:gone:payment",
+        revisionAt: "2026-08-03T12:10:00Z",
+        kind: "payment_required",
+      }),
+      notice({
+        title: "감시 상태가 변경되었습니다",
+        subjectKey: "watch:timed",
+        revisionKey: "watch:timed:recovery",
+        revisionAt: "2026-08-03T12:10:00Z",
+        kind: "recovery",
+      }),
+    ]);
+
+    const pruned = notificationCenterReducer(state, {
+      type: "prune_stale_subjects",
+      subjectKeys: ["watch:gone", "watch:timed"],
+    });
+
+    expect(pruned.notices.map((item) => item.subjectKey)).toEqual(["watch:timed"]);
+    expect(pruned.dismissalLedger).toBe(state.dismissalLedger);
+    expect(pruned.dismissalLedger).toEqual([]);
+    expect(pruned.seenRevisionKeys).toBe(state.seenRevisionKeys);
+    expect(pruned.subjectRevisionWatermarks).toBe(state.subjectRevisionWatermarks);
+
+    const lateProgress = pushNotifications(pruned, [notice({
+      title: "늦게 도착한 예매 진행",
+      subjectKey: "watch:gone",
+      revisionKey: "watch:gone:progress:old",
+      revisionAt: "2026-08-03T12:09:00Z",
+      kind: "reserving",
+    })]);
+    expect(lateProgress.notices.some((item) => item.subjectKey === "watch:gone")).toBe(false);
+
+    const newerPayment = pushNotifications(lateProgress, [notice({
+      title: "새 결제 요청",
+      subjectKey: "watch:gone",
+      revisionKey: "watch:gone:payment:new",
+      revisionAt: "2026-08-03T12:11:00Z",
+      kind: "payment_required",
+    })]);
+    expect(newerPayment.notices).toContainEqual(expect.objectContaining({
+      subjectKey: "watch:gone",
+      title: "새 결제 요청",
+    }));
+  });
+
   it("keeps active reservation progress until a terminal revision replaces it", () => {
     const reserving = pushNotifications(initialNotificationCenterState, [notice({
       title: "예매를 진행하고 있습니다",
@@ -300,12 +401,12 @@ describe("notification center lifecycle", () => {
       steps: [{ label: "공식 결제 필요", state: "active" }],
     })]);
     const cancelled = pushNotifications(payment, [notice({
-      title: "결제기한 안에 결제되지 않아 예매가 취소되었습니다",
+      title: "결제 가능 기한이 지났습니다",
       revisionKey: "watch:one:hold-ended",
       revisionAt: "2026-08-03T12:20:00Z",
       kind: "recovery",
       steps: [
-        { label: "결제기한 내 결제 미완료", state: "failed" },
+        { label: "결제 가능 시간 종료", state: "failed" },
         { label: "예매 취소 확인", state: "completed" },
         { label: "감시 재개", state: "completed" },
       ],
@@ -313,7 +414,7 @@ describe("notification center lifecycle", () => {
 
     expect(cancelled.notices).toHaveLength(1);
     expect(cancelled.notices[0]).toMatchObject({
-      title: "결제기한 안에 결제되지 않아 예매가 취소되었습니다",
+      title: "결제 가능 기한이 지났습니다",
       kind: "recovery",
       persistence: "timed",
     });

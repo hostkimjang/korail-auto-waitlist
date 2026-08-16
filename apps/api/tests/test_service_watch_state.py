@@ -23,6 +23,10 @@ from rail_waitlist.models import (
     WatchCandidate,
     WatchTransitionHistory,
 )
+from rail_waitlist.notification_management import (
+    watch_transition_application as notification_application,
+)
+from rail_waitlist.provider_account_management.models import RailProviderAccount
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
@@ -34,6 +38,7 @@ from rail_waitlist.schemas import (
     ReservationResult,
     SeatObservationResult,
 )
+from rail_waitlist.security import secret_box
 from rail_waitlist.services import (
     add_outbox_event,
     apply_reservation_reconciliation,
@@ -59,6 +64,43 @@ class CapabilityAdapter:
             seat_monitoring=self.seat_monitoring,
             reservation_once=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("target", "reason", "follow_up"),
+    [
+        (
+            WatchStatus.WATCHING,
+            "confirmed_payment_hold_no_longer_actionable_monitoring_resumed",
+            "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 예매하지 않습니다.",
+        ),
+        (
+            WatchStatus.EXPIRED,
+            "confirmed_payment_hold_no_longer_actionable_one_off_expired",
+            "해당 1회성 작업을 종료합니다.",
+        ),
+    ],
+)
+def test_payment_hold_end_notification_is_neutral_for_deadline_or_absence_evidence(
+    target: WatchStatus,
+    reason: str,
+    follow_up: str,
+) -> None:
+    message = notification_application._message_detail(
+        Watch(),
+        target,
+        reason=reason,
+        transition_token="payment-hold-ended",
+        payment_deadline=None,
+    )
+
+    assert message == (
+        "공식 확인 결과 기존 결제 안내를 종료했습니다. "
+        f"공식 예약 내역을 직접 확인해 주세요. {follow_up}"
+    )
+    assert "결제되지" not in message
+    assert "취소" not in message
+    assert "기한" not in message
 
 
 @pytest.mark.parametrize(
@@ -802,8 +844,24 @@ async def test_reconciliation_auth_or_protection_signal_stops_bounded_reads(
             outcome=ReservationOutcome.UNKNOWN,
             credential_version=7,
         )
+        candidate.manual_rearm_source_attempt_id = "manual-marker-attempt"
+        candidate.manual_rearm_authorized_at = observed_at - timedelta(minutes=1)
         watch.candidates.append(candidate)
-        session.add(watch)
+        account = RailProviderAccount(
+            provider=Provider.SRT,
+            credentials_ciphertext=secret_box.encrypt_dict(
+                {
+                    "login_method": "membership_number",
+                    "login_id": "fixture-user",
+                    "password": "fixture-only-value",
+                }
+            ),
+            enabled=True,
+            credential_version=7,
+            last_auth_status="authenticated",
+            last_authenticated_at=observed_at - timedelta(minutes=5),
+        )
+        session.add_all([watch, account])
         await session.flush()
 
         await apply_reservation_reconciliation(
@@ -820,9 +878,18 @@ async def test_reconciliation_auth_or_protection_signal_stops_bounded_reads(
             reconciled_at=observed_at + timedelta(seconds=1),
         )
 
-        assert attempt.reconciliation_attempt_count == 1
+        assert attempt.reconciliation_attempt_count == 0
         assert attempt.next_reconcile_at is None
         assert attempt.outcome is ReservationOutcome.UNKNOWN
+        assert attempt.confirmation_outcome is confirmation_outcome
+        assert candidate.manual_rearm_source_attempt_id is None
+        assert candidate.manual_rearm_authorized_at is None
+        assert watch.status is WatchStatus.AUTH_REQUIRED
+        assert account.last_auth_status == (
+            "auth_required"
+            if confirmation_outcome is ReservationConfirmationOutcome.AUTH_REQUIRED
+            else "provider_blocked"
+        )
 
 
 async def test_reconciliation_positive_match_restores_payment_handoff(db_engine) -> None:
@@ -1157,7 +1224,7 @@ async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_w
             "from": "payment_required",
             "to": "watching",
             "reason": "confirmed_payment_deadline_elapsed",
-            "message": "임시 예약이 결제기한 안에 결제되지 않아 취소되었습니다.",
+            "message": "공식 확인에서 결제 가능 기한이 지난 임시 예약을 확인했습니다.",
             "payment_deadline": deadline.isoformat(),
             "automatic_reservation_retry": True,
             "retry_condition": "new_availability_episode",
@@ -1168,7 +1235,8 @@ async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_w
         assert message_lines[0].startswith("SRT · 370 · 2026년 8월 1일 (토) · 수서 ")
         assert message_lines[0].endswith("→ 부산 도착시각 미확인 · 일반실 · 1명")
         assert message_lines[1] == (
-            "임시 예약이 결제기한 안에 결제되지 않아 취소되었습니다. "
+            "공식 확인 결과 기존 결제 안내를 종료했습니다. "
+            "공식 예약 내역을 직접 확인해 주세요. "
             "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 예매하지 않습니다."
         )
 

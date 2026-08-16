@@ -44,6 +44,25 @@ function groupNotices(notices: ReadonlyArray<AppNotificationNotice>) {
   return [...groups.entries()];
 }
 
+function TimedNotificationDismissal({
+  notice,
+  onDismiss,
+}: {
+  notice: AppNotificationNotice;
+  onDismiss: (id: string) => void;
+}): null {
+  const onDismissRef = useRef(onDismiss);
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
+  useEffect(() => {
+    if (typeof notice.autoCloseMs !== "number") return undefined;
+    const timer = window.setTimeout(() => onDismissRef.current(notice.id), notice.autoCloseMs);
+    return () => window.clearTimeout(timer);
+  }, [notice.autoCloseMs, notice.id]);
+  return null;
+}
+
 export function AppNotificationCenter({
   state,
   expanded,
@@ -117,6 +136,11 @@ export function AppNotificationCenter({
       >
         {state.announcement}
       </div>
+      {state.notices.map((notice) => (
+        notice.persistence === "timed" ? (
+          <TimedNotificationDismissal key={notice.id} notice={notice} onDismiss={onDismiss} />
+        ) : null
+      ))}
       <section className="notification-center-surface" role="region" aria-label="실시간 알림">
         <header className="notification-center-header">
           <Bell size={20} weight="fill" aria-hidden="true" />
@@ -167,49 +191,49 @@ export function AppNotificationCenter({
           </div>
         )}
         <div id="notification-center-body" className="notification-center-body" hidden={!expanded}>
-          {state.notices.length === 0 ? (
+          {expanded && state.notices.length === 0 && (
             <p className="notification-center-empty" role="status">
               새 실시간 알림이 없습니다.
             </p>
-          ) : null}
-            {groups.map(([kind, notices]) => {
-              const expanded = expandedGroups.has(kind);
-              return (
-                <section className="notification-group" key={kind} aria-labelledby={`notification-group-${kind}`}>
-                  <div className="notification-group-heading">
-                    <strong id={`notification-group-${kind}`}>{GROUP_LABELS[kind]}</strong>
-                    <span>{notices.length}건</span>
-                    {notices.length > 1 && (
-                      <button type="button" onClick={() => toggleGroup(kind)}>
-                        {expanded ? "접기" : `추가 ${notices.length - 1}건 보기`}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="notification-group-dismiss"
-                      aria-label={`${GROUP_LABELS[kind]} ${notices.length}건 모두 닫기`}
-                      onClick={() => onDismissGroup(kind)}
-                    >
-                      <X size={18} aria-hidden="true" />
+          )}
+          {expanded && groups.map(([kind, notices]) => {
+            const groupExpanded = expandedGroups.has(kind);
+            return (
+              <section className="notification-group" key={kind} aria-labelledby={`notification-group-${kind}`}>
+                <div className="notification-group-heading">
+                  <strong id={`notification-group-${kind}`}>{GROUP_LABELS[kind]}</strong>
+                  <span>{notices.length}건</span>
+                  {notices.length > 1 && (
+                    <button type="button" onClick={() => toggleGroup(kind)}>
+                      {groupExpanded ? "접기" : `추가 ${notices.length - 1}건 보기`}
                     </button>
-                  </div>
-                  <div className="notification-group-items">
-                    {notices.map((notice, index) => (
-                      <div key={notice.id} hidden={!expanded && index > 0}>
-                        <AppToast
-                          notice={notice}
-                          embedded
-                          onClose={() => onDismiss(notice.id)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
+                  )}
+                  <button
+                    type="button"
+                    className="notification-group-dismiss"
+                    aria-label={`${GROUP_LABELS[kind]} ${notices.length}건 모두 닫기`}
+                    onClick={() => onDismissGroup(kind)}
+                  >
+                    <X size={18} aria-hidden="true" />
+                  </button>
+                </div>
+                <div className="notification-group-items">
+                  {notices.map((notice, index) => (
+                    <div key={notice.id} hidden={!groupExpanded && index > 0}>
+                      <AppToast
+                        notice={{ ...notice, autoCloseMs: null }}
+                        embedded
+                        onClose={() => onDismiss(notice.id)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </div>
-        {timedCount > 1 && (
-          <footer className="notification-center-footer" hidden={!expanded}>
+        {expanded && timedCount > 1 && (
+          <footer className="notification-center-footer">
             <button type="button" onClick={onDismissTimed}>정보 알림 {timedCount}건 모두 닫기</button>
           </footer>
         )}

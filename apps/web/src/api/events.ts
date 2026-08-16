@@ -15,6 +15,7 @@ export const LIVE_EVENT_TYPES = [
   "watch.reservation_attempted",
   "watch.reservation_progressed",
   "watch.reservation_result",
+  "watch.reservation_reconciled",
   "watch.reservation_result_requires_manual_check",
   "watch.payment_hold_ended_monitoring_resumed",
   "watch.payment_hold_ended_one_off_expired",

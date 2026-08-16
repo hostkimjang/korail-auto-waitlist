@@ -288,6 +288,14 @@
   line-height: 1.5;
 }
 
+.payment-confirmation-evidence {
+  max-width: 300px;
+  margin: 0 0 12px;
+  color: #68455f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .active-section {
   margin-top: 42px;
 }
@@ -638,6 +646,38 @@
   color: #9a5b17;
   font-size: 12px;
   font-weight: 800;
+}
+
+.reservation-rearm-acknowledgement {
+  min-height: 52px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: var(--ink);
+  background: #f8fbfc;
+  cursor: pointer;
+  line-height: 1.45;
+}
+
+.reservation-rearm-acknowledgement input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--teal);
+}
+
+.reservation-rearm-acknowledgement:has(input:focus-visible) {
+  outline: 3px solid color-mix(in srgb, var(--teal) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.reservation-rearm-acknowledgement:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .watch-control-actions {
@@ -2528,6 +2568,7 @@
   border-color: #a8d4d2;
 }
 
+.seat-class-actions .seat-action-watch.seat-action-standing_only,
 .seat-class-actions .seat-action-watch.seat-action-sold_out {
   color: #8b2430;
   background: #fff7f7;
@@ -2823,6 +2864,12 @@
   color: #2c5d8d;
   background: #edf5ff;
   border-color: #c9ddf4;
+}
+
+.seat-status-standing_only {
+  color: #7a4d0b;
+  background: #fff8e8;
+  border-color: #ead9a5;
 }
 
 .seat-status-waitlist_available {

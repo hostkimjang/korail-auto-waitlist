@@ -101,8 +101,8 @@ def test_migration_0018_replaces_permanent_candidate_fence_with_episode_sequence
             """
             INSERT INTO reservation_attempts (
                 id, candidate_id, attempt_sequence, episode_key, idempotency_key,
-                started_at, finished_at, outcome
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, finished_at, outcome, result_reason_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "attempt-after-0018",
@@ -113,6 +113,7 @@ def test_migration_0018_replaces_permanent_candidate_fence_with_episode_sequence
                 now,
                 now,
                 "NOT_AVAILABLE",
+                "TARGET_NOT_AVAILABLE",
             ),
         )
         connection.commit()
@@ -126,8 +127,8 @@ def test_migration_0018_replaces_permanent_candidate_fence_with_episode_sequence
                     """
                     INSERT INTO reservation_attempts (
                         id, candidate_id, attempt_sequence, episode_key, idempotency_key,
-                        started_at, finished_at, outcome
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        started_at, finished_at, outcome, result_reason_code
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         key,
@@ -138,6 +139,7 @@ def test_migration_0018_replaces_permanent_candidate_fence_with_episode_sequence
                         now,
                         now,
                         "FAILED",
+                        "RESERVATION_FAILED",
                     ),
                 )
             connection.rollback()

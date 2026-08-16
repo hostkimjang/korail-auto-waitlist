@@ -74,7 +74,10 @@ from .provider_execution.lifecycle_runtime import (
     drain_execution_adapter_safely,
 )
 from .provider_registry.application import get_execution_provider
-from .reservations.attempt_policy import is_confirmed_absent_retry_source
+from .reservations.attempt_policy import (
+    is_confirmed_absent_retry_source,
+    is_unresolved_unknown_manual_rearm_source,
+)
 from .reservations.attempt_result_application import record_reservation_confirmation
 from .reservations.attempt_runtime import (
     begin_reservation_attempt,
@@ -311,6 +314,7 @@ def _observation_group_dependencies(
         record_seat_observation=record_seat_observation,
         finish_observation_cycle=finish_observation_cycle,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
         is_payment_hold_ended=is_payment_hold_ended,
         reserve_winner=reserve_winner,
         lease_is_current=lease_is_current,

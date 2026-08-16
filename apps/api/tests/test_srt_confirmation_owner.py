@@ -14,9 +14,11 @@ import rail_waitlist.reservations.provider_confirmation.srt as canonical
 import rail_waitlist.srt_reservation_confirmation as legacy
 from rail_waitlist.domain import Provider, SeatClass
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
 
@@ -41,6 +43,7 @@ def _target(
     provider: Provider = Provider.SRT,
     credential_version: int = 7,
     purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
+    confirmation_correlation_seats: tuple[ReservationConfirmationSeat, ...] = (),
 ) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-1",
@@ -54,6 +57,7 @@ def _target(
         passenger_count=1,
         credential_version=credential_version,
         purpose=purpose,
+        confirmation_correlation_seats=confirmation_correlation_seats,
     )
 
 
@@ -69,6 +73,7 @@ def _record(
     paid: bool = False,
     seat_class: SeatClass | None = SeatClass.STANDARD,
     passenger_count: int | None = 1,
+    seats: tuple[ReservationConfirmationSeat, ...] = (),
 ) -> canonical.SrtReservationRecord:
     return canonical.SrtReservationRecord(
         train_number=train_number,
@@ -81,6 +86,7 @@ def _record(
         paid=paid,
         seat_class=seat_class,
         passenger_count=passenger_count,
+        seats=seats,
     )
 
 
@@ -125,6 +131,7 @@ def test_srt_confirmation_dataclass_shapes_are_preserved() -> None:
         "paid",
         "seat_class",
         "passenger_count",
+        "seats",
     ]
     assert [field.name for field in fields(canonical.SrtReservationListEvidence)] == [
         "observed_at",
@@ -159,7 +166,7 @@ def test_srt_confirmation_rejects_non_srt_target_before_evidence_branches() -> N
 
 
 @pytest.mark.parametrize(
-    ("evidence", "expected"),
+    ("evidence", "expected", "expected_diagnostic"),
     [
         (
             _evidence(
@@ -169,30 +176,36 @@ def test_srt_confirmation_rejects_non_srt_target_before_evidence_branches() -> N
                 records=(),
             ),
             ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+            None,
         ),
         (
             _evidence(auth_required=True, credential_version=8, records=()),
             ReservationConfirmationOutcome.AUTH_REQUIRED,
+            None,
         ),
         (
             _evidence(credential_version=8, records=()),
             ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationConfirmationDiagnosticCode.CREDENTIAL_CONTEXT_MISMATCH,
         ),
-        (_evidence(records=()), ReservationConfirmationOutcome.NOT_FOUND),
+        (_evidence(records=()), ReservationConfirmationOutcome.NOT_FOUND, None),
         (
             _evidence(records=(_record(), _record())),
             ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS,
         ),
         (
             _evidence(records=(_record(paid=True),)),
             ReservationConfirmationOutcome.CONFIRMED_PAID,
+            None,
         ),
-        (_evidence(), ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED),
+        (_evidence(), ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED, None),
     ],
 )
 def test_srt_confirmation_branch_precedence_is_preserved(
     evidence: canonical.SrtReservationListEvidence,
     expected: ReservationConfirmationOutcome,
+    expected_diagnostic: ReservationConfirmationDiagnosticCode | None,
 ) -> None:
     purpose = (
         ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
@@ -204,6 +217,7 @@ def test_srt_confirmation_branch_precedence_is_preserved(
         evidence,
     )
     assert result.outcome is expected
+    assert result.diagnostic_code is expected_diagnostic
     assert not result.permits_automatic_reservation_retry
 
 
@@ -222,6 +236,64 @@ def test_srt_confirmation_invalid_payment_deadline_remains_confirmed_without_dea
     assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
     assert result.payment_deadline is None
     assert result.official_handoff_url == canonical.SRT_RESERVATION_HANDOFF_URL
+
+
+@pytest.mark.parametrize("paid", [False, True])
+def test_srt_unknown_follow_up_requires_exact_seats_for_paid_and_unpaid(paid: bool) -> None:
+    private_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
+    result = canonical.normalize_srt_reservation_records(
+        _target(
+            purpose=ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+            confirmation_correlation_seats=(private_seat,),
+        ),
+        _evidence(records=(_record(paid=paid, seats=(private_seat,)),)),
+    )
+
+    assert result.outcome is (
+        ReservationConfirmationOutcome.CONFIRMED_PAID
+        if paid
+        else ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    )
+
+
+@pytest.mark.parametrize("paid", [False, True])
+def test_srt_unknown_follow_up_without_correlation_never_confirms(paid: bool) -> None:
+    observed_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
+    result = canonical.normalize_srt_reservation_records(
+        _target(purpose=ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP),
+        _evidence(records=(_record(paid=paid, seats=(observed_seat,)),)),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert result.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+
+
+@pytest.mark.parametrize(
+    "actual_seats",
+    [
+        (),
+        (ReservationConfirmationSeat(car_number="5", seat_number="8A"),),
+        (
+            ReservationConfirmationSeat(car_number="4", seat_number="8A"),
+            ReservationConfirmationSeat(car_number="4", seat_number="8A"),
+        ),
+    ],
+)
+@pytest.mark.parametrize("paid", [False, True])
+def test_srt_unknown_follow_up_rejects_missing_mismatched_or_duplicate_seats(
+    actual_seats: tuple[ReservationConfirmationSeat, ...],
+    paid: bool,
+) -> None:
+    private_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
+    result = canonical.normalize_srt_reservation_records(
+        _target(
+            purpose=ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+            confirmation_correlation_seats=(private_seat,),
+        ),
+        _evidence(records=(_record(paid=paid, seats=actual_seats),)),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
 
 
 def test_srt_confirmation_validates_current_handoff_url_at_call_time(monkeypatch) -> None:

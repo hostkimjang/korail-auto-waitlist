@@ -11,6 +11,7 @@ _BOOKING_OPEN_OBSERVATIONS = frozenset(
         SeatObservationStatus.AVAILABLE,
         SeatObservationStatus.LIMITED,
         SeatObservationStatus.STANDING_PLUS_SEAT,
+        SeatObservationStatus.STANDING_ONLY,
         SeatObservationStatus.NOT_ENOUGH_SEATS,
         SeatObservationStatus.RESERVATION_COMPLETED,
     }

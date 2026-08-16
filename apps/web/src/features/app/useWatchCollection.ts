@@ -12,7 +12,11 @@ import { subscribeToEvents } from "../../api/events";
 import { delayUntilRefreshRotationEnds } from "../../shared/lib/refreshIndicator";
 import { createReservationPolicyMutationGuard } from "../../shared/lib/reservationPolicyMutationGuard";
 import { buildLiveReservationNotice } from "./liveReservationNotice";
-import { createLiveDataReloadCoordinator, type LiveDataReloadCoordinator } from "./liveDataReloadCoordinator";
+import {
+  createLiveDataReloadCoordinator,
+  type LiveDataReloadCoordinator,
+  type LiveDataReloadUrgency,
+} from "./liveDataReloadCoordinator";
 import {
   notificationLifecyclePhasePriority,
   type AppNotificationInput,
@@ -40,11 +44,18 @@ const queuedReservationEventTypes: ReadonlySet<string> = new Set([
   "watch.reservation_attempted",
   "watch.reservation_progressed",
   "watch.reservation_result",
+  "watch.reservation_reconciled",
   "watch.reservation_result_requires_manual_check",
   "watch.payment_hold_ended_monitoring_resumed",
   "watch.payment_hold_ended_one_off_expired",
   "watch.payment_completed",
 ]);
+
+const ignoreStaleNotificationSubjects = (_subjectKeys: ReadonlyArray<string>): void => undefined;
+
+function liveEventReloadUrgency(type: string | null): LiveDataReloadUrgency {
+  return type === "watch.seat_observed" ? "routine" : "immediate";
+}
 
 interface WatchRefreshState {
   isRefreshing: boolean;
@@ -61,6 +72,7 @@ interface UseWatchCollectionOptions<TWatch extends LegacyWatchSnapshot> {
   onAuthenticationExpired: () => void;
   onProviderAuthenticationTransition: () => void;
   pushNotifications: (notifications: ReadonlyArray<AppNotificationInput>) => void;
+  pruneStaleNotificationSubjects?: (subjectKeys: ReadonlyArray<string>) => void;
 }
 
 export interface WatchCollectionController<TWatch extends LegacyWatchSnapshot> {
@@ -96,6 +108,7 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
   onAuthenticationExpired,
   onProviderAuthenticationTransition,
   pushNotifications,
+  pruneStaleNotificationSubjects = ignoreStaleNotificationSubjects,
 }: UseWatchCollectionOptions<TWatch>): WatchCollectionController<TWatch> {
   const [watches, setWatches] = useState<ReadonlyArray<TWatch>>(() => initialWatches);
   const [refreshState, setRefreshState] = useState<WatchRefreshState>({
@@ -166,6 +179,10 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
       const isInitialCanonicalSnapshot = !hasCanonicalSnapshotRef.current;
       hasCanonicalSnapshotRef.current = true;
       const previous = watchesRef.current;
+      const visibleWatchIds = new Set(visibleWatchItems.map((watch) => watch.id));
+      const staleNotificationSubjects = previous.flatMap((watch) => (
+        visibleWatchIds.has(watch.id) ? [] : [`watch:${watch.id}`]
+      ));
       const previousSnapshots = previous.map((watch) => snapshotOfRef.current(watch));
       const nextSnapshots = visibleWatchItems.map((watch) => snapshotOfRef.current(watch));
       const transitions = detectSeatFoundTransitions(previousSnapshots, nextSnapshots);
@@ -240,6 +257,9 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
         ...availabilityLosses.map(buildAvailabilityLostToast),
         ...selectedLiveReservationNotices,
       ]);
+      if (staleNotificationSubjects.length > 0) {
+        pruneStaleNotificationSubjects(staleNotificationSubjects);
+      }
     } catch (error: unknown) {
       if (
         activeLifecycleEpochRef.current === lifecycleEpoch
@@ -267,11 +287,12 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
     loadWatches,
     onAuthenticationExpired,
     onProviderAuthenticationTransition,
+    pruneStaleNotificationSubjects,
     pushNotifications,
   ]);
 
   const requestRefresh = useCallback((): void => {
-    reloadCoordinatorRef.current?.request();
+    reloadCoordinatorRef.current?.request("immediate");
   }, []);
 
   const beginWatchMutation = useCallback((): void => {
@@ -307,6 +328,15 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
       (event) => {
         if (activeLifecycleEpochRef.current !== lifecycleEpoch) return;
         const type = eventType(event);
+        const urgency = liveEventReloadUrgency(type);
+        if (!coordinator.isVisible()) {
+          coordinator.request(urgency);
+          return;
+        }
+        if (type === null || !queuedReservationEventTypes.has(type)) {
+          coordinator.request(urgency);
+          return;
+        }
         const liveNotice = buildLiveReservationNotice(
           event,
           watchesRef.current.map((watch) => snapshotOfRef.current(watch)),
@@ -319,12 +349,12 @@ export function useWatchCollection<TWatch extends LegacyWatchSnapshot>({
             pendingLiveReservationEventsRef.current.push(event);
           }
         }
-        coordinator.request();
+        coordinator.request(urgency);
       },
       () => undefined,
     );
     const unsubscribePwaNotificationHints = subscribeToPwaNotificationHints(() => {
-      coordinator.request();
+      coordinator.request("immediate");
     });
     coordinator.start();
     return () => {

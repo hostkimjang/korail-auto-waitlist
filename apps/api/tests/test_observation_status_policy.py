@@ -22,6 +22,8 @@ def test_observation_status_policy_preserves_the_exact_status_matrix() -> None:
 
     assert status_policy.SEAT_FOUND_STATUSES == seat_found
     assert status_policy.ACTIONABLE_SEAT_STATUSES == actionable
+    assert SeatObservationStatus.STANDING_ONLY not in seat_found
+    assert SeatObservationStatus.STANDING_ONLY not in actionable
     for status in SeatObservationStatus:
         assert (status in status_policy.SEAT_FOUND_STATUSES) is (status in seat_found)
         assert (status in status_policy.ACTIONABLE_SEAT_STATUSES) is (status in actionable)

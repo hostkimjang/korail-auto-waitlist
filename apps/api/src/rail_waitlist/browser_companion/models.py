@@ -84,8 +84,8 @@ class KorailBrowserSeatSnapshot(Base):
             name="ck_korail_browser_snapshot_seat_class",
         ),
         CheckConstraint(
-            "status IN ('AVAILABLE', 'LIMITED', 'STANDING_PLUS_SEAT', 'SOLD_OUT', "
-            "'WAITLIST_AVAILABLE', 'NOT_OFFERED')",
+            "status IN ('AVAILABLE', 'LIMITED', 'STANDING_PLUS_SEAT', 'STANDING_ONLY', "
+            "'SOLD_OUT', 'WAITLIST_AVAILABLE', 'NOT_OFFERED')",
             name="ck_korail_browser_snapshot_status",
         ),
         Index(

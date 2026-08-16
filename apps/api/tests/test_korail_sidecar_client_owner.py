@@ -9,6 +9,7 @@ import subprocess
 import sys
 from datetime import UTC, date, datetime, time
 from pathlib import Path
+from typing import Self
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from rail_waitlist.korail_browser_automation import (
 from rail_waitlist.korail_sidecar import client as owner
 from rail_waitlist.korail_sidecar.contracts import (
     KorailCredentialRequest,
+    KorailReservationConfirmationRequest,
     KorailReserveOnceRequest,
 )
 from rail_waitlist.provider_call_context import (
@@ -107,7 +109,7 @@ class FakeStreamResponse:
         self.lines = lines
         self.status_code = status_code
 
-    async def __aenter__(self) -> "FakeStreamResponse":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> None:
@@ -122,9 +124,18 @@ class FakeStreamHttpClient:
     def __init__(self, lines: list[str]) -> None:
         self.response = FakeStreamResponse(lines)
         self.requests: list[tuple[str, str, object]] = []
+        self.request_headers: list[dict[str, str] | None] = []
 
-    def stream(self, method: str, path: str, *, json: object) -> FakeStreamResponse:
+    def stream(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: object,
+        headers: dict[str, str] | None = None,
+    ) -> FakeStreamResponse:
         self.requests.append((method, path, json))
+        self.request_headers.append(headers)
         return self.response
 
 
@@ -155,6 +166,21 @@ def reserve_request() -> KorailReserveOnceRequest:
             password="password-secret",
             version="credential:7",
         ),
+    )
+
+
+def confirmation_request() -> KorailReservationConfirmationRequest:
+    return KorailReservationConfirmationRequest(
+        attempt_id="attempt-fixture",
+        candidate_id="candidate-fixture",
+        train_number="43",
+        origin="서울",
+        destination="부산",
+        departure_at=datetime(2026, 8, 7, 3, tzinfo=UTC),
+        arrival_at=datetime(2026, 8, 7, 5, tzinfo=UTC),
+        seat_class="standard",
+        passenger_count=1,
+        credential_version=7,
     )
 
 
@@ -611,6 +637,32 @@ async def test_reserve_transport_serializes_secret_values_only_at_wire_boundary(
     }
 
 
+@pytest.mark.parametrize(
+    ("status_code", "expected_outcome"),
+    [
+        (429, "rate_limited"),
+        (403, "provider_blocked"),
+        (423, "provider_blocked"),
+        (500, "http_status"),
+    ],
+)
+async def test_reservation_transport_logs_closed_http_failure_classification(
+    status_code: int,
+    expected_outcome: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = transport_with(
+        FakeHttpClient(FakeResponse(status_code, {"reason": "provider-secret-fixture"}))
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(owner._AdapterFailure):
+        await transport.reserve(reserve_request())
+
+    assert f"outcome={expected_outcome}" in caplog.text
+    assert f"status_code={status_code}" in caplog.text
+    assert "provider-secret-fixture" not in caplog.text
+
+
 async def test_reserve_progress_stream_is_ordered_and_sent_once() -> None:
     stage_names = (
         "authenticated_session_ready",
@@ -702,10 +754,14 @@ async def test_reserve_progress_stream_preserves_click_error_without_request_sta
         [],
         ['{"type":"progress","stage":"target_rechecked","occurred_at":"2026-08-07T03:00:00Z"}'],
         [
-            '{"type":"result","result":{"outcome":"failed","reason":"failed",'
-            '"seat_clicked":false,"reservation_clicked":false}}',
-            '{"type":"result","result":{"outcome":"failed","reason":"failed",'
-            '"seat_clicked":false,"reservation_clicked":false}}',
+            (
+                '{"type":"result","result":{"outcome":"failed","reason":"failed",'
+                '"seat_clicked":false,"reservation_clicked":false}}'
+            ),
+            (
+                '{"type":"result","result":{"outcome":"failed","reason":"failed",'
+                '"seat_clicked":false,"reservation_clicked":false}}'
+            ),
         ],
     ],
 )
@@ -724,6 +780,158 @@ async def test_reserve_progress_stream_fails_closed_without_one_valid_sequence(
     assert captured.value.reason == "source_unavailable"
     assert captured.value.reservation_command_uncertain is True
     assert len(client.requests) == 1
+
+
+async def test_reservation_transports_propagate_one_ambient_request_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request_id = "4f7e5fa7b2aa4e70a8fd2cf4a535f1ee"
+    reserve_client = FakeHttpClient(
+        FakeResponse(
+            200,
+            {
+                "outcome": "failed",
+                "reason": "fixture_terminal",
+                "seat_clicked": False,
+                "reservation_clicked": False,
+            },
+        )
+    )
+    stream_client = FakeStreamHttpClient(
+        [
+            json.dumps(
+                {
+                    "type": "result",
+                    "result": {
+                        "outcome": "failed",
+                        "reason": "fixture_terminal",
+                        "seat_clicked": False,
+                        "reservation_clicked": False,
+                    },
+                }
+            )
+        ]
+    )
+    confirmation_client = FakeHttpClient(
+        FakeResponse(
+            200,
+            {
+                "outcome": "inconclusive",
+                "diagnostic_code": "official_evidence_insufficient",
+                "source": "korail-same-session-detail",
+                "observed_at": "2026-08-07T03:00:00Z",
+            },
+        )
+    )
+
+    async def on_progress(_stage: object) -> None:
+        return None
+
+    with caplog.at_level(logging.INFO), bind_request_id(request_id):
+        await transport_with(reserve_client).reserve(reserve_request())
+        await transport_with(stream_client).reserve_with_progress(  # type: ignore[arg-type]
+            reserve_request(),
+            on_progress,
+        )
+        await transport_with(confirmation_client).confirm_reservation(confirmation_request())
+
+    assert reserve_client.request_headers == [{REQUEST_ID_HEADER: request_id}]
+    assert stream_client.request_headers == [{REQUEST_ID_HEADER: request_id}]
+    assert confirmation_client.request_headers == [{REQUEST_ID_HEADER: request_id}]
+    lifecycle = [
+        record.getMessage()
+        for record in caplog.records
+        if "event=provider_sidecar_request_" in record.getMessage()
+    ]
+    assert len(lifecycle) == 6
+    terminal_outcomes = {
+        "reserve_once": "failed",
+        "reserve_once_stream": "failed",
+        "confirm_reservation": "inconclusive",
+    }
+    for operation, terminal_outcome in terminal_outcomes.items():
+        correlated = [message for message in lifecycle if f"operation={operation} " in message]
+        assert len(correlated) == 2
+        assert all(f"request_id={request_id}" in message for message in correlated)
+        completed = next(message for message in correlated if "request completed" in message)
+        assert "outcome=completed" in completed
+        assert f"terminal_outcome={terminal_outcome}" in completed
+        assert "outcome=success" not in completed
+        if operation == "confirm_reservation":
+            assert "diagnostic_code=official_evidence_insufficient" in completed
+            assert "phase=completed" in completed
+    assert "attempt-fixture" not in caplog.text
+    assert "candidate-fixture" not in caplog.text
+
+
+async def test_reservation_transports_generate_fresh_ids_without_ambient_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated_ids = iter(
+        (
+            "11111111111141118111111111111111",
+            "22222222222242228222222222222222",
+            "33333333333343338333333333333333",
+        )
+    )
+    monkeypatch.setattr(owner, "new_log_id", lambda: next(generated_ids))
+    reserve_client = FakeHttpClient(
+        FakeResponse(
+            200,
+            {
+                "outcome": "failed",
+                "reason": "fixture_terminal",
+                "seat_clicked": False,
+                "reservation_clicked": False,
+            },
+        )
+    )
+    stream_client = FakeStreamHttpClient(
+        [
+            json.dumps(
+                {
+                    "type": "result",
+                    "result": {
+                        "outcome": "failed",
+                        "reason": "fixture_terminal",
+                        "seat_clicked": False,
+                        "reservation_clicked": False,
+                    },
+                }
+            )
+        ]
+    )
+    confirmation_client = FakeHttpClient(
+        FakeResponse(
+            200,
+            {
+                "outcome": "inconclusive",
+                "diagnostic_code": "official_evidence_insufficient",
+                "source": "korail-same-session-detail",
+                "observed_at": "2026-08-07T03:00:00Z",
+            },
+        )
+    )
+
+    async def on_progress(_stage: object) -> None:
+        return None
+
+    await transport_with(reserve_client).reserve(reserve_request())
+    await transport_with(stream_client).reserve_with_progress(  # type: ignore[arg-type]
+        reserve_request(),
+        on_progress,
+    )
+    await transport_with(confirmation_client).confirm_reservation(confirmation_request())
+
+    assert reserve_client.request_headers == [
+        {REQUEST_ID_HEADER: "11111111111141118111111111111111"}
+    ]
+    assert stream_client.request_headers == [
+        {REQUEST_ID_HEADER: "22222222222242228222222222222222"}
+    ]
+    assert confirmation_client.request_headers == [
+        {REQUEST_ID_HEADER: "33333333333343338333333333333333"}
+    ]
 
 
 async def test_login_transports_serialize_secret_values_only_at_wire_boundary() -> None:

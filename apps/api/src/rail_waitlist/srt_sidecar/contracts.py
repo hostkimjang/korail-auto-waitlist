@@ -12,6 +12,7 @@ from ..observations.contracts import SeatObservationRequest, SeatObservationResu
 from ..provider_account_management.contracts import ProviderCredentials
 from ..reservations.contracts import ReservationRequest, ReservationResult
 from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
@@ -245,6 +246,7 @@ class SrtReservationConfirmationTarget(SrtProviderAdapterModel):
     credential_version: int = Field(ge=1)
     purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL
     reserved_seats: tuple[ReservationConfirmationSeat, ...] = ()
+    confirmation_correlation_seats: tuple[ReservationConfirmationSeat, ...] = ()
 
     @model_validator(mode="after")
     def validate_domain_target(self) -> SrtReservationConfirmationTarget:
@@ -273,6 +275,7 @@ class SrtReservationConfirmationTarget(SrtProviderAdapterModel):
             credential_version=target.credential_version,
             purpose=target.purpose,
             reserved_seats=target.reserved_seats,
+            confirmation_correlation_seats=target.confirmation_correlation_seats,
         )
 
     def to_domain(self) -> ReservationConfirmationTarget:
@@ -290,6 +293,7 @@ class SrtReservationConfirmationTarget(SrtProviderAdapterModel):
             credential_version=self.credential_version,
             purpose=self.purpose,
             reserved_seats=self.reserved_seats,
+            confirmation_correlation_seats=self.confirmation_correlation_seats,
         )
 
 
@@ -301,6 +305,7 @@ class SrtConfirmReservationRequest(SrtProviderAdapterModel):
 class SrtReservationConfirmationResult(SrtProviderAdapterModel):
     provider: Literal[Provider.SRT]
     outcome: ReservationConfirmationOutcome
+    diagnostic_code: ReservationConfirmationDiagnosticCode | None = None
     source: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
     observed_at: datetime
     payment_deadline: datetime | None = None
@@ -308,6 +313,10 @@ class SrtReservationConfirmationResult(SrtProviderAdapterModel):
 
     @model_validator(mode="after")
     def validate_domain_result(self) -> SrtReservationConfirmationResult:
+        if (self.outcome is ReservationConfirmationOutcome.INCONCLUSIVE) != (
+            self.diagnostic_code is not None
+        ):
+            raise ValueError("only inconclusive confirmation requires a diagnostic code")
         self.to_domain()
         return self
 
@@ -319,6 +328,7 @@ class SrtReservationConfirmationResult(SrtProviderAdapterModel):
         return cls(
             provider=_cast(Literal[Provider.SRT], result.provider),
             outcome=result.outcome,
+            diagnostic_code=result.diagnostic_code,
             source=result.source,
             observed_at=result.observed_at,
             payment_deadline=result.payment_deadline,
@@ -329,6 +339,7 @@ class SrtReservationConfirmationResult(SrtProviderAdapterModel):
         return ReservationConfirmationResult(
             provider=self.provider,
             outcome=self.outcome,
+            diagnostic_code=self.diagnostic_code,
             source=self.source,
             observed_at=self.observed_at,
             payment_deadline=self.payment_deadline,

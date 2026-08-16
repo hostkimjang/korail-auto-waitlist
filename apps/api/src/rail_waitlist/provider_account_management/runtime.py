@@ -220,6 +220,7 @@ async def _prewarm_account(
                         session,
                         provider,
                         account.last_authenticated_at,
+                        credential_version=credentials.credential_version,
                     )
                     await session.commit()
         except asyncio.CancelledError:
@@ -273,6 +274,7 @@ async def _restore_authenticated_account(
                     session,
                     provider,
                     account.last_authenticated_at,
+                    credential_version=credentials.credential_version,
                 )
                 await session.commit()
                 outcome = "authenticated"

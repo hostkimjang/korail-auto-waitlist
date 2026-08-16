@@ -17,7 +17,7 @@ function seat(
   status: string,
   seatMonitoring = false,
 ): object {
-  const actions = ["available", "limited", "standing_plus_seat"].includes(status)
+  const actions = ["available", "limited", "standing_plus_seat", "standing_only"].includes(status)
     ? [
         { kind: "official_check", url: "https://www.korail.com/ticket/search/list" },
         ...(seatMonitoring ? [{ kind: "add_to_watch", url: null }] : []),
@@ -34,6 +34,7 @@ function seat(
     "available",
     "limited",
     "standing_plus_seat",
+    "standing_only",
     "sold_out",
     "waitlist_available",
   ].includes(status);
@@ -160,7 +161,7 @@ describe("KORAIL live smoke contract", () => {
   it("accepts watch evidence only when KORAIL monitoring capability is enabled", () => {
     const monitored = [{
       ...timetableItem(),
-      seat_classes: [seat("standard", "available", true), seat("first", "sold_out", true)],
+      seat_classes: [seat("standard", "standing_only", true), seat("first", "sold_out", true)],
     }];
     expect(parseFreshLiveKorailTrain(
       monitored,
@@ -168,7 +169,7 @@ describe("KORAIL live smoke contract", () => {
       undefined,
       true,
     )).toMatchObject({
-      standard: { status: "available", registrationEvidencePresent: true },
+      standard: { status: "standing_only", registrationEvidencePresent: true },
       first: { status: "sold_out", registrationEvidencePresent: true },
     });
     expect(() => parseFreshLiveKorailTrain(
@@ -264,6 +265,7 @@ describe("KORAIL live smoke contract", () => {
     expect(expectedLiveKorailActions("available", false)).toEqual(["official_booking"]);
     expect(expectedLiveKorailActions("limited", false)).toEqual(["official_booking"]);
     expect(expectedLiveKorailActions("standing_plus_seat", false)).toEqual(["official_booking"]);
+    expect(expectedLiveKorailActions("standing_only", false)).toEqual(["official_booking"]);
     expect(expectedLiveKorailActions("available", true)).toEqual([
       "official_booking",
       "add_to_watch",
@@ -273,6 +275,10 @@ describe("KORAIL live smoke contract", () => {
       "add_to_watch",
     ]);
     expect(expectedLiveKorailActions("standing_plus_seat", true)).toEqual([
+      "official_booking",
+      "add_to_watch",
+    ]);
+    expect(expectedLiveKorailActions("standing_only", true)).toEqual([
       "official_booking",
       "add_to_watch",
     ]);

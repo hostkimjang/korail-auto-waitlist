@@ -29,6 +29,7 @@ import {
   useSeatStatusSources,
   type SeatStatusSourcesLoader,
 } from "./useSeatStatusSources";
+import { reservationConfirmationDiagnosticDescriptions } from "../../shared/lib/reservationConfirmationDiagnostic";
 
 export interface SystemStatusDashboardProps {
   demo?: boolean;
@@ -117,6 +118,7 @@ const eventStatusLabels: Record<string, string> = {
   available: "예약 가능 관측",
   limited: "잔여석 부족 관측",
   standing_plus_seat: "입석+좌석 관측",
+  standing_only: "입석만 가능 관측",
   not_enough_seats: "요청 인원 좌석 부족",
   sold_out: "매진 관측",
   waitlist_available: "예약대기 가능 관측",
@@ -153,7 +155,7 @@ const watchStatusLabels: Record<string, string> = {
 const errorCategoryLabels: Record<string, string> = {
   timeout: "시간 초과",
   schema_mismatch: "응답 형식 오류",
-  provider_unavailable: "운영사 연결 불가",
+  provider_unavailable: "운영사 연결·응답 확인 불가",
   partial_failure: "일부 처리 실패",
   unknown: "원인 확인 필요",
 };
@@ -172,18 +174,32 @@ const seatClassLabels: Record<NonNullable<OperationsEntry["seatClass"]>, string>
 };
 const entryReasonLabels: Record<NonNullable<OperationsEntry["reasonCode"]>, string> = {
   reservation_pending: "예매 처리 결과를 기다리는 중입니다.",
+  payment_hold_created: "철도사 응답에서 결제가 필요한 임시 예약을 확인했습니다.",
+  target_not_available: "예매 시점에 대상 열차를 찾지 못했습니다.",
+  target_ambiguous: "검색 결과에서 대상 열차를 하나로 구분하지 못했습니다.",
+  seat_not_available: "예매 시점에 선택 가능한 좌석이 없었습니다.",
+  reservation_control_unavailable: "철도사 예매 화면의 예약 기능을 사용할 수 없었습니다.",
+  seat_selection_lost: "예약 화면에서 선택한 좌석 상태가 예약 요청까지 유지되지 않았습니다.",
+  delay_consent_required: "철도사 운행 지연 안내에 사용자 동의가 필요합니다.",
+  existing_reservation_action_required: "철도사 기존 예약 안내에서 진행할 예약 선택이 필요합니다.",
+  provider_notice_action_required: "철도사 안내창에 사용자 확인이 필요합니다.",
+  authentication_required: "철도사 로그인 만료 또는 추가 인증으로 요청을 완료하지 못했습니다.",
+  provider_blocked: "운영사 요청 제한으로 예매 처리를 계속할 수 없었습니다.",
+  provider_unavailable: "철도사 예매 처리 중 연결 또는 응답 확인에 실패했습니다.",
+  provider_response_invalid: "철도사 응답을 검증하지 못해 결과를 신뢰하지 않았습니다.",
+  reservation_request_result_unknown: "예약 요청 처리 중 전달 여부 또는 철도사 결과를 확정하지 못했습니다.",
+  reservation_failed: "철도사 예매 요청이 완료되지 않았습니다.",
   reservation_payment_required: "좌석을 임시 확보했으며 공식 창에서 결제가 필요합니다.",
   reservation_reserved: "임시 예약이 확인됐으며 결제 완료 상태는 아닙니다.",
   reservation_not_available: "예매 시점에 요청 좌석을 확보하지 못했습니다.",
   reservation_auth_required: "운영사 로그인 확인이 필요해 예매를 진행하지 못했습니다.",
   reservation_provider_blocked: "운영사 요청 제한으로 예매 시도가 중단됐습니다.",
-  reservation_failed: "예매 처리가 실패했지만 세부 원인은 기록되지 않았습니다.",
   reservation_unknown: "예매 결과를 확정하지 못해 공식 창 확인이 필요합니다.",
   payment_completed: "공식 내역에서 결제 완료를 확인했습니다.",
-  payment_deadline_elapsed_monitoring_resumed: "결제기한 안에 결제가 확인되지 않아 좌석 관측을 다시 시작했습니다.",
-  payment_hold_no_longer_present_monitoring_resumed: "공식 미결제 보류가 더 이상 확인되지 않아 좌석 관측을 다시 시작했습니다.",
-  payment_deadline_elapsed_one_off_expired: "결제기한이 지나 일회성 관측을 만료 처리했습니다.",
-  payment_hold_no_longer_present_one_off_expired: "공식 미결제 보류가 더 이상 확인되지 않아 일회성 관측을 만료 처리했습니다.",
+  payment_deadline_elapsed_monitoring_resumed: "공식 확인에서 결제 가능 기한이 지나 좌석 관측을 다시 시작했습니다.",
+  payment_hold_no_longer_present_monitoring_resumed: "공식 내역에서 대상 임시 예약을 더 이상 찾지 못해 좌석 관측을 다시 시작했습니다.",
+  payment_deadline_elapsed_one_off_expired: "공식 확인에서 결제 가능 기한이 지나 일회성 관측을 만료 처리했습니다.",
+  payment_hold_no_longer_present_one_off_expired: "공식 내역에서 대상 임시 예약을 더 이상 찾지 못해 일회성 관측을 만료 처리했습니다.",
 };
 const limitationLabels: Record<string, string> = {
   http_and_process_errors_are_not_durably_recorded: "HTTP·프로세스 오류는 이 영속 집계에 포함되지 않습니다.",
@@ -309,12 +325,21 @@ function safeEventDescription(entry: OperationsEntry): string {
 }
 
 function safeEventDetail(entry: OperationsEntry): string {
+  const confirmationDiagnostic = entry.kind === "reservation_attempt"
+    && entry.confirmationDiagnosticCode
+    ? reservationConfirmationDiagnosticDescriptions[entry.confirmationDiagnosticCode]
+    : null;
   const reason = entry.reasonCode ? entryReasonLabels[entry.reasonCode] : null;
   const error = entry.errorCategory
     ? errorCategoryLabels[entry.errorCategory] ?? "오류 분류 확인 필요"
     : null;
-  if (reason) return error ? `${reason} · ${error}` : reason;
-  return `${entryLevelLabels[entry.level]}${error ? ` · ${error}` : ""}`;
+  if (confirmationDiagnostic === null && reason === null) {
+    return `${entryLevelLabels[entry.level]}${error ? ` · ${error}` : ""}`;
+  }
+  const details = [...new Set(
+    [confirmationDiagnostic, reason, error].filter((detail): detail is string => detail !== null),
+  )];
+  return details.join(" · ");
 }
 
 function rateLabel(value: OperationsRate): string {

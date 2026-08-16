@@ -1,3 +1,8 @@
+import {
+  isReservationConfirmationDiagnosticCode,
+  type ReservationConfirmationDiagnosticCode,
+} from "../domain/reservationAttempt";
+
 export type OperationsHealthStatus = "healthy" | "fresh" | "stale" | "unknown";
 export type OperationsEntryLevel = "info" | "warning" | "error";
 export type OperationsEntryProvider = "KORAIL" | "SRT" | "MOCK";
@@ -5,12 +10,26 @@ export type ProviderCircuitState = "closed" | "open" | "half_open" | "manual_hol
 export type OperationsSeatClass = "standard" | "first" | "infant" | "free" | "waitlist" | "any";
 export type OperationsEntryReasonCode =
   | "reservation_pending"
+  | "payment_hold_created"
+  | "target_not_available"
+  | "target_ambiguous"
+  | "seat_not_available"
+  | "reservation_control_unavailable"
+  | "seat_selection_lost"
+  | "delay_consent_required"
+  | "existing_reservation_action_required"
+  | "provider_notice_action_required"
+  | "authentication_required"
+  | "provider_blocked"
+  | "provider_unavailable"
+  | "provider_response_invalid"
+  | "reservation_request_result_unknown"
+  | "reservation_failed"
   | "reservation_payment_required"
   | "reservation_reserved"
   | "reservation_not_available"
   | "reservation_auth_required"
   | "reservation_provider_blocked"
-  | "reservation_failed"
   | "reservation_unknown"
   | "payment_completed"
   | "payment_deadline_elapsed_monitoring_resumed"
@@ -86,6 +105,7 @@ export interface OperationsEntry {
   departureAt: string | null;
   seatClass: OperationsSeatClass | null;
   reasonCode: OperationsEntryReasonCode | null;
+  confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
 }
 
 export interface OperationsSummary {
@@ -117,12 +137,26 @@ const seatClasses = new Set<OperationsSeatClass>([
 ]);
 const entryReasonCodes = new Set<OperationsEntryReasonCode>([
   "reservation_pending",
+  "payment_hold_created",
+  "target_not_available",
+  "target_ambiguous",
+  "seat_not_available",
+  "reservation_control_unavailable",
+  "seat_selection_lost",
+  "delay_consent_required",
+  "existing_reservation_action_required",
+  "provider_notice_action_required",
+  "authentication_required",
+  "provider_blocked",
+  "provider_unavailable",
+  "provider_response_invalid",
+  "reservation_request_result_unknown",
+  "reservation_failed",
   "reservation_payment_required",
   "reservation_reserved",
   "reservation_not_available",
   "reservation_auth_required",
   "reservation_provider_blocked",
-  "reservation_failed",
   "reservation_unknown",
   "payment_completed",
   "payment_deadline_elapsed_monitoring_resumed",
@@ -269,6 +303,9 @@ function recentEntries(value: unknown): OperationsEntry[] {
     departureAt: timestamp(item.departure_at),
     seatClass: seatClass(item.seat_class),
     reasonCode: entryReasonCode(item.reason_code),
+    confirmationDiagnosticCode: isReservationConfirmationDiagnosticCode(
+      item.confirmation_diagnostic_code,
+    ) ? item.confirmation_diagnostic_code : null,
   }));
 }
 

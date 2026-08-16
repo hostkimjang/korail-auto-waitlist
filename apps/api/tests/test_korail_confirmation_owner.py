@@ -13,6 +13,7 @@ import rail_waitlist.korail_reservation_confirmation as legacy
 import rail_waitlist.reservations.provider_confirmation.korail as canonical
 from rail_waitlist.domain import Provider, SeatClass
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
@@ -41,6 +42,7 @@ EVIDENCE_FIELDS = [
     "seat_class_match_required",
     "official_list_read_completed",
     "official_list_target_absent",
+    "inconclusive_diagnostic_code",
     "auth_required",
     "provider_blocked",
     "issued_ticket_exact_match",
@@ -57,6 +59,7 @@ def _target(
     credential_version: int = 7,
     purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
     reserved_seats: tuple[ReservationConfirmationSeat, ...] = (),
+    confirmation_correlation_seats: tuple[ReservationConfirmationSeat, ...] = (),
 ) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-1",
@@ -72,6 +75,7 @@ def _target(
         credential_version=credential_version,
         purpose=purpose,
         reserved_seats=reserved_seats,
+        confirmation_correlation_seats=confirmation_correlation_seats,
     )
 
 
@@ -118,6 +122,10 @@ def test_korail_confirmation_dataclass_shapes_and_defaults_are_preserved() -> No
     assert detail.seat_class_match_required is True
     assert detail.official_list_read_completed is False
     assert detail.official_list_target_absent is False
+    assert (
+        detail.inconclusive_diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
     assert detail.auth_required is False
     assert detail.provider_blocked is False
     assert detail.issued_ticket_exact_match is False
@@ -206,7 +214,7 @@ def test_korail_confirmation_rejects_non_korail_before_evidence_flags() -> None:
 
 
 @pytest.mark.parametrize(
-    ("evidence", "expected"),
+    ("evidence", "expected", "expected_diagnostic"),
     [
         (
             _evidence(
@@ -218,6 +226,7 @@ def test_korail_confirmation_rejects_non_korail_before_evidence_flags() -> None:
                 passenger_count_matched=True,
             ),
             ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+            None,
         ),
         (
             _evidence(
@@ -228,6 +237,7 @@ def test_korail_confirmation_rejects_non_korail_before_evidence_flags() -> None:
                 passenger_count_matched=True,
             ),
             ReservationConfirmationOutcome.AUTH_REQUIRED,
+            None,
         ),
         (
             _evidence(
@@ -237,6 +247,7 @@ def test_korail_confirmation_rejects_non_korail_before_evidence_flags() -> None:
                 official_list_target_absent=True,
             ),
             ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationConfirmationDiagnosticCode.CREDENTIAL_CONTEXT_MISMATCH,
         ),
         (
             _evidence(
@@ -247,6 +258,7 @@ def test_korail_confirmation_rejects_non_korail_before_evidence_flags() -> None:
                 payment_deadline=PAYMENT_DEADLINE,
             ),
             ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            None,
         ),
         (
             _evidence(
@@ -257,6 +269,7 @@ def test_korail_confirmation_rejects_non_korail_before_evidence_flags() -> None:
                 passenger_count_matched=True,
             ),
             ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            None,
         ),
         (
             _evidence(
@@ -265,17 +278,24 @@ def test_korail_confirmation_rejects_non_korail_before_evidence_flags() -> None:
                 official_list_target_absent=True,
             ),
             ReservationConfirmationOutcome.NOT_FOUND,
+            None,
         ),
-        (_evidence(), ReservationConfirmationOutcome.INCONCLUSIVE),
+        (
+            _evidence(),
+            ReservationConfirmationOutcome.INCONCLUSIVE,
+            ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT,
+        ),
     ],
 )
 def test_korail_confirmation_preserves_fail_closed_precedence(
     evidence: canonical.KorailSameSessionDetailEvidence,
     expected: ReservationConfirmationOutcome,
+    expected_diagnostic: ReservationConfirmationDiagnosticCode | None,
 ) -> None:
     result = canonical.normalize_korail_same_session_detail(_target(), evidence)
 
     assert result.outcome is expected
+    assert result.diagnostic_code is expected_diagnostic
     assert result.source == evidence.source
     assert result.observed_at is evidence.observed_at
     assert result.permits_automatic_reservation_retry is False
@@ -317,6 +337,69 @@ def test_korail_confirmation_requires_persisted_seat_for_issued_ticket_paid_resu
     )
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+
+
+def test_korail_unknown_follow_up_confirms_only_exact_issued_ticket_paid() -> None:
+    private_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
+    unknown_target = _target(
+        purpose=ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+        confirmation_correlation_seats=(private_seat,),
+    )
+    paid = canonical.normalize_korail_same_session_detail(
+        unknown_target,
+        _evidence(
+            source=canonical.KORAIL_ISSUED_TICKET_LIST_SOURCE,
+            exact_identity_matched=True,
+            seat_class_matched=True,
+            passenger_count_matched=True,
+            issued_ticket_exact_match=True,
+        ),
+    )
+    unpaid = canonical.normalize_korail_same_session_detail(
+        unknown_target,
+        _evidence(
+            source=canonical.KORAIL_RESERVATION_LIST_SOURCE,
+            exact_identity_matched=True,
+            payment_pending_markers_present=True,
+            seat_class_match_required=False,
+            passenger_count_matched=True,
+        ),
+    )
+
+    assert paid.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    assert unpaid.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert unpaid.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        _evidence(
+            source=canonical.KORAIL_ISSUED_TICKET_LIST_SOURCE,
+            exact_identity_matched=True,
+            seat_class_matched=True,
+            passenger_count_matched=True,
+            issued_ticket_exact_match=True,
+        ),
+        _evidence(
+            source=canonical.KORAIL_RESERVATION_LIST_SOURCE,
+            exact_identity_matched=True,
+            payment_pending_markers_present=True,
+            seat_class_match_required=False,
+            passenger_count_matched=True,
+        ),
+    ],
+)
+def test_korail_unknown_follow_up_without_correlation_never_confirms(
+    evidence: canonical.KorailSameSessionDetailEvidence,
+) -> None:
+    result = canonical.normalize_korail_same_session_detail(
+        _target(purpose=ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP),
+        evidence,
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert result.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
 
 
 def test_korail_confirmation_validates_the_exact_handoff_at_call_time(monkeypatch) -> None:

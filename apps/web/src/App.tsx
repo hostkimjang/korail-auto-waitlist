@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 
 import { AppAuthenticationBoundary } from "./app/AppAuthenticationBoundary";
 import {
@@ -89,6 +89,7 @@ export function App(): ReactElement {
     dismiss: dismissNotification,
     dismissGroup: dismissNotificationGroup,
     dismissTimed: dismissTimedNotifications,
+    pruneStaleSubjects: pruneStaleNotificationSubjects,
     clear: clearNotifications,
   } = useAppNotifications();
   const {
@@ -134,6 +135,11 @@ export function App(): ReactElement {
     demo: auth.demo,
     pushToast: setToast,
   });
+  const watchListView = activeView === "reservations" ? "all" : "live";
+  const loadWatches = useCallback(
+    () => fetchWatches({ view: watchListView }),
+    [watchListView],
+  );
 
   const {
     watches,
@@ -148,11 +154,12 @@ export function App(): ReactElement {
     demo: auth.demo,
     initialWatches: initialWatchCollection,
     pollIntervalSeconds: LIVE_DATA_RECONCILIATION_INTERVAL_SECONDS,
-    loadWatches: fetchWatches,
+    loadWatches,
     snapshotOf: mapWatchLifecycleSnapshot,
     onAuthenticationExpired: markUnauthenticated,
     onProviderAuthenticationTransition: handleProviderAuthenticationTransition,
     pushNotifications,
+    pruneStaleNotificationSubjects,
   });
   useDemoCaptureLifecycle({
     enabled: auth.demo && DEMO_CAPTURE_RESERVATION_LIFECYCLE,

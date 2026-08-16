@@ -25,6 +25,12 @@ function result(overrides: Partial<ReservationRecoveryResult>): ReservationRecov
     retryable: false,
     manualCheckRequired: true,
     retryCondition: null,
+    resultReasonCode: null,
+    confirmationOutcome: null,
+    confirmationDiagnosticCode: null,
+    confirmationObservedAt: null,
+    reconciliationAttemptCount: 0,
+    nextReconcileAt: null,
     ...overrides,
   };
 }
@@ -171,6 +177,125 @@ describe("reservation recovery toast", () => {
     expect(toast.description).toContain("공식 예약 내역을 확인해 주세요");
     expect(toast.description).not.toContain("예매를 다시 시도합니다");
     expect(toast.steps?.at(-1)).toEqual({ label: "감시·수동 확인", state: "active" });
+  });
+
+  it.each([
+    [
+      "delay_consent_required",
+      "운행 지연 동의가 필요합니다",
+      "철도사 지연 안내창에서 운행 지연 동의가 필요합니다.",
+    ],
+    [
+      "existing_reservation_action_required",
+      "기존 예약 안내를 확인해야 합니다",
+      "철도사 기존 예약 안내창에서 진행할 예약을 선택해야 합니다.",
+    ],
+    [
+      "provider_notice_action_required",
+      "철도사 안내창 확인이 필요합니다",
+      "철도사 안내창에서 사용자 확인이 필요합니다.",
+    ],
+  ] as const)("separates the %s provider action without raw dialog text", (
+    resultReasonCode,
+    title,
+    detail,
+  ) => {
+    const toast = buildReservationRecoveryToast(transition, result({
+      resultReasonCode,
+      nextReconcileAt: "2026-08-03T12:14:00Z",
+    }));
+
+    expect(toast.title).toBe(title);
+    expect(toast.description).toContain(detail);
+    expect(toast.description).not.toContain("raw-provider-dialog");
+  });
+
+  it("explains a post-click provider outage without dropping the manual-check fence", () => {
+    const toast = buildReservationRecoveryToast(transition, result({
+      resultReasonCode: "provider_unavailable",
+      confirmationOutcome: "inconclusive",
+      reconciliationAttemptCount: 1,
+    }));
+
+    expect(toast.title).toBe("철도사 연결 문제로 예매 결과를 확인해야 합니다");
+    expect(toast.description).toContain("연결 또는 응답 확인에 실패했습니다");
+    expect(toast.description).toContain("자동 재예매를 보류합니다");
+    expect(toast.description).toContain("공식 예약 내역을 확인해 주세요");
+    expect(toast.description).not.toMatch(/결제 (실패|완료)/);
+  });
+
+  it.each([
+    ["not_found", "공식 예약 내역에서 대상 예약을 찾지 못했습니다."],
+    ["inconclusive", "공식 예약 내역 확인으로 결과를 확정하지 못했습니다."],
+  ] as const)("shows official confirmation %s without guessing payment state", (
+    confirmationOutcome,
+    detail,
+  ) => {
+    const toast = buildReservationRecoveryToast(transition, result({
+      resultReasonCode: "reservation_request_result_unknown",
+      confirmationOutcome,
+      confirmationObservedAt: "2026-08-03T12:13:00Z",
+      reconciliationAttemptCount: 4,
+      nextReconcileAt: "2026-08-03T12:14:00Z",
+    }));
+
+    expect(toast.description).toContain(detail);
+    expect(toast.description).toContain("공식 내역 자동 재확인 4/6회 수행");
+    expect(toast.description).toContain("다음 자동 재확인은 21:14 예정");
+    expect(toast.description).not.toMatch(/결제 (미완료|완료)/);
+    expect(toast.steps?.at(-1)?.label).toBe("공식 결과 자동 재확인 대기");
+  });
+
+  it.each([
+    [
+      "official_read_unavailable",
+      "철도사 공식 내역을 불러오거나 응답을 확인하지 못했습니다.",
+    ],
+    [
+      "credential_context_mismatch",
+      "예매 시도와 공식 확인의 계정 상태가 달라 결과를 연결하지 못했습니다.",
+    ],
+    [
+      "official_record_ambiguous",
+      "공식 내역에서 이번 예매 시도와 정확히 일치하는 항목을 하나로 구분하지 못했습니다.",
+    ],
+    [
+      "official_evidence_insufficient",
+      "공식 내역은 확인했지만 예약 상태를 확정할 정보가 충분하지 않습니다.",
+    ],
+    [
+      "unspecified",
+      "공식 예약 내역 확인으로 결과를 확정하지 못했습니다.",
+    ],
+  ] as const)("explains inconclusive confirmation diagnostic %s without inferring payment", (
+    confirmationDiagnosticCode,
+    detail,
+  ) => {
+    const toast = buildReservationRecoveryToast(transition, result({
+      resultReasonCode: "reservation_request_result_unknown",
+      confirmationOutcome: "inconclusive",
+      confirmationDiagnosticCode,
+    }));
+
+    expect(toast.description).toContain(detail);
+    expect(toast.description).toContain("공식 예약 내역을 확인해 주세요");
+    expect(toast.description).not.toMatch(/결제 (실패|취소|완료)/);
+  });
+
+  it("keeps provider blocking separate from an authentication failure", () => {
+    const toast = buildWatchActionToast({
+      ...transition,
+      status: "auth_required",
+      resultReasonCode: "provider_blocked",
+      confirmationOutcome: "provider_blocked",
+      confirmationObservedAt: "2026-08-03T12:13:00Z",
+      reconciliationAttemptCount: 1,
+      nextReconcileAt: null,
+    });
+
+    expect(toast.title).toBe("운영사 요청 제한으로 확인이 필요합니다");
+    expect(toast.description).toContain("운영사 제한으로 공식 예약 내역을 확인하지 못했습니다");
+    expect(toast.description).not.toContain("철도 계정을 다시 확인");
   });
 
   it("keeps an expired unknown result visible without claiming monitoring resumed", () => {

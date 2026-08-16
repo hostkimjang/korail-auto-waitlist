@@ -412,10 +412,13 @@ describe("useWatchMutations", () => {
       rearmReservationRequest,
     });
 
-    await act(() => result.current.controller.rearmReservation("watch-1"));
+    await act(() => result.current.controller.rearmReservation(
+      "watch-1",
+      "payment_hold_ended",
+    ));
 
     expect(rearmReservationRequest).toHaveBeenCalledOnce();
-    expect(rearmReservationRequest).toHaveBeenCalledWith("watch-1");
+    expect(rearmReservationRequest).toHaveBeenCalledWith("watch-1", "payment_hold_ended");
     expect(result.current.watches[0]).toBe(updated);
     expect(order).toEqual([
       "begin",
@@ -434,7 +437,10 @@ describe("useWatchMutations", () => {
       rearmReservationRequest: vi.fn().mockRejectedValue(failure),
     });
 
-    await expect(result.current.controller.rearmReservation("watch-1")).rejects.toBe(failure);
+    await expect(result.current.controller.rearmReservation(
+      "watch-1",
+      "unknown_result_unresolved",
+    )).rejects.toBe(failure);
 
     expect(pushToast).toHaveBeenCalledWith(failure.message);
     expect(result.current.controller.watchMutationPendingIds.size).toBe(0);

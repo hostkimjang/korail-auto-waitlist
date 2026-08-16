@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,7 @@ from rail_waitlist.domain import (
     Provider,
     ReservationOutcome,
     ReservationPolicy,
+    ReservationResultReasonCode,
     SeatClass,
     WatchStatus,
 )
@@ -23,8 +25,11 @@ from rail_waitlist.models import (
     WatchCandidate,
 )
 from rail_waitlist.provider_account_management.application import update_provider_auth_status
+from rail_waitlist.provider_call_context import current_request_id
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
+    ReservationConfirmationPurpose,
     ReservationConfirmationResult,
 )
 from rail_waitlist.reservations.contracts import ReservedSeat
@@ -63,9 +68,13 @@ from rail_waitlist.srt_reservation import SRT_RESERVATION_SOURCE
 class StubConfirmationAdapter:
     result: ReservationConfirmationResult
     calls: int = 0
+    request_id: str | None = None
+    target: object | None = None
 
     async def confirm_reservation(self, target):
         self.calls += 1
+        self.request_id = current_request_id()
+        self.target = target
         return self.result
 
 
@@ -196,6 +205,7 @@ async def test_exact_srt_reserve_result_skips_a_second_list_call() -> None:
     assert confirmed.source == SRT_RESERVATION_SOURCE
     assert confirmed.payment_deadline == deadline
     assert confirmed.confirmation is not None
+    assert confirmed.request_id is None
     assert (
         confirmed.confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
     )
@@ -223,6 +233,63 @@ async def test_not_found_or_inconclusive_remains_an_ambiguous_fence() -> None:
     assert unresolved.outcome is ReservationOutcome.UNKNOWN
     assert unresolved.official_handoff_url is None
     assert unresolved.payment_deadline is None
+    assert unresolved.request_id is not None
+    assert adapter.request_id == unresolved.request_id
+    assert adapter.target is not None
+    assert adapter.target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+    assert adapter.target.confirmation_correlation_seats == ()
+
+
+async def test_initial_confirmation_failure_is_safely_classified_in_correlated_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hidden_error = "private provider response body"
+
+    class FailingConfirmationAdapter:
+        request_id: str | None = None
+
+        async def confirm_reservation(self, _target):
+            self.request_id = current_request_id()
+            raise RuntimeError(hidden_error)
+
+    adapter = FailingConfirmationAdapter()
+    caplog.set_level(
+        logging.INFO,
+        logger="rail_waitlist.reservations.execution_application",
+    )
+
+    unresolved = await confirm_provider_reservation_result(
+        adapter,
+        execution_target(Provider.KORAIL),
+        "attempt-log-contract",
+        reservation_result(ReservationOutcome.UNKNOWN),
+        dependencies=dependencies(),
+    )
+
+    assert unresolved.confirmation is not None
+    assert (
+        unresolved.confirmation.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+    )
+    assert adapter.request_id == unresolved.request_id
+    classified = next(
+        record.message
+        for record in caplog.records
+        if "event=reservation_confirmation_classified" in record.message
+    )
+    for field in (
+        "phase=initial_confirmation",
+        "provider=korail",
+        "purpose=unknown_result_follow_up",
+        "outcome=inconclusive",
+        "confirmation_diagnostic_code=official_read_unavailable",
+        "source=worker-initial-confirmation",
+        "attempt_id=attempt-log-contract",
+        f"request_id={unresolved.request_id}",
+        "reconciliation_attempt=0",
+    ):
+        assert field in classified
+    assert hidden_error not in caplog.text
 
 
 async def test_korail_confirmation_preserves_all_reservation_progress_stages() -> None:
@@ -274,6 +341,194 @@ async def test_korail_confirmation_preserves_all_reservation_progress_stages() -
     assert confirmed.result.reserved_seats == result.reserved_seats
     assert tuple(stage.occurred_at for stage in confirmed.result.progress_stages) == progress_times
     assert all(stage.occurred_at.tzinfo is UTC for stage in confirmed.result.progress_stages)
+
+
+def post_request_progress() -> tuple[ReservationProgressStage, ...]:
+    return (
+        ReservationProgressStage(
+            stage="reservation_requested",
+            occurred_at=datetime(2026, 8, 10, 10, 0, tzinfo=UTC),
+        ),
+    )
+
+
+async def test_unknown_exact_correlation_uses_private_follow_up_and_paid_wins_auth_signal() -> None:
+    adapter = StubConfirmationAdapter(
+        ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+            source="korail-issued-ticket-list",
+            observed_at=datetime(2026, 8, 10, 10, 1, tzinfo=UTC),
+        )
+    )
+    private_seat = ReservedSeat(car_number="4", seat_number="8A")
+    result = ReservationResult(
+        outcome=ReservationOutcome.UNKNOWN,
+        result_reason_code=ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
+        source="korail-pydoll-reservation",
+        observed_at=datetime(2026, 8, 10, 10, 0, 1, tzinfo=UTC),
+        credential_version=3,
+        progress_stages=post_request_progress(),
+        confirmation_correlation_seats=(private_seat,),
+    )
+
+    evaluation = await confirm_provider_reservation_result(
+        adapter,
+        execution_target(Provider.KORAIL),
+        "attempt-private-paid",
+        result,
+        dependencies=dependencies(),
+    )
+
+    assert adapter.target is not None
+    assert adapter.target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+    assert adapter.target.reserved_seats == ()
+    assert adapter.target.confirmation_correlation_seats[0].seat_number == "8A"
+    assert evaluation.outcome is ReservationOutcome.UNKNOWN
+    assert evaluation.result.reserved_seats == ()
+    assert evaluation.result.confirmation_correlation_seats == (private_seat,)
+    assert evaluation.confirmation is not None
+    assert evaluation.confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+
+
+async def test_unconfirmed_actionable_result_moves_exact_seat_to_private_correlation() -> None:
+    adapter = StubConfirmationAdapter(
+        ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE,
+            source="korail-reservation-list",
+            observed_at=datetime(2026, 8, 10, 10, 1, tzinfo=UTC),
+        )
+    )
+    exact_seat = ReservedSeat(car_number="4", seat_number="8A")
+    result = ReservationResult(
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        source="korail-pydoll-reservation",
+        observed_at=datetime(2026, 8, 10, 10, 0, 1, tzinfo=UTC),
+        credential_version=3,
+        official_handoff_url="https://www.korail.com/ticket/mypage/mykorail",
+        progress_stages=post_request_progress(),
+        reserved_seats=(exact_seat,),
+    )
+
+    evaluation = await confirm_provider_reservation_result(
+        adapter,
+        execution_target(Provider.KORAIL),
+        "attempt-private-unresolved",
+        result,
+        dependencies=dependencies(),
+    )
+
+    assert evaluation.outcome is ReservationOutcome.UNKNOWN
+    assert evaluation.result.reserved_seats == ()
+    assert evaluation.result.confirmation_correlation_seats == (exact_seat,)
+
+
+async def test_confirmed_hold_promotes_exact_private_correlation_to_reserved_seat() -> None:
+    adapter = StubConfirmationAdapter(
+        ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            source="srtrain-reservation-list",
+            observed_at=datetime(2026, 8, 10, 10, 1, tzinfo=UTC),
+            official_handoff_url=(
+                "https://etk.srail.kr/hpg/hra/02/selectReservationList.do?pageId=TK0102010000"
+            ),
+        )
+    )
+    private_seat = ReservedSeat(car_number="4", seat_number="8A")
+    result = ReservationResult(
+        outcome=ReservationOutcome.UNKNOWN,
+        result_reason_code=ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+        source="srt-ambiguous-result",
+        observed_at=datetime(2026, 8, 10, 10, 0, 1, tzinfo=UTC),
+        credential_version=3,
+        progress_stages=post_request_progress(),
+        confirmation_correlation_seats=(private_seat,),
+    )
+
+    evaluation = await confirm_provider_reservation_result(
+        adapter,
+        execution_target(Provider.SRT),
+        "attempt-private-hold",
+        result,
+        dependencies=dependencies(),
+    )
+
+    assert evaluation.outcome is ReservationOutcome.PAYMENT_REQUIRED
+    assert evaluation.result.reserved_seats == (private_seat,)
+    assert evaluation.result.confirmation_correlation_seats == ()
+
+
+@pytest.mark.parametrize(
+    ("provider", "confirmation_outcome", "with_correlation"),
+    [
+        (Provider.SRT, ReservationConfirmationOutcome.CONFIRMED_PAID, False),
+        (Provider.SRT, ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED, False),
+        (Provider.KORAIL, ReservationConfirmationOutcome.CONFIRMED_PAID, False),
+        (Provider.KORAIL, ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED, False),
+        (Provider.KORAIL, ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED, True),
+    ],
+)
+async def test_unknown_confirmation_main_boundary_rejects_unsafe_positive_evidence(
+    provider: Provider,
+    confirmation_outcome: ReservationConfirmationOutcome,
+    with_correlation: bool,
+) -> None:
+    confirmation = ReservationConfirmationResult(
+        provider=provider,
+        outcome=confirmation_outcome,
+        source="unsafe-positive-fixture",
+        observed_at=datetime(2026, 8, 10, 10, 1, tzinfo=UTC),
+        **(
+            {
+                "official_handoff_url": (
+                    "https://www.korail.com/ticket/mypage/mykorail"
+                    if provider is Provider.KORAIL
+                    else (
+                        "https://etk.srail.kr/hpg/hra/02/"
+                        "selectReservationList.do?pageId=TK0102010000"
+                    )
+                )
+            }
+            if confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+            else {}
+        ),
+    )
+    adapter = StubConfirmationAdapter(confirmation)
+    correlation_seats = (
+        (ReservedSeat(car_number="4", seat_number="8A"),) if with_correlation else ()
+    )
+    result = ReservationResult(
+        outcome=ReservationOutcome.UNKNOWN,
+        result_reason_code=ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+        source="ambiguous-reservation-result",
+        observed_at=datetime(2026, 8, 10, 10, 0, 1, tzinfo=UTC),
+        credential_version=3,
+        progress_stages=post_request_progress(),
+        confirmation_correlation_seats=correlation_seats,
+    )
+
+    evaluation = await confirm_provider_reservation_result(
+        adapter,
+        execution_target(provider),
+        "attempt-unsafe-positive",
+        result,
+        dependencies=dependencies(),
+    )
+
+    assert adapter.target is not None
+    assert adapter.target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+    assert len(adapter.target.confirmation_correlation_seats) == int(with_correlation)
+    assert evaluation.outcome is ReservationOutcome.UNKNOWN
+    assert evaluation.result.reserved_seats == ()
+    assert evaluation.confirmation is not None
+    assert evaluation.confirmation.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        evaluation.confirmation.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
 
 
 @pytest.mark.parametrize(
@@ -804,6 +1059,375 @@ async def _persist_actionable_korail_target(session_factory) -> ReservationExecu
             passenger_count=watch.passenger_count,
             reservation_episode_key="availability:progress-observation",
         )
+
+
+class PausingExactPaidKorailAdapter:
+    def __init__(
+        self,
+        session_factory,
+        target: ReservationExecutionTarget,
+        *,
+        landed_watch_status: WatchStatus = WatchStatus.PAUSED,
+    ) -> None:
+        self.session_factory = session_factory
+        self.target = target
+        self.landed_watch_status = landed_watch_status
+        self.reserve_calls = 0
+        self.confirmation_calls = 0
+
+    async def reserve_once(self, _request) -> ReservationResult:
+        raise AssertionError("KORAIL progress adapter must use reserve_once_with_progress")
+
+    async def reserve_once_with_progress(self, request, _on_progress) -> ReservationResult:
+        self.reserve_calls += 1
+        async with self.session_factory() as session:
+            watch = await session.get(Watch, self.target.watch_id)
+            candidate = await session.get(WatchCandidate, self.target.candidate_id)
+            attempt = await session.scalar(
+                select(ReservationAttempt).where(
+                    ReservationAttempt.candidate_id == self.target.candidate_id
+                )
+            )
+            assert watch is not None and candidate is not None and attempt is not None
+            watch.status = self.landed_watch_status
+            watch.payment_deadline = datetime.now(UTC) + timedelta(minutes=10)
+            watch.official_booking_url = "https://www.korail.com/ticket/mypage/mykorail"
+            watch.next_check_at = datetime.now(UTC) + timedelta(minutes=1)
+            watch.observation_in_flight_until = datetime.now(UTC) + timedelta(minutes=1)
+            candidate.manual_rearm_source_attempt_id = attempt.id
+            candidate.manual_rearm_authorized_at = datetime.now(UTC)
+            session.add(
+                WatchCandidate(
+                    watch_id=watch.id,
+                    train_number="00057",
+                    departure_at=self.target.departure_at + timedelta(minutes=10),
+                    scheduled_departure_at=self.target.departure_at + timedelta(minutes=10),
+                    arrival_at=self.target.arrival_at + timedelta(minutes=10),
+                    seat_class=SeatClass.STANDARD,
+                    priority=2,
+                    state="active",
+                    manual_rearm_source_attempt_id=attempt.id,
+                    manual_rearm_authorized_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+        observed_at = datetime.now(UTC)
+        return ReservationResult(
+            outcome=ReservationOutcome.UNKNOWN,
+            result_reason_code=ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+            source="korail-pydoll-reservation",
+            observed_at=observed_at,
+            credential_version=request.expected_credential_version,
+            progress_stages=(
+                ReservationProgressStage(
+                    stage="reservation_requested",
+                    occurred_at=observed_at,
+                ),
+            ),
+            confirmation_correlation_seats=(ReservedSeat(car_number="4", seat_number="8A"),),
+        )
+
+    async def confirm_reservation(self, target) -> ReservationConfirmationResult:
+        self.confirmation_calls += 1
+        assert target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+        return ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+            source="korail-issued-ticket-list",
+            observed_at=datetime.now(UTC),
+        )
+
+
+async def test_late_exact_paid_preserves_pause_but_closes_all_retry_and_public_seat_state(
+    app,
+    client,
+) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+    adapter = PausingExactPaidKorailAdapter(app.state.test_session_factory, target)
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.reserve_calls == 1
+    assert adapter.confirmation_calls == 1
+    async with app.state.test_session_factory() as session:
+        watch = await session.get(Watch, target.watch_id)
+        attempt = await session.scalar(
+            select(ReservationAttempt).where(ReservationAttempt.candidate_id == target.candidate_id)
+        )
+        candidates = list(
+            (
+                await session.scalars(
+                    select(WatchCandidate).where(WatchCandidate.watch_id == target.watch_id)
+                )
+            ).all()
+        )
+        event_types = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent.event_type).where(
+                        OutboxEvent.aggregate_id == target.watch_id
+                    )
+                )
+            ).all()
+        )
+        assert watch is not None and attempt is not None
+        assert watch.status is WatchStatus.PAUSED
+        assert watch.payment_deadline is None
+        assert watch.official_booking_url is None
+        assert watch.next_check_at is None
+        assert watch.observation_in_flight_until is None
+        assert attempt.outcome is ReservationOutcome.UNKNOWN
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+        assert attempt.reserved_seats == []
+        assert attempt.confirmation_correlation_seats == [{"car_number": "4", "seat_number": "8A"}]
+        assert all(candidate.state == "expired" for candidate in candidates)
+        assert all(
+            candidate.manual_rearm_source_attempt_id is None
+            and candidate.manual_rearm_authorized_at is None
+            for candidate in candidates
+        )
+        assert event_types.count("watch.payment_completed") == 0
+        assert event_types.count("watch.reservation_result_requires_manual_check") == 0
+        assert event_types.count("watch.reservation_reconciled") == 1
+
+    response = await client.get(f"/api/v1/watches/{target.watch_id}")
+    assert response.status_code == 200
+    latest_attempt = response.json()["candidates"][0]["latest_reservation_attempt"]
+    assert "confirmation_correlation_seats" not in latest_attempt
+    assert latest_attempt["manual_rearm_available"] is False
+
+
+async def test_late_exact_paid_completes_a_watch_resumed_to_scheduled_during_provider_io(
+    app,
+) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+    adapter = PausingExactPaidKorailAdapter(
+        app.state.test_session_factory,
+        target,
+        landed_watch_status=WatchStatus.SCHEDULED,
+    )
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.reserve_calls == 1
+    assert adapter.confirmation_calls == 1
+    async with app.state.test_session_factory() as session:
+        watch = await session.get(Watch, target.watch_id)
+        candidates = list(
+            (
+                await session.scalars(
+                    select(WatchCandidate).where(WatchCandidate.watch_id == target.watch_id)
+                )
+            ).all()
+        )
+        event_types = list(
+            (
+                await session.scalars(
+                    select(OutboxEvent.event_type).where(
+                        OutboxEvent.aggregate_id == target.watch_id
+                    )
+                )
+            ).all()
+        )
+        payment_event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_id == target.watch_id,
+                OutboxEvent.event_type == "watch.payment_completed",
+            )
+        )
+        assert watch is not None and payment_event is not None
+        assert watch.status is WatchStatus.COMPLETED
+        assert all(candidate.state == "expired" for candidate in candidates)
+        assert event_types.count("watch.payment_completed") == 1
+        assert event_types.count("watch.reservation_reconciled") == 0
+        assert payment_event.payload["from"] == "watching"
+        assert payment_event.payload["to"] == "completed"
+
+
+class DeletingAuthRequiredKorailAdapter:
+    def __init__(self, session_factory, target: ReservationExecutionTarget) -> None:
+        self.session_factory = session_factory
+        self.target = target
+        self.reserve_calls = 0
+
+    async def reserve_once(self, _request) -> ReservationResult:
+        raise AssertionError("KORAIL progress adapter must use reserve_once_with_progress")
+
+    async def reserve_once_with_progress(self, request, _on_progress) -> ReservationResult:
+        self.reserve_calls += 1
+        async with self.session_factory() as session:
+            watch = await session.get(Watch, self.target.watch_id)
+            assert watch is not None
+            await session.execute(
+                delete(ReservationAttempt).where(
+                    ReservationAttempt.candidate_id == self.target.candidate_id
+                )
+            )
+            await session.execute(
+                delete(WatchCandidate).where(WatchCandidate.watch_id == self.target.watch_id)
+            )
+            await session.execute(delete(Watch).where(Watch.id == self.target.watch_id))
+            await session.commit()
+        return ReservationResult(
+            outcome=ReservationOutcome.UNKNOWN,
+            result_reason_code=ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
+            source="korail-pydoll-reservation",
+            observed_at=datetime.now(UTC),
+            credential_version=request.expected_credential_version,
+            progress_stages=post_request_progress(),
+        )
+
+    async def confirm_reservation(self, _target) -> ReservationConfirmationResult:
+        return ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.AUTH_REQUIRED,
+            source="korail-reservation-list",
+            observed_at=datetime.now(UTC),
+        )
+
+
+async def test_post_dispatch_auth_demotion_commits_when_watch_is_deleted_during_io(app) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+    adapter = DeletingAuthRequiredKorailAdapter(app.state.test_session_factory, target)
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.reserve_calls == 1
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
+        )
+        assert account is not None
+        assert account.credential_version == 4
+        assert account.last_auth_status == "auth_required"
+        assert await session.get(Watch, target.watch_id) is None
+        assert (
+            await session.scalar(
+                select(ReservationAttempt).where(
+                    ReservationAttempt.candidate_id == target.candidate_id
+                )
+            )
+            is None
+        )
+        result_event_count = await session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(
+                OutboxEvent.aggregate_id == target.watch_id,
+                OutboxEvent.event_type.in_(
+                    [
+                        "watch.reservation_result",
+                        "watch.reservation_result_requires_manual_check",
+                    ]
+                ),
+            )
+        )
+        assert result_event_count == 0
+
+
+class UnknownProviderUnavailableKorailAdapter:
+    def __init__(self) -> None:
+        self.progress_calls = 0
+        self.confirmation_calls = 0
+        self.confirmation_target = None
+        self.confirmation_request_id: str | None = None
+
+    async def reserve_once(self, _request) -> ReservationResult:
+        raise AssertionError("KORAIL progress adapter must use reserve_once_with_progress")
+
+    async def reserve_once_with_progress(self, request, _on_progress) -> ReservationResult:
+        self.progress_calls += 1
+        return ReservationResult(
+            outcome=ReservationOutcome.UNKNOWN,
+            result_reason_code=ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+            source="korail-pydoll-reservation",
+            observed_at=datetime.now(UTC),
+            credential_version=request.expected_credential_version,
+        )
+
+    async def confirm_reservation(self, target) -> ReservationConfirmationResult:
+        self.confirmation_calls += 1
+        self.confirmation_target = target
+        self.confirmation_request_id = current_request_id()
+        return ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            source="korail-reservation-list",
+            observed_at=datetime.now(UTC),
+        )
+
+
+async def test_korail_unknown_provider_failure_is_confirmed_and_persisted(
+    app,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+    adapter = UnknownProviderUnavailableKorailAdapter()
+    caplog.set_level(
+        logging.INFO,
+        logger="rail_waitlist.reservations.execution_application",
+    )
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.progress_calls == 1
+    assert adapter.confirmation_calls == 1
+    assert adapter.confirmation_target is not None
+    assert adapter.confirmation_target.credential_version == 4
+    async with app.state.test_session_factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        event = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == "watch.reservation_result")
+        )
+        assert attempt is not None
+        assert attempt.outcome is ReservationOutcome.UNKNOWN
+        assert attempt.result_reason_code is ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+        assert attempt.credential_version == 4
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+        assert (
+            attempt.confirmation_diagnostic_code
+            is ReservationConfirmationDiagnosticCode.UNSPECIFIED
+        )
+        assert attempt.next_reconcile_at is not None
+        assert event is not None
+        assert event.payload["result_reason_code"] == "provider_unavailable"
+        assert event.payload["confirmation_outcome"] == "inconclusive"
+        assert event.payload["confirmation_diagnostic_code"] == "unspecified"
+        persisted = next(
+            record.message
+            for record in caplog.records
+            if "event=reservation_confirmation_persisted" in record.message
+        )
+        for field in (
+            "phase=initial_confirmation",
+            "provider=korail",
+            "purpose=unknown_result_follow_up",
+            "outcome=inconclusive",
+            "confirmation_diagnostic_code=unspecified",
+            "source=korail-reservation-list",
+            f"attempt_id={attempt.id}",
+            f"request_id={adapter.confirmation_request_id}",
+            "reconciliation_attempt=0",
+            "reconciliation_attempt_count=0",
+            "next_reconcile_at=",
+        ):
+            assert field in persisted
 
 
 class ProgressReportingKorailAdapter:

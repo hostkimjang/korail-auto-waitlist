@@ -21,6 +21,9 @@ from .reservations.provider_confirmation.contracts import (
     ReservationConfirmationAdapter as ReservationConfirmationAdapter,
 )
 from .reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode as ReservationConfirmationDiagnosticCode,
+)
+from .reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome as ReservationConfirmationOutcome,
 )
 from .reservations.provider_confirmation.contracts import (

@@ -10,12 +10,13 @@ from sqlalchemy.dialects import postgresql
 from rail_waitlist.domain import (
     Provider,
     ProviderCircuitState,
+    ReservationOutcome,
     ReservationPolicy,
     SeatClass,
     SeatObservationStatus,
     WatchStatus,
 )
-from rail_waitlist.models import SeatObservation, Watch, WatchCandidate
+from rail_waitlist.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
 from rail_waitlist.observations.group_application import (
     ObservationGroupDependencies,
     ObservationTarget,
@@ -24,9 +25,18 @@ from rail_waitlist.observations.group_application import (
     defer_watch_group_observation,
     prepare_watch,
     process_watch_group_observation,
+    retryable_reservation_episode_key,
 )
 from rail_waitlist.provider_account_management.models import RailProviderAccount
 from rail_waitlist.provider_circuit.models import ProviderCircuit
+from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
+from rail_waitlist.reservations.attempt_policy import (
+    is_unresolved_unknown_manual_rearm_source,
+    manual_unknown_rearm_episode_key,
+)
+from rail_waitlist.reservations.reconciliation_policy import (
+    ReservationReconciliationResolution,
+)
 from rail_waitlist.schemas import ProviderCapabilities, SeatObservationResult
 from rail_waitlist.services import (
     add_outbox_event,
@@ -124,6 +134,7 @@ def dependencies(session_factory, reserved: list[ObservationTarget], *, locked=T
         record_seat_observation=record_seat_observation,
         finish_observation_cycle=finish_observation_cycle,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
         is_payment_hold_ended=is_payment_hold_ended,
         reserve_winner=reserve_winner,
         lease_is_current=lease_is_current,
@@ -204,6 +215,309 @@ async def test_group_deduplicates_provider_request_and_persists_each_watch(app) 
         assert {watch.status for watch in watches} == {WatchStatus.WATCHING}
         assert all(watch.observation_in_flight_until is None for watch in watches)
         assert observation_count == 2
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [ReservationOutcome.AUTH_REQUIRED, ReservationOutcome.PROVIDER_BLOCKED],
+)
+async def test_group_never_opens_auth_episode_after_reservation_was_requested(
+    app,
+    outcome: ReservationOutcome,
+) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="수서",
+            origin_node_id="N-SUSEO",
+            destination="부산",
+            destination_node_id="N-BUSAN",
+            travel_date=(now + timedelta(days=1)).date(),
+            time_from=time(8),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key=f"post-request-auth-group-{outcome.value}",
+        )
+        candidate = WatchCandidate(
+            train_number="SRT-301",
+            departure_at=now + timedelta(days=1),
+            scheduled_departure_at=now + timedelta(days=1),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="seat_found",
+        )
+        watch.candidates.append(candidate)
+        attempt = ReservationAttempt(
+            candidate=candidate,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key=f"post-request-auth-{outcome.value}",
+            started_at=now - timedelta(minutes=2),
+            finished_at=now - timedelta(minutes=1),
+            outcome=outcome,
+            progress_stages=[
+                {
+                    "stage": "reservation_requested",
+                    "occurred_at": (now - timedelta(minutes=1, seconds=30)).isoformat(),
+                }
+            ],
+        )
+        current = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.AVAILABLE,
+            source="srtrain-2.6.7-accountless",
+            observed_at=now,
+            fresh_until=now + timedelta(minutes=1),
+        )
+        session.add_all(
+            [
+                watch,
+                attempt,
+                current,
+                RailProviderAccount(
+                    provider=Provider.SRT,
+                    credentials_ciphertext="test-ciphertext",
+                    credential_version=3,
+                    last_auth_status="authenticated",
+                    last_authenticated_at=now,
+                ),
+            ]
+        )
+        await session.flush()
+
+        episode = await retryable_reservation_episode_key(
+            session,
+            candidate,
+            current,
+            Provider.SRT,
+            is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+            is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
+            is_payment_hold_ended=is_payment_hold_ended,
+        )
+
+        assert episode is None
+
+
+async def test_group_uses_unique_older_unresolved_source_and_fences_other_candidate(
+    app,
+) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="수서",
+            origin_node_id="N-SUSEO",
+            destination="부산",
+            destination_node_id="N-BUSAN",
+            travel_date=(now + timedelta(days=1)).date(),
+            time_from=time(8),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key="watch-global-unknown-group-fence",
+        )
+        source = WatchCandidate(
+            train_number="SRT-301",
+            departure_at=now + timedelta(days=1),
+            scheduled_departure_at=now + timedelta(days=1),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="seat_found",
+        )
+        other = WatchCandidate(
+            train_number="SRT-303",
+            departure_at=now + timedelta(days=1, minutes=10),
+            scheduled_departure_at=now + timedelta(days=1, minutes=10),
+            seat_class=SeatClass.STANDARD,
+            priority=2,
+            state="seat_found",
+        )
+        watch.candidates.extend([source, other])
+        confirmed_at = now - timedelta(minutes=1)
+        unknown = ReservationAttempt(
+            candidate=source,
+            attempt_sequence=1,
+            episode_key="availability:source",
+            idempotency_key="watch-global-unknown-source",
+            started_at=now - timedelta(minutes=2),
+            finished_at=now - timedelta(minutes=1, seconds=30),
+            outcome=ReservationOutcome.UNKNOWN,
+            credential_version=3,
+            confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            confirmation_source="srtrain-reservation-list",
+            confirmation_observed_at=confirmed_at,
+            last_reconciled_at=confirmed_at,
+            reconciliation_attempt_count=3,
+            reconciliation_resolution=None,
+        )
+        later_safe_attempt = ReservationAttempt(
+            candidate=other,
+            attempt_sequence=1,
+            episode_key="availability:later-safe",
+            idempotency_key="watch-global-later-safe",
+            started_at=now - timedelta(seconds=30),
+            finished_at=now - timedelta(seconds=20),
+            outcome=ReservationOutcome.NOT_AVAILABLE,
+        )
+        source_available = SeatObservation(
+            candidate=source,
+            status=SeatObservationStatus.AVAILABLE,
+            source="srtrain-2.6.7-accountless",
+            observed_at=now,
+            fresh_until=now + timedelta(minutes=1),
+        )
+        other_available = SeatObservation(
+            candidate=other,
+            status=SeatObservationStatus.AVAILABLE,
+            source="srtrain-2.6.7-accountless",
+            observed_at=now,
+            fresh_until=now + timedelta(minutes=1),
+        )
+        session.add_all(
+            [
+                watch,
+                unknown,
+                later_safe_attempt,
+                source_available,
+                other_available,
+                RailProviderAccount(
+                    provider=Provider.SRT,
+                    credentials_ciphertext="test-ciphertext",
+                    credential_version=3,
+                    last_auth_status="authenticated",
+                    last_authenticated_at=now - timedelta(seconds=10),
+                ),
+            ]
+        )
+        await session.flush()
+        source.manual_rearm_source_attempt_id = unknown.id
+        source.manual_rearm_authorized_at = now - timedelta(seconds=5)
+
+        other_episode = await retryable_reservation_episode_key(
+            session,
+            other,
+            other_available,
+            Provider.SRT,
+            is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+            is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
+            is_payment_hold_ended=is_payment_hold_ended,
+        )
+        source_episode = await retryable_reservation_episode_key(
+            session,
+            source,
+            source_available,
+            Provider.SRT,
+            is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+            is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
+            is_payment_hold_ended=is_payment_hold_ended,
+        )
+
+        assert other_episode is None
+        assert source_episode == manual_unknown_rearm_episode_key(
+            unknown.id,
+            source.id,
+            source_available.id,
+        )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "confirmation", "resolution", "expected_allowed"),
+    [
+        (
+            ReservationOutcome.UNKNOWN,
+            ReservationConfirmationOutcome.NOT_FOUND,
+            ReservationReconciliationResolution.CONFIRMED_ABSENT,
+            True,
+        ),
+        (
+            ReservationOutcome.RESERVED,
+            ReservationConfirmationOutcome.CONFIRMED_PAID,
+            None,
+            False,
+        ),
+    ],
+)
+async def test_group_treats_confirmed_absence_as_resolved_but_exact_paid_as_absolute(
+    app,
+    outcome: ReservationOutcome,
+    confirmation: ReservationConfirmationOutcome,
+    resolution: ReservationReconciliationResolution | None,
+    expected_allowed: bool,
+) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="수서",
+            destination="부산",
+            travel_date=(now + timedelta(days=1)).date(),
+            time_from=time(8),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key=f"resolved-vs-paid-group-{outcome.value}",
+        )
+        source = WatchCandidate(
+            train_number="SRT-301",
+            departure_at=now + timedelta(days=1),
+            scheduled_departure_at=now + timedelta(days=1),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="observed",
+        )
+        other = WatchCandidate(
+            train_number="SRT-303",
+            departure_at=now + timedelta(days=1, minutes=10),
+            scheduled_departure_at=now + timedelta(days=1, minutes=10),
+            seat_class=SeatClass.STANDARD,
+            priority=2,
+            state="seat_found",
+        )
+        watch.candidates.extend([source, other])
+        previous = ReservationAttempt(
+            candidate=source,
+            attempt_sequence=1,
+            episode_key="availability:source",
+            idempotency_key=f"resolved-vs-paid-source-{outcome.value}",
+            started_at=now - timedelta(minutes=2),
+            finished_at=now - timedelta(minutes=1),
+            outcome=outcome,
+            confirmation_outcome=confirmation,
+            confirmation_source="official-reservation-list",
+            confirmation_observed_at=now - timedelta(minutes=1),
+            last_reconciled_at=now - timedelta(minutes=1),
+            reconciliation_attempt_count=1,
+            reconciliation_resolution=resolution,
+        )
+        available = SeatObservation(
+            candidate=other,
+            status=SeatObservationStatus.AVAILABLE,
+            source="srtrain-2.6.7-accountless",
+            observed_at=now,
+            fresh_until=now + timedelta(minutes=1),
+        )
+        session.add_all([watch, previous, available])
+        await session.flush()
+
+        episode = await retryable_reservation_episode_key(
+            session,
+            other,
+            available,
+            Provider.SRT,
+            is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+            is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
+            is_payment_hold_ended=is_payment_hold_ended,
+        )
+
+        assert episode == (f"availability:{available.id}" if expected_allowed else None)
 
 
 async def test_prepare_uses_an_expiring_claim_without_rewriting_the_due_schedule(app) -> None:
@@ -513,6 +827,50 @@ async def test_group_passes_the_exact_actionable_observation_to_the_status_trans
             select(WatchCandidate.id).where(WatchCandidate.watch_id == watch_id)
         )
     assert transition_observations[0].candidate_id == candidate_id
+
+
+async def test_standing_only_reopens_seated_ticket_monitoring_without_reservation(app) -> None:
+    session_factory = app.state.test_session_factory
+    now = datetime.now(UTC)
+    watch_id = await persist_due_watch(
+        session_factory,
+        dedupe_key="standing-only-reopens-watch",
+        now=now,
+    )
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        candidate = await session.scalar(
+            select(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
+        )
+        assert watch is not None and candidate is not None
+        watch.status = WatchStatus.SEAT_FOUND
+        candidate.state = "seat_found"
+        await session.commit()
+
+    reserved: list[ObservationTarget] = []
+    await process_watch_group_observation(
+        [watch_id],
+        now,
+        provider=Provider.MOCK,
+        adapter=RecordingObservationAdapter(
+            SeatObservationStatus.STANDING_ONLY,
+            reservation_once=True,
+        ),
+        lease_grant=None,
+        dependencies=dependencies(session_factory, reserved),
+    )
+
+    assert reserved == []
+    async with session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        candidate = await session.scalar(
+            select(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
+        )
+        observation = await session.scalar(select(SeatObservation))
+        assert watch is not None and watch.status is WatchStatus.WATCHING
+        assert candidate is not None and candidate.state == "observed"
+        assert observation is not None
+        assert observation.status is SeatObservationStatus.STANDING_ONLY
 
 
 async def test_missing_matching_seat_class_is_persisted_as_fail_closed_error(app) -> None:

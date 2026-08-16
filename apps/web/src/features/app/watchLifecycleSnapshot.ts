@@ -3,10 +3,18 @@ import type {
   PaymentHoldEndReason,
   ReservedSeat,
   ReservationAttemptOutcome,
+  ReservationConfirmationDiagnosticCode,
+  ReservationConfirmationOutcome,
   ReservationProgressStage,
+  ReservationResultReasonCode,
   ReservationRetryCondition,
 } from "../../domain/reservationAttempt";
-import { normalizeReservedSeats } from "../../domain/reservationAttempt";
+import {
+  isReservationConfirmationOutcome,
+  isReservationResultReasonCode,
+  normalizeReservationConfirmationDiagnosticCode,
+  normalizeReservedSeats,
+} from "../../domain/reservationAttempt";
 import { normalizeReservationPolicy, type ReservationPolicy } from "../../domain/reservationPolicy";
 import { isWatchStatus, type WatchStatus } from "../../domain/watch";
 
@@ -31,6 +39,7 @@ export interface LegacyWatchSnapshot {
 
 export interface WatchLifecycleAttempt {
   outcome: ReservationAttemptOutcome;
+  resultReasonCode?: ReservationResultReasonCode | null;
   startedAt: string | null;
   finishedAt: string | null;
   retryable: boolean;
@@ -39,6 +48,11 @@ export interface WatchLifecycleAttempt {
   progressStages?: ReadonlyArray<ReservationProgressStage>;
   paymentHoldEndedAt: string | null;
   paymentHoldEndReason?: PaymentHoldEndReason | null;
+  confirmationOutcome?: ReservationConfirmationOutcome | null;
+  confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
+  confirmationObservedAt?: string | null;
+  reconciliationAttemptCount?: number;
+  nextReconcileAt?: string | null;
   reservedSeats?: ReadonlyArray<ReservedSeat>;
 }
 
@@ -87,25 +101,37 @@ function trimmedText(value: unknown): string | null {
 function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
   if (!isRecord(value)) return null;
   const reason = value.paymentHoldEndReason;
+  const outcome = typeof value.outcome === "string"
+    && [
+      "pending",
+      "payment_required",
+      "reserved",
+      "not_available",
+      "auth_required",
+      "provider_blocked",
+      "failed",
+      "unknown",
+    ].includes(value.outcome)
+    ? value.outcome as ReservationAttemptOutcome
+    : "pending";
+  const confirmationOutcome = isReservationConfirmationOutcome(value.confirmationOutcome)
+    ? value.confirmationOutcome
+    : null;
   const legacyReservedSeats = Array.isArray(value.reservedSeats)
     ? value.reservedSeats.map((seat) => isRecord(seat)
       ? { car_number: seat.carNumber, seat_number: seat.seatNumber }
       : seat)
     : value.reserved_seats;
+  const reconciliationAttemptCount = Number.isInteger(value.reconciliationAttemptCount)
+    && Number(value.reconciliationAttemptCount) >= 0
+    && Number(value.reconciliationAttemptCount) <= 6
+    ? Number(value.reconciliationAttemptCount)
+    : 0;
   return {
-    outcome: typeof value.outcome === "string"
-      && [
-        "pending",
-        "payment_required",
-        "reserved",
-        "not_available",
-        "auth_required",
-        "provider_blocked",
-        "failed",
-        "unknown",
-      ].includes(value.outcome)
-      ? value.outcome as ReservationAttemptOutcome
-      : "pending",
+    outcome,
+    resultReasonCode: isReservationResultReasonCode(value.resultReasonCode)
+      ? value.resultReasonCode
+      : null,
     startedAt: nonEmptyString(value.startedAt),
     finishedAt: nonEmptyString(value.finishedAt),
     retryable: value.retryable === true,
@@ -126,6 +152,14 @@ function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
       || reason === "confirmed_payment_hold_no_longer_present"
       ? reason
       : null,
+    confirmationOutcome,
+    confirmationDiagnosticCode: normalizeReservationConfirmationDiagnosticCode(
+      confirmationOutcome,
+      value.confirmationDiagnosticCode,
+    ),
+    confirmationObservedAt: nonEmptyString(value.confirmationObservedAt),
+    reconciliationAttemptCount,
+    nextReconcileAt: nonEmptyString(value.nextReconcileAt),
     reservedSeats: normalizeReservedSeats(legacyReservedSeats),
   };
 }
@@ -172,6 +206,7 @@ export function mapWatchLifecycleSnapshot(watch: WatchReadModel): WatchLifecycle
       ? null
       : {
         outcome: attempt.outcome,
+        resultReasonCode: attempt.resultReasonCode ?? null,
         startedAt: attempt.startedAt,
         finishedAt: attempt.finishedAt,
         retryable: attempt.retryable,
@@ -180,6 +215,11 @@ export function mapWatchLifecycleSnapshot(watch: WatchReadModel): WatchLifecycle
         progressStages: attempt.progressStages ?? [],
         paymentHoldEndedAt: attempt.paymentHoldEndedAt,
         paymentHoldEndReason: attempt.paymentHoldEndReason ?? null,
+        confirmationOutcome: attempt.confirmationOutcome ?? null,
+        confirmationDiagnosticCode: attempt.confirmationDiagnosticCode ?? null,
+        confirmationObservedAt: attempt.confirmationObservedAt ?? null,
+        reconciliationAttemptCount: attempt.reconciliationAttemptCount ?? 0,
+        nextReconcileAt: attempt.nextReconcileAt ?? null,
         reservedSeats: attempt.reservedSeats ?? [],
       },
     latestReservationAttemptCandidateId: watch.latestReservationAttemptCandidateId ?? null,

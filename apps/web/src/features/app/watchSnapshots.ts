@@ -5,7 +5,10 @@ import {
 } from "./watchLifecycleSnapshot";
 import type {
   ReservedSeat,
+  ReservationConfirmationDiagnosticCode,
+  ReservationConfirmationOutcome,
   ReservationProgressStage,
+  ReservationResultReasonCode,
   ReservationRetryCondition,
 } from "../../domain/reservationAttempt";
 
@@ -33,6 +36,12 @@ export interface SeatFoundTransition {
   paymentDeadline?: string | null;
   reservationProgress?: ReadonlyArray<ReservationProgressStage>;
   reservedSeats?: ReadonlyArray<ReservedSeat>;
+  resultReasonCode?: ReservationResultReasonCode | null;
+  confirmationOutcome?: ReservationConfirmationOutcome | null;
+  confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
+  confirmationObservedAt?: string | null;
+  reconciliationAttemptCount?: number;
+  nextReconcileAt?: string | null;
 }
 
 export type SeatAvailabilityLostTransition = SeatFoundTransition;
@@ -44,6 +53,12 @@ export interface ReservationRecoveryResult {
   retryable: boolean;
   manualCheckRequired: boolean;
   retryCondition: ReservationRetryCondition | null;
+  resultReasonCode?: ReservationResultReasonCode | null;
+  confirmationOutcome?: ReservationConfirmationOutcome | null;
+  confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
+  confirmationObservedAt?: string | null;
+  reconciliationAttemptCount?: number;
+  nextReconcileAt?: string | null;
 }
 
 export interface WatchActionTransition extends SeatFoundTransition {
@@ -123,6 +138,7 @@ function transitionRevisionAt(
   }
   if (stage === "payment_required") {
     return latestLifecycleTimestamp(
+      watch.latestReservationAttempt?.confirmationObservedAt,
       attemptTimestamp(watch, "finishedAt"),
       watch.updatedAt,
     )
@@ -130,9 +146,12 @@ function transitionRevisionAt(
       ?? undefined;
   }
   if (["auth_required", "failed", "monitoring_resumed"].includes(stage)) {
-    return attemptTimestamp(watch, "finishedAt")
+    return latestLifecycleTimestamp(
+      watch.latestReservationAttempt?.confirmationObservedAt,
+      attemptTimestamp(watch, "finishedAt"),
+      watch.updatedAt,
+    )
       ?? attemptTimestamp(watch, "startedAt")
-      ?? watch.updatedAt
       ?? undefined;
   }
   return watch.updatedAt ?? undefined;
@@ -168,6 +187,14 @@ function transitionContext(
     ...(finishedAt === undefined ? {} : { finishedAt }),
     ...(reservationProgress.length === 0 ? {} : { reservationProgress }),
     ...(reservedSeats.length === 0 ? {} : { reservedSeats }),
+    resultReasonCode: watch.latestReservationAttempt?.resultReasonCode ?? null,
+    confirmationOutcome: watch.latestReservationAttempt?.confirmationOutcome ?? null,
+    confirmationDiagnosticCode:
+      watch.latestReservationAttempt?.confirmationDiagnosticCode ?? null,
+    confirmationObservedAt: watch.latestReservationAttempt?.confirmationObservedAt ?? null,
+    reconciliationAttemptCount:
+      watch.latestReservationAttempt?.reconciliationAttemptCount ?? 0,
+    nextReconcileAt: watch.latestReservationAttempt?.nextReconcileAt ?? null,
     reservationPolicy: watch.reservationPolicy,
     paymentDeadline: watch.paymentDeadline,
   };
@@ -287,6 +314,12 @@ function canonicalRecoveryResult(
     retryable: attempt.retryable,
     manualCheckRequired: attempt.manualCheckRequired,
     retryCondition: attempt.retryCondition,
+    resultReasonCode: attempt.resultReasonCode ?? null,
+    confirmationOutcome: attempt.confirmationOutcome ?? null,
+    confirmationDiagnosticCode: attempt.confirmationDiagnosticCode ?? null,
+    confirmationObservedAt: attempt.confirmationObservedAt ?? null,
+    reconciliationAttemptCount: attempt.reconciliationAttemptCount ?? 0,
+    nextReconcileAt: attempt.nextReconcileAt ?? null,
   };
 }
 
@@ -303,6 +336,12 @@ function canonicalRecoveryRevision(watch: WatchLifecycleSnapshot): string | null
     result.retryable ? "retryable" : "not-retryable",
     result.manualCheckRequired ? "manual-check" : "automatic",
     result.retryCondition ?? "no-retry-condition",
+    result.resultReasonCode ?? "no-result-reason",
+    result.confirmationOutcome ?? "no-confirmation",
+    result.confirmationDiagnosticCode ?? "no-confirmation-diagnostic",
+    result.confirmationObservedAt ?? "no-confirmation-time",
+    `reconcile-${result.reconciliationAttemptCount}`,
+    result.nextReconcileAt ?? "no-next-reconcile",
   ].join(":");
 }
 
@@ -393,7 +432,20 @@ function detectWatchActionLifecycleTransitions(
     }
     const holdEndedAt = attemptTimestamp(watch, "paymentHoldEndedAt");
     const holdEndReason = attemptPaymentHoldEndReason(watch);
-    if (previousWatch.status === "payment_required" && watch.status === "completed") {
+    const completedAttempt = watch.latestReservationAttempt;
+    const completedAttemptCandidateId = watch.latestReservationAttemptCandidateId ?? null;
+    const confirmedPaidUnknownCompletion = previousWatch.status === "watching"
+      && watch.status === "completed"
+      && completedAttempt?.outcome === "unknown"
+      && completedAttempt.confirmationOutcome === "confirmed_paid"
+      && completedAttempt.confirmationObservedAt !== null
+      && completedAttempt.confirmationObservedAt !== undefined
+      && completedAttemptCandidateId !== null
+      && watch.reservationCandidateContexts[completedAttemptCandidateId] !== undefined;
+    if (
+      (previousWatch.status === "payment_required" && watch.status === "completed")
+      || confirmedPaidUnknownCompletion
+    ) {
       return [{
         ...transitionContext(watch, "payment_completed"),
         status: "payment_completed" as const,

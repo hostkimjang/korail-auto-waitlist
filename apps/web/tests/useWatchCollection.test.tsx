@@ -15,9 +15,26 @@ const eventApi = vi.hoisted(() => ({
   subscribeToEvents: vi.fn((_handler: (event: unknown) => void) => () => undefined),
 }));
 
+const liveNoticeApi = vi.hoisted(() => ({
+  buildLiveReservationNotice: vi.fn(),
+}));
+
 vi.mock("../src/api/events", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/api/events")>();
   return { ...actual, subscribeToEvents: eventApi.subscribeToEvents };
+});
+
+vi.mock("../src/features/app/liveReservationNotice", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/features/app/liveReservationNotice")>();
+  return {
+    ...actual,
+    buildLiveReservationNotice: (
+      ...args: Parameters<typeof actual.buildLiveReservationNotice>
+    ): ReturnType<typeof actual.buildLiveReservationNotice> => {
+      liveNoticeApi.buildLiveReservationNotice(...args);
+      return actual.buildLiveReservationNotice(...args);
+    },
+  };
 });
 
 import { useWatchCollection } from "../src/features/app/useWatchCollection";
@@ -148,6 +165,7 @@ function reservationProgressedEvent(watchId: string, id: string): unknown {
 
 describe("useWatchCollection", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     eventApi.subscribeToEvents.mockImplementation((_handler) => () => undefined);
   });
@@ -615,7 +633,20 @@ describe("useWatchCollection", () => {
         initialWatches: [initial],
         pollIntervalSeconds: 300,
         loadWatches,
-        snapshotOf: (value) => ({ ...snapshotOf(value), train: trainLabel }),
+        snapshotOf: (value) => {
+          const snapshot = snapshotOf(value);
+          return {
+            ...snapshot,
+            train: trainLabel,
+            reservationCandidateContexts: {
+              ...snapshot.reservationCandidateContexts,
+              candidate: {
+                ...snapshot.reservationCandidateContexts.candidate,
+                train: trainLabel,
+              },
+            },
+          };
+        },
         onAuthenticationExpired,
         onProviderAuthenticationTransition,
         pushNotifications,
@@ -637,7 +668,7 @@ describe("useWatchCollection", () => {
         event_type: "watch.reservation_attempted",
         aggregate_id: initial.id,
         created_at: "2026-08-01T03:44:59Z",
-        payload: { watch_id: initial.id, outcome: "pending" },
+        payload: { watch_id: initial.id, candidate_id: "candidate", outcome: "pending" },
       });
     });
     expect(pushNotifications).toHaveBeenCalledWith([
@@ -659,6 +690,166 @@ describe("useWatchCollection", () => {
 
     expect(eventApi.subscribeToEvents).toHaveBeenCalledOnce();
     unmount();
+  });
+
+  it("prunes a missing watch subject only after a successful canonical reload", async () => {
+    const initial = watch("reserve_once_before_payment", "payment_required");
+    const loadWatches = vi.fn().mockResolvedValue([]);
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    const pruneStaleNotificationSubjects = vi.fn();
+    const { result, unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+      pruneStaleNotificationSubjects,
+    }));
+
+    await waitFor(() => expect(pruneStaleNotificationSubjects)
+      .toHaveBeenCalledWith(["watch:watch-one"]));
+    expect(result.current.watches).toEqual([]);
+    expect(pushNotifications).toHaveBeenLastCalledWith([]);
+    expect(onProviderAuthenticationTransition).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("folds repeated seat-observation SSE invalidations into the next recovery poll", async () => {
+    const initial = watch("notify_only");
+    const loadWatches = vi.fn().mockResolvedValue([initial]);
+    const projectSnapshot = vi.fn(snapshotOf);
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf: projectSnapshot,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(projectSnapshot).toHaveBeenCalled());
+    const projectionCallsBeforeRoutineEvents = projectSnapshot.mock.calls.length;
+    liveNoticeApi.buildLiveReservationNotice.mockClear();
+
+    act(() => {
+      onEvent?.({ event_type: "watch.seat_observed", aggregate_id: initial.id });
+      onEvent?.({ event_type: "watch.seat_observed", aggregate_id: initial.id });
+      onEvent?.({ event_type: "watch.seat_observed", aggregate_id: initial.id });
+    });
+    expect(liveNoticeApi.buildLiveReservationNotice).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    expect(loadWatches).toHaveBeenCalledOnce();
+    expect(projectSnapshot).toHaveBeenCalledTimes(projectionCallsBeforeRoutineEvents);
+
+    unmount();
+  });
+
+  it("reloads an important status event without waiting for the routine poll", async () => {
+    const initial = watch("notify_only");
+    const loadWatches = vi.fn().mockResolvedValue([initial]);
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    const { unmount } = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+
+    act(() => onEvent?.({ event_type: "watch.status_changed", aggregate_id: initial.id }));
+    await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+
+    unmount();
+  });
+
+  it("defers hidden SSE interpretation and performs one canonical reload on resume", async () => {
+    const initial = watch("reserve_once_before_payment", "watching");
+    const loadWatches = vi.fn().mockResolvedValue([initial]);
+    const projectSnapshot = vi.fn(snapshotOf);
+    const onAuthenticationExpired = vi.fn();
+    const onProviderAuthenticationTransition = vi.fn();
+    const pushNotifications = vi.fn();
+    let onEvent: ((event: unknown) => void) | undefined;
+    eventApi.subscribeToEvents.mockImplementation((handler: (event: unknown) => void) => {
+      onEvent = handler;
+      return () => undefined;
+    });
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    const setVisibility = (state: DocumentVisibilityState): void => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: state,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    const rendered = renderHook(() => useWatchCollection({
+      authenticated: true,
+      demo: false,
+      initialWatches: [initial],
+      pollIntervalSeconds: 300,
+      loadWatches,
+      snapshotOf: projectSnapshot,
+      onAuthenticationExpired,
+      onProviderAuthenticationTransition,
+      pushNotifications,
+    }));
+
+    try {
+      await waitFor(() => expect(loadWatches).toHaveBeenCalledOnce());
+      const projectionCallsBeforeHiddenEvents = projectSnapshot.mock.calls.length;
+      liveNoticeApi.buildLiveReservationNotice.mockClear();
+
+      act(() => setVisibility("hidden"));
+      act(() => {
+        onEvent?.(reservationProgressedEvent(initial.id, "hidden-progress-one"));
+        onEvent?.(reservationProgressedEvent(initial.id, "hidden-progress-two"));
+        onEvent?.({ event_type: "watch.seat_observed", aggregate_id: initial.id });
+      });
+
+      expect(loadWatches).toHaveBeenCalledOnce();
+      expect(projectSnapshot).toHaveBeenCalledTimes(projectionCallsBeforeHiddenEvents);
+      expect(liveNoticeApi.buildLiveReservationNotice).not.toHaveBeenCalled();
+
+      act(() => setVisibility("visible"));
+      await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
+      expect(liveNoticeApi.buildLiveReservationNotice).not.toHaveBeenCalled();
+    } finally {
+      rendered.unmount();
+      if (originalVisibility === undefined) {
+        Reflect.deleteProperty(document, "visibilityState");
+      } else {
+        Object.defineProperty(document, "visibilityState", originalVisibility);
+      }
+    }
   });
 
   it("coalesces duplicate PWA notification hints and removes the listener on cleanup", async () => {
@@ -727,6 +918,7 @@ describe("useWatchCollection", () => {
     const onAuthenticationExpired = vi.fn();
     const onProviderAuthenticationTransition = vi.fn();
     const pushNotifications = vi.fn();
+    const pruneStaleNotificationSubjects = vi.fn();
     const { result, unmount } = renderHook(() => useWatchCollection({
       authenticated: true,
       demo: false,
@@ -736,6 +928,7 @@ describe("useWatchCollection", () => {
       onAuthenticationExpired,
       onProviderAuthenticationTransition,
       pushNotifications,
+      pruneStaleNotificationSubjects,
     }));
 
     await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(1));
@@ -750,6 +943,7 @@ describe("useWatchCollection", () => {
 
     expect(result.current.watches[0]?.reservationPolicy)
       .toBe("reserve_once_before_payment");
+    expect(pruneStaleNotificationSubjects).not.toHaveBeenCalled();
 
     act(() => {
       result.current.endReservationPolicyMutation();
@@ -758,6 +952,7 @@ describe("useWatchCollection", () => {
     await waitFor(() => expect(loadWatches).toHaveBeenCalledTimes(2));
     expect(result.current.watches[0]?.reservationPolicy)
       .toBe("reserve_once_before_payment");
+    expect(pruneStaleNotificationSubjects).not.toHaveBeenCalled();
 
     unmount();
   });

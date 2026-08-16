@@ -289,7 +289,7 @@ class SrtLiveSeatSource:
         cache_ttl_seconds: int,
         client_factory: SrtClientFactory = _default_client_factory,
         monotonic: Callable[[], float] = time.monotonic,
-        timeout_seconds: float = 25,
+        timeout_seconds: float = 60,
         rate_limit_cooldown_seconds: int = 300,
         protection_cooldown_seconds: int = 60,
         cooldown_store: CooldownStore | None = None,

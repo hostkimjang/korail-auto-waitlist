@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, case, func, or_, select
@@ -12,9 +12,11 @@ from .domain import (
     OutboxStatus,
     ProviderCircuitState,
     ReservationOutcome,
+    ReservationResultReasonCode,
     SeatClass,
     SeatObservationStatus,
     WatchStatus,
+    reservation_result_reason_code_for_outcome,
 )
 from .operation_summary.schemas import (
     OperationCurrentCounts,
@@ -32,7 +34,10 @@ from .operation_summary.schemas import (
 from .outbox_management.models import OutboxEvent
 from .provider_circuit.models import ProviderCircuit
 from .reservations.payment_hold_application import payment_hold_end_reason
-from .reservations.provider_confirmation.contracts import ReservationConfirmationOutcome
+from .reservations.provider_confirmation.contracts import (
+    ReservationConfirmationOutcome,
+    effective_reservation_confirmation_diagnostic_code,
+)
 from .timetable_management.models import StationCatalogCache
 from .watch_management.models import (
     ReservationAttempt,
@@ -58,13 +63,13 @@ RESERVATION_FAILURE_OUTCOMES = frozenset(
 )
 RESERVATION_REASON_CODES: dict[ReservationOutcome, OperationEntryReasonCode] = {
     ReservationOutcome.PENDING: "reservation_pending",
-    ReservationOutcome.PAYMENT_REQUIRED: "reservation_payment_required",
-    ReservationOutcome.RESERVED: "reservation_reserved",
-    ReservationOutcome.NOT_AVAILABLE: "reservation_not_available",
-    ReservationOutcome.AUTH_REQUIRED: "reservation_auth_required",
-    ReservationOutcome.PROVIDER_BLOCKED: "reservation_provider_blocked",
+    ReservationOutcome.PAYMENT_REQUIRED: "payment_hold_created",
+    ReservationOutcome.RESERVED: "payment_hold_created",
+    ReservationOutcome.NOT_AVAILABLE: "target_not_available",
+    ReservationOutcome.AUTH_REQUIRED: "authentication_required",
+    ReservationOutcome.PROVIDER_BLOCKED: "provider_blocked",
     ReservationOutcome.FAILED: "reservation_failed",
-    ReservationOutcome.UNKNOWN: "reservation_unknown",
+    ReservationOutcome.UNKNOWN: "reservation_request_result_unknown",
 }
 PAYMENT_HOLD_TRANSITION_REASONS = frozenset(
     {
@@ -93,6 +98,19 @@ def _utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _reservation_error_category(attempt: ReservationAttempt) -> str | None:
+    if attempt.outcome not in RESERVATION_FAILURE_OUTCOMES:
+        return None
+    reason_code = attempt.result_reason_code or reservation_result_reason_code_for_outcome(
+        attempt.outcome
+    )
+    if reason_code is ReservationResultReasonCode.PROVIDER_UNAVAILABLE:
+        return "provider_unavailable"
+    if reason_code is ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID:
+        return "schema_mismatch"
+    return "unknown"
 
 
 def _kst(value: datetime) -> datetime:
@@ -279,14 +297,24 @@ async def _recent_entries(session: AsyncSession, window_start: datetime) -> list
                 kind="reservation_attempt",
                 level=_reservation_level(attempt.outcome),
                 status=attempt.outcome.value,
-                error_category="unknown"
-                if attempt.outcome in RESERVATION_FAILURE_OUTCOMES
-                else None,
+                error_category=_reservation_error_category(attempt),
                 provider=provider,
                 train_number=_safe_train_number(candidate.train_number),
                 departure_at=_kst(candidate.departure_at),
                 seat_class=_safe_seat_class(candidate.seat_class),
-                reason_code=RESERVATION_REASON_CODES[attempt.outcome],
+                reason_code=cast(
+                    OperationEntryReasonCode,
+                    (
+                        attempt.result_reason_code
+                        or reservation_result_reason_code_for_outcome(attempt.outcome)
+                    ).value,
+                ),
+                confirmation_diagnostic_code=(
+                    effective_reservation_confirmation_diagnostic_code(
+                        attempt.confirmation_outcome,
+                        attempt.confirmation_diagnostic_code,
+                    )
+                ),
             )
         )
 
@@ -314,7 +342,9 @@ async def _recent_entries(session: AsyncSession, window_start: datetime) -> list
                     select(WatchTransitionHistory)
                     .where(
                         WatchTransitionHistory.watch_id.in_(paid_watch_ids),
-                        WatchTransitionHistory.from_status == WatchStatus.PAYMENT_REQUIRED,
+                        WatchTransitionHistory.from_status.in_(
+                            [WatchStatus.PAYMENT_REQUIRED, WatchStatus.WATCHING]
+                        ),
                         WatchTransitionHistory.to_status == WatchStatus.COMPLETED,
                         WatchTransitionHistory.reason
                         == "reservation_reconciliation_confirmed_paid",

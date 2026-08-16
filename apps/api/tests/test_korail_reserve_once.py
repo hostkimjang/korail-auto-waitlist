@@ -1869,6 +1869,359 @@ async def test_reservation_uses_distinct_pre_route_and_post_submit_session_check
 
 
 @pytest.mark.asyncio
+async def test_reservation_login_route_uses_header_after_unavailable_official_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    attempt = _ReservationAttemptState()
+    clock = 0.0
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: clock)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인 처리", (), url="https://www.korail.com/ticket/login"
+            )
+        ),
+    )
+    monkeypatch.setattr(session, "_visible_elements", AsyncMock(return_value=[]))
+    official_session_probe = AsyncMock(side_effect=BrowserSourceUnavailable("session_keepalive"))
+    authenticated_header = AsyncMock(side_effect=(False, True))
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        official_session_probe,
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", authenticated_header)
+
+    unresolved = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert unresolved is None
+    assert attempt.pre_login_route_check_attempted is False
+    assert attempt.login_route_auth_unavailable_attempts == 1
+    assert attempt.login_route_auth_next_official_probe_at == 0.25
+
+    clock = 0.1
+    recovered = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert recovered is None
+    assert attempt.pre_login_route_check_attempted is True
+    assert attempt.pre_login_route_authenticated is True
+    assert attempt.login_route_auth_unavailable_stage is None
+    assert attempt.login_route_auth_unavailable_attempts == 0
+    assert attempt.login_route_auth_next_official_probe_at == 0.0
+    assert official_session_probe.await_count == 1
+    assert authenticated_header.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_reservation_login_route_preserves_uncertainty_when_header_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    attempt = _ReservationAttemptState()
+    clock = 0.0
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: clock)
+    uncertainty = BrowserSourceUnavailable("session_keepalive")
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인 처리", (), url="https://www.korail.com/ticket/login"
+            )
+        ),
+    )
+    official_session_probe = AsyncMock(side_effect=(uncertainty, False))
+    authenticated_header = AsyncMock(side_effect=(False, False))
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        official_session_probe,
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", authenticated_header)
+
+    unresolved = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert unresolved is None
+    assert attempt.pre_login_route_check_attempted is False
+    assert attempt.pre_login_route_authenticated is False
+    assert attempt.login_route_auth_unavailable_stage == "session_keepalive"
+    assert attempt.login_route_auth_unavailable_attempts == 1
+    assert attempt.login_route_auth_next_official_probe_at == 0.25
+
+    clock = 0.25
+    logged_out = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert logged_out is not None
+    assert logged_out.outcome is KorailReservationOutcome.AUTH_REQUIRED
+    assert attempt.pre_login_route_check_attempted is True
+    assert attempt.pre_login_route_authenticated is False
+    assert attempt.login_route_auth_unavailable_stage is None
+    assert attempt.login_route_auth_unavailable_attempts == 0
+    assert attempt.login_route_auth_next_official_probe_at == 0.0
+    assert official_session_probe.await_count == 2
+    assert authenticated_header.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_reservation_clears_stale_auth_uncertainty_after_leaving_login_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    attempt = _ReservationAttemptState(
+        login_route_auth_unavailable_stage="session_keepalive",
+        login_route_auth_unavailable_attempts=3,
+        login_route_auth_next_official_probe_at=99.0,
+    )
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "열차 목록", (), url="https://www.korail.com/ticket/search/general"
+            )
+        ),
+    )
+    monkeypatch.setattr(session, "_visible_elements", AsyncMock(return_value=[]))
+
+    terminal = await session._probe_reservation_terminal(reservation_request(), attempt)
+
+    assert terminal is None
+    assert attempt.login_route_auth_unavailable_stage is None
+    assert attempt.login_route_auth_unavailable_attempts == 0
+    assert attempt.login_route_auth_next_official_probe_at == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reservation_login_route_backs_off_official_probe_while_polling_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 3_000, True)
+    attempt = _ReservationAttemptState()
+    clock = 0.0
+    monkeypatch.setattr(session._reservation_driver, "_monotonic", lambda: clock)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인 처리", (), url="https://www.korail.com/ticket/login"
+            )
+        ),
+    )
+    official_session_probe = AsyncMock(side_effect=BrowserSourceUnavailable("session_keepalive"))
+    authenticated_header = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        official_session_probe,
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", authenticated_header)
+
+    for observed_at in (0.0, 0.1, 0.24, 0.25, 0.4, 0.74, 0.75, 1.0, 1.74, 1.75):
+        clock = observed_at
+        assert await session._probe_reservation_terminal(reservation_request(), attempt) is None
+
+    assert official_session_probe.await_count == 4
+    assert authenticated_header.await_count == 10
+    assert attempt.login_route_auth_unavailable_attempts == 4
+    assert attempt.login_route_auth_next_official_probe_at == 2.75
+
+
+@pytest.mark.asyncio
+async def test_reservation_waits_for_delayed_header_after_unavailable_official_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+    post_click_snapshots = 0
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        nonlocal post_click_snapshots
+        if reserve.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록", (), url="https://www.korail.com/ticket/search/general"
+            )
+        post_click_snapshots += 1
+        if post_click_snapshots <= 2:
+            return PydollPageSnapshot("로그인 처리", (), url="https://www.korail.com/ticket/login")
+        return PydollPageSnapshot(
+            ("승차권 예약 2026-08-02 KTX 118 06:35 07:49 특실 예약취소 장바구니 결제하기"),
+            (),
+            url="https://www.korail.com/ticket/reservation/detail",
+        )
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+    official_session_probe = AsyncMock(side_effect=BrowserSourceUnavailable("session_keepalive"))
+    authenticated_header = AsyncMock(side_effect=(False, True))
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        official_session_probe,
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", authenticated_header)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert result.reservation_clicked is True
+    assert reserve.clicks == 1
+    assert official_session_probe.await_count == 1
+    assert authenticated_header.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_reservation_does_not_click_while_login_route_auth_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 350, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인 처리", (), url="https://www.korail.com/ticket/login"
+            )
+        ),
+    )
+    official_session_probe = AsyncMock(side_effect=BrowserSourceUnavailable("session_keepalive"))
+    authenticated_header = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        official_session_probe,
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", authenticated_header)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.FAILED
+    assert result.reason == "source_unavailable:session_keepalive"
+    assert result.seat_clicked is True
+    assert result.reservation_clicked is False
+    assert reserve.clicks == 0
+    assert 1 <= official_session_probe.await_count <= 3
+    assert authenticated_header.await_count > official_session_probe.await_count
+
+
+@pytest.mark.asyncio
+async def test_reservation_preserves_post_click_uncertainty_until_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 350, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        return []
+
+    async def snapshot() -> PydollPageSnapshot:
+        if reserve.clicks == 0:
+            return PydollPageSnapshot(
+                "열차 목록", (), url="https://www.korail.com/ticket/search/general"
+            )
+        return PydollPageSnapshot("로그인 처리", (), url="https://www.korail.com/ticket/login")
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(session, "_snapshot", snapshot)
+    official_session_probe = AsyncMock(side_effect=BrowserSourceUnavailable("session_keepalive"))
+    authenticated_header = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        official_session_probe,
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", authenticated_header)
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.outcome is KorailReservationOutcome.FAILED
+    assert result.reason == "source_unavailable:session_keepalive"
+    assert result.seat_clicked is True
+    assert result.reservation_clicked is True
+    assert reserve.clicks == 1
+    assert 1 <= official_session_probe.await_count <= 3
+    assert authenticated_header.await_count > official_session_probe.await_count
+
+
+@pytest.mark.asyncio
+async def test_reservation_replaces_unsafe_unavailable_stage_before_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 350, True)
+    row = booking_row()
+    seat = FakeElement("특실\n33,200원")
+    reserve = FakeElement("예매")
+
+    async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
+        if selector == "li.tckList":
+            return [row]
+        if selector == "a" and scope is row:
+            return [seat]
+        if selector == "button.reservbtn":
+            return [reserve]
+        return []
+
+    monkeypatch.setattr(session, "_visible_elements", visible)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "로그인 처리", (), url="https://www.korail.com/ticket/login"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        AsyncMock(side_effect=BrowserSourceUnavailable("credential=fixture-password")),
+    )
+    monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(return_value=False))
+
+    result = await session.reserve_once(reservation_request())
+
+    assert result.reason == "source_unavailable:session_keepalive"
+    assert "fixture-password" not in result.reason
+    assert reserve.clicks == 0
+
+
+@pytest.mark.asyncio
 async def test_post_submit_auth_keeps_observing_login_url_until_exact_detail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3025,7 +3378,12 @@ class ReservationFixtureSession:
     ) -> PydollPageSnapshot:
         return snapshot
 
-    async def reserve_once(self, request: KorailReservationRequest) -> KorailReservationResult:
+    async def reserve_once(
+        self,
+        request: KorailReservationRequest,
+        *,
+        on_progress=None,
+    ) -> KorailReservationResult:
         self.reserve_calls += 1
         return KorailReservationResult(
             KorailReservationOutcome.PAYMENT_REQUIRED,
@@ -3336,9 +3694,14 @@ class SignalingReservationSession(ReservationFixtureSession):
         super().__init__()
         self.reservation_started = asyncio.Event()
 
-    async def reserve_once(self, request: KorailReservationRequest) -> KorailReservationResult:
+    async def reserve_once(
+        self,
+        request: KorailReservationRequest,
+        *,
+        on_progress=None,
+    ) -> KorailReservationResult:
         self.reservation_started.set()
-        return await super().reserve_once(request)
+        return await super().reserve_once(request, on_progress=on_progress)
 
 
 class ReplayFixtureClient:
@@ -4006,6 +4369,7 @@ def test_internal_reserve_endpoint_is_bearer_protected_and_returns_no_credential
         "seat_clicked": True,
         "reservation_clicked": True,
         "reserved_seats": [],
+        "confirmation_correlation_seats": [],
     }
     assert "fixture-login" not in response.text
     assert "fixture-password" not in response.text

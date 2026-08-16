@@ -115,6 +115,110 @@ async def test_reservation_driver_resolves_session_monkeypatch_seams_after_const
     assert terminal_probe.await_count == 2
 
 
+@pytest.mark.asyncio
+async def test_click_attempt_captures_empty_baseline_before_seat_and_exact_state_after_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    row = object()
+    seat = _ClickControl()
+    reservation = _ClickControl("예매")
+    exact_seat = reservation_contracts_module.KorailReservedSeat(
+        car_number="4",
+        seat_number="2C",
+    )
+
+    async def visible_elements(selector: str, *, scope: object = None) -> list[object]:
+        del scope
+        if selector == "li.tckList":
+            return [row]
+        if selector == "button.reservbtn":
+            return [reservation]
+        return []
+
+    read_order: list[tuple[int, int]] = []
+
+    async def read_reserved_state(_request_value):  # type: ignore[no-untyped-def]
+        read_order.append((seat.clicks, reservation.clicks))
+        return () if len(read_order) == 1 else (exact_seat,)
+
+    monkeypatch.setattr(session, "_visible_elements", visible_elements)
+    monkeypatch.setattr(session, "_row_matches_reservation", AsyncMock(return_value=True))
+    monkeypatch.setattr(session, "_actionable_seat_controls", AsyncMock(return_value=[seat]))
+    monkeypatch.setattr(
+        session,
+        "_probe_reservation_terminal",
+        AsyncMock(
+            side_effect=[
+                None,
+                reservation_contracts_module.KorailReservationResult(
+                    reservation_contracts_module.KorailReservationOutcome.FAILED,
+                    "reservation_result_unknown",
+                ),
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        session,
+        "_read_control_state",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                enabled=True,
+                aria_disabled="false",
+                disabled_attribute=False,
+                read_error=False,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        session._reservation_driver,
+        "_read_reserved_seats_from_preserved_state",
+        read_reserved_state,
+    )
+
+    result = await session.reserve_once(_request())
+
+    assert result.outcome is reservation_contracts_module.KorailReservationOutcome.FAILED
+    assert result.reservation_clicked is True
+    assert result.confirmation_correlation_seats == (exact_seat,)
+    assert read_order == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("baseline_kind", ["unavailable", "unchanged"])
+async def test_correlation_requires_a_trusted_changed_pre_click_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_kind: str,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    exact_seat = reservation_contracts_module.KorailReservedSeat(
+        car_number="4",
+        seat_number="2C",
+    )
+    session._reservation_driver._confirmation_correlation_baseline = (
+        None if baseline_kind == "unavailable" else (exact_seat,)
+    )
+    monkeypatch.setattr(
+        session._reservation_driver,
+        "_read_reserved_seats_from_preserved_state",
+        AsyncMock(return_value=(exact_seat,)),
+    )
+
+    correlation = await session._reservation_driver.confirmation_correlation_seats_from_fresh_state(
+        _request()
+    )
+
+    assert correlation == ()
+
+
 def test_reservation_contract_identity_remains_compatible_across_facades() -> None:
     names = (
         "KorailReservationOutcome",

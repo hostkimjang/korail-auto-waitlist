@@ -40,6 +40,9 @@ async def test_runtime_resolves_current_dependencies_and_preserves_application_e
     def utc_instant(value: datetime) -> datetime:
         return value
 
+    async def update_auth(*_args: object, **_kwargs: object) -> bool:
+        return True
+
     async def application(*args: object, **kwargs: object) -> None:
         captured["args"] = args
         captured["kwargs"] = kwargs
@@ -49,6 +52,11 @@ async def test_runtime_resolves_current_dependencies_and_preserves_application_e
     monkeypatch.setattr(runtime_module, "add_outbox_event", outbox)
     monkeypatch.setattr(runtime_module, "record_reservation_confirmation", confirmation)
     monkeypatch.setattr(runtime_module, "_utc_instant", utc_instant)
+    monkeypatch.setattr(
+        runtime_module,
+        "_update_provider_auth_status_in_reconciliation_transaction",
+        update_auth,
+    )
     monkeypatch.setattr(
         runtime_module,
         "apply_reservation_reconciliation_application",
@@ -72,4 +80,5 @@ async def test_runtime_resolves_current_dependencies_and_preserves_application_e
     assert dependencies.apply_watch_transition is transition
     assert dependencies.add_outbox_event is outbox
     assert dependencies.record_reservation_confirmation is confirmation
+    assert dependencies.update_provider_auth_status is update_auth
     assert dependencies.utc_instant is utc_instant

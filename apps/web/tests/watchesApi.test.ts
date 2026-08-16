@@ -94,6 +94,17 @@ beforeEach(() => {
 });
 
 describe("watch API boundary", () => {
+  it("requests the reduced live collection only when the caller selects it", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWatches({ view: "live" });
+    await fetchWatches();
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/v1/watches?view=live");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toMatch(/\/api\/v1\/watches$/);
+  });
+
   it("rejects malformed list envelopes and rows instead of fabricating watch state", async () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(jsonResponse({ items: [] }))
@@ -644,6 +655,12 @@ describe("watch API boundary", () => {
           retryable: true,
           manual_check_required: false,
           retry_condition: "new_availability_episode",
+          result_reason_code: "reservation_request_result_unknown",
+          confirmation_outcome: "inconclusive",
+          confirmation_diagnostic_code: "official_read_unavailable",
+          confirmation_observed_at: "2026-08-02T13:05:08Z",
+          reconciliation_attempt_count: 2,
+          next_reconcile_at: "2026-08-02T13:06:08Z",
           progress_stages: [],
         },
       }],
@@ -651,6 +668,7 @@ describe("watch API boundary", () => {
 
     expect(mapped.latestReservationAttempt).toEqual({
       outcome: "not_available",
+      resultReasonCode: "reservation_request_result_unknown",
       startedAt: "2026-08-02T13:04:43Z",
       finishedAt: "2026-08-02T13:05:07Z",
       retryable: true,
@@ -658,6 +676,13 @@ describe("watch API boundary", () => {
       retryCondition: "new_availability_episode",
       paymentHoldEndedAt: null,
       manualRearmAvailable: false,
+      manualRearmReason: null,
+      confirmationOutcome: "inconclusive",
+      confirmationDiagnosticCode: "official_read_unavailable",
+      confirmationObservedAt: "2026-08-02T13:05:08Z",
+      reconciliationAttemptCount: 2,
+      reconciliationResolution: null,
+      nextReconcileAt: "2026-08-02T13:06:08Z",
       progressStages: [],
       reservedSeats: [],
     });
@@ -686,6 +711,69 @@ describe("watch API boundary", () => {
         },
       }],
     }).latestReservationAttempt).toBeNull();
+    for (const invalidEvidence of [
+      { result_reason_code: "raw_provider_dialog_text" },
+      { confirmation_outcome: "maybe_paid" },
+      { confirmation_observed_at: "2026-08-02T13:05:08" },
+      { reconciliation_attempt_count: 7 },
+      { next_reconcile_at: "not-a-time" },
+    ]) {
+      expect(mapWatch({
+        ...apiWatch,
+        candidates: [{
+          ...apiWatch.candidates[0],
+          latest_reservation_attempt: {
+            outcome: "unknown",
+            started_at: "2026-08-02T13:04:43Z",
+            finished_at: "2026-08-02T13:05:07Z",
+            retryable: false,
+            manual_check_required: true,
+            ...invalidEvidence,
+          },
+        }],
+      }).latestReservationAttempt).toBeNull();
+    }
+  });
+
+  it("normalizes legacy and future inconclusive diagnostics without applying them to conclusive evidence", () => {
+    const mapAttempt = (
+      confirmationOutcome: string,
+      confirmationDiagnosticCode?: unknown,
+    ) => mapWatch({
+      ...apiWatch,
+      candidates: [{
+        ...apiWatch.candidates[0],
+        latest_reservation_attempt: {
+          outcome: "unknown",
+          started_at: "2026-08-02T13:04:43Z",
+          finished_at: "2026-08-02T13:05:07Z",
+          retryable: false,
+          manual_check_required: true,
+          confirmation_outcome: confirmationOutcome,
+          ...(confirmationDiagnosticCode === undefined
+            ? {}
+            : { confirmation_diagnostic_code: confirmationDiagnosticCode }),
+        },
+      }],
+    }).latestReservationAttempt;
+
+    expect(mapAttempt("inconclusive", "official_record_ambiguous")).toMatchObject({
+      confirmationOutcome: "inconclusive",
+      confirmationDiagnosticCode: "official_record_ambiguous",
+    });
+    expect(mapAttempt("inconclusive")).toMatchObject({
+      confirmationDiagnosticCode: "unspecified",
+    });
+    expect(mapAttempt("inconclusive", null)).toMatchObject({
+      confirmationDiagnosticCode: "unspecified",
+    });
+    expect(mapAttempt("inconclusive", "future_diagnostic_code")).toMatchObject({
+      confirmationDiagnosticCode: "unspecified",
+    });
+    expect(mapAttempt("not_found", "official_read_unavailable")).toMatchObject({
+      confirmationOutcome: "not_found",
+      confirmationDiagnosticCode: null,
+    });
   });
 
   it("maps confirmed train type and reserved seats without deriving missing details", () => {
@@ -777,6 +865,10 @@ describe("watch API boundary", () => {
           ...apiWatch.candidates[0],
           id: "attempted-two",
           train_number: "326",
+          train_type: "KTX-산천",
+          departure_at: "2026-07-31T14:11:00+09:00",
+          arrival_at: "2026-07-31T16:52:00+09:00",
+          seat_class: "first",
           priority: 2,
           latest_reservation_attempt: {
             outcome: "unknown",
@@ -795,10 +887,138 @@ describe("watch API boundary", () => {
     });
 
     expect(mapped.latestReservationAttemptCandidateId).toBe("attempted-two");
+    expect(mapped.train).toBe("KTX 033");
+    expect(mapped.seatClass).toBe("standard");
+    expect(mapped.latestReservationAttemptContext).toEqual({
+      candidateId: "attempted-two",
+      provider: "KORAIL",
+      train: "326",
+      trainType: "KTX-산천",
+      date: "7월 31일 (금)",
+      departure: "14:11",
+      arrival: "16:52",
+      seatClass: "first",
+      seatClassLabel: "특실",
+    });
     expect(mapped.latestReservationAttempt).toMatchObject({
       outcome: "unknown",
       manualCheckRequired: true,
       progressStages: [{ stage: "authenticated_session_ready" }],
+    });
+  });
+
+  it("uses the unique manual-rearm attempt owner across candidates", () => {
+    const mapped = mapWatch({
+      ...apiWatch,
+      status: "watching",
+      candidates: [
+        {
+          ...apiWatch.candidates[0],
+          id: "later-conclusive",
+          train_number: "111",
+          priority: 1,
+          latest_reservation_attempt: {
+            outcome: "not_available",
+            started_at: "2026-08-02T13:10:00Z",
+            finished_at: "2026-08-02T13:11:00Z",
+            retryable: true,
+            manual_check_required: false,
+            retry_condition: "new_availability_episode",
+          },
+        },
+        {
+          ...apiWatch.candidates[0],
+          id: "older-unknown-source",
+          train_number: "223",
+          train_type: "KTX-산천",
+          departure_at: "2026-07-31T22:08:00+09:00",
+          arrival_at: "2026-07-31T23:07:00+09:00",
+          seat_class: "first",
+          priority: 2,
+          latest_reservation_attempt: {
+            outcome: "unknown",
+            started_at: "2026-08-02T13:00:00Z",
+            finished_at: "2026-08-02T13:01:00Z",
+            retryable: false,
+            manual_check_required: true,
+            retry_condition: null,
+            confirmation_outcome: "inconclusive",
+            confirmation_observed_at: "2026-08-02T13:04:00Z",
+            reconciliation_attempt_count: 3,
+            reconciliation_resolution: null,
+            next_reconcile_at: "2026-08-02T13:09:00Z",
+            manual_rearm_available: true,
+            manual_rearm_reason: "unknown_result_unresolved",
+          },
+        },
+      ],
+    });
+
+    expect(mapped.train).toBe("111");
+    expect(mapped.latestReservationAttemptCandidateId).toBe("older-unknown-source");
+    expect(mapped.latestReservationAttempt).toMatchObject({
+      outcome: "unknown",
+      manualRearmAvailable: true,
+      manualRearmReason: "unknown_result_unresolved",
+    });
+    expect(mapped.latestReservationAttemptContext).toMatchObject({
+      candidateId: "older-unknown-source",
+      provider: "KORAIL",
+      train: "223",
+      trainType: "KTX-산천",
+      departure: "22:08",
+      arrival: "23:07",
+      seatClass: "first",
+      seatClassLabel: "특실",
+    });
+  });
+
+  it("fails manual rearm closed when multiple candidates claim authority, even if one is malformed", () => {
+    const unresolvedAttempt = {
+      outcome: "unknown",
+      finished_at: "2026-08-02T13:01:00Z",
+      retryable: false,
+      manual_check_required: true,
+      retry_condition: null,
+      confirmation_outcome: "inconclusive",
+      confirmation_observed_at: "2026-08-02T13:04:00Z",
+      reconciliation_attempt_count: 3,
+      reconciliation_resolution: null,
+      next_reconcile_at: "2026-08-02T13:09:00Z",
+      manual_rearm_available: true,
+      manual_rearm_reason: "unknown_result_unresolved",
+    };
+    const mapped = mapWatch({
+      ...apiWatch,
+      status: "watching",
+      candidates: [
+        {
+          ...apiWatch.candidates[0],
+          id: "manual-older",
+          priority: 1,
+          latest_reservation_attempt: {
+            ...unresolvedAttempt,
+            started_at: "not-an-aware-time",
+          },
+        },
+        {
+          ...apiWatch.candidates[0],
+          id: "manual-newer",
+          priority: 2,
+          latest_reservation_attempt: {
+            ...unresolvedAttempt,
+            started_at: "2026-08-02T13:02:00Z",
+            finished_at: "2026-08-02T13:03:00Z",
+            confirmation_observed_at: "2026-08-02T13:04:00Z",
+          },
+        },
+      ],
+    });
+
+    expect(mapped.latestReservationAttemptCandidateId).toBe("manual-newer");
+    expect(mapped.latestReservationAttempt).toMatchObject({
+      manualRearmAvailable: false,
+      manualRearmReason: null,
     });
   });
 
@@ -814,6 +1034,7 @@ describe("watch API boundary", () => {
       post_deadline_reconciled_at: "2026-08-02T08:24:00Z",
       payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
       manual_rearm_available: true,
+      manual_rearm_reason: "payment_hold_ended",
     };
     const mapAttempt = (overrides: Record<string, unknown> = {}) => mapWatch({
       ...apiWatch,
@@ -829,6 +1050,7 @@ describe("watch API boundary", () => {
       paymentHoldEndedAt: "2026-08-02T08:24:00Z",
       paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
       manualRearmAvailable: true,
+      manualRearmReason: "payment_hold_ended",
     });
     expect(mapAttempt({ confirmation_outcome: "inconclusive" })).toMatchObject({
       paymentHoldEndedAt: null,
@@ -852,7 +1074,76 @@ describe("watch API boundary", () => {
     expect(mapAttempt({ payment_hold_end_reason: null })).toMatchObject({
       paymentHoldEndedAt: null,
     });
+    expect(mapAttempt({ manual_rearm_reason: "unknown_result_unresolved" })).toMatchObject({
+      manualRearmAvailable: false,
+      manualRearmReason: null,
+    });
     expect(mapAttempt({ post_deadline_reconciled_at: "2026-08-02 08:24:00" })).toBeNull();
+  });
+
+  it("accepts unresolved UNKNOWN rearm only with the server reason and exact evidence", () => {
+    const attempt = {
+      outcome: "unknown",
+      started_at: "2026-08-02T08:20:00Z",
+      finished_at: "2026-08-02T08:22:00Z",
+      retryable: false,
+      manual_check_required: true,
+      retry_condition: null,
+      confirmation_outcome: "inconclusive",
+      confirmation_observed_at: "2026-08-02T08:24:00Z",
+      reconciliation_attempt_count: 3,
+      reconciliation_resolution: null,
+      next_reconcile_at: "2026-08-02T08:29:00Z",
+      manual_rearm_available: true,
+      manual_rearm_reason: "unknown_result_unresolved",
+    };
+    const mapAttempt = (overrides: Record<string, unknown> = {}) => mapWatch({
+      ...apiWatch,
+      candidates: [{
+        ...apiWatch.candidates[0],
+        latest_reservation_attempt: { ...attempt, ...overrides },
+      }],
+    }).latestReservationAttempt;
+
+    expect(mapAttempt()).toMatchObject({
+      manualRearmAvailable: true,
+      manualRearmReason: "unknown_result_unresolved",
+      reconciliationAttemptCount: 3,
+      reconciliationResolution: null,
+    });
+    expect(mapAttempt({ reconciliation_attempt_count: 2 })).toMatchObject({
+      manualRearmAvailable: false,
+      manualRearmReason: null,
+    });
+    expect(mapAttempt({ confirmation_observed_at: null })).toMatchObject({
+      manualRearmAvailable: false,
+    });
+    expect(mapAttempt({ reconciliation_resolution: "confirmed_absent" })).toMatchObject({
+      manualRearmAvailable: false,
+      manualRearmReason: null,
+    });
+    expect(mapAttempt({ manual_rearm_reason: "payment_hold_ended" })).toMatchObject({
+      manualRearmAvailable: false,
+    });
+    expect(mapAttempt({
+      confirmation_outcome: "not_found",
+      reconciliation_attempt_count: 6,
+      reconciliation_resolution: "exhausted_unresolved",
+      next_reconcile_at: null,
+    })).toMatchObject({
+      manualRearmAvailable: true,
+      manualRearmReason: "unknown_result_unresolved",
+    });
+    expect(mapAttempt({
+      confirmation_outcome: "not_found",
+      reconciliation_attempt_count: 6,
+      reconciliation_resolution: "confirmed_absent",
+      next_reconcile_at: null,
+    })).toMatchObject({
+      manualRearmAvailable: false,
+      manualRearmReason: null,
+    });
+    expect(mapAttempt({ manual_rearm_reason: "future_reason" })).toBeNull();
   });
 
   it("labels a safe official scheduled watch without claiming an automatic check", () => {
@@ -931,6 +1222,28 @@ describe("watch API boundary", () => {
     expect(mapped).toMatchObject({
       seatEvidenceLabel: "일반실 · 매진 · 최근 관측 12:46",
       registrationEvidenceLabel: "일반실 · 예매 가능 · 공식 관측 12:34",
+      seatFoundObservation: null,
+    });
+  });
+
+  it("keeps standing-only visible while excluding it from actionable seat-found context", () => {
+    const mapped = mapWatch({
+      ...apiWatch,
+      status: "seat_found",
+      candidates: [{
+        ...apiWatch.candidates[0],
+        latest_observation: {
+          status: "standing_only",
+          source: "authorized-test",
+          observed_at: "2026-07-31T03:46:00Z",
+          fresh_until: "2030-07-31T03:51:00Z",
+          error_category: null,
+        },
+      }],
+    });
+
+    expect(mapped).toMatchObject({
+      seatEvidenceLabel: "일반실 · 입석만 가능 · 최근 관측 12:46",
       seatFoundObservation: null,
     });
   });
@@ -1265,6 +1578,7 @@ describe("watch API boundary", () => {
           post_deadline_reconciled_at: "2026-08-02T08:24:00Z",
           payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
           manual_rearm_available: true,
+          manual_rearm_reason: "payment_hold_ended",
         },
       }],
     });
@@ -1273,6 +1587,7 @@ describe("watch API boundary", () => {
     expect(mapped.latestReservationAttempt).toMatchObject({
       paymentHoldEndedAt: "2026-08-02T08:24:00Z",
       manualRearmAvailable: true,
+      manualRearmReason: "payment_hold_ended",
     });
     expect(mapped.seatFoundObservation).toMatchObject({
       kind: "official_provider",
@@ -1292,6 +1607,7 @@ describe("watch API boundary", () => {
       post_deadline_reconciled_at: "2026-08-02T08:24:00Z",
       payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
       manual_rearm_available: true,
+      manual_rearm_reason: "payment_hold_ended",
     };
     const mapped = mapWatch({
       ...WATCH_DTO,
@@ -1383,13 +1699,17 @@ describe("watch API boundary", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(apiWatch));
     vi.stubGlobal("fetch", fetchMock);
 
-    await rearmWatchReservation(apiWatch.id);
+    await rearmWatchReservation(apiWatch.id, "unknown_result_unresolved");
 
     const [url, options] = fetchMock.mock.calls[0] ?? [];
     const headers = new Headers(options?.headers);
     expect(String(url)).toContain(`/watches/${apiWatch.id}/reservation-rearm`);
     expect(options?.method).toBe("POST");
     expect(headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(JSON.parse(String(options?.body))).toEqual({
+      reason: "unknown_result_unresolved",
+      official_reservation_state_confirmed: true,
+    });
   });
 
 });

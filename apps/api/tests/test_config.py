@@ -1,5 +1,6 @@
 import base64
 import hashlib
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -9,6 +10,8 @@ from rail_waitlist.config import (
     FULLSTACK_E2E_UPSTREAM_ORIGIN,
     Settings,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_initial_admin_registration_is_disabled_by_default():
@@ -27,6 +30,48 @@ def test_live_seat_cache_defaults_to_one_second():
 
     assert settings.srt_seat_status_cache_ttl_seconds == 1
     assert settings.korail_browser_adapter_cache_ttl_seconds == 1
+
+
+def test_srt_timeouts_use_roomy_ordered_defaults(monkeypatch):
+    monkeypatch.delenv("SRT_SEAT_STATUS_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("SRT_PROVIDER_ADAPTER_TIMEOUT_SECONDS", raising=False)
+
+    settings = Settings(
+        _env_file=None,
+        srt_provider_adapter_enabled=True,
+        srt_provider_adapter_token="s" * 32,
+    )
+
+    assert settings.srt_seat_status_timeout_seconds == 60
+    assert settings.srt_provider_adapter_timeout_seconds == 90
+
+
+@pytest.mark.parametrize("value", [3, 90])
+def test_srt_provider_budget_accepts_documented_boundaries(value):
+    settings = Settings(_env_file=None, srt_seat_status_timeout_seconds=value)
+
+    assert settings.srt_seat_status_timeout_seconds == value
+
+
+@pytest.mark.parametrize("value", [2.99, 90.01])
+def test_srt_provider_budget_rejects_values_outside_documented_range(value):
+    with pytest.raises(ValidationError, match="srt_seat_status_timeout_seconds"):
+        Settings(_env_file=None, srt_seat_status_timeout_seconds=value)
+
+
+def test_srt_timeout_defaults_stay_synced_across_deployment_artifacts():
+    example_values = {}
+    for line in (REPO_ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            name, value = line.split("=", 1)
+            example_values[name] = value
+
+    compose = (REPO_ROOT / "compose.yml").read_text(encoding="utf-8")
+
+    assert example_values["SRT_SEAT_STATUS_TIMEOUT_SECONDS"] == "60"
+    assert example_values["SRT_PROVIDER_ADAPTER_TIMEOUT_SECONDS"] == "90"
+    assert compose.count("${SRT_SEAT_STATUS_TIMEOUT_SECONDS:-60}") == 2
+    assert compose.count("${SRT_PROVIDER_ADAPTER_TIMEOUT_SECONDS:-90}") == 1
 
 
 def test_removed_accountless_korail_settings_are_ignored(monkeypatch):

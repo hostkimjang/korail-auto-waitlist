@@ -252,7 +252,7 @@ async def test_browser_preserves_hooks_pickles_surface_and_late_dependencies(
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")
     }
-    assert len(private_names) == 29
+    assert len(private_names) == 30
     assert "_search_schedule_commit_owner" not in private_names
     assert not hasattr(browser, "__all__")
 

@@ -5,7 +5,12 @@ from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 
-from ..domain import Provider, ReservationOutcome
+from ..domain import (
+    Provider,
+    ReservationOutcome,
+    ReservationResultReasonCode,
+    reservation_result_reason_code_for_outcome,
+)
 from ..observations.contracts import SeatObservationRequest
 from ..provider_registry.official_url_policy import (
     OFFICIAL_HOST_ROOTS,
@@ -49,6 +54,16 @@ ReservationProgressStageName = Literal[
     "reservation_requested",
 ]
 
+POST_REQUEST_UNKNOWN_CORRELATION_REASON_CODES = frozenset(
+    {
+        ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
+        ReservationResultReasonCode.PROVIDER_BLOCKED,
+        ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+        ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID,
+        ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+    }
+)
+
 
 class ReservationProgressStage(ProviderContractModel):
     stage: ReservationProgressStageName
@@ -80,6 +95,9 @@ class ReservationResult(ProviderContractModel):
             "reserved means a temporary reservation awaiting user payment, not payment completion"
         )
     )
+    result_reason_code: ReservationResultReasonCode = (
+        ReservationResultReasonCode.RESERVATION_PENDING
+    )
     source: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
     observed_at: datetime
     credential_version: int | None = Field(default=None, ge=1)
@@ -87,6 +105,7 @@ class ReservationResult(ProviderContractModel):
     official_handoff_url: AnyHttpUrl | None = None
     progress_stages: tuple[ReservationProgressStage, ...] = ()
     reserved_seats: tuple[ReservedSeat, ...] = Field(default=(), max_length=9)
+    confirmation_correlation_seats: tuple[ReservedSeat, ...] = Field(default=(), max_length=9)
 
     @field_validator("observed_at", "payment_deadline")
     @classmethod
@@ -115,6 +134,41 @@ class ReservationResult(ProviderContractModel):
 
     @model_validator(mode="after")
     def validate_reservation_result(self) -> ReservationResult:
+        if "result_reason_code" not in self.model_fields_set:
+            self.result_reason_code = reservation_result_reason_code_for_outcome(self.outcome)
+        compatible_reason_codes = {
+            ReservationOutcome.PENDING: {ReservationResultReasonCode.RESERVATION_PENDING},
+            ReservationOutcome.PAYMENT_REQUIRED: {ReservationResultReasonCode.PAYMENT_HOLD_CREATED},
+            ReservationOutcome.RESERVED: {ReservationResultReasonCode.PAYMENT_HOLD_CREATED},
+            ReservationOutcome.NOT_AVAILABLE: {
+                ReservationResultReasonCode.TARGET_NOT_AVAILABLE,
+                ReservationResultReasonCode.SEAT_NOT_AVAILABLE,
+                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE,
+                ReservationResultReasonCode.SEAT_SELECTION_LOST,
+            },
+            ReservationOutcome.AUTH_REQUIRED: {ReservationResultReasonCode.AUTHENTICATION_REQUIRED},
+            ReservationOutcome.PROVIDER_BLOCKED: {ReservationResultReasonCode.PROVIDER_BLOCKED},
+            ReservationOutcome.FAILED: {
+                ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+                ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID,
+                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE,
+                ReservationResultReasonCode.SEAT_SELECTION_LOST,
+                ReservationResultReasonCode.RESERVATION_FAILED,
+            },
+            ReservationOutcome.UNKNOWN: {
+                ReservationResultReasonCode.TARGET_AMBIGUOUS,
+                ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
+                ReservationResultReasonCode.PROVIDER_BLOCKED,
+                ReservationResultReasonCode.DELAY_CONSENT_REQUIRED,
+                ReservationResultReasonCode.EXISTING_RESERVATION_ACTION_REQUIRED,
+                ReservationResultReasonCode.PROVIDER_NOTICE_ACTION_REQUIRED,
+                ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+                ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID,
+                ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+            },
+        }
+        if self.result_reason_code not in compatible_reason_codes[self.outcome]:
+            raise ValueError("result_reason_code is incompatible with reservation outcome")
         stage_names = [progress.stage for progress in self.progress_stages]
         if len(stage_names) != len(set(stage_names)):
             raise ValueError("reservation progress stages must be unique")
@@ -126,11 +180,24 @@ class ReservationResult(ProviderContractModel):
         seat_keys = [(seat.car_number, seat.seat_number) for seat in self.reserved_seats]
         if len(seat_keys) != len(set(seat_keys)):
             raise ValueError("reserved_seats must contain unique car and seat pairs")
+        correlation_seat_keys = [
+            (seat.car_number, seat.seat_number) for seat in self.confirmation_correlation_seats
+        ]
+        if len(correlation_seat_keys) != len(set(correlation_seat_keys)):
+            raise ValueError(
+                "confirmation_correlation_seats must contain unique car and seat pairs"
+            )
         actionable = self.outcome in {"payment_required", "reserved"}
         if actionable and self.official_handoff_url is None:
             raise ValueError(
                 f"{self.outcome} is not payment completion and requires an official_handoff_url"
             )
+        post_request_unknown_with_exact_seats = (
+            self.outcome is ReservationOutcome.UNKNOWN
+            and self.result_reason_code in POST_REQUEST_UNKNOWN_CORRELATION_REASON_CODES
+            and any(progress.stage == "reservation_requested" for progress in self.progress_stages)
+            and bool(self.confirmation_correlation_seats)
+        )
         if not actionable and (
             self.payment_deadline is not None
             or self.official_handoff_url is not None
@@ -139,6 +206,10 @@ class ReservationResult(ProviderContractModel):
             raise ValueError(
                 "only payment_required or reserved can include payment handoff or seat data"
             )
+        if self.confirmation_correlation_seats and not post_request_unknown_with_exact_seats:
+            raise ValueError("confirmation correlation seats require a post-request unknown result")
+        if actionable and self.confirmation_correlation_seats:
+            raise ValueError("payment states cannot include uncertain correlation seats")
         if self.payment_deadline is not None and self.payment_deadline <= self.observed_at:
             raise ValueError("payment_deadline must be later than observed_at")
         if (

@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import ColumnElement
 
-from ..domain import Provider, ReservationOutcome, SeatClass, WatchStatus
+from ..domain import (
+    Provider,
+    ReservationOutcome,
+    SeatClass,
+    WatchStatus,
+)
 from ..provider_account_management.models import RailProviderAccount
+from ..provider_call_context import bind_request_id
 from ..provider_contracts import (
     ProviderLifecycle,
     ProviderUnavailable,
@@ -18,13 +27,16 @@ from ..provider_contracts import (
 from ..provider_execution.contracts import AcquireExecutionLease, ExecutionLeaseGrant
 from ..provider_execution.lease_application import lock_execution_lease_current
 from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
+from .contracts import POST_REQUEST_UNKNOWN_CORRELATION_REASON_CODES
 from .provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
     ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
+from .provider_confirmation.safety_policy import enforce_confirmation_target_safety
 from .reconciliation_policy import (
     PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
     RESERVATION_RECONCILIATION_INTERVAL,
@@ -41,6 +53,7 @@ from .reconciliation_state_application import (
 )
 
 EXTERNAL_RECONCILIATION_PROVIDERS = frozenset({Provider.KORAIL, Provider.SRT})
+logger = logging.getLogger(__name__)
 
 
 class AsyncSessionFactory(Protocol):
@@ -108,13 +121,33 @@ def _confirmation_purpose(
         and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
         and attempt.confirmation_outcome
         not in {
-            ReservationConfirmationOutcome.AUTH_REQUIRED,
-            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
             ReservationConfirmationOutcome.CONFIRMED_PAID,
         }
     ):
         return ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+    if attempt.outcome is ReservationOutcome.UNKNOWN:
+        return ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
     return ReservationConfirmationPurpose.INITIAL
+
+
+def _has_valid_reservation_requested_progress(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {"stage", "occurred_at"}:
+            continue
+        if item.get("stage") != "reservation_requested":
+            continue
+        occurred_at = item.get("occurred_at")
+        if not isinstance(occurred_at, str):
+            continue
+        try:
+            parsed = datetime.fromisoformat(occurred_at)
+        except ValueError:
+            continue
+        if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+            return True
+    return False
 
 
 def _persisted_confirmation_seats(
@@ -147,6 +180,27 @@ def _persisted_confirmation_seats(
     if len(seat_keys) != len(set(seat_keys)):
         return ()
     return tuple(seats)
+
+
+def _trusted_unknown_correlation_seats(
+    attempt: ReservationAttempt,
+    *,
+    passenger_count: int,
+) -> tuple[ReservationConfirmationSeat, ...]:
+    """Return only durable, post-request, full-passenger UNKNOWN correlation."""
+
+    persisted = _persisted_confirmation_seats(
+        attempt.confirmation_correlation_seats,
+        max_count=passenger_count,
+    )
+    if (
+        attempt.outcome is ReservationOutcome.UNKNOWN
+        and attempt.result_reason_code in POST_REQUEST_UNKNOWN_CORRELATION_REASON_CODES
+        and _has_valid_reservation_requested_progress(attempt.progress_stages)
+        and len(persisted) == passenger_count
+    ):
+        return persisted
+    return ()
 
 
 def _reservation_reconciliation_due_clause(now: datetime):
@@ -183,6 +237,8 @@ def _reservation_reconciliation_due_clause(now: datetime):
                         ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
                         ReservationConfirmationOutcome.INCONCLUSIVE,
                         ReservationConfirmationOutcome.NOT_FOUND,
+                        ReservationConfirmationOutcome.AUTH_REQUIRED,
+                        ReservationConfirmationOutcome.PROVIDER_BLOCKED,
                     ]
                 ),
             ),
@@ -224,6 +280,8 @@ def _reservation_reconciliation_due_clause(now: datetime):
                 [
                     ReservationConfirmationOutcome.INCONCLUSIVE,
                     ReservationConfirmationOutcome.NOT_FOUND,
+                    ReservationConfirmationOutcome.AUTH_REQUIRED,
+                    ReservationConfirmationOutcome.PROVIDER_BLOCKED,
                 ]
             ),
             ReservationAttempt.reconciliation_attempt_count
@@ -262,8 +320,6 @@ def _reservation_reconciliation_due_clause(now: datetime):
                 ReservationAttempt.confirmation_outcome.is_(None),
                 ReservationAttempt.confirmation_outcome.not_in(
                     [
-                        ReservationConfirmationOutcome.AUTH_REQUIRED,
-                        ReservationConfirmationOutcome.PROVIDER_BLOCKED,
                         ReservationConfirmationOutcome.CONFIRMED_PAID,
                     ]
                 ),
@@ -291,6 +347,20 @@ def _reservation_reconciliation_due_clause(now: datetime):
     )
 
 
+def _watch_has_no_exact_paid_confirmation_clause() -> ColumnElement[bool]:
+    paid_attempt = aliased(ReservationAttempt)
+    paid_candidate = aliased(WatchCandidate)
+    return ~exists(
+        select(paid_attempt.id)
+        .join(paid_candidate, paid_candidate.id == paid_attempt.candidate_id)
+        .where(
+            paid_candidate.watch_id == Watch.id,
+            paid_attempt.confirmation_outcome == ReservationConfirmationOutcome.CONFIRMED_PAID,
+        )
+        .correlate(Watch)
+    )
+
+
 def _reservation_reconciliation_is_due(
     attempt: ReservationAttempt,
     watch: Watch,
@@ -315,8 +385,6 @@ def _reservation_reconciliation_is_due(
         and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
         and attempt.confirmation_outcome
         not in {
-            ReservationConfirmationOutcome.AUTH_REQUIRED,
-            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
             ReservationConfirmationOutcome.CONFIRMED_PAID,
         }
         and 0 < attempt.reconciliation_attempt_count < PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS
@@ -353,8 +421,6 @@ def _reservation_reconciliation_is_due(
             and attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
             and attempt.confirmation_outcome
             not in {
-                ReservationConfirmationOutcome.AUTH_REQUIRED,
-                ReservationConfirmationOutcome.PROVIDER_BLOCKED,
                 ReservationConfirmationOutcome.CONFIRMED_PAID,
             }
             and (attempt.post_deadline_reconciled_at is None or legacy_expired_hold_cleanup_due)
@@ -398,6 +464,7 @@ async def reconcile_reservation_attempt(
                     ),
                     ReservationAttempt.credential_version.is_not(None),
                     _reservation_reconciliation_due_clause(now),
+                    _watch_has_no_exact_paid_confirmation_clause(),
                     Watch.provider.in_(EXTERNAL_RECONCILIATION_PROVIDERS),
                 )
             )
@@ -409,20 +476,21 @@ async def reconcile_reservation_attempt(
             select(RailProviderAccount.credential_version).where(
                 RailProviderAccount.provider == watch.provider,
                 RailProviderAccount.enabled.is_(True),
+                RailProviderAccount.last_auth_status == "authenticated",
             )
         )
         if account_version != attempt.credential_version:
             return 0
         owner_watch_id = watch.id
-        purpose = _confirmation_purpose(watch, attempt)
-        reserved_seats = (
-            _persisted_confirmation_seats(
-                attempt.reserved_seats,
-                max_count=watch.passenger_count,
-            )
-            if purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
-            else ()
+        persisted_reserved_seats = _persisted_confirmation_seats(
+            attempt.reserved_seats,
+            max_count=watch.passenger_count,
         )
+        trusted_correlation_seats = _trusted_unknown_correlation_seats(
+            attempt,
+            passenger_count=watch.passenger_count,
+        )
+        purpose = _confirmation_purpose(watch, attempt)
         target = ReservationConfirmationTarget(
             attempt_id=attempt.id,
             candidate_id=candidate.id,
@@ -438,8 +506,18 @@ async def reconcile_reservation_attempt(
             passenger_count=watch.passenger_count,
             credential_version=attempt.credential_version,
             purpose=purpose,
-            reserved_seats=reserved_seats,
+            reserved_seats=(
+                persisted_reserved_seats
+                if purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+                else ()
+            ),
+            confirmation_correlation_seats=(
+                trusted_correlation_seats
+                if purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+                else ()
+            ),
         )
+        reconciliation_attempt = attempt.reconciliation_attempt_count + 1
 
     provider = target.provider
     if not await dependencies.provider_circuit_is_closed(provider):
@@ -457,14 +535,57 @@ async def reconcile_reservation_attempt(
             raise RuntimeError("execution adapter provider does not match reservation attempt")
         if not adapter.capabilities().reservation_once:
             return 0
-        try:
-            confirmation = await adapter.confirm_reservation(target)
-        except (ProviderUnavailable, RuntimeError, TypeError, ValueError):
-            confirmation = ReservationConfirmationResult(
-                provider=provider,
-                outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
-                source="worker-reconciliation",
-                observed_at=dependencies.now(),
+        with bind_request_id() as request_id:
+            logger.info(
+                "Reservation confirmation started event=reservation_confirmation_started "
+                "phase=worker_reconciliation provider=%s purpose=%s attempt_id=%s request_id=%s "
+                "reconciliation_attempt=%s",
+                provider.value,
+                target.purpose.value,
+                attempt_id,
+                request_id,
+                reconciliation_attempt,
+            )
+            try:
+                confirmation = await adapter.confirm_reservation(target)
+            except ProviderUnavailable:
+                confirmation = ReservationConfirmationResult(
+                    provider=provider,
+                    outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+                    source="worker-reconciliation",
+                    observed_at=dependencies.now(),
+                    diagnostic_code=(
+                        ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+                    ),
+                )
+            except (RuntimeError, TypeError, ValueError):
+                confirmation = ReservationConfirmationResult(
+                    provider=provider,
+                    outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+                    source="worker-reconciliation",
+                    observed_at=dependencies.now(),
+                    diagnostic_code=(
+                        ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+                    ),
+                )
+            confirmation = enforce_confirmation_target_safety(target, confirmation)
+            logger.info(
+                "Reservation confirmation classified event=reservation_confirmation_classified "
+                "phase=worker_reconciliation provider=%s purpose=%s outcome=%s "
+                "confirmation_diagnostic_code=%s source=%s attempt_id=%s request_id=%s "
+                "reconciliation_attempt=%s",
+                provider.value,
+                target.purpose.value,
+                confirmation.outcome.value,
+                (
+                    confirmation.diagnostic_code.value
+                    if confirmation.diagnostic_code is not None
+                    else "none"
+                ),
+                confirmation.source,
+                attempt_id,
+                request_id,
+                reconciliation_attempt,
             )
         if not await lease_service.is_current(
             lease_grant,
@@ -485,6 +606,7 @@ async def reconcile_reservation_attempt(
                 .where(
                     RailProviderAccount.provider == provider,
                     RailProviderAccount.enabled.is_(True),
+                    RailProviderAccount.last_auth_status == "authenticated",
                 )
                 .with_for_update()
             )
@@ -504,10 +626,38 @@ async def reconcile_reservation_attempt(
                 .with_for_update()
             )
             if watch is None or candidate is None or attempt is None:
+                auth_status = (
+                    "auth_required"
+                    if confirmation.outcome is ReservationConfirmationOutcome.AUTH_REQUIRED
+                    else "provider_blocked"
+                    if confirmation.outcome is ReservationConfirmationOutcome.PROVIDER_BLOCKED
+                    else None
+                )
+                if auth_status is not None and dependencies.state_dependencies is not None:
+                    updated = await dependencies.state_dependencies.update_provider_auth_status(
+                        session,
+                        provider,
+                        auth_status,
+                        expected_credential_version=target.credential_version,
+                    )
+                    if updated:
+                        await session.commit()
                 return 0
+            paid_attempt_id = await session.scalar(
+                select(ReservationAttempt.id)
+                .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+                .where(
+                    WatchCandidate.watch_id == watch.id,
+                    ReservationAttempt.confirmation_outcome
+                    == ReservationConfirmationOutcome.CONFIRMED_PAID,
+                )
+                .limit(1)
+                .with_for_update(of=ReservationAttempt)
+            )
             reconciled_at = dependencies.now()
             if (
-                attempt.credential_version != target.credential_version
+                paid_attempt_id is not None
+                or attempt.credential_version != target.credential_version
                 or not _reservation_reconciliation_is_due(
                     attempt,
                     watch,
@@ -524,6 +674,31 @@ async def reconcile_reservation_attempt(
                 attempt.candidate_id != candidate.id
                 or candidate.watch_id != watch.id
                 or watch.provider != provider
+            ):
+                return 0
+            locked_reserved_seats = _persisted_confirmation_seats(
+                attempt.reserved_seats,
+                max_count=watch.passenger_count,
+            )
+            locked_trusted_correlation_seats = _trusted_unknown_correlation_seats(
+                attempt,
+                passenger_count=watch.passenger_count,
+            )
+            locked_purpose = _confirmation_purpose(watch, attempt)
+            expected_target_seats = (
+                locked_reserved_seats
+                if locked_purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+                else ()
+            )
+            expected_correlation_seats = (
+                locked_trusted_correlation_seats
+                if locked_purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+                else ()
+            )
+            if (
+                locked_purpose is not target.purpose
+                or expected_target_seats != target.reserved_seats
+                or expected_correlation_seats != target.confirmation_correlation_seats
             ):
                 return 0
             if not await dependencies.lease_is_current_in_session(
@@ -555,6 +730,31 @@ async def reconcile_reservation_attempt(
                     dependencies=state_dependencies,
                 )
             await session.commit()
+            logger.info(
+                "Reservation confirmation persisted event=reservation_confirmation_persisted "
+                "phase=worker_reconciliation provider=%s purpose=%s outcome=%s "
+                "confirmation_diagnostic_code=%s source=%s attempt_id=%s request_id=%s "
+                "reconciliation_attempt=%s "
+                "reconciliation_attempt_count=%s next_reconcile_at=%s",
+                provider.value,
+                target.purpose.value,
+                confirmation.outcome.value,
+                (
+                    confirmation.diagnostic_code.value
+                    if confirmation.diagnostic_code is not None
+                    else "none"
+                ),
+                confirmation.source,
+                attempt_id,
+                request_id,
+                reconciliation_attempt,
+                attempt.reconciliation_attempt_count,
+                (
+                    attempt.next_reconcile_at.isoformat()
+                    if attempt.next_reconcile_at is not None
+                    else "none"
+                ),
+            )
         return 1
     finally:
         try:

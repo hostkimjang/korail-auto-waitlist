@@ -49,6 +49,69 @@ function centerState() {
 }
 
 describe("AppNotificationCenter", () => {
+  it("mounts detail cards only while expanded and keeps the controlled body target", async () => {
+    const state = pushNotifications(centerState(), [{
+      title: "감시 상태 변경",
+      subjectKey: "watch:four",
+      revisionKey: "watch:four:1",
+      kind: "recovery",
+    }]);
+    const onExpandedChange = vi.fn();
+    const { container, rerender } = render(
+      <AppNotificationCenter
+        state={state}
+        expanded={false}
+        onExpandedChange={onExpandedChange}
+        onDismiss={vi.fn()}
+        onDismissGroup={vi.fn()}
+        onDismissTimed={vi.fn()}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "실시간 알림 펼치기" });
+    const body = container.querySelector<HTMLDivElement>("#notification-center-body");
+    expect(toggle.getAttribute("aria-controls")).toBe("notification-center-body");
+    expect(body).not.toBeNull();
+    expect(body?.hidden).toBe(true);
+    expect(container.querySelectorAll(".notification-group")).toHaveLength(0);
+    expect(container.querySelectorAll(".notification-card")).toHaveLength(0);
+    expect(container.querySelector(".notification-center-footer")).toBeNull();
+    expect(screen.getByText("실시간 알림").nextElementSibling?.textContent).toBe("5건");
+    expect(await screen.findByText("첫 번째 좌석", {
+      selector: ".notification-center-peek strong",
+    })).toBeTruthy();
+
+    rerender(
+      <AppNotificationCenter
+        state={state}
+        expanded
+        onExpandedChange={onExpandedChange}
+        onDismiss={vi.fn()}
+        onDismissGroup={vi.fn()}
+        onDismissTimed={vi.fn()}
+      />,
+    );
+    expect(body?.hidden).toBe(false);
+    expect(container.querySelectorAll(".notification-group")).toHaveLength(4);
+    expect(container.querySelectorAll(".notification-card")).toHaveLength(5);
+    expect(container.querySelector(".notification-center-footer")).not.toBeNull();
+
+    rerender(
+      <AppNotificationCenter
+        state={state}
+        expanded={false}
+        onExpandedChange={onExpandedChange}
+        onDismiss={vi.fn()}
+        onDismissGroup={vi.fn()}
+        onDismissTimed={vi.fn()}
+      />,
+    );
+    expect(body?.hidden).toBe(true);
+    expect(container.querySelectorAll(".notification-group")).toHaveLength(0);
+    expect(container.querySelectorAll(".notification-card")).toHaveLength(0);
+    expect(container.querySelector(".notification-center-footer")).toBeNull();
+  });
+
   it("renders one region, groups simultaneous events, and does not steal focus", async () => {
     const onDismissGroup = vi.fn();
     const anchor = document.createElement("button");

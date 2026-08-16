@@ -9,6 +9,7 @@ from ..provider_contracts import ProviderUnavailable
 from ..provider_registry.contracts import ProviderCapabilities
 from ..reservations.contracts import ReservationRequest, ReservationResult
 from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
@@ -135,10 +136,18 @@ class SrtLiveExecutionAdapter(RailProviderAdapter):
             credentials = await self._credential_loader(self.provider)
         except RuntimeError:
             credentials = None
-        if credentials is None or credentials.credential_version != target.credential_version:
+        if credentials is None:
             return ReservationConfirmationResult(
                 provider=self.provider,
                 outcome=ReservationConfirmationOutcome.AUTH_REQUIRED,
+                source="srtrain-reservation-list",
+                observed_at=datetime.now(timezone.utc),
+            )
+        if credentials.credential_version != target.credential_version:
+            return ReservationConfirmationResult(
+                provider=self.provider,
+                outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+                diagnostic_code=(ReservationConfirmationDiagnosticCode.CREDENTIAL_CONTEXT_MISMATCH),
                 source="srtrain-reservation-list",
                 observed_at=datetime.now(timezone.utc),
             )

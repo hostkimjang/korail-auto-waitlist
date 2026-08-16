@@ -19,6 +19,7 @@ interface UseAppNotificationsResult {
   dismiss: (id: string) => void;
   dismissGroup: (kind: NotificationKind) => void;
   dismissTimed: () => void;
+  pruneStaleSubjects: (subjectKeys: ReadonlyArray<string>) => void;
   clear: () => void;
 }
 
@@ -55,7 +56,19 @@ export function useAppNotifications(): UseAppNotificationsResult {
     [],
   );
   const dismissTimed = useCallback(() => dispatch({ type: "dismiss_timed" }), []);
+  const pruneStaleSubjects = useCallback((subjectKeys: ReadonlyArray<string>) => {
+    dispatch({ type: "prune_stale_subjects", subjectKeys });
+  }, []);
   const clear = useCallback(() => dispatch({ type: "clear" }), []);
 
-  return { state, push, pushMany, dismiss, dismissGroup, dismissTimed, clear };
+  return {
+    state,
+    push,
+    pushMany,
+    dismiss,
+    dismissGroup,
+    dismissTimed,
+    pruneStaleSubjects,
+    clear,
+  };
 }

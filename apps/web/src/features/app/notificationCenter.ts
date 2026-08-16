@@ -73,6 +73,7 @@ export type NotificationCenterAction =
   | { type: "dismiss"; id: string }
   | { type: "dismiss_group"; kind: NotificationKind }
   | { type: "dismiss_timed" }
+  | { type: "prune_stale_subjects"; subjectKeys: ReadonlyArray<string> }
   | { type: "clear" };
 
 const DEFAULTS: Record<NotificationKind, {
@@ -261,13 +262,23 @@ export function pushNotifications(
     const existingLifecyclePhase = existing === undefined
       ? watermark?.lifecyclePhase ?? 0
       : notificationLifecyclePhasePriority(existing.kind);
+    const incomingLifecyclePhase = notificationLifecyclePhasePriority(kind);
     const isOlderRevision = incomingRevisionAt !== null
       && existingRevisionAt !== null
       && incomingRevisionAt < existingRevisionAt;
+    const replacesVisibleEqualPhaseRevision = existing !== undefined
+      && incomingLifecyclePhase === existingLifecyclePhase
+      && revisionKey !== existing.revisionKey;
     const losesEqualTimeLifecycleTie = incomingRevisionAt !== null
       && existingRevisionAt !== null
       && incomingRevisionAt === existingRevisionAt
-      && notificationLifecyclePhasePriority(kind) <= existingLifecyclePhase;
+      && (
+        incomingLifecyclePhase < existingLifecyclePhase
+        || (
+          incomingLifecyclePhase === existingLifecyclePhase
+          && !replacesVisibleEqualPhaseRevision
+        )
+      );
     if (
       existingRevisionAt !== null
       && (isOlderRevision || losesEqualTimeLifecycleTie)
@@ -386,6 +397,19 @@ function dismissNotices(
   };
 }
 
+function pruneStaleSubjects(
+  state: NotificationCenterState,
+  subjectKeys: ReadonlyArray<string>,
+): NotificationCenterState {
+  if (subjectKeys.length === 0) return state;
+  const staleSubjects = new Set(subjectKeys);
+  const notices = state.notices.filter((notice) => (
+    notice.persistence !== "sticky" || !staleSubjects.has(notice.subjectKey)
+  ));
+  if (notices.length === state.notices.length) return state;
+  return { ...state, notices };
+}
+
 export function notificationCenterReducer(
   state: NotificationCenterState,
   action: NotificationCenterAction,
@@ -402,6 +426,8 @@ export function notificationCenterReducer(
         ...state,
         notices: state.notices.filter((notice) => notice.persistence === "sticky"),
       };
+    case "prune_stale_subjects":
+      return pruneStaleSubjects(state, action.subjectKeys);
     case "clear":
       return createInitialNotificationCenterState(state.dismissalLedger);
   }

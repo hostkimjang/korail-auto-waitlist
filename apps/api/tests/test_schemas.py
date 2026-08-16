@@ -290,6 +290,7 @@ def test_latest_reservation_attempt_read_is_typed_and_normalizes_sqlite_datetime
         "available",
         "limited",
         "standing_plus_seat",
+        "standing_only",
         "not_enough_seats",
         "sold_out",
         "waitlist_available",

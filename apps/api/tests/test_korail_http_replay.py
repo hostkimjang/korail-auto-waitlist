@@ -385,6 +385,7 @@ async def test_parser_maps_each_seat_class_and_filters_non_ktx_and_exact_window(
     response = _payload(
         _row(standard="매진 임박", first="입석 + 좌석"),
         _row(number="19", departure="160000", standard="예약대기", first="특실 없음"),
+        _row(number="20", departure="163000", standard="입석", first="매진"),
         _row(number="21", departure="170000", standard="매진", first="좌석 많음"),
         _row(number="23", departure="180100"),
         _row(number="25", departure="153000", kind="ITX-새마을"),
@@ -397,6 +398,7 @@ async def test_parser_maps_each_seat_class_and_filters_non_ktx_and_exact_window(
     assert [(train.standard, train.first) for train in result.trains] == [
         ("limited", "standing_plus_seat"),
         ("waitlist_available", "not_offered"),
+        ("standing_only", "sold_out"),
         ("sold_out", "available"),
     ]
     assert result.trains[0].train_number == "17"

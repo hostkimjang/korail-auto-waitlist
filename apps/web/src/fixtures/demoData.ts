@@ -16,6 +16,7 @@ type DemoSeatStatus =
   | "limited"
   | "sold_out"
   | "standing_plus_seat"
+  | "standing_only"
   | "waitlist_available";
 
 interface DemoTimetableForm {

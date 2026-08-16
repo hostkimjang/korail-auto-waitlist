@@ -81,7 +81,7 @@ async def test_acquisition_policy_passes_exact_public_epoch(
         "account_scope": "anonymous/public",
         "owner_token": "a" * 32,
         "now": NOW,
-        "expires_at": NOW + timedelta(minutes=2),
+        "expires_at": NOW + timedelta(minutes=5),
     }
 
 

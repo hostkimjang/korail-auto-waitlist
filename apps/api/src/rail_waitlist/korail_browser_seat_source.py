@@ -350,12 +350,15 @@ class KorailBrowserSeatSource:
             result = await self._transport.reserve_with_progress(internal_request, on_progress)
         except _AdapterFailure as error:
             if error.reservation_command_uncertain:
+                from .domain import ReservationResultReasonCode
+
                 terminal_at = self._normalize_reservation_terminal_time(
                     datetime.now(UTC),
                     (progress.occurred_at for progress in error.progress_stages),
                 )
                 return ReservationResult(
                     outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
                     source="korail-pydoll-reservation",
                     observed_at=terminal_at,
                     progress_stages=error.progress_stages,

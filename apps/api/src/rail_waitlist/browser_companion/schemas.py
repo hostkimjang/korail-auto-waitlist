@@ -21,6 +21,7 @@ KorailBrowserSeatStatus = Literal[
     "available",
     "limited",
     "standing_plus_seat",
+    "standing_only",
     "sold_out",
     "waitlist_available",
     "not_offered",

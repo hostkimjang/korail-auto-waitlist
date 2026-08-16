@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -12,8 +12,10 @@ from rail_waitlist.korail_reservation_confirmation import (
     normalize_korail_same_session_detail,
 )
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
+    ReservationConfirmationSeat,
     ReservationConfirmationTarget,
     require_official_handoff_url,
 )
@@ -41,6 +43,7 @@ def target(
         origin="대전",
         destination="부산",
         departure_at=datetime(2026, 8, 3, 13, 9, tzinfo=KOREA),
+        arrival_at=datetime(2026, 8, 3, 15, 34, tzinfo=KOREA),
         seat_class=SeatClass.STANDARD,
         passenger_count=1,
         credential_version=credential_version,
@@ -134,6 +137,7 @@ def test_srt_ambiguous_matches_fail_closed(
     result = normalize_srt_reservation_records(target(), evidence(records=records))
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert result.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
     assert not result.permits_automatic_reservation_retry
 
 
@@ -149,6 +153,27 @@ def test_srt_exact_paid_record_confirms_payment_completion() -> None:
     assert not result.permits_automatic_reservation_retry
 
 
+def test_unknown_result_follow_up_allows_empty_or_full_private_seat_identity() -> None:
+    correlation_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
+    uncorrelated_unknown_target = replace(
+        target(),
+        purpose=ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+    )
+    unknown_target = replace(
+        uncorrelated_unknown_target,
+        confirmation_correlation_seats=(correlation_seat,),
+    )
+
+    assert uncorrelated_unknown_target.reserved_seats == ()
+    assert uncorrelated_unknown_target.confirmation_correlation_seats == ()
+    assert unknown_target.reserved_seats == ()
+    assert unknown_target.confirmation_correlation_seats == (correlation_seat,)
+    with pytest.raises(ValueError, match="no correlation or one exact seat per passenger"):
+        replace(unknown_target, passenger_count=2)
+    with pytest.raises(ValueError, match="no correlation or one exact seat per passenger"):
+        replace(unknown_target, reserved_seats=(correlation_seat,))
+
+
 def test_srt_initial_probe_does_not_claim_historical_paid_row() -> None:
     result = normalize_srt_reservation_records(
         target(),
@@ -156,6 +181,7 @@ def test_srt_initial_probe_does_not_claim_historical_paid_row() -> None:
     )
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert result.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
     assert result.payment_deadline is None
     assert result.official_handoff_url is None
 
@@ -175,6 +201,12 @@ def test_srt_unproven_seat_class_or_passenger_count_is_inconclusive(
     result = normalize_srt_reservation_records(target(), evidence(records=(record,)))
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    expected_diagnostic = (
+        ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+        if record.seat_class is None or record.passenger_count is None
+        else ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+    )
+    assert result.diagnostic_code is expected_diagnostic
     assert not result.permits_automatic_reservation_retry
 
 
@@ -187,6 +219,10 @@ def test_srt_generation_authentication_and_protection_boundaries_do_not_confirm(
     blocked = normalize_srt_reservation_records(target(), evidence(provider_blocked=True))
 
     assert generation_mismatch.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        generation_mismatch.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.CREDENTIAL_CONTEXT_MISMATCH
+    )
     assert authentication.outcome is ReservationConfirmationOutcome.AUTH_REQUIRED
     assert blocked.outcome is ReservationConfirmationOutcome.PROVIDER_BLOCKED
     assert all(
@@ -287,6 +323,27 @@ def test_korail_completed_official_list_absence_is_not_found_without_retry_permi
     assert not result.permits_automatic_reservation_retry
 
 
+def test_korail_complete_list_without_arrival_identity_never_proves_absence() -> None:
+    result = normalize_korail_same_session_detail(
+        replace(target(Provider.KORAIL), arrival_at=None),
+        KorailSameSessionDetailEvidence(
+            observed_at=datetime(2026, 8, 3, 12, 0, tzinfo=UTC),
+            credential_version=7,
+            exact_identity_matched=False,
+            payment_pending_markers_present=False,
+            official_list_read_completed=True,
+            official_list_target_absent=True,
+            source="korail-reservation-list",
+        ),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        result.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
+
+
 def test_korail_uncertain_official_list_absence_remains_inconclusive() -> None:
     result = normalize_korail_same_session_detail(
         target(Provider.KORAIL),
@@ -302,6 +359,10 @@ def test_korail_uncertain_official_list_absence_remains_inconclusive() -> None:
     )
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        result.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
 
 
 def test_korail_completed_official_list_with_ambiguous_matches_is_inconclusive() -> None:
@@ -314,11 +375,15 @@ def test_korail_completed_official_list_with_ambiguous_matches_is_inconclusive()
             payment_pending_markers_present=False,
             official_list_read_completed=True,
             official_list_target_absent=False,
+            inconclusive_diagnostic_code=(
+                ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+            ),
             source="korail-reservation-list",
         ),
     )
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert result.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
 
 
 @pytest.mark.parametrize(

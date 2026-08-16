@@ -102,6 +102,7 @@ def test_enabled_sidecar_source_preserves_exact_connection_settings(monkeypatch)
         srt_seat_monitoring_enabled=True,
         srt_provider_adapter_enabled=True,
         srt_provider_adapter_token="s" * 32,
+        srt_seat_status_timeout_seconds=21,
         srt_provider_adapter_timeout_seconds=47,
     )
 

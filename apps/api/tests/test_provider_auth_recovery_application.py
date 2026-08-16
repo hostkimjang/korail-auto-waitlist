@@ -7,7 +7,12 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import rail_waitlist.services as services_module
-from rail_waitlist.domain import Provider, ReservationOutcome, WatchStatus
+from rail_waitlist.domain import (
+    Provider,
+    ReservationOutcome,
+    ReservationResultReasonCode,
+    WatchStatus,
+)
 from rail_waitlist.models import (
     ReservationAttempt,
     Watch,
@@ -20,6 +25,7 @@ from rail_waitlist.provider_account_management.auth_recovery_application import 
 from rail_waitlist.provider_account_management.auth_recovery_application import (
     resume_watches_after_verified_provider_login as resume_watches_application,
 )
+from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
 from rail_waitlist.services import resume_watches_after_verified_provider_login
 
 
@@ -199,7 +205,13 @@ async def test_auth_recovery_owner_preserves_reason_time_and_candidate_contract(
         make_transition(watch, transition_reason, transition_at),
     ]
     if attempt_outcome is not None:
-        scalar_results.append(make_attempt(candidate, attempt_outcome, transition_reason))
+        attempt = make_attempt(candidate, attempt_outcome, transition_reason)
+        if transition_reason in {
+            "reservation_auth_required",
+            "reservation_provider_blocked",
+        }:
+            scalar_results.append(attempt)
+        scalar_results.append(attempt)
     session = ScriptedSession(
         scalar_results=scalar_results,
         scalars_results=[[watch.id], [candidate]],
@@ -292,6 +304,7 @@ async def test_auth_recovery_owner_changes_only_matching_failed_candidates() -> 
     matching = make_candidate(watch, "matching")
     mismatched = make_candidate(watch, "mismatched")
     active = make_candidate(watch, "active", state="observed")
+    matching_attempt = make_attempt(matching, ReservationOutcome.AUTH_REQUIRED, "matching")
     session = ScriptedSession(
         scalar_results=[
             watch,
@@ -300,7 +313,8 @@ async def test_auth_recovery_owner_changes_only_matching_failed_candidates() -> 
                 "reservation_auth_required",
                 authenticated_at - timedelta(minutes=1),
             ),
-            make_attempt(matching, ReservationOutcome.AUTH_REQUIRED, "matching"),
+            matching_attempt,
+            matching_attempt,
             make_attempt(mismatched, ReservationOutcome.FAILED, "mismatched"),
         ],
         scalars_results=[[watch.id], [matching, mismatched, active]],
@@ -385,3 +399,301 @@ async def test_services_auth_recovery_wrapper_does_not_translate_failures(
             Provider.KORAIL,
             datetime(2030, 8, 1, tzinfo=UTC),
         )
+
+
+@pytest.mark.parametrize(
+    ("transition_reason", "confirmation_outcome", "initial_count", "expected_reason"),
+    [
+        (
+            "reservation_reconciliation_auth_required",
+            ReservationConfirmationOutcome.AUTH_REQUIRED,
+            5,
+            "provider_login_reverified_for_reservation_reconciliation",
+        ),
+        (
+            "reservation_reconciliation_provider_blocked",
+            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+            6,
+            "provider_login_reverified_for_reservation_reconciliation_after_block",
+        ),
+    ],
+)
+async def test_same_generation_reauth_resumes_latest_unknown_reconciliation_once(
+    transition_reason: str,
+    confirmation_outcome: ReservationConfirmationOutcome,
+    initial_count: int,
+    expected_reason: str,
+) -> None:
+    authenticated_at = datetime(2030, 8, 1, 1, tzinfo=UTC)
+    watch = make_watch(f"reconciliation-{confirmation_outcome.value}")
+    candidate = make_candidate(
+        watch,
+        f"reconciliation-{confirmation_outcome.value}",
+        state="observed",
+    )
+    attempt = make_attempt(candidate, ReservationOutcome.UNKNOWN, confirmation_outcome.value)
+    attempt.credential_version = 8
+    attempt.confirmation_outcome = confirmation_outcome
+    attempt.confirmation_source = "worker-reconciliation"
+    attempt.confirmation_observed_at = authenticated_at - timedelta(minutes=2)
+    attempt.last_reconciled_at = authenticated_at - timedelta(minutes=2)
+    attempt.reconciliation_attempt_count = initial_count
+    session = ScriptedSession(
+        scalar_results=[
+            watch,
+            make_transition(
+                watch,
+                transition_reason,
+                authenticated_at - timedelta(minutes=1),
+            ),
+            attempt,
+        ],
+        scalars_results=[[watch.id], [candidate]],
+    )
+    transitions: list[tuple[WatchStatus, str | None]] = []
+
+    async def apply_transition(
+        _session: AsyncSession,
+        transitioned_watch: Watch,
+        target: WatchStatus,
+        idempotency_key: str | None = None,
+        *,
+        reason: str | None = None,
+    ) -> Watch:
+        assert idempotency_key is None
+        transitions.append((target, reason))
+        transitioned_watch.status = target
+        return transitioned_watch
+
+    resumed = await resume_watches_application(
+        cast(AsyncSession, session),
+        Provider.KORAIL,
+        authenticated_at,
+        credential_version=8,
+        dependencies=ProviderAuthRecoveryDependencies(
+            apply_watch_transition=apply_transition,
+        ),
+    )
+
+    assert resumed == [watch.id]
+    assert watch.status is WatchStatus.SCHEDULED
+    assert candidate.state == "observed"
+    assert attempt.reconciliation_attempt_count == 5
+    assert attempt.next_reconcile_at == authenticated_at
+    assert transitions == [(WatchStatus.SCHEDULED, expected_reason)]
+
+
+@pytest.mark.parametrize(
+    ("legacy_outcome", "confirmation_outcome", "expected_reason_code"),
+    [
+        (
+            ReservationOutcome.AUTH_REQUIRED,
+            ReservationConfirmationOutcome.AUTH_REQUIRED,
+            ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
+        ),
+        (
+            ReservationOutcome.PROVIDER_BLOCKED,
+            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+            ReservationResultReasonCode.PROVIDER_BLOCKED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("same_generation", [True, False])
+async def test_reauth_lazily_normalizes_only_same_generation_legacy_post_dispatch_auth(
+    legacy_outcome: ReservationOutcome,
+    confirmation_outcome: ReservationConfirmationOutcome,
+    expected_reason_code: ReservationResultReasonCode,
+    same_generation: bool,
+) -> None:
+    authenticated_at = datetime(2030, 8, 1, 1, tzinfo=UTC)
+    watch = make_watch(f"legacy-{legacy_outcome.value}-{same_generation}")
+    candidate = make_candidate(
+        watch,
+        f"legacy-{legacy_outcome.value}-{same_generation}",
+        state="failed",
+    )
+    candidate.manual_rearm_source_attempt_id = "stale-authorization"
+    candidate.manual_rearm_authorized_at = authenticated_at - timedelta(minutes=2)
+    attempt = make_attempt(candidate, legacy_outcome, f"legacy-{legacy_outcome.value}")
+    attempt.credential_version = 8
+    attempt.reconciliation_attempt_count = 0
+    attempt.progress_stages = [
+        {
+            "stage": "reservation_requested",
+            "occurred_at": (authenticated_at - timedelta(minutes=3)).isoformat(),
+        }
+    ]
+    transition_reason = (
+        "reservation_auth_required"
+        if legacy_outcome is ReservationOutcome.AUTH_REQUIRED
+        else "reservation_provider_blocked"
+    )
+    session = ScriptedSession(
+        scalar_results=[
+            watch,
+            make_transition(
+                watch,
+                transition_reason,
+                authenticated_at - timedelta(minutes=1),
+            ),
+            attempt,
+            *([attempt] if same_generation else []),
+        ],
+        scalars_results=[
+            [watch.id],
+            *([[candidate]] if same_generation else []),
+        ],
+    )
+    transitions: list[tuple[WatchStatus, str | None]] = []
+
+    async def apply_transition(
+        _session: AsyncSession,
+        transitioned_watch: Watch,
+        target: WatchStatus,
+        idempotency_key: str | None = None,
+        *,
+        reason: str | None = None,
+    ) -> Watch:
+        assert idempotency_key is None
+        transitions.append((target, reason))
+        transitioned_watch.status = target
+        return transitioned_watch
+
+    resumed = await resume_watches_application(
+        cast(AsyncSession, session),
+        Provider.KORAIL,
+        authenticated_at,
+        credential_version=8 if same_generation else 9,
+        dependencies=ProviderAuthRecoveryDependencies(
+            apply_watch_transition=apply_transition,
+        ),
+    )
+
+    if not same_generation:
+        assert resumed == []
+        assert watch.status is WatchStatus.AUTH_REQUIRED
+        assert candidate.state == "failed"
+        assert attempt.outcome is legacy_outcome
+        assert attempt.next_reconcile_at is None
+        assert transitions == []
+        return
+
+    assert resumed == [watch.id]
+    assert watch.status is WatchStatus.SCHEDULED
+    assert candidate.state == "observed"
+    assert candidate.manual_rearm_source_attempt_id is None
+    assert candidate.manual_rearm_authorized_at is None
+    assert attempt.outcome is ReservationOutcome.UNKNOWN
+    assert attempt.result_reason_code is expected_reason_code
+    assert attempt.confirmation_outcome is confirmation_outcome
+    assert attempt.confirmation_source == "legacy-post-request-auth-signal"
+    assert attempt.next_reconcile_at == authenticated_at
+    assert transitions[0][0] is WatchStatus.SCHEDULED
+
+
+@pytest.mark.parametrize(
+    "confirmation_outcome",
+    [
+        ReservationConfirmationOutcome.AUTH_REQUIRED,
+        ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+    ],
+)
+async def test_same_generation_reauth_resumes_payment_follow_up_without_changing_cta(
+    confirmation_outcome: ReservationConfirmationOutcome,
+) -> None:
+    authenticated_at = datetime(2030, 8, 1, 1, tzinfo=UTC)
+    watch = make_watch(f"payment-{confirmation_outcome.value}")
+    watch.status = WatchStatus.PAYMENT_REQUIRED
+    watch.payment_deadline = authenticated_at + timedelta(minutes=10)
+    watch.official_booking_url = "https://www.korail.com/ticket/mypage"
+    candidate = make_candidate(
+        watch,
+        f"payment-{confirmation_outcome.value}",
+        state="payment_required",
+    )
+    attempt = make_attempt(
+        candidate,
+        ReservationOutcome.PAYMENT_REQUIRED,
+        confirmation_outcome.value,
+    )
+    attempt.credential_version = 6
+    attempt.confirmation_outcome = confirmation_outcome
+    attempt.confirmation_source = "worker-reconciliation"
+    attempt.confirmation_observed_at = authenticated_at - timedelta(minutes=2)
+    attempt.last_reconciled_at = authenticated_at - timedelta(minutes=2)
+    attempt.reconciliation_attempt_count = 5
+    session = ScriptedSession(
+        scalar_results=[
+            watch,
+            make_transition(
+                watch,
+                "reservation_requires_user_payment",
+                authenticated_at - timedelta(minutes=5),
+            ),
+            attempt,
+        ],
+        scalars_results=[[watch.id]],
+    )
+
+    async def fail_transition(*_args: object, **_kwargs: object) -> Watch:
+        raise AssertionError("payment follow-up recovery must preserve the payment state")
+
+    resumed = await resume_watches_application(
+        cast(AsyncSession, session),
+        Provider.KORAIL,
+        authenticated_at,
+        credential_version=6,
+        dependencies=ProviderAuthRecoveryDependencies(
+            apply_watch_transition=fail_transition,
+        ),
+    )
+
+    assert resumed == [watch.id]
+    assert attempt.reconciliation_attempt_count == 5
+    assert attempt.next_reconcile_at == authenticated_at
+    assert watch.status is WatchStatus.PAYMENT_REQUIRED
+    assert watch.payment_deadline == authenticated_at + timedelta(minutes=10)
+    assert watch.official_booking_url == "https://www.korail.com/ticket/mypage"
+
+
+async def test_new_generation_reauth_does_not_resume_old_reconciliation_attempt() -> None:
+    authenticated_at = datetime(2030, 8, 1, 1, tzinfo=UTC)
+    watch = make_watch("new-generation")
+    candidate = make_candidate(watch, "new-generation", state="observed")
+    attempt = make_attempt(candidate, ReservationOutcome.UNKNOWN, "new-generation")
+    attempt.credential_version = 4
+    attempt.confirmation_outcome = ReservationConfirmationOutcome.AUTH_REQUIRED
+    attempt.confirmation_source = "worker-reconciliation"
+    attempt.confirmation_observed_at = authenticated_at - timedelta(minutes=2)
+    attempt.last_reconciled_at = authenticated_at - timedelta(minutes=2)
+    attempt.reconciliation_attempt_count = 5
+    session = ScriptedSession(
+        scalar_results=[
+            watch,
+            make_transition(
+                watch,
+                "reservation_reconciliation_auth_required",
+                authenticated_at - timedelta(minutes=1),
+            ),
+            attempt,
+        ],
+        scalars_results=[[watch.id]],
+    )
+
+    async def fail_transition(*_args: object, **_kwargs: object) -> Watch:
+        raise AssertionError("a new credential generation must remain fail closed")
+
+    resumed = await resume_watches_application(
+        cast(AsyncSession, session),
+        Provider.KORAIL,
+        authenticated_at,
+        credential_version=5,
+        dependencies=ProviderAuthRecoveryDependencies(
+            apply_watch_transition=fail_transition,
+        ),
+    )
+
+    assert resumed == []
+    assert watch.status is WatchStatus.AUTH_REQUIRED
+    assert attempt.reconciliation_attempt_count == 5
+    assert attempt.next_reconcile_at is None

@@ -7,11 +7,12 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..domain import ReservationOutcome, WatchStatus
+from ..domain import ReservationOutcome, ReservationResultReasonCode, WatchStatus
 from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
 from .attempt_timing_application import latest_candidate_seat_detected_at
 from .contracts import ReservationResult
 from .domain import ReservationAttemptResultPolicy
+from .exact_paid_application import apply_exact_paid_resolution
 from .progress_timing_policy import (
     normalize_reservation_terminal_time,
     persisted_reservation_progress_times,
@@ -19,6 +20,7 @@ from .progress_timing_policy import (
 from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
+    effective_reservation_confirmation_diagnostic_code,
 )
 from .reconciliation_policy import RESERVATION_RECONCILIATION_INTERVAL
 
@@ -89,6 +91,7 @@ def record_reservation_confirmation(
     """Persist normalized confirmation evidence without provider transport material."""
 
     attempt.confirmation_outcome = confirmation.outcome
+    attempt.confirmation_diagnostic_code = confirmation.diagnostic_code
     attempt.confirmation_source = confirmation.source
     attempt.confirmation_observed_at = confirmation.observed_at
     if reconciled_at is not None:
@@ -110,7 +113,10 @@ async def complete_reservation_attempt(
     """Apply a provider result inside the caller-owned persistence unit of work."""
     if attempt.outcome != ReservationOutcome.PENDING:
         raise ReservationAttemptAlreadyCompleted
+    if attempt.reconciliation_attempt_count is None:
+        attempt.reconciliation_attempt_count = 0
     attempt.outcome = result.outcome
+    attempt.result_reason_code = result.result_reason_code
     if result.credential_version is not None:
         attempt.credential_version = result.credential_version
     if confirmation is not None:
@@ -145,6 +151,9 @@ async def complete_reservation_attempt(
         str(result.official_handoff_url) if result.official_handoff_url is not None else None
     )
     attempt.reserved_seats = [seat.model_dump() for seat in result.reserved_seats]
+    attempt.confirmation_correlation_seats = [
+        seat.model_dump() for seat in result.confirmation_correlation_seats
+    ]
     if result.progress_stages:
         attempt.progress_stages = [
             {
@@ -155,6 +164,30 @@ async def complete_reservation_attempt(
         ]
     persisted_progress = attempt.progress_stages or []
 
+    unknown_confirmation_auth_failure = (
+        result.outcome is ReservationOutcome.UNKNOWN
+        and confirmation is not None
+        and confirmation.outcome
+        in {
+            ReservationConfirmationOutcome.AUTH_REQUIRED,
+            ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+        }
+    )
+    confirmed_paid = (
+        result.outcome is ReservationOutcome.UNKNOWN
+        and confirmation is not None
+        and confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    )
+    if confirmed_paid:
+        await apply_exact_paid_resolution(
+            session,
+            watch,
+            candidate,
+            attempt,
+            apply_watch_transition=dependencies.apply_watch_transition,
+            add_outbox_event=dependencies.add_outbox_event,
+        )
+        return
     successful_hold = result.outcome in {
         ReservationOutcome.PAYMENT_REQUIRED,
         ReservationOutcome.RESERVED,
@@ -165,8 +198,10 @@ async def complete_reservation_attempt(
         and result.payment_deadline <= completed_at
     ):
         attempt.outcome = ReservationOutcome.UNKNOWN
+        attempt.result_reason_code = ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
         attempt.payment_deadline = None
         attempt.official_handoff_url = None
+        attempt.confirmation_correlation_seats = list(attempt.reserved_seats)
         attempt.reserved_seats = []
         # An already unusable hold is ambiguous rather than authentication failure.
         # The UNKNOWN attempt remains the durable no-retry fence.
@@ -186,6 +221,35 @@ async def complete_reservation_attempt(
             payload={
                 "watch_id": watch.id,
                 "candidate_id": candidate.id,
+                "outcome": attempt.outcome.value,
+                "result_reason_code": attempt.result_reason_code.value,
+                "confirmation_outcome": (
+                    attempt.confirmation_outcome.value
+                    if attempt.confirmation_outcome is not None
+                    else None
+                ),
+                "confirmation_diagnostic_code": (
+                    diagnostic.value
+                    if (
+                        diagnostic := effective_reservation_confirmation_diagnostic_code(
+                            attempt.confirmation_outcome,
+                            attempt.confirmation_diagnostic_code,
+                        )
+                    )
+                    is not None
+                    else None
+                ),
+                "confirmation_observed_at": (
+                    attempt.confirmation_observed_at.isoformat()
+                    if attempt.confirmation_observed_at is not None
+                    else None
+                ),
+                "reconciliation_attempt_count": attempt.reconciliation_attempt_count,
+                "next_reconcile_at": (
+                    attempt.next_reconcile_at.isoformat()
+                    if attempt.next_reconcile_at is not None
+                    else None
+                ),
                 "reason": "payment_deadline_already_elapsed",
             },
             dedupe_key=f"reservation-result-expired-deadline:{attempt.id}",
@@ -232,15 +296,22 @@ async def complete_reservation_attempt(
                 dedupe_key=f"candidate-suppressed:{lower.id}:{candidate.id}",
             )
     else:
-        monitoring_resumed = result.outcome in {
-            ReservationOutcome.NOT_AVAILABLE,
-            ReservationOutcome.UNKNOWN,
-            ReservationOutcome.FAILED,
-        }
+        monitoring_resumed = (
+            result.outcome
+            in {
+                ReservationOutcome.NOT_AVAILABLE,
+                ReservationOutcome.UNKNOWN,
+                ReservationOutcome.FAILED,
+            }
+            and not unknown_confirmation_auth_failure
+        )
         if monitoring_resumed:
             # These outcomes do not prove monitoring itself is unsafe.
             candidate.state = "observed"
             target = WatchStatus.WATCHING
+        elif unknown_confirmation_auth_failure:
+            candidate.state = "observed"
+            target = WatchStatus.AUTH_REQUIRED
         else:
             candidate.state = "failed"
             target = (
@@ -253,17 +324,39 @@ async def complete_reservation_attempt(
                 else WatchStatus.FAILED
             )
         if watch.status == WatchStatus.RESERVING:
-            transition_reason = (
-                "reservation_failed_monitoring_resumed"
-                if result.outcome is ReservationOutcome.FAILED
-                else f"reservation_{result.outcome.value}"
-            )
+            if unknown_confirmation_auth_failure:
+                transition_reason = (
+                    "reservation_reconciliation_auth_required"
+                    if confirmation is not None
+                    and confirmation.outcome is ReservationConfirmationOutcome.AUTH_REQUIRED
+                    else "reservation_reconciliation_provider_blocked"
+                )
+            else:
+                transition_reason = (
+                    "reservation_failed_monitoring_resumed"
+                    if result.outcome is ReservationOutcome.FAILED
+                    else f"reservation_{result.outcome.value}"
+                )
             await dependencies.apply_watch_transition(
                 session,
                 watch,
                 target,
                 reason=transition_reason,
             )
+
+        if unknown_confirmation_auth_failure:
+            watch.next_check_at = None
+            watch.observation_in_flight_until = None
+            watch_candidates = list(
+                (
+                    await session.scalars(
+                        select(WatchCandidate).where(WatchCandidate.watch_id == watch.id)
+                    )
+                ).all()
+            )
+            for watch_candidate in watch_candidates:
+                watch_candidate.manual_rearm_source_attempt_id = None
+                watch_candidate.manual_rearm_authorized_at = None
 
         if result.outcome is ReservationOutcome.FAILED:
             await dependencies.add_outbox_event(
@@ -304,17 +397,42 @@ async def complete_reservation_attempt(
                 attempt.finished_at.isoformat() if attempt.finished_at is not None else None
             ),
             "outcome": result.outcome.value,
+            "result_reason_code": attempt.result_reason_code.value,
+            "confirmation_outcome": (
+                attempt.confirmation_outcome.value
+                if attempt.confirmation_outcome is not None
+                else None
+            ),
+            "confirmation_diagnostic_code": (
+                diagnostic.value
+                if (
+                    diagnostic := effective_reservation_confirmation_diagnostic_code(
+                        attempt.confirmation_outcome,
+                        attempt.confirmation_diagnostic_code,
+                    )
+                )
+                is not None
+                else None
+            ),
+            "confirmation_observed_at": (
+                attempt.confirmation_observed_at.isoformat()
+                if attempt.confirmation_observed_at is not None
+                else None
+            ),
+            "reconciliation_attempt_count": attempt.reconciliation_attempt_count,
+            "next_reconcile_at": (
+                attempt.next_reconcile_at.isoformat()
+                if attempt.next_reconcile_at is not None
+                else None
+            ),
             "payment_deadline": (
                 result.payment_deadline.isoformat() if result.payment_deadline is not None else None
             ),
-            "monitoring_resumed": result.outcome
-            in {
-                ReservationOutcome.NOT_AVAILABLE,
-                ReservationOutcome.UNKNOWN,
-                ReservationOutcome.FAILED,
-            },
+            "monitoring_resumed": monitoring_resumed if not successful_hold else False,
             "retryable": result_policy.retryable,
-            "manual_check_required": result_policy.manual_check_required,
+            "manual_check_required": (
+                result_policy.manual_check_required and not unknown_confirmation_auth_failure
+            ),
             "retry_condition": result_policy.retry_condition,
             "reserved_seats": [seat.model_dump() for seat in result.reserved_seats],
             **({"progress_stages": persisted_progress} if persisted_progress else {}),

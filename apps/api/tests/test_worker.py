@@ -9,12 +9,14 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rail_waitlist import worker as worker_module
+from rail_waitlist.config import Settings
 from rail_waitlist.domain import (
     NotificationKind,
     Provider,
     ProviderCircuitState,
     ReservationOutcome,
     ReservationPolicy,
+    ReservationResultReasonCode,
     SeatClass,
     SeatObservationStatus,
     WatchStatus,
@@ -37,20 +39,27 @@ from rail_waitlist.observations.group_application import (
     defer_watch_group_observation,
     retryable_reservation_episode_key,
 )
+from rail_waitlist.provider_accounts import ProviderCredentials
 from rail_waitlist.provider_execution_lease import (
     ExecutionLeaseGrant,
     lock_execution_lease_current,
 )
-from rail_waitlist.providers import MockProviderAdapter
+from rail_waitlist.providers import MockProviderAdapter, SrtLiveExecutionAdapter
 from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
+)
+from rail_waitlist.reservations.attempt_policy import (
+    is_unresolved_unknown_manual_rearm_source,
 )
 from rail_waitlist.reservations.reconciliation_application import (
     _reservation_reconciliation_is_due,
 )
 from rail_waitlist.reservations.reconciliation_application import (
     reconcile_reservation_attempt as run_reservation_reconciliation,
+)
+from rail_waitlist.reservations.reconciliation_policy import (
+    ReservationReconciliationResolution,
 )
 from rail_waitlist.reservations.stale_attempt_recovery_application import (
     build_stale_reservation_attempts_query,
@@ -73,6 +82,7 @@ from rail_waitlist.services import (
     record_seat_observation,
     resume_watches_after_verified_provider_login,
 )
+from rail_waitlist.srt_sidecar.reservation import SrtReservationExecutor
 from rail_waitlist.timetable_management.models import TimetableSeatEvidence
 from rail_waitlist.watch_management import transition_runtime as transition_runtime_module
 from rail_waitlist.worker import (
@@ -97,6 +107,7 @@ async def _retryable_reservation_episode_key(
         observation,
         provider,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
         is_payment_hold_ended=is_payment_hold_ended,
     )
 
@@ -117,6 +128,7 @@ def _observation_dependencies(session_factory) -> ObservationGroupDependencies:
         record_seat_observation=record_seat_observation,
         finish_observation_cycle=finish_observation_cycle,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
         is_payment_hold_ended=is_payment_hold_ended,
         reserve_winner=reserve_winner,
         lease_is_current=lease_is_current,
@@ -134,7 +146,7 @@ async def test_worker_execution_lease_covers_adapter_timeout(
     service, grant = await _acquire_execution_lease(Provider.SRT, now)
 
     assert grant is not None
-    assert grant.expires_at == now + timedelta(seconds=120)
+    assert grant.expires_at == now + timedelta(seconds=300)
     assert await service.release(grant, now=now + timedelta(seconds=1)) is True
 
 
@@ -161,6 +173,190 @@ class ReadOnlyReconciliationAdapter:
 
     async def drain_pending_calls(self) -> None:
         return None
+
+
+class WorkerExactPaidTrain:
+    def __init__(self, departure: datetime) -> None:
+        self.train_number = "00329"
+        self.dep_date = departure.strftime("%Y%m%d")
+        self.dep_time = departure.strftime("%H%M%S")
+        self.dep_station_name = "대전"
+        self.arr_station_name = "부산"
+
+    def general_seat_available(self) -> bool:
+        return True
+
+    def special_seat_available(self) -> bool:
+        return True
+
+
+class WorkerExactPaidTicket:
+    seat_type_code = "1"
+    car = "4"
+    seat = "8A"
+
+
+class WorkerExactPaidReservation:
+    def __init__(self, departure: datetime) -> None:
+        self.train_number = "00329"
+        self.dep_date = departure.strftime("%Y%m%d")
+        self.dep_time = departure.strftime("%H%M%S")
+        self.dep_station_name = "대전"
+        self.arr_station_name = "부산"
+        self.payment_date = departure.strftime("%Y%m%d")
+        self.payment_time = departure.strftime("%H%M%S")
+        self.paid = True
+        self.seat_count = 1
+        self.tickets = [WorkerExactPaidTicket()]
+
+
+class WorkerExactPaidSrtClient:
+    is_login = True
+
+    def __init__(self, departure: datetime) -> None:
+        self.train = WorkerExactPaidTrain(departure)
+        self.reservation = WorkerExactPaidReservation(departure)
+        self.reserve_calls = 0
+        self.reservation_list_calls = 0
+
+    def search_train(self, *_args, **_kwargs):
+        return [self.train]
+
+    def reserve(self, _train, *, passengers, special_seat, window_seat=None):
+        del special_seat, window_seat
+        assert passengers[0].count == 1
+        self.reserve_calls += 1
+        return self.reservation
+
+    def get_reservations(self, paid_only=False):
+        del paid_only
+        self.reservation_list_calls += 1
+        return [self.reservation]
+
+
+class UnusedWorkerSrtSeatSource:
+    async def observation_deferred_until(self):
+        return None
+
+    async def observe(self, *_args, **_kwargs):
+        raise AssertionError("persisted reservation E2E must not issue another seat observation")
+
+    async def drain_pending_calls(self):
+        return None
+
+
+async def test_srt_paid_reserve_record_reaches_worker_completed_with_one_command(
+    app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    korea = timezone(timedelta(hours=9))
+    departure = datetime.now(korea).replace(microsecond=0) + timedelta(days=1)
+    client = WorkerExactPaidSrtClient(departure)
+    executor = SrtReservationExecutor(lambda _login_id, _password: client)
+
+    async def credentials(provider: Provider) -> ProviderCredentials:
+        assert provider is Provider.SRT
+        return ProviderCredentials("1234567890", "fixture-password", 3)
+
+    adapter = SrtLiveExecutionAdapter(
+        Settings(
+            _env_file=None,
+            EXPERIMENTAL_RAIL_ENABLED=True,
+            srt_seat_status_enabled=True,
+            srt_seat_monitoring_enabled=True,
+            srt_reservation_once_enabled=True,
+        ),
+        UnusedWorkerSrtSeatSource(),
+        credential_loader=credentials,
+        reservation_executor=executor,
+    )
+    monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
+    now = datetime.now(timezone.utc)
+    async with app.state.test_session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.SRT,
+                credentials_ciphertext=secret_box.encrypt_dict(
+                    {
+                        "login_method": "membership_number",
+                        "login_id": "1234567890",
+                        "password": "fixture-password",
+                    }
+                ),
+                enabled=True,
+                credential_version=3,
+                last_auth_status="authenticated",
+            )
+        )
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="대전",
+            origin_node_id="0010",
+            destination="부산",
+            destination_node_id="0020",
+            travel_date=departure.date(),
+            time_from=departure.time().replace(tzinfo=None),
+            time_to=(departure + timedelta(hours=2)).time().replace(tzinfo=None),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key="srt-exact-paid-worker-e2e",
+        )
+        candidate = WatchCandidate(
+            train_number="329",
+            departure_at=departure,
+            scheduled_departure_at=departure,
+            arrival_at=departure + timedelta(hours=2),
+            seat_class=SeatClass.STANDARD,
+            priority=1,
+            state="seat_found",
+        )
+        observation = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.AVAILABLE,
+            source="srtrain-2.6.7-accountless",
+            observed_at=now,
+            fresh_until=now + timedelta(minutes=1),
+        )
+        watch.candidates.append(candidate)
+        session.add_all([watch, observation])
+        await session.commit()
+        target = ObservationTarget(
+            watch_id=watch.id,
+            candidate_id=candidate.id,
+            provider=Provider.SRT,
+            origin=watch.origin,
+            destination=watch.destination,
+            origin_node_id=watch.origin_node_id or "",
+            destination_node_id=watch.destination_node_id or "",
+            train_number=candidate.train_number,
+            departure_at=candidate.departure_at,
+            arrival_at=candidate.arrival_at,
+            seat_class=candidate.seat_class,
+            passenger_count=watch.passenger_count,
+            priority=candidate.priority,
+            reservation_episode_key=f"availability:{observation.id}",
+        )
+        watch_id = watch.id
+
+    await _reserve_winner(adapter, target)
+
+    async with app.state.test_session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        attempt = await session.scalar(select(ReservationAttempt))
+        assert client.reserve_calls == 1, (
+            watch.status if watch is not None else None,
+            attempt.outcome if attempt is not None else None,
+            adapter.capabilities(),
+        )
+        assert client.reservation_list_calls >= 1
+        assert watch is not None and attempt is not None
+        assert watch.status is WatchStatus.COMPLETED
+        assert attempt.outcome is ReservationOutcome.UNKNOWN
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+        assert attempt.reserved_seats == []
+        assert attempt.confirmation_correlation_seats == [{"car_number": "4", "seat_number": "8A"}]
 
 
 class CurrentReconciliationLeaseService:
@@ -405,8 +601,16 @@ async def test_reconciliation_uses_same_generation_read_only_confirmation_once(
             idempotency_key="reserve:reconciliation-worker",
             started_at=observed_at - timedelta(minutes=2),
             outcome=ReservationOutcome.UNKNOWN,
+            result_reason_code=(ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN),
             credential_version=3,
             finished_at=observed_at - timedelta(minutes=1),
+            progress_stages=[
+                {
+                    "stage": "reservation_requested",
+                    "occurred_at": (observed_at - timedelta(minutes=1)).isoformat(),
+                }
+            ],
+            confirmation_correlation_seats=[{"car_number": "4", "seat_number": "8A"}],
         )
         watch.candidates.append(candidate)
         session.add(watch)
@@ -443,6 +647,259 @@ async def test_reconciliation_uses_same_generation_read_only_confirmation_once(
             ).all()
         )
         assert len(reconciliation_events) == 1
+
+
+async def test_unknown_auth_reconciliation_same_generation_reauth_resumes_final_read(
+    app,
+    db_engine,
+    monkeypatch,
+) -> None:
+    observed_at = datetime.now(timezone.utc)
+    adapter = ReadOnlyReconciliationAdapter(
+        ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.AUTH_REQUIRED,
+            source="srtrain-reservation-list",
+            observed_at=observed_at,
+        )
+    )
+    lease_service = CurrentReconciliationLeaseService()
+
+    async def acquire(_provider: Provider, now: datetime):
+        assert now.tzinfo is not None
+        return lease_service, object()
+
+    monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
+    monkeypatch.setattr(worker_module, "_acquire_execution_lease", acquire)
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        account = RailProviderAccount(
+            provider=Provider.SRT,
+            credentials_ciphertext=secret_box.encrypt_dict(
+                {
+                    "login_method": "membership_number",
+                    "login_id": "fixture-account",
+                    "password": "fixture-only-value",
+                }
+            ),
+            enabled=True,
+            credential_version=13,
+            last_auth_status="authenticated",
+        )
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="수서",
+            origin_node_id="N-SUSEO",
+            destination="부산",
+            destination_node_id="N-BUSAN",
+            travel_date=date(2026, 8, 3),
+            time_from=time(12),
+            time_to=time(18),
+            train_numbers=["307"],
+            notification_channel_ids=[],
+            mode="official",
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.WATCHING,
+            dedupe_key="reconciliation-auth-same-generation",
+            reservation_attempted=True,
+        )
+        candidate = WatchCandidate(
+            train_number="307",
+            departure_at=datetime(2026, 8, 3, 5, tzinfo=timezone.utc),
+            seat_class="standard",
+            priority=1,
+            state="observed",
+            manual_rearm_source_attempt_id="older-manual-authorization",
+            manual_rearm_authorized_at=observed_at - timedelta(minutes=1),
+        )
+        attempt = ReservationAttempt(
+            candidate=candidate,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key="reserve:reconciliation-auth-same-generation",
+            started_at=observed_at - timedelta(minutes=2),
+            finished_at=observed_at - timedelta(minutes=1),
+            outcome=ReservationOutcome.UNKNOWN,
+            credential_version=13,
+            confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            confirmation_source="srtrain-reservation-list",
+            confirmation_observed_at=observed_at - timedelta(minutes=1),
+            last_reconciled_at=observed_at - timedelta(minutes=1),
+            reconciliation_attempt_count=5,
+            next_reconcile_at=observed_at - timedelta(seconds=1),
+        )
+        watch.candidates.append(candidate)
+        session.add_all([account, watch])
+        await session.commit()
+        attempt_id = attempt.id
+        watch_id = watch.id
+
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
+    async with factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
+        )
+        watch = await session.get(Watch, watch_id)
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        candidate = await session.scalar(
+            select(WatchCandidate).where(WatchCandidate.watch_id == watch_id)
+        )
+        assert account is not None
+        assert watch is not None
+        assert attempt is not None
+        assert candidate is not None
+        assert account.last_auth_status == "auth_required"
+        assert watch.status is WatchStatus.AUTH_REQUIRED
+        assert attempt.reconciliation_attempt_count == 5
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.AUTH_REQUIRED
+        assert candidate.manual_rearm_source_attempt_id is None
+        assert candidate.manual_rearm_authorized_at is None
+
+        attempt.next_reconcile_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        await session.commit()
+        assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 0
+        assert len(adapter.targets) == 1
+
+        reauthenticated_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+        account.last_auth_status = "authenticated"
+        account.last_authenticated_at = reauthenticated_at
+        resumed = await resume_watches_after_verified_provider_login(
+            session,
+            Provider.SRT,
+            reauthenticated_at,
+            credential_version=13,
+        )
+        assert resumed == [watch_id]
+        assert watch.status is WatchStatus.SCHEDULED
+        assert attempt.next_reconcile_at == reauthenticated_at
+        attempt.next_reconcile_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        await session.commit()
+
+    adapter.result = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        source="srtrain-reservation-list",
+        observed_at=datetime.now(timezone.utc),
+    )
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
+
+    async with factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
+        )
+        watch = await session.get(Watch, watch_id)
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert account is not None
+        assert watch is not None
+        assert attempt is not None
+        assert account.last_auth_status == "authenticated"
+        assert watch.status is WatchStatus.WATCHING
+        assert attempt.reconciliation_attempt_count == 6
+        assert attempt.next_reconcile_at is None
+        assert (
+            attempt.reconciliation_resolution
+            is ReservationReconciliationResolution.EXHAUSTED_UNRESOLVED
+        )
+    assert len(adapter.targets) == 2
+    assert lease_service.released == 2
+
+
+async def test_reconciliation_final_account_auth_gate_fences_late_provider_result(
+    app,
+    db_engine,
+    monkeypatch,
+) -> None:
+    observed_at = datetime.now(timezone.utc)
+
+    class AccountBlockingReconciliationAdapter(ReadOnlyReconciliationAdapter):
+        async def confirm_reservation(self, target):
+            result = await super().confirm_reservation(target)
+            async with app.state.test_session_factory() as account_session:
+                account = await account_session.scalar(
+                    select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
+                )
+                assert account is not None
+                account.last_auth_status = "provider_blocked"
+                await account_session.commit()
+            return result
+
+    adapter = AccountBlockingReconciliationAdapter(
+        ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            source="srtrain-reservation-list",
+            observed_at=observed_at,
+        )
+    )
+    lease_service = CurrentReconciliationLeaseService()
+
+    async def acquire(_provider: Provider, _now: datetime):
+        return lease_service, object()
+
+    monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
+    monkeypatch.setattr(worker_module, "_acquire_execution_lease", acquire)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        account = RailProviderAccount(
+            provider=Provider.SRT,
+            credentials_ciphertext="encrypted-outside-this-boundary",
+            enabled=True,
+            credential_version=14,
+            last_auth_status="authenticated",
+        )
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="수서",
+            origin_node_id="N-SUSEO",
+            destination="부산",
+            destination_node_id="N-BUSAN",
+            travel_date=date(2026, 8, 3),
+            time_from=time(12),
+            time_to=time(18),
+            reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+            status=WatchStatus.WATCHING,
+            dedupe_key="reconciliation-final-account-auth-fence",
+        )
+        candidate = WatchCandidate(
+            train_number="309",
+            departure_at=datetime(2026, 8, 3, 6, tzinfo=timezone.utc),
+            seat_class="standard",
+            priority=1,
+            state="observed",
+        )
+        attempt = ReservationAttempt(
+            candidate=candidate,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key="reserve:reconciliation-final-account-auth-fence",
+            started_at=observed_at - timedelta(minutes=1),
+            finished_at=observed_at - timedelta(seconds=30),
+            outcome=ReservationOutcome.UNKNOWN,
+            credential_version=14,
+        )
+        watch.candidates.append(candidate)
+        session.add_all([account, watch])
+        await session.commit()
+        attempt_id = attempt.id
+        watch_id = watch.id
+
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 0
+    async with factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
+        )
+        watch = await session.get(Watch, watch_id)
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert account is not None
+        assert watch is not None
+        assert attempt is not None
+        assert account.last_auth_status == "provider_blocked"
+        assert watch.status is WatchStatus.WATCHING
+        assert attempt.confirmation_outcome is None
+        assert attempt.reconciliation_attempt_count == 0
+    assert len(adapter.targets) == 1
+    assert lease_service.released == 1
 
 
 async def test_unknown_inconclusive_reconciliation_uses_extended_bounded_schedule(
@@ -559,7 +1016,11 @@ async def test_unknown_inconclusive_reconciliation_uses_extended_bounded_schedul
         attempt = await session.get(ReservationAttempt, attempt_id)
         assert attempt is not None
         assert attempt.outcome is ReservationOutcome.UNKNOWN
-    assert attempt.next_reconcile_at is None
+        assert attempt.next_reconcile_at is None
+        assert (
+            attempt.reconciliation_resolution
+            is ReservationReconciliationResolution.EXHAUSTED_UNRESOLVED
+        )
 
 
 def test_legacy_unknown_count_three_without_next_schedule_is_due_after_five_minutes() -> None:
@@ -798,6 +1259,8 @@ def test_missing_deadline_payment_hold_is_due_for_bounded_legacy_refresh() -> No
         ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
         ReservationConfirmationOutcome.INCONCLUSIVE,
         ReservationConfirmationOutcome.NOT_FOUND,
+        ReservationConfirmationOutcome.AUTH_REQUIRED,
+        ReservationConfirmationOutcome.PROVIDER_BLOCKED,
     ],
 )
 def test_known_payment_hold_is_rechecked_before_deadline_on_bounded_schedule(
@@ -920,6 +1383,46 @@ def test_expired_payment_hold_and_legacy_stuck_row_get_one_cleanup_read() -> Non
     attempt.post_deadline_reconciled_at = None
     watch.payment_deadline = now + timedelta(minutes=1)
     assert _reservation_reconciliation_is_due(attempt, watch, now) is False
+
+
+@pytest.mark.parametrize(
+    "confirmation_outcome",
+    [
+        ReservationConfirmationOutcome.AUTH_REQUIRED,
+        ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+    ],
+)
+def test_reauthenticated_payment_hold_gets_post_deadline_final_read(
+    confirmation_outcome: ReservationConfirmationOutcome,
+) -> None:
+    now = datetime.now(timezone.utc)
+    watch = Watch(
+        provider=Provider.KORAIL,
+        origin="대전",
+        destination="서울",
+        travel_date=date(2026, 8, 4),
+        time_from=time(9),
+        time_to=time(12),
+        status=WatchStatus.PAYMENT_REQUIRED,
+        payment_deadline=now - timedelta(seconds=1),
+        dedupe_key=f"post-auth-deadline-payment-refresh-{confirmation_outcome.value}",
+    )
+    attempt = ReservationAttempt(
+        candidate_id="candidate-post-auth-deadline-payment",
+        attempt_sequence=1,
+        episode_key="availability:first",
+        idempotency_key=f"reserve:post-auth-deadline-{confirmation_outcome.value}",
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        confirmation_outcome=confirmation_outcome,
+        confirmation_source="worker-reconciliation",
+        confirmation_observed_at=now - timedelta(minutes=1),
+        last_reconciled_at=now - timedelta(minutes=1),
+        payment_deadline=watch.payment_deadline,
+        reconciliation_attempt_count=5,
+        next_reconcile_at=now,
+    )
+
+    assert _reservation_reconciliation_is_due(attempt, watch, now) is True
 
 
 def test_stale_reservation_lock_query_does_not_lock_nullable_evidence() -> None:
@@ -2008,6 +2511,7 @@ async def test_reconciled_confirmed_absent_unknown_emits_one_official_retry_epis
             confirmation_observed_at=confirmed_at,
             last_reconciled_at=confirmed_at,
             reconciliation_attempt_count=1,
+            reconciliation_resolution=(ReservationReconciliationResolution.CONFIRMED_ABSENT),
         )
         non_official_observation = SeatObservation(
             candidate=candidate,
@@ -2173,9 +2677,14 @@ async def test_legacy_confirmed_absent_payment_hold_emits_one_retry_episode(
         ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
     ],
 )
+@pytest.mark.parametrize(
+    "retry_edge_status",
+    [SeatObservationStatus.SOLD_OUT, SeatObservationStatus.STANDING_ONLY],
+)
 async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
     db_engine,
     confirmation_outcome: ReservationConfirmationOutcome,
+    retry_edge_status: SeatObservationStatus,
 ) -> None:
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     now = datetime.now(timezone.utc)
@@ -2194,7 +2703,7 @@ async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
             mode="official",
             reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
             status=WatchStatus.SEAT_FOUND,
-            dedupe_key=f"ended-hold-retry-{confirmation_outcome.value}",
+            dedupe_key=(f"ended-hold-retry-{confirmation_outcome.value}-{retry_edge_status.value}"),
         )
         candidate = WatchCandidate(
             train_number="374",
@@ -2215,7 +2724,9 @@ async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
             candidate_id=candidate.id,
             attempt_sequence=1,
             episode_key="availability:first",
-            idempotency_key=f"reserve:ended-hold:{confirmation_outcome.value}",
+            idempotency_key=(
+                f"reserve:ended-hold:{confirmation_outcome.value}:{retry_edge_status.value}"
+            ),
             started_at=hold_ended_at - timedelta(minutes=2),
             finished_at=hold_ended_at - timedelta(minutes=1),
             outcome=ReservationOutcome.PAYMENT_REQUIRED,
@@ -2247,7 +2758,7 @@ async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
 
         unavailable = SeatObservation(
             candidate=candidate,
-            status=SeatObservationStatus.SOLD_OUT,
+            status=retry_edge_status,
             source="authorized-provider",
             observed_at=hold_ended_at + timedelta(seconds=20),
             fresh_until=hold_ended_at + timedelta(minutes=1),

@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from enum import StrEnum
+
+
+class ReservationReconciliationResolution(StrEnum):
+    """Durable terminal resolution of an ambiguous reservation attempt."""
+
+    CONFIRMED_ABSENT = "confirmed_absent"
+    EXHAUSTED_UNRESOLVED = "exhausted_unresolved"
+
 
 RESERVATION_RECONCILIATION_MAX_ATTEMPTS = 3
 RESERVATION_RECONCILIATION_INTERVAL = timedelta(seconds=30)
 UNKNOWN_RECONCILIATION_MAX_ATTEMPTS = 6
+UNKNOWN_MANUAL_REARM_MIN_RECONCILIATIONS = 3
 PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS = 6
 
 _UNKNOWN_INCONCLUSIVE_RECONCILIATION_INTERVALS = {

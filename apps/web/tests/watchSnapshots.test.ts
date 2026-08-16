@@ -159,6 +159,56 @@ describe("watch snapshot reconciliation", () => {
     expect(detectWatchActionTransitions(next, next)).toEqual([]);
   });
 
+  it.each([
+    ["auth_required", "로그인 확인이 필요합니다"],
+    ["provider_blocked", "운영사 요청 제한으로 확인이 필요합니다"],
+  ] as const)("preserves UNKNOWN reconciliation %s on the canonical auth edge", (
+    confirmationOutcome,
+    title,
+  ) => {
+    const previous = watch(`reconciled-${confirmationOutcome}`, "watching");
+    const candidateId = "candidate-auth";
+    const next: WatchLifecycleSnapshot = {
+      ...previous,
+      status: "auth_required",
+      latestReservationAttemptCandidateId: candidateId,
+      reservationCandidateContexts: {
+        [candidateId]: {
+          train: "KTX 223",
+          seatClassLabel: "특실",
+          date: "8월 15일 (토)",
+          departure: "22:08",
+          arrival: "23:07",
+        },
+      },
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        finishedAt: "2026-08-15T12:10:00Z",
+        manualCheckRequired: true,
+        confirmationOutcome,
+        confirmationObservedAt: "2026-08-15T12:12:00Z",
+        reconciliationAttemptCount: 2,
+        nextReconcileAt: null,
+      }),
+      updatedAt: "2026-08-15T12:12:01Z",
+    };
+
+    const transitions = detectWatchActionTransitions([previous], [next]);
+    const transition = transitions[0];
+    if (transition === undefined) throw new Error("canonical authentication edge was not created");
+
+    expect(transitions).toMatchObject([{
+      status: "auth_required",
+      train: "KTX 223",
+      seatClassLabel: "특실",
+      confirmationOutcome,
+      confirmationObservedAt: "2026-08-15T12:12:00Z",
+      revisionAt: "2026-08-15T12:12:01Z",
+    }]);
+    expect(buildWatchActionToast(transition).title).toBe(title);
+  });
+
   it("hydrates only current actionable reservation states and keeps seat-found as baseline", () => {
     const reserving = {
       ...watch("reserve", "reserving"),
@@ -341,6 +391,129 @@ describe("watch snapshot reconciliation", () => {
       status: "monitoring_resumed",
       monitoringResumed: false,
     }]);
+  });
+
+  it("revises a durable manual-check notice for each newer official confirmation", () => {
+    const first: WatchLifecycleSnapshot = {
+      ...watch("reconcile-progress", "watching"),
+      latestReservationAttemptCandidateId: "candidate-two",
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:10:15Z",
+        manualCheckRequired: true,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: "2026-08-03T12:11:00Z",
+        reconciliationAttemptCount: 1,
+        nextReconcileAt: "2026-08-03T12:12:00Z",
+      }),
+    };
+    const second: WatchLifecycleSnapshot = {
+      ...first,
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:10:15Z",
+        manualCheckRequired: true,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: "2026-08-03T12:12:00Z",
+        reconciliationAttemptCount: 2,
+        nextReconcileAt: "2026-08-03T12:14:00Z",
+      }),
+    };
+
+    const firstTransition = hydrateCurrentWatchActionTransitions([first])[0];
+    const secondTransition = detectWatchActionTransitions([first], [second])[0];
+    if (firstTransition === undefined || secondTransition === undefined) {
+      throw new Error("reconciliation progress transitions were not created");
+    }
+    expect(secondTransition).toMatchObject({
+      status: "monitoring_resumed",
+      revisionAt: "2026-08-03T12:12:00Z",
+      reservationResult: {
+        confirmationOutcome: "inconclusive",
+        reconciliationAttemptCount: 2,
+        nextReconcileAt: "2026-08-03T12:14:00Z",
+      },
+    });
+    expect(secondTransition.revision).not.toBe(firstTransition.revision);
+
+    const firstState = pushNotifications(initialNotificationCenterState, [
+      buildWatchActionToast(firstTransition),
+    ]);
+    const secondState = pushNotifications(firstState, [buildWatchActionToast(secondTransition)]);
+    expect(secondState.notices[0]).toMatchObject({
+      revisionAt: "2026-08-03T12:12:00Z",
+      title: "예매 요청 결과를 확인해야 합니다",
+    });
+    expect(secondState.notices[0]?.description).toContain("공식 내역 자동 재확인 2/6회 수행");
+  });
+
+  it("revises the same inconclusive outcome when only its diagnostic becomes more specific", () => {
+    const first: WatchLifecycleSnapshot = {
+      ...watch("diagnostic-revision", "watching"),
+      latestReservationAttemptCandidateId: "candidate-diagnostic",
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:10:15Z",
+        manualCheckRequired: true,
+        confirmationOutcome: "inconclusive",
+        confirmationDiagnosticCode: "unspecified",
+        confirmationObservedAt: "2026-08-03T12:11:00Z",
+        reconciliationAttemptCount: 1,
+        nextReconcileAt: null,
+      }),
+    };
+    const second: WatchLifecycleSnapshot = {
+      ...first,
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-03T12:09:45Z",
+        finishedAt: "2026-08-03T12:10:15Z",
+        manualCheckRequired: true,
+        confirmationOutcome: "inconclusive",
+        confirmationDiagnosticCode: "official_record_ambiguous",
+        confirmationObservedAt: "2026-08-03T12:11:00Z",
+        reconciliationAttemptCount: 1,
+        nextReconcileAt: null,
+      }),
+    };
+
+    const previous = hydrateCurrentWatchActionTransitions([first])[0];
+    const revised = detectWatchActionTransitions([first], [second])[0];
+    if (previous === undefined || revised === undefined) {
+      throw new Error("diagnostic-only reconciliation transition was not created");
+    }
+
+    expect(revised.revision).not.toBe(previous.revision);
+    expect(revised.reservationResult).toMatchObject({
+      confirmationOutcome: "inconclusive",
+      confirmationDiagnosticCode: "official_record_ambiguous",
+    });
+    expect(buildWatchActionToast(revised).description).toContain(
+      "공식 내역에서 이번 예매 시도와 정확히 일치하는 항목을 하나로 구분하지 못했습니다.",
+    );
+
+    const initialNoticeState = pushNotifications(initialNotificationCenterState, [
+      buildWatchActionToast(previous),
+    ]);
+    const revisedNoticeState = pushNotifications(initialNoticeState, [
+      buildWatchActionToast(revised),
+    ]);
+    expect(revisedNoticeState.notices).toHaveLength(1);
+    expect(revisedNoticeState.notices[0]?.revisionKey)
+      .toBe(`watch:${second.id}:${revised.revision}`);
+    expect(revisedNoticeState.notices[0]?.description).toContain(
+      "공식 내역에서 이번 예매 시도와 정확히 일치하는 항목을 하나로 구분하지 못했습니다.",
+    );
+    expect(revisedNoticeState.notices[0]?.description).not.toContain(
+      "공식 예약 내역 확인으로 결과를 확정하지 못했습니다.",
+    );
   });
 
   it("replaces a same-attempt manual check with a later reconciled payment action", () => {
@@ -534,5 +707,46 @@ describe("watch snapshot reconciliation", () => {
       revisionAt: completedAt,
     }]);
     expect(detectWatchActionTransitions([completed], [completed])).toEqual([]);
+  });
+
+  it("recovers an UNKNOWN paid completion only from exact confirmed-paid canonical evidence", () => {
+    const previous = [watch("unknown-paid", "watching")];
+    const completedAt = "2026-08-03T12:21:01Z";
+    const confirmedPaid: WatchLifecycleSnapshot = {
+      ...watch("unknown-paid", "completed"),
+      latestReservationAttemptCandidateId: "candidate",
+      reservationCandidateContexts: {
+        candidate: { train: "KTX 9248", seatClassLabel: "일반실" },
+      },
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        finishedAt: "2026-08-03T12:09:48Z",
+        manualCheckRequired: true,
+        confirmationOutcome: "confirmed_paid",
+        confirmationObservedAt: completedAt,
+      }),
+      updatedAt: completedAt,
+    };
+
+    expect(detectWatchActionTransitions(previous, [confirmedPaid])).toMatchObject([{
+      id: "unknown-paid",
+      status: "payment_completed",
+      train: "KTX 9248",
+      revision: `payment_completed:${completedAt}`,
+    }]);
+    expect(detectWatchActionTransitions(previous, [{
+      ...confirmedPaid,
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        finishedAt: "2026-08-03T12:09:48Z",
+        manualCheckRequired: true,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: completedAt,
+      }),
+    }])).toEqual([]);
+    expect(detectWatchActionTransitions(previous, [{
+      ...confirmedPaid,
+      latestReservationAttemptCandidateId: "missing-candidate",
+    }])).toEqual([]);
   });
 });

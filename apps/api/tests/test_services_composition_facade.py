@@ -275,7 +275,7 @@ def test_services_facade_has_exact_local_definitions_and_runtime_surface() -> No
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == []
     assert not hasattr(facade, "__all__")
-    assert len(SERVICES_PATH.read_text(encoding="utf-8").splitlines()) <= 453
+    assert len(SERVICES_PATH.read_text(encoding="utf-8").splitlines()) <= 456
     import_rows: list[tuple[object, ...]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

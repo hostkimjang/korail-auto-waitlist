@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -8,15 +9,23 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 import pytest
-from SRT import SeatType, SRTNotLoggedInError
+from requests import RequestException
+from SRT import SeatType, SRTError, SRTNotLoggedInError
 from SRT.errors import SRTNetFunnelError
 from SRT.reservation import SRTReservation
 
-from rail_waitlist.domain import Provider, ReservationOutcome, SeatClass
+from rail_waitlist.domain import (
+    Provider,
+    ReservationOutcome,
+    ReservationResultReasonCode,
+    SeatClass,
+)
 from rail_waitlist.provider_adapters.srt_station_roster import (
     SrtStationRosterUnavailable,
 )
+from rail_waitlist.provider_call_context import bind_request_id
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationTarget,
 )
@@ -211,6 +220,99 @@ async def test_unverified_srt_seat_metadata_fails_closed_without_losing_payment_
 
 
 @pytest.mark.parametrize(
+    ("car_number", "seat_number"),
+    [
+        (None, "8A"),
+        ("4", None),
+        ("NONE", "8A"),
+        ("4", "null"),
+        ("-", "8A"),
+    ],
+)
+def test_srt_reservation_seat_parser_rejects_null_and_placeholder_identity(
+    car_number: object,
+    seat_number: object,
+) -> None:
+    ticket = FakeTicket(car=car_number, seat=seat_number)
+
+    assert srt_reservation_module._reservation_seats(FakeReservation(tickets=[ticket])) == ()
+
+
+@pytest.mark.parametrize(
+    ("error", "reason_code"),
+    [
+        (SRTNotLoggedInError(), ReservationResultReasonCode.AUTHENTICATION_REQUIRED),
+        (SRTNetFunnelError("redacted"), ReservationResultReasonCode.PROVIDER_BLOCKED),
+    ],
+)
+async def test_post_call_srt_auth_signal_is_unknown_with_request_provenance(
+    error: Exception,
+    reason_code: ReservationResultReasonCode,
+) -> None:
+    class PostCallFailureClient(FakeClient):
+        def reserve(self, _train, *, passengers, special_seat, window_seat=None):
+            self.reserve_calls += 1
+            raise error
+
+    client = PostCallFailureClient()
+    result = await SrtReservationExecutor(lambda _login_id, _password: client).reserve_once(
+        request(), Credentials()
+    )
+
+    assert client.reserve_calls == 1
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert result.result_reason_code is reason_code
+    assert [progress.stage for progress in result.progress_stages] == ["reservation_requested"]
+    assert result.confirmation_correlation_seats == ()
+
+
+@pytest.mark.parametrize(
+    ("reservation", "expected_correlation"),
+    [
+        (FakeReservation(paid=True), (("4", "8A"),)),
+        (FakeReservation(paid=True, train_number="00331"), ()),
+        (FakeReservation(paid=True, tickets=[]), ()),
+        (
+            FakeReservation(paid=True, tickets=[FakeTicket(car=None, seat="8A")]),
+            (),
+        ),
+        (
+            FakeReservation(
+                paid=True,
+                tickets=[
+                    FakeTicket(car="4", seat="8A"),
+                    FakeTicket(car="4", seat="8A"),
+                ],
+            ),
+            (),
+        ),
+    ],
+)
+async def test_paid_reserve_response_keeps_only_exact_private_correlation(
+    reservation: FakeReservation,
+    expected_correlation: tuple[tuple[str, str], ...],
+) -> None:
+    class PaidResultClient(FakeClient):
+        def reserve(self, _train, *, passengers, special_seat, window_seat=None):
+            self.reserve_calls += 1
+            return reservation
+
+    client = PaidResultClient()
+    result = await SrtReservationExecutor(lambda _login_id, _password: client).reserve_once(
+        request(), Credentials()
+    )
+
+    assert client.reserve_calls == 1
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert [progress.stage for progress in result.progress_stages] == ["reservation_requested"]
+    assert (
+        tuple((seat.car_number, seat.seat_number) for seat in result.confirmation_correlation_seats)
+        == expected_correlation
+    )
+    assert result.reserved_seats == ()
+
+
+@pytest.mark.parametrize(
     "reservation",
     [
         FakeReservation(tickets=[FakeTicket(seat_type_code="2")]),
@@ -260,6 +362,60 @@ async def test_read_only_srt_list_confirms_class_passengers_and_deadline() -> No
 
     assert confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
     assert confirmation.payment_deadline == datetime(2099, 12, 31, 23, 59, tzinfo=KOREA)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_failure_stage"),
+    [
+        (RequestException("transport secret"), "transport"),
+        (SRTError("provider library secret"), "provider_library"),
+        (TypeError("response type secret"), "response_validation"),
+        (ValueError("response value secret"), "response_validation"),
+    ],
+    ids=("transport", "provider_library", "response_type", "response_value"),
+)
+async def test_read_only_srt_list_exception_is_diagnosed_and_logs_closed_stage(
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+    expected_failure_stage: str,
+) -> None:
+    class FailingListClient(FakeClient):
+        def get_reservations(self, paid_only=False):
+            raise error
+
+    executor = SrtReservationExecutor(lambda _login_id, _password: FailingListClient())
+    request_id = "62b41ae2322242b18e98ec989d09a994"
+    with caplog.at_level(logging.INFO), bind_request_id(request_id):
+        confirmation = await executor.confirm_reservation(
+            ReservationConfirmationTarget(
+                attempt_id="attempt-1",
+                candidate_id="candidate-1",
+                provider=Provider.SRT,
+                train_number="329",
+                origin="대전",
+                destination="부산",
+                departure_at=request().departure_at,
+                seat_class=SeatClass.STANDARD,
+                passenger_count=1,
+                credential_version=1,
+            ),
+            Credentials(),
+        )
+
+    assert confirmation.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        confirmation.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+    )
+    assert (
+        "SRT reservation confirmation read failed "
+        "event=provider_confirmation_read_failed provider=SRT "
+        "operation=confirm_reservation "
+        f"request_id={request_id} outcome=inconclusive "
+        "diagnostic_code=official_read_unavailable source=srtrain-reservation-list "
+        f"phase=reservation_list failure_stage={expected_failure_stage}"
+    ) in caplog.text
+    assert str(error) not in caplog.text
 
 
 async def test_read_only_list_recovers_deadline_from_srtrain_official_fields() -> None:

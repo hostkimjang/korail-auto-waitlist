@@ -124,6 +124,9 @@ from .korail_sidecar.pydoll.reservation_contracts import (
 from .korail_sidecar.pydoll.reservation_contracts import (
     KorailReservationSeatClass as ActorKorailReservationSeatClass,
 )
+from .korail_sidecar.pydoll.reservation_contracts import (
+    KorailReservedSeat as _ActorKorailReservedSeat,
+)
 from .korail_sidecar.pydoll.reservation_driver import (
     PydollReservationDomDriver,
 )
@@ -243,6 +246,11 @@ class PydollBrowserSession(Protocol):
         *,
         on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult: ...
+
+    async def confirmation_correlation_seats_from_fresh_state(
+        self,
+        request: KorailReservationRequest,
+    ) -> tuple[_ActorKorailReservedSeat, ...]: ...
 
     async def read_reservation_list(self) -> PydollReservationListSnapshot: ...
 
@@ -1074,6 +1082,14 @@ class _PydollSession:
         if on_progress is None:
             return await self._reservation_driver.reserve_once(request)
         return await self._reservation_driver.reserve_once(request, on_progress=on_progress)
+
+    async def confirmation_correlation_seats_from_fresh_state(
+        self,
+        request: KorailReservationRequest,
+    ) -> tuple[_ActorKorailReservedSeat, ...]:
+        return await self._reservation_driver.confirmation_correlation_seats_from_fresh_state(
+            request
+        )
 
     async def _has_exact_preserved_booking_state(
         self,

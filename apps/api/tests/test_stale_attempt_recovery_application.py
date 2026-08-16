@@ -183,6 +183,7 @@ async def test_stale_recovery_preserves_state_matrix_and_durable_unknown_fence(
 
     assert recovered == 1
     assert attempt.outcome is ReservationOutcome.UNKNOWN
+    assert attempt.result_reason_code.value == "reservation_request_result_unknown"
     assert attempt.finished_at == now
     assert watch.status is expected_watch_status
     assert candidate.state == expected_candidate_state
@@ -209,6 +210,12 @@ async def test_stale_recovery_preserves_state_matrix_and_durable_unknown_fence(
                 "attempt_started_at": attempt.started_at.isoformat(),
                 "attempt_finished_at": now.isoformat(),
                 "outcome": "unknown",
+                "result_reason_code": "reservation_request_result_unknown",
+                "confirmation_outcome": None,
+                "confirmation_diagnostic_code": None,
+                "confirmation_observed_at": None,
+                "reconciliation_attempt_count": 0,
+                "next_reconcile_at": None,
                 "retryable": False,
                 "manual_check_required": True,
                 "retry_condition": None,

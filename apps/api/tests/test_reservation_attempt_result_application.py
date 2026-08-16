@@ -8,9 +8,15 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import rail_waitlist.services as services_module
-from rail_waitlist.domain import Provider, ReservationOutcome, WatchStatus
+from rail_waitlist.domain import (
+    Provider,
+    ReservationOutcome,
+    ReservationResultReasonCode,
+    WatchStatus,
+)
 from rail_waitlist.models import ReservationAttempt, Watch, WatchCandidate
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
@@ -196,6 +202,81 @@ async def test_success_result_suppresses_lower_candidates_and_emits_stable_event
     assert events[1]["dedupe_key"] == "reservation-result:attempt-1"
 
 
+async def test_initial_exact_paid_event_uses_the_actual_watching_to_completed_edge() -> None:
+    transitions: list[tuple[WatchStatus, str | None]] = []
+    events: list[dict[str, object]] = []
+    watch = make_watch()
+    candidate = make_candidate()
+    attempt = make_attempt()
+    result = ReservationResult(
+        outcome=ReservationOutcome.UNKNOWN,
+        result_reason_code=ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+        source="srt.owner-test",
+        observed_at=OBSERVED_AT,
+        credential_version=4,
+    )
+
+    await complete_reservation_attempt_application(
+        cast(AsyncSession, ResultSession()),
+        watch,
+        candidate,
+        attempt,
+        result,
+        confirmation=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+            source="srtrain-reservation-list",
+            observed_at=COMPLETED_AT,
+        ),
+        dependencies=make_dependencies(transitions, events),
+    )
+
+    assert watch.status is WatchStatus.COMPLETED
+    assert transitions == [
+        (WatchStatus.WATCHING, "reservation_result_unknown_confirmed_paid"),
+        (WatchStatus.COMPLETED, "reservation_reconciliation_confirmed_paid"),
+    ]
+    assert [event["event_type"] for event in events] == ["watch.payment_completed"]
+    payload = cast(dict[str, object], events[0]["payload"])
+    assert payload["from"] == "watching"
+    assert payload["to"] == "completed"
+
+
+async def test_exact_paid_cleanup_does_not_emit_a_second_completion_event() -> None:
+    transitions: list[tuple[WatchStatus, str | None]] = []
+    events: list[dict[str, object]] = []
+    watch = make_watch()
+    watch.status = WatchStatus.COMPLETED
+    candidate = make_candidate()
+    attempt = make_attempt()
+    result = ReservationResult(
+        outcome=ReservationOutcome.UNKNOWN,
+        result_reason_code=ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN,
+        source="srt.owner-test",
+        observed_at=OBSERVED_AT,
+        credential_version=4,
+    )
+
+    await complete_reservation_attempt_application(
+        cast(AsyncSession, ResultSession()),
+        watch,
+        candidate,
+        attempt,
+        result,
+        confirmation=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+            source="srtrain-reservation-list",
+            observed_at=COMPLETED_AT,
+        ),
+        dependencies=make_dependencies(transitions, events),
+    )
+
+    assert watch.status is WatchStatus.COMPLETED
+    assert transitions == []
+    assert events == []
+
+
 async def test_terminal_result_reuses_progress_already_persisted_during_provider_io() -> None:
     transitions: list[tuple[WatchStatus, str | None]] = []
     events: list[dict[str, object]] = []
@@ -303,6 +384,13 @@ async def test_expired_success_deadline_becomes_unknown_manual_check_fence() -> 
             "payload": {
                 "watch_id": "watch-1",
                 "candidate_id": "candidate-1",
+                "outcome": "unknown",
+                "result_reason_code": "reservation_request_result_unknown",
+                "confirmation_outcome": None,
+                "confirmation_diagnostic_code": None,
+                "confirmation_observed_at": None,
+                "reconciliation_attempt_count": 0,
+                "next_reconcile_at": None,
                 "reason": "payment_deadline_already_elapsed",
             },
             "dedupe_key": "reservation-result-expired-deadline:attempt-1",
@@ -454,7 +542,20 @@ async def test_unknown_schedules_one_delayed_official_recheck(
     )
 
     assert attempt.confirmation_outcome is confirmation_outcome
+    assert attempt.confirmation_diagnostic_code is (
+        ReservationConfirmationDiagnosticCode.UNSPECIFIED
+        if confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+        else None
+    )
     assert attempt.next_reconcile_at == COMPLETED_AT + timedelta(seconds=30)
+    result_event = next(
+        event for event in events if event["event_type"] == "watch.reservation_result"
+    )
+    assert result_event["payload"]["confirmation_diagnostic_code"] == (
+        "unspecified"
+        if confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+        else None
+    )
 
 
 async def test_result_application_rejects_completion_and_confirmation_mismatch() -> None:

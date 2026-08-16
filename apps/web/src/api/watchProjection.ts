@@ -82,6 +82,18 @@ export interface ReservationCandidateContext {
   arrival: string;
 }
 
+export interface ReservationAttemptCandidateContext {
+  candidateId: string;
+  provider: WatchProvider;
+  train: string;
+  trainType: string | null;
+  date: string;
+  departure: string;
+  arrival: string | null;
+  seatClass: WatchSeatClass;
+  seatClassLabel: string;
+}
+
 interface WatchReadModelBase {
   id: string;
   provider: WatchProvider;
@@ -106,7 +118,9 @@ interface WatchReadModelBase {
   officialBookingUrl: string | null;
   operational: OperationalCandidateMeta | null;
   latestReservationAttempt: LatestReservationAttempt | null;
+  latestReservationAttemptContext?: ReservationAttemptCandidateContext | null;
   paymentRequiredReservedSeats: ReadonlyArray<ReservedSeat>;
+  paymentRequiredReservationAttempt?: LatestReservationAttempt | null;
   latestReservationAttemptCandidateId?: string | null;
   seatFoundObservation: SeatFoundObservation | null;
   reservationCandidateContexts: Record<string, ReservationCandidateContext>;
@@ -172,6 +186,7 @@ const LATEST_OBSERVATION_STATUSES: ReadonlySet<string> = new Set([
   "available",
   "limited",
   "standing_plus_seat",
+  "standing_only",
   "not_enough_seats",
   "sold_out",
   "waitlist_available",
@@ -186,6 +201,11 @@ const OBSERVATION_SOURCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function claimsManualReservationRearm(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.latest_reservation_attempt)) return false;
+  return value.latest_reservation_attempt.manual_rearm_available === true;
 }
 
 function watchSeatClass(value: unknown): WatchSeatClass | null {
@@ -257,6 +277,7 @@ function latestObservationMeta(
     available: "예매 가능",
     limited: "매진 임박",
     standing_plus_seat: "입석+좌석",
+    standing_only: "입석만 가능",
     sold_out: "매진",
     waitlist_available: "예약대기 가능",
     not_enough_seats: "좌석 부족",
@@ -294,6 +315,7 @@ function optionalAwareTimestamp(value: unknown): string | null {
 
 export function mapWatch(value: unknown): ProjectedWatch {
   const watch = parseWatchReadDto(value);
+  const manualRearmClaimCount = watch.candidates.filter(claimsManualReservationRearm).length;
   const prioritizedCandidates = watch.candidates
     .flatMap((item): ValidWatchCandidate[] => {
       const candidate = parseWatchCandidateReadDto(item);
@@ -325,17 +347,44 @@ export function mapWatch(value: unknown): ProjectedWatch {
       : ["auth_required", "failed"].includes(watch.status)
         ? prioritizedCandidates.find(({ raw }) => raw.state === "failed")
         : null;
-  const latestAttemptOwner = prioritizedCandidates.reduce<{
+  const reservationAttemptOwners = prioritizedCandidates.flatMap<{
     candidateId: string;
     attempt: LatestReservationAttempt;
-  } | null>((latest, { raw, mapped }) => {
+  }>(({ raw, mapped }) => {
     const attempt = mapLatestReservationAttempt(raw.latest_reservation_attempt);
-    if (attempt === null) return latest;
-    if (latest === null || Date.parse(attempt.startedAt) > Date.parse(latest.attempt.startedAt)) {
-      return { candidateId: mapped.id, attempt };
+    return attempt === null ? [] : [{ candidateId: mapped.id, attempt }];
+  });
+  const newestAttemptOwner = reservationAttemptOwners.reduce<{
+    candidateId: string;
+    attempt: LatestReservationAttempt;
+  } | null>((latest, owner) => {
+    if (
+      latest === null
+      || Date.parse(owner.attempt.startedAt) > Date.parse(latest.attempt.startedAt)
+    ) {
+      return owner;
     }
     return latest;
   }, null);
+  const manualRearmAttemptOwners = reservationAttemptOwners.filter(
+    ({ attempt }) => attempt.manualRearmAvailable === true,
+  );
+  const preferredAttemptOwner = manualRearmClaimCount === 1
+    && manualRearmAttemptOwners.length === 1
+    ? manualRearmAttemptOwners[0] ?? null
+    : newestAttemptOwner;
+  const latestAttemptOwner = manualRearmClaimCount <= 1
+    ? preferredAttemptOwner
+    : preferredAttemptOwner === null
+      ? null
+      : {
+          ...preferredAttemptOwner,
+          attempt: {
+            ...preferredAttemptOwner.attempt,
+            manualRearmAvailable: false,
+            manualRearmReason: null,
+          },
+        };
   const endedHoldCandidate = watch.status === "watching"
     && latestAttemptOwner?.attempt.paymentHoldEndedAt
     ? prioritizedCandidates.find(({ mapped }) => mapped.id === latestAttemptOwner.candidateId)
@@ -407,17 +456,19 @@ export function mapWatch(value: unknown): ProjectedWatch {
       || normalizedSeat.status === "limited"
       || normalizedSeat.status === "standing_plus_seat"
       ? "예매 가능"
-      : normalizedSeat.status === "sold_out"
-        ? "매진"
-        : normalizedSeat.status === "waitlist_available"
-          ? "예약대기 가능"
-          : normalizedSeat.status === "unknown"
-            || normalizedSeat.status === "stale"
-            || normalizedSeat.status === "error"
-            ? observed
-              ? "확인 필요"
-              : seatObservationReasonMeta(provenance?.reason).label
-            : "예매 불가";
+      : normalizedSeat.status === "standing_only"
+        ? "입석만 가능"
+        : normalizedSeat.status === "sold_out"
+          ? "매진"
+          : normalizedSeat.status === "waitlist_available"
+            ? "예약대기 가능"
+            : normalizedSeat.status === "unknown"
+              || normalizedSeat.status === "stale"
+              || normalizedSeat.status === "error"
+              ? observed
+                ? "확인 필요"
+                : seatObservationReasonMeta(provenance?.reason).label
+              : "예매 불가";
     if (!observed) {
       seatEvidenceLabel = `${seatClassLabel} · ${statusLabel}`;
     } else {
@@ -446,6 +497,11 @@ export function mapWatch(value: unknown): ProjectedWatch {
     cooldownUntil,
   });
   const latestReservationAttempt = latestAttemptOwner?.attempt ?? null;
+  const latestReservationAttemptCandidate = latestAttemptOwner === null
+    ? null
+    : prioritizedCandidates.find(({ mapped }) => (
+      mapped.id === latestAttemptOwner.candidateId
+    )) ?? null;
   if (currentObservation) seatEvidenceLabel = currentObservation.label;
   const paymentHoldEndedForSelectedCandidate = latestReservationAttempt?.paymentHoldEndedAt !== null
     && latestReservationAttempt?.paymentHoldEndedAt !== undefined
@@ -474,6 +530,22 @@ export function mapWatch(value: unknown): ProjectedWatch {
         : timeLabel(watch.time_to),
     }]
   )));
+  const latestReservationAttemptContext: ReservationAttemptCandidateContext | null =
+    latestReservationAttemptCandidate === null
+      ? null
+      : {
+          candidateId: latestReservationAttemptCandidate.mapped.id,
+          provider: normalizedProvider,
+          train: latestReservationAttemptCandidate.mapped.trainNumber,
+          trainType: latestReservationAttemptCandidate.mapped.trainType ?? null,
+          date: dateLabel(watch.travel_date),
+          departure: timetableTimeLabel(latestReservationAttemptCandidate.mapped.departureAt),
+          arrival: latestReservationAttemptCandidate.mapped.arrivalAt === null
+            ? null
+            : timetableTimeLabel(latestReservationAttemptCandidate.mapped.arrivalAt),
+          seatClass: latestReservationAttemptCandidate.mapped.seatClass,
+          seatClassLabel: SEAT_CLASS_LABELS[latestReservationAttemptCandidate.mapped.seatClass],
+        };
   const officialBookingUrl = safeOfficialUrl(watch.official_booking_url, normalizedProvider);
   const reservationPolicy = normalizeReservationPolicy(watch.reservation_policy);
   const paymentDeadline = optionalAwareTimestamp(watch.payment_deadline);
@@ -516,9 +588,13 @@ export function mapWatch(value: unknown): ProjectedWatch {
     lastCheckedLabel,
     operational,
     latestReservationAttempt,
+    latestReservationAttemptContext,
     paymentRequiredReservedSeats: watch.status === "payment_required"
       ? selectedCandidateReservationAttempt?.reservedSeats ?? []
       : [],
+    paymentRequiredReservationAttempt: watch.status === "payment_required"
+      ? selectedCandidateReservationAttempt
+      : null,
     latestReservationAttemptCandidateId: latestAttemptOwner?.candidateId ?? null,
     origin: watch.origin,
     destination: watch.destination,

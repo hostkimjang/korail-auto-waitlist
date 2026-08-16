@@ -14,6 +14,7 @@ from ...korail_sidecar.contracts import (
     KorailReservationConfirmationResult,
 )
 from .contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
@@ -30,10 +31,14 @@ Clock = Callable[[], datetime]
 _FALLBACK_SOURCE = "korail-same-session-detail"
 
 
-def _inconclusive(now: Clock) -> ReservationConfirmationResult:
+def _inconclusive(
+    now: Clock,
+    diagnostic_code: ReservationConfirmationDiagnosticCode,
+) -> ReservationConfirmationResult:
     return ReservationConfirmationResult(
         provider=Provider.KORAIL,
         outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        diagnostic_code=diagnostic_code,
         source=_FALLBACK_SOURCE,
         observed_at=now(),
     )
@@ -51,7 +56,10 @@ async def confirm_korail_sidecar_reservation(
     """Read and normalize one same-session confirmation without retrying or mutating."""
 
     if not enabled or target.provider is not Provider.KORAIL:
-        return _inconclusive(now)
+        return _inconclusive(
+            now,
+            ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE,
+        )
     try:
         result = await confirm(
             KorailReservationConfirmationRequest.model_validate(
@@ -74,6 +82,13 @@ async def confirm_korail_sidecar_reservation(
                         }
                         for seat in target.reserved_seats
                     ],
+                    "confirmation_correlation_seats": [
+                        {
+                            "car_number": seat.car_number,
+                            "seat_number": seat.seat_number,
+                        }
+                        for seat in target.confirmation_correlation_seats
+                    ],
                 }
             )
         )
@@ -85,26 +100,50 @@ async def confirm_korail_sidecar_reservation(
                 if error.protection or error.rate_limited
                 else ReservationConfirmationOutcome.INCONCLUSIVE
             ),
+            diagnostic_code=(
+                None
+                if error.protection or error.rate_limited
+                else ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+            ),
             source=_FALLBACK_SOURCE,
             observed_at=now(),
         )
     except (ValueError, ValidationError):
-        return _inconclusive(now)
+        return _inconclusive(
+            now,
+            ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT,
+        )
     try:
         outcome = ReservationConfirmationOutcome(result.outcome)
+        paid_seats = (
+            target.confirmation_correlation_seats
+            if target.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+            else target.reserved_seats
+        )
         if outcome is ReservationConfirmationOutcome.CONFIRMED_PAID and (
-            target.purpose is not ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+            target.purpose
+            not in {
+                ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP,
+                ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+            }
             or target.passenger_count != 1
-            or len(target.reserved_seats) != 1
+            or len(paid_seats) != 1
         ):
-            return _inconclusive(now)
+            return _inconclusive(
+                now,
+                ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT,
+            )
         return ReservationConfirmationResult(
             provider=Provider.KORAIL,
             outcome=outcome,
+            diagnostic_code=result.diagnostic_code,
             source=result.source,
             observed_at=result.observed_at,
             payment_deadline=result.payment_deadline,
             official_handoff_url=result.official_handoff_url,
         )
     except ValueError:
-        return _inconclusive(now)
+        return _inconclusive(
+            now,
+            ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT,
+        )

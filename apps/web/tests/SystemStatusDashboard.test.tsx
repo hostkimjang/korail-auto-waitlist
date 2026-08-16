@@ -33,10 +33,76 @@ describe("SystemStatusDashboard", () => {
     expect(screen.getByText(/KORAIL · 좌석 조회 · 관측 오류 · 382/)).toBeTruthy();
     expect(screen.getByText("오류 · 시간 초과")).toBeTruthy();
     expect(screen.getByText("운영사 로그인 확인이 필요해 예매를 진행하지 못했습니다.")).toBeTruthy();
+    expect(screen.getByText(
+      /공식 내역에서 이번 예매 시도와 정확히 일치하는 항목을 하나로 구분하지 못했습니다\. · 철도사 운행 지연 안내에 사용자 동의가 필요합니다\./,
+    )).toBeTruthy();
     expect(screen.getByText("활동·오류 최대 20개 · 반복 정상 관측 제외")).toBeTruthy();
     expect(screen.getAllByRole("list").length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText(/^기록 시각 /).length).toBeGreaterThan(0);
     expect(screen.queryByText(/https?:\/\/|서울|payload|token|watch-|candidate-/i)).toBeNull();
+  });
+
+  it("labels standing-only seat observations in the operations summary", async () => {
+    const payload = operationsPayload();
+    const standingOnlyEntry = {
+      ...payload.recent_entries[3],
+      status: "standing_only",
+      error_category: null,
+    };
+    const loader = vi.fn().mockResolvedValue(mapOperationsSummary({
+      ...payload,
+      recent_entries: [standingOnlyEntry],
+    }));
+    render(<SystemStatusDashboard loader={loader} />);
+
+    expect(await screen.findByText(/입석만 가능 관측/)).toBeTruthy();
+  });
+
+  it("shows every safe official-confirmation diagnostic in reservation attempt logs", async () => {
+    const diagnostics = [
+      [
+        "official_read_unavailable",
+        "철도사 공식 내역을 불러오거나 응답을 확인하지 못했습니다.",
+      ],
+      [
+        "credential_context_mismatch",
+        "예매 시도와 공식 확인의 계정 상태가 달라 결과를 연결하지 못했습니다.",
+      ],
+      [
+        "official_record_ambiguous",
+        "공식 내역에서 이번 예매 시도와 정확히 일치하는 항목을 하나로 구분하지 못했습니다.",
+      ],
+      [
+        "official_evidence_insufficient",
+        "공식 내역은 확인했지만 예약 상태를 확정할 정보가 충분하지 않습니다.",
+      ],
+      [
+        "unspecified",
+        "공식 예약 내역 확인으로 결과를 확정하지 못했습니다.",
+      ],
+    ] as const;
+    const payload = {
+      ...operationsPayload(),
+      recent_entries: diagnostics.map(([confirmation_diagnostic_code], index) => ({
+        occurred_at: `2026-07-29T03:${String(29 - index).padStart(2, "0")}:00Z`,
+        kind: "reservation_attempt",
+        level: "warning",
+        status: "unknown",
+        error_category: null,
+        provider: "korail",
+        train_number: String(100 + index),
+        departure_at: "2026-08-15T04:57:00Z",
+        seat_class: "standard",
+        reason_code: null,
+        confirmation_diagnostic_code,
+      })),
+    };
+    const loader = vi.fn().mockResolvedValue(mapOperationsSummary(payload));
+    render(<SystemStatusDashboard loader={loader} />);
+
+    await screen.findByRole("heading", { name: "처리량" });
+    for (const [, label] of diagnostics) expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText(/결제 (실패|취소|완료)/)).toBeNull();
   });
 
   it("keeps the last safe summary when a manual refresh fails", async () => {

@@ -46,6 +46,7 @@ LEGACY_OUTCOME_PICKLE = (
 )
 SEMANTIC_SYMBOLS = {
     "ReservationConfirmationAdapter",
+    "ReservationConfirmationDiagnosticCode",
     "ReservationConfirmationOutcome",
     "ReservationConfirmationPurpose",
     "ReservationConfirmationResult",
@@ -58,6 +59,7 @@ LEGACY_PUBLIC_SURFACE = {
     "Protocol",
     "Provider",
     "ReservationConfirmationAdapter",
+    "ReservationConfirmationDiagnosticCode",
     "ReservationConfirmationOutcome",
     "ReservationConfirmationPurpose",
     "ReservationConfirmationResult",
@@ -135,11 +137,13 @@ def test_confirmation_classes_are_canonical_frozen_slot_contracts() -> None:
         "arrival_at",
         "purpose",
         "reserved_seats",
+        "confirmation_correlation_seats",
     ]
     assert [field.default for field in target_fields[:10]] == [MISSING] * 10
     assert target_fields[10].default is None
     assert target_fields[11].default is canonical.ReservationConfirmationPurpose.INITIAL
     assert target_fields[12].default == ()
+    assert target_fields[13].default == ()
     assert [field.name for field in result_fields] == [
         "provider",
         "outcome",
@@ -147,9 +151,10 @@ def test_confirmation_classes_are_canonical_frozen_slot_contracts() -> None:
         "observed_at",
         "payment_deadline",
         "official_handoff_url",
+        "diagnostic_code",
     ]
     assert [field.default for field in result_fields[:4]] == [MISSING] * 4
-    assert [field.default for field in result_fields[4:]] == [None, None]
+    assert [field.default for field in result_fields[4:]] == [None, None, None]
     assert canonical.ReservationConfirmationTarget.__slots__ == tuple(
         field.name for field in target_fields
     )
@@ -229,6 +234,23 @@ def test_target_validation_contract_is_preserved(
             {"official_handoff_url": "https://etk.srail.kr/hpg/hra/02/list"},
             "provider allowlist",
         ),
+        (
+            {
+                "diagnostic_code": (
+                    canonical.ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+                )
+            },
+            "only an inconclusive confirmation",
+        ),
+        (
+            {
+                "outcome": canonical.ReservationConfirmationOutcome.INCONCLUSIVE,
+                "payment_deadline": None,
+                "official_handoff_url": None,
+                "diagnostic_code": "official_read_unavailable",
+            },
+            "diagnostic code is invalid",
+        ),
     ],
 )
 def test_result_validation_contract_is_preserved(
@@ -243,6 +265,17 @@ def test_result_validation_contract_is_preserved(
 def test_confirmation_result_never_authorizes_an_automatic_retry() -> None:
     result = canonical.ReservationConfirmationResult(**result_kwargs())
     assert not result.permits_automatic_reservation_retry
+
+
+def test_inconclusive_confirmation_normalizes_missing_diagnostic_for_legacy_callers() -> None:
+    result = canonical.ReservationConfirmationResult(
+        provider=Provider.KORAIL,
+        outcome=canonical.ReservationConfirmationOutcome.INCONCLUSIVE,
+        source="legacy-confirmation",
+        observed_at=datetime(2026, 8, 7, 6, 40, tzinfo=UTC),
+    )
+
+    assert result.diagnostic_code is canonical.ReservationConfirmationDiagnosticCode.UNSPECIFIED
 
 
 def test_confirmation_adapter_keeps_the_async_structural_signature() -> None:
@@ -269,8 +302,10 @@ def test_canonical_and_pre_move_legacy_pickles_restore_exact_contract_objects() 
     assert legacy_target.provider is Provider.KORAIL
     assert legacy_target.purpose is canonical.ReservationConfirmationPurpose.INITIAL
     assert legacy_target.reserved_seats == ()
+    assert legacy_target.confirmation_correlation_seats == ()
     assert isinstance(legacy_result, canonical.ReservationConfirmationResult)
     assert legacy_result.outcome is canonical.ReservationConfirmationOutcome.NOT_FOUND
+    assert legacy_result.diagnostic_code is None
     assert legacy_outcome is canonical.ReservationConfirmationOutcome.NOT_FOUND
 
 
@@ -327,6 +362,7 @@ from rail_waitlist.reservations.provider_confirmation import korail, srt
 from rail_waitlist import schemas
 semantic = (
     "ReservationConfirmationAdapter",
+    "ReservationConfirmationDiagnosticCode",
     "ReservationConfirmationOutcome",
     "ReservationConfirmationResult",
     "ReservationConfirmationTarget",
@@ -362,6 +398,7 @@ print(json.dumps({
         "identity": True,
         "modules": {
             "ReservationConfirmationAdapter": expected_module,
+            "ReservationConfirmationDiagnosticCode": expected_module,
             "ReservationConfirmationOutcome": expected_module,
             "ReservationConfirmationResult": expected_module,
             "ReservationConfirmationTarget": expected_module,

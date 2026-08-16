@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol, cast, overload
@@ -30,6 +32,7 @@ from ..provider_call_context import (
     validated_log_id,
 )
 from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
@@ -191,6 +194,7 @@ class _ReserveOnceResult(Protocol):
     seat_selected_at: datetime | None
     reservation_requested_at: datetime | None
     reserved_seats: tuple[_ReservedSeat, ...]
+    confirmation_correlation_seats: tuple[_ReservedSeat, ...]
 
 
 class _ReservationProgress(Protocol):
@@ -248,6 +252,13 @@ def create_adapter_app(
                     seat_number=seat.seat_number,
                 )
                 for seat in result.reserved_seats
+            ],
+            confirmation_correlation_seats=[
+                KorailReservedSeat(
+                    car_number=seat.car_number,
+                    seat_number=seat.seat_number,
+                )
+                for seat in result.confirmation_correlation_seats
             ],
         )
 
@@ -316,6 +327,9 @@ def create_adapter_app(
         lifespan=lifespan,
     )
 
+    def request_id_from_header(value: object) -> str | None:
+        return validated_log_id(value if isinstance(value, str) else None)
+
     @app.exception_handler(RequestValidationError)
     async def redact_credential_validation_error(
         request: Request,
@@ -329,11 +343,42 @@ def create_adapter_app(
             "/v1/reserve-once/stream",
             "/v1/confirm-reservation",
         }:
-            return JSONResponse(
-                status_code=422,
-                content={"detail": "request_validation_failed"},
-                headers=NO_STORE_HEADERS,
-            )
+            operation = {
+                "/v1/seat-snapshot": "seat_snapshot",
+                "/v1/verify-login": "verify_login",
+                "/v1/prewarm-login": "prewarm_login",
+                "/v1/reserve-once": "reserve_once",
+                "/v1/reserve-once/stream": "reserve_once_stream",
+                "/v1/confirm-reservation": "confirm_reservation",
+            }[request.url.path]
+            with bind_request_id(
+                request_id_from_header(request.headers.get(REQUEST_ID_HEADER))
+            ) as request_id:
+                expected = f"Bearer {app.state.token}"
+                authorization = request.headers.get("authorization")
+                if authorization is None or not hmac.compare_digest(authorization, expected):
+                    dependencies.logger.warning(
+                        "KORAIL adapter request rejected failure=unauthorized "
+                        "operation=%s request_id=%s",
+                        operation,
+                        request_id,
+                    )
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "unauthorized"},
+                        headers={**NO_STORE_HEADERS, REQUEST_ID_HEADER: request_id},
+                    )
+                dependencies.logger.warning(
+                    "KORAIL adapter request rejected failure=request_validation "
+                    "operation=%s request_id=%s",
+                    operation,
+                    request_id,
+                )
+                return JSONResponse(
+                    status_code=422,
+                    content={"detail": "request_validation_failed"},
+                    headers={**NO_STORE_HEADERS, REQUEST_ID_HEADER: request_id},
+                )
         return await request_validation_exception_handler(request, error)
 
     @app.get("/healthz", include_in_schema=False)
@@ -399,12 +444,19 @@ def create_adapter_app(
         ),
     ) -> BrowserSeatSearchResult:
         response.headers["Cache-Control"] = "no-store"
-        expected = f"Bearer {app.state.token}"
-        if authorization is None or not hmac.compare_digest(authorization, expected):
-            raise HTTPException(401, "unauthorized", headers=NO_STORE_HEADERS)
-        with bind_request_id(validated_log_id(rail_request_id)) as request_id:
-            response.headers[REQUEST_ID_HEADER] = request_id
+        operation = "seat_snapshot"
+        with bind_request_id(request_id_from_header(rail_request_id)) as request_id:
             response_headers = {**NO_STORE_HEADERS, REQUEST_ID_HEADER: request_id}
+            response.headers.update(response_headers)
+            expected = f"Bearer {app.state.token}"
+            if authorization is None or not hmac.compare_digest(authorization, expected):
+                dependencies.logger.warning(
+                    "KORAIL adapter request rejected failure=unauthorized "
+                    "operation=%s request_id=%s",
+                    operation,
+                    request_id,
+                )
+                raise HTTPException(401, "unauthorized", headers=response_headers)
             if not app.state.readiness.ready:
                 raise HTTPException(503, "not_ready", headers=response_headers)
             timeout_ms = None
@@ -462,105 +514,148 @@ def create_adapter_app(
         request: KorailReserveOnceRequest,
         response: Response,
         authorization: str | None = Header(default=None),
+        rail_request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
     ) -> KorailReserveOnceResult:
         response.headers["Cache-Control"] = "no-store"
-        expected = f"Bearer {app.state.token}"
-        if authorization is None or not hmac.compare_digest(authorization, expected):
-            raise HTTPException(401, "unauthorized", headers=NO_STORE_HEADERS)
-        if not app.state.readiness.ready:
-            raise HTTPException(503, "not_ready", headers=NO_STORE_HEADERS)
-        client = app.state.reservation_client
-        if client is None:
-            raise HTTPException(503, "reservation_not_ready", headers=NO_STORE_HEADERS)
+        operation = "reserve_once"
+        with bind_request_id(request_id_from_header(rail_request_id)) as request_id:
+            response_headers = {**NO_STORE_HEADERS, REQUEST_ID_HEADER: request_id}
+            response.headers.update(response_headers)
+            expected = f"Bearer {app.state.token}"
+            if authorization is None or not hmac.compare_digest(authorization, expected):
+                dependencies.logger.warning(
+                    "KORAIL adapter request rejected failure=unauthorized "
+                    "operation=%s request_id=%s",
+                    operation,
+                    request_id,
+                )
+                raise HTTPException(401, "unauthorized", headers=response_headers)
+            if not app.state.readiness.ready:
+                raise HTTPException(503, "not_ready", headers=response_headers)
+            client = app.state.reservation_client
+            if client is None:
+                raise HTTPException(503, "reservation_not_ready", headers=response_headers)
 
-        internal_request = internal_reservation_request(request)
-        try:
-            result = cast(_ReserveOnceResult, await client.reserve_once(internal_request))
-        except Exception:  # noqa: BLE001 -- never serialize backend exceptions containing secrets.
-            dependencies.logger.error("KORAIL reserve-once failed with a redacted backend error")
-            return failed_reservation_result()
-        dependencies.logger.info(
-            "KORAIL reserve-once completed outcome=%s reason=%s "
-            "seat_clicked=%s reservation_clicked=%s",
-            result.outcome.value,
-            result.reason,
-            str(result.seat_clicked).lower(),
-            str(result.reservation_clicked).lower(),
-        )
-        return public_reservation_result(result)
+            dependencies.logger.info(
+                "KORAIL reserve-once started operation=%s request_id=%s",
+                operation,
+                request_id,
+            )
+            internal_request = internal_reservation_request(request)
+            try:
+                result = cast(_ReserveOnceResult, await client.reserve_once(internal_request))
+            except Exception:  # noqa: BLE001 -- never serialize backend exceptions containing secrets.
+                dependencies.logger.error(
+                    "KORAIL reserve-once failed with a redacted backend error "
+                    "operation=%s request_id=%s",
+                    operation,
+                    request_id,
+                )
+                return failed_reservation_result()
+            dependencies.logger.info(
+                "KORAIL reserve-once completed outcome=%s reason=%s "
+                "seat_clicked=%s reservation_clicked=%s operation=%s request_id=%s",
+                result.outcome.value,
+                result.reason,
+                str(result.seat_clicked).lower(),
+                str(result.reservation_clicked).lower(),
+                operation,
+                request_id,
+            )
+            return public_reservation_result(result)
 
     @app.post("/v1/reserve-once/stream", response_class=StreamingResponse)
     async def reserve_once_stream(
         request: KorailReserveOnceRequest,
         authorization: str | None = Header(default=None),
+        rail_request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
     ) -> StreamingResponse:
-        expected = f"Bearer {app.state.token}"
-        if authorization is None or not hmac.compare_digest(authorization, expected):
-            raise HTTPException(401, "unauthorized", headers=NO_STORE_HEADERS)
-        if not app.state.readiness.ready:
-            raise HTTPException(503, "not_ready", headers=NO_STORE_HEADERS)
-        client = app.state.reservation_client
-        if client is None:
-            raise HTTPException(503, "reservation_not_ready", headers=NO_STORE_HEADERS)
-
-        internal_request = internal_reservation_request(request)
-        frames: asyncio.Queue[KorailReserveProgressFrame | KorailReserveResultFrame] = (
-            asyncio.Queue()
-        )
-
-        def emit_progress(progress: object) -> None:
-            typed = cast(_ReservationProgress, progress)
-            frames.put_nowait(
-                KorailReserveProgressFrame(
-                    stage=cast(Any, typed.stage),
-                    occurred_at=typed.occurred_at,
+        operation = "reserve_once_stream"
+        with bind_request_id(request_id_from_header(rail_request_id)) as request_id:
+            response_headers = {**NO_STORE_HEADERS, REQUEST_ID_HEADER: request_id}
+            expected = f"Bearer {app.state.token}"
+            if authorization is None or not hmac.compare_digest(authorization, expected):
+                dependencies.logger.warning(
+                    "KORAIL adapter request rejected failure=unauthorized "
+                    "operation=%s request_id=%s",
+                    operation,
+                    request_id,
                 )
+                raise HTTPException(401, "unauthorized", headers=response_headers)
+            if not app.state.readiness.ready:
+                raise HTTPException(503, "not_ready", headers=response_headers)
+            client = app.state.reservation_client
+            if client is None:
+                raise HTTPException(503, "reservation_not_ready", headers=response_headers)
+
+            dependencies.logger.info(
+                "KORAIL reserve-once stream started operation=%s request_id=%s",
+                operation,
+                request_id,
+            )
+            internal_request = internal_reservation_request(request)
+            frames: asyncio.Queue[KorailReserveProgressFrame | KorailReserveResultFrame] = (
+                asyncio.Queue()
             )
 
-        async def run_once() -> None:
-            try:
-                result = cast(
-                    _ReserveOnceResult,
-                    await client.reserve_once(internal_request, on_progress=emit_progress),
+            def emit_progress(progress: object) -> None:
+                typed = cast(_ReservationProgress, progress)
+                frames.put_nowait(
+                    KorailReserveProgressFrame(
+                        stage=cast(Any, typed.stage),
+                        occurred_at=typed.occurred_at,
+                    )
                 )
-                dependencies.logger.info(
-                    "KORAIL reserve-once stream completed outcome=%s reason=%s "
-                    "seat_clicked=%s reservation_clicked=%s",
-                    result.outcome.value,
-                    result.reason,
-                    str(result.seat_clicked).lower(),
-                    str(result.reservation_clicked).lower(),
-                )
-                terminal = public_reservation_result(result)
-            except Exception:  # noqa: BLE001 -- redact browser and credential details.
-                dependencies.logger.error(
-                    "KORAIL reserve-once stream failed with a redacted backend error"
-                )
-                terminal = failed_reservation_result()
-            frames.put_nowait(KorailReserveResultFrame(result=terminal))
 
-        task = asyncio.create_task(run_once())
-        app.state.pending_reservation_tasks.add(task)
+            async def run_once() -> None:
+                try:
+                    result = cast(
+                        _ReserveOnceResult,
+                        await client.reserve_once(internal_request, on_progress=emit_progress),
+                    )
+                    dependencies.logger.info(
+                        "KORAIL reserve-once stream completed outcome=%s reason=%s "
+                        "seat_clicked=%s reservation_clicked=%s operation=%s request_id=%s",
+                        result.outcome.value,
+                        result.reason,
+                        str(result.seat_clicked).lower(),
+                        str(result.reservation_clicked).lower(),
+                        operation,
+                        request_id,
+                    )
+                    terminal = public_reservation_result(result)
+                except Exception:  # noqa: BLE001 -- redact browser and credential details.
+                    dependencies.logger.error(
+                        "KORAIL reserve-once stream failed with a redacted backend error "
+                        "operation=%s request_id=%s",
+                        operation,
+                        request_id,
+                    )
+                    terminal = failed_reservation_result()
+                frames.put_nowait(KorailReserveResultFrame(result=terminal))
 
-        def release_task(done: asyncio.Task[None]) -> None:
-            app.state.pending_reservation_tasks.discard(done)
-            if not done.cancelled():
-                done.exception()
+            task = asyncio.create_task(run_once(), context=copy_context())
+            app.state.pending_reservation_tasks.add(task)
 
-        task.add_done_callback(release_task)
+            def release_task(done: asyncio.Task[None]) -> None:
+                app.state.pending_reservation_tasks.discard(done)
+                if not done.cancelled():
+                    done.exception()
 
-        async def stream_frames() -> AsyncIterator[bytes]:
-            while True:
-                frame = await frames.get()
-                yield (frame.model_dump_json(exclude_none=True) + "\n").encode()
-                if isinstance(frame, KorailReserveResultFrame):
-                    return
+            task.add_done_callback(release_task)
 
-        return StreamingResponse(
-            stream_frames(),
-            media_type="application/x-ndjson",
-            headers=NO_STORE_HEADERS,
-        )
+            async def stream_frames() -> AsyncIterator[bytes]:
+                while True:
+                    frame = await frames.get()
+                    yield (frame.model_dump_json(exclude_none=True) + "\n").encode()
+                    if isinstance(frame, KorailReserveResultFrame):
+                        return
+
+            return StreamingResponse(
+                stream_frames(),
+                media_type="application/x-ndjson",
+                headers=response_headers,
+            )
 
     @app.post(
         "/v1/confirm-reservation",
@@ -570,74 +665,156 @@ def create_adapter_app(
         request: KorailReservationConfirmationRequest,
         response: Response,
         authorization: str | None = Header(default=None),
+        rail_request_id: str | None = Header(default=None, alias=REQUEST_ID_HEADER),
     ) -> KorailReservationConfirmationResult:
         response.headers.update(NO_STORE_HEADERS)
-        expected = f"Bearer {app.state.token}"
-        if authorization is None or not hmac.compare_digest(authorization, expected):
-            raise HTTPException(401, "unauthorized", headers=NO_STORE_HEADERS)
-        if not app.state.readiness.ready:
-            raise HTTPException(503, "not_ready", headers=NO_STORE_HEADERS)
-        client = app.state.reservation_client
-        read_detail = getattr(client, "read_reservation_detail", None)
-        if client is None or not callable(read_detail):
-            raise HTTPException(503, "confirmation_not_ready", headers=NO_STORE_HEADERS)
-
-        target = ReservationConfirmationTarget(
-            attempt_id=request.attempt_id,
-            candidate_id=request.candidate_id,
-            provider=Provider.KORAIL,
-            train_number=request.train_number,
-            origin=request.origin,
-            destination=request.destination,
-            departure_at=request.departure_at,
-            arrival_at=request.arrival_at,
-            seat_class=SeatClass(request.seat_class),
-            passenger_count=request.passenger_count,
-            credential_version=request.credential_version,
-            purpose=ReservationConfirmationPurpose(request.purpose),
-            reserved_seats=tuple(
-                ReservationConfirmationSeat(
-                    car_number=seat.car_number,
-                    seat_number=seat.seat_number,
+        operation = "confirm_reservation"
+        with bind_request_id(request_id_from_header(rail_request_id)) as request_id:
+            response_headers = {**NO_STORE_HEADERS, REQUEST_ID_HEADER: request_id}
+            response.headers.update(response_headers)
+            expected = f"Bearer {app.state.token}"
+            if authorization is None or not hmac.compare_digest(authorization, expected):
+                dependencies.logger.warning(
+                    "KORAIL adapter request rejected failure=unauthorized "
+                    "operation=%s request_id=%s",
+                    operation,
+                    request_id,
                 )
-                for seat in request.reserved_seats
-            ),
-        )
-        try:
-            confirmation = normalize_korail_same_session_detail(
-                target,
-                await read_detail(target),
+                raise HTTPException(401, "unauthorized", headers=response_headers)
+            if not app.state.readiness.ready:
+                raise HTTPException(503, "not_ready", headers=response_headers)
+            client = app.state.reservation_client
+            read_detail = getattr(client, "read_reservation_detail", None)
+            if client is None or not callable(read_detail):
+                raise HTTPException(503, "confirmation_not_ready", headers=response_headers)
+
+            dependencies.logger.info(
+                "KORAIL reservation confirmation started operation=%s request_id=%s",
+                operation,
+                request_id,
             )
-        except Exception:  # noqa: BLE001 -- provider exception text may contain secrets.
-            dependencies.logger.error(
-                "KORAIL reservation confirmation failed with a redacted error"
-            )
-            confirmation = ReservationConfirmationResult(
+            target = ReservationConfirmationTarget(
+                attempt_id=request.attempt_id,
+                candidate_id=request.candidate_id,
                 provider=Provider.KORAIL,
-                outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
-                source=KORAIL_CONFIRMATION_SOURCE,
-                observed_at=datetime.now(UTC),
+                train_number=request.train_number,
+                origin=request.origin,
+                destination=request.destination,
+                departure_at=request.departure_at,
+                arrival_at=request.arrival_at,
+                seat_class=SeatClass(request.seat_class),
+                passenger_count=request.passenger_count,
+                credential_version=request.credential_version,
+                purpose=ReservationConfirmationPurpose(request.purpose),
+                reserved_seats=tuple(
+                    ReservationConfirmationSeat(
+                        car_number=seat.car_number,
+                        seat_number=seat.seat_number,
+                    )
+                    for seat in request.reserved_seats
+                ),
+                confirmation_correlation_seats=tuple(
+                    ReservationConfirmationSeat(
+                        car_number=seat.car_number,
+                        seat_number=seat.seat_number,
+                    )
+                    for seat in request.confirmation_correlation_seats
+                ),
             )
-        dependencies.logger.info(
-            "KORAIL reservation confirmation completed purpose=%s outcome=%s source=%s",
-            target.purpose.value,
-            confirmation.outcome.value,
-            confirmation.source,
-        )
-        return KorailReservationConfirmationResult(
-            outcome=confirmation.outcome.value,
-            source=cast(
-                Literal[
-                    "korail-same-session-detail",
-                    "korail-reservation-list",
-                    "korail-issued-ticket-list",
-                ],
+            phase: Literal["official_read", "evidence_normalization"] = "official_read"
+            try:
+                evidence = await read_detail(target)
+                phase = "evidence_normalization"
+                confirmation = normalize_korail_same_session_detail(target, evidence)
+            except (BrowserProtectionDetected, BrowserRateLimited):
+                dependencies.logger.warning(
+                    "KORAIL reservation confirmation failed failure=provider_blocked "
+                    "diagnostic_code=none phase=%s operation=%s request_id=%s",
+                    phase,
+                    operation,
+                    request_id,
+                )
+                confirmation = ReservationConfirmationResult(
+                    provider=Provider.KORAIL,
+                    outcome=ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+                    source=KORAIL_CONFIRMATION_SOURCE,
+                    observed_at=datetime.now(UTC),
+                )
+            except BrowserSourceUnavailable as error:
+                safe_stage = (
+                    error.stage
+                    if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error.stage) is not None
+                    else "unspecified"
+                )
+                dependencies.logger.error(
+                    "KORAIL reservation confirmation failed "
+                    "failure=source_unavailable diagnostic_code=%s phase=%s "
+                    "stage=%s operation=%s request_id=%s",
+                    ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE.value,
+                    phase,
+                    safe_stage,
+                    operation,
+                    request_id,
+                )
+                confirmation = ReservationConfirmationResult(
+                    provider=Provider.KORAIL,
+                    outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+                    diagnostic_code=(
+                        ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+                    ),
+                    source=KORAIL_CONFIRMATION_SOURCE,
+                    observed_at=datetime.now(UTC),
+                )
+            except Exception:  # noqa: BLE001 -- provider exception text may contain secrets.
+                diagnostic_code = (
+                    ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+                    if phase == "official_read"
+                    else ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+                )
+                dependencies.logger.error(
+                    "KORAIL reservation confirmation failed with a redacted error "
+                    "diagnostic_code=%s phase=%s operation=%s request_id=%s",
+                    diagnostic_code.value,
+                    phase,
+                    operation,
+                    request_id,
+                )
+                confirmation = ReservationConfirmationResult(
+                    provider=Provider.KORAIL,
+                    outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+                    diagnostic_code=diagnostic_code,
+                    source=KORAIL_CONFIRMATION_SOURCE,
+                    observed_at=datetime.now(UTC),
+                )
+            dependencies.logger.info(
+                "KORAIL reservation confirmation completed purpose=%s outcome=%s "
+                "diagnostic_code=%s source=%s phase=completed operation=%s request_id=%s",
+                target.purpose.value,
+                confirmation.outcome.value,
+                (
+                    confirmation.diagnostic_code.value
+                    if confirmation.diagnostic_code is not None
+                    else "none"
+                ),
                 confirmation.source,
-            ),
-            observed_at=confirmation.observed_at,
-            payment_deadline=confirmation.payment_deadline,
-            official_handoff_url=confirmation.official_handoff_url,
-        )
+                operation,
+                request_id,
+            )
+            return KorailReservationConfirmationResult(
+                outcome=confirmation.outcome.value,
+                diagnostic_code=confirmation.diagnostic_code,
+                source=cast(
+                    Literal[
+                        "korail-same-session-detail",
+                        "korail-reservation-list",
+                        "korail-issued-ticket-list",
+                    ],
+                    confirmation.source,
+                ),
+                observed_at=confirmation.observed_at,
+                payment_deadline=confirmation.payment_deadline,
+                official_handoff_url=confirmation.official_handoff_url,
+            )
 
     @app.post("/v1/verify-login", response_model=KorailLoginVerifyResult)
     async def verify_login(

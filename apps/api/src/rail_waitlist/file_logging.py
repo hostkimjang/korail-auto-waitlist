@@ -9,14 +9,24 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import BinaryIO, TextIO
+from typing import BinaryIO, Protocol, TextIO, cast
 
 from .provider_call_context import validated_log_id
 
+
+class _FileLockModule(Protocol):
+    LOCK_EX: int
+    LOCK_UN: int
+
+    def flock(self, file_descriptor: int, operation: int) -> None: ...
+
+
 try:
-    import fcntl
+    import fcntl as _native_file_lock
 except ImportError:  # pragma: no cover - Windows unit tests use the thread lock.
-    fcntl = None
+    _file_lock: _FileLockModule | None = None
+else:  # pragma: no cover - exercised by Linux containers.
+    _file_lock = cast(_FileLockModule, _native_file_lock)
 
 DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 4
@@ -42,6 +52,19 @@ _BEARER = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
 _URL_QUERY = re.compile(r"(https?://[^\s?]+)\?[^\s]+", re.IGNORECASE)
 _RELATIVE_URL_QUERY = re.compile(r"(?P<path>/[^\s?\"]+)\?[^\s\"]+")
 _URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", re.IGNORECASE)
+_TELEGRAM_BOT_PATH = re.compile(
+    r"(?P<prefix>/bot)\d{5,16}:[a-z0-9_-]{20,}(?P<suffix>/sendMessage\b)",
+    re.IGNORECASE,
+)
+_DISCORD_WEBHOOK_PATH = re.compile(
+    r"(?P<prefix>/api(?:/v\d{1,2})?/webhooks/)\d{15,25}/[a-z0-9._-]{20,}",
+    re.IGNORECASE,
+)
+_SLACK_WEBHOOK_PATH = re.compile(
+    r"(?P<prefix>/services/)T[a-z0-9]{8,}/B[a-z0-9]{8,}/[a-z0-9_-]{20,}",
+    re.IGNORECASE,
+)
+_HTTP_TRANSPORT_LOGGERS = ("httpx", "httpcore")
 _STRUCTURED_EVENT = re.compile(r"(?:^|\s)event=(?P<value>[a-z][a-z0-9_]{0,63})(?:\s|$)")
 _STRUCTURED_LOG_ID = {
     name: re.compile(rf"(?:^|\s){name}=(?P<value>[0-9a-f]{{32}})(?:\s|$)")
@@ -53,6 +76,37 @@ _handler_cache_lock = threading.Lock()
 
 class _SafeConsoleHandler(logging.StreamHandler[TextIO]):
     """Marker type used to keep sidecar console configuration idempotent."""
+
+
+class _ExcludeHttpTransportRecords(logging.Filter):
+    """Keep dependency-owned records out of application-managed logging sinks."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not any(
+            record.name == name or record.name.startswith(f"{name}.")
+            for name in _HTTP_TRANSPORT_LOGGERS
+        )
+
+
+def _protect_from_http_transport_records(handler: logging.Handler) -> None:
+    if not any(isinstance(item, _ExcludeHttpTransportRecords) for item in handler.filters):
+        handler.addFilter(_ExcludeHttpTransportRecords())
+
+
+def _enforce_http_transport_log_levels() -> None:
+    existing_names = tuple(logging.root.manager.loggerDict)
+    logger_names = {
+        *(_HTTP_TRANSPORT_LOGGERS),
+        *(
+            name
+            for name in existing_names
+            if any(name.startswith(f"{root}.") for root in _HTTP_TRANSPORT_LOGGERS)
+        ),
+    }
+    for name in logger_names:
+        logger = logging.getLogger(name)
+        if logger.level == logging.NOTSET or logger.level < logging.WARNING:
+            logger.setLevel(logging.WARNING)
 
 
 def _bounded_integer(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -74,6 +128,18 @@ def _sanitize(message: str) -> str:
     sanitized = _BEARER.sub("Bearer [REDACTED]", sanitized)
     sanitized = _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", sanitized)
     sanitized = _URL_USERINFO.sub(r"\1[REDACTED]@", sanitized)
+    sanitized = _TELEGRAM_BOT_PATH.sub(
+        r"\g<prefix>[REDACTED]\g<suffix>",
+        sanitized,
+    )
+    sanitized = _DISCORD_WEBHOOK_PATH.sub(
+        r"\g<prefix>[REDACTED]/[REDACTED]",
+        sanitized,
+    )
+    sanitized = _SLACK_WEBHOOK_PATH.sub(
+        r"\g<prefix>[REDACTED]/[REDACTED]/[REDACTED]",
+        sanitized,
+    )
     sanitized = _URL_QUERY.sub(r"\1?[REDACTED]", sanitized)
     return _RELATIVE_URL_QUERY.sub(r"\g<path>?[REDACTED]", sanitized)
 
@@ -123,6 +189,7 @@ class ServiceFileHandler(logging.Handler):
         self.max_bytes = max_bytes
         self.backup_count = backup_count
         self.base_filename.parent.mkdir(parents=True, exist_ok=True)
+        _protect_from_http_transport_records(self)
         self.setFormatter(SafeJsonFormatter(service))
         self._assert_writable()
 
@@ -135,13 +202,13 @@ class ServiceFileHandler(logging.Handler):
     @contextmanager
     def _process_lock(self) -> Iterator[BinaryIO]:
         with self.lock_filename.open("a+b") as handle:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            if _file_lock is not None:
+                _file_lock.flock(handle.fileno(), _file_lock.LOCK_EX)
             try:
                 yield handle
             finally:
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                if _file_lock is not None:
+                    _file_lock.flock(handle.fileno(), _file_lock.LOCK_UN)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -194,6 +261,9 @@ def _service_file_handler() -> ServiceFileHandler | None:
 
 
 def configure_service_file_logging(logger: logging.Logger | None = None) -> None:
+    # HTTP transport records can contain complete request URLs with path credentials.
+    # Suppress verbose records and exclude every transport record from managed sinks.
+    _enforce_http_transport_log_levels()
     handler = _service_file_handler()
     if handler is None:
         return
@@ -212,7 +282,11 @@ def configure_service_file_logging(logger: logging.Logger | None = None) -> None
         ]
     )
     for target in targets:
-        if target is not None and handler not in target.handlers:
+        if target is None:
+            continue
+        for target_handler in target.handlers:
+            _protect_from_http_transport_records(target_handler)
+        if handler not in target.handlers:
             target.addHandler(handler)
 
 
@@ -223,14 +297,17 @@ def configure_service_console_logging(
 ) -> None:
     """Emit sanitized application records to container stderr for sidecar diagnostics."""
 
+    _enforce_http_transport_log_levels()
     service = os.getenv("APP_LOG_SERVICE", "").strip()
     if not service:
         return
     level = os.getenv("APP_LOG_LEVEL", "INFO").upper()
     logger.setLevel(level)
+    _enforce_http_transport_log_levels()
     if any(isinstance(handler, _SafeConsoleHandler) for handler in logger.handlers):
         return
     handler = _SafeConsoleHandler(stream)
     handler.setLevel(level)
+    _protect_from_http_transport_records(handler)
     handler.setFormatter(SafeJsonFormatter(service))
     logger.addHandler(handler)

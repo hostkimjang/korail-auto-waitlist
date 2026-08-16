@@ -16,12 +16,15 @@ async def resume_watches_after_verified_provider_login(
     session: AsyncSession,
     provider: Provider,
     authenticated_at: datetime,
+    *,
+    credential_version: int | None = None,
 ) -> list[str]:
     """Resume verified watches through the feature-owned transition runtime."""
     return await resume_watches_application(
         session,
         provider,
         authenticated_at,
+        credential_version=credential_version,
         dependencies=ProviderAuthRecoveryDependencies(
             apply_watch_transition=apply_watch_transition,
         ),

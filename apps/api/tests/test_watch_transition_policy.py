@@ -51,6 +51,15 @@ def test_transition_matrix_is_complete_for_every_watch_status() -> None:
     )
 
 
+def test_exact_paid_reconciliation_can_complete_a_watching_unknown_attempt() -> None:
+    decision = decide_watch_transition(WatchStatus.WATCHING, WatchStatus.COMPLETED)
+
+    assert isinstance(decision, AllowedWatchTransition)
+    assert decision.previous_status is WatchStatus.WATCHING
+    assert decision.target_status is WatchStatus.COMPLETED
+    assert decision.next_check_policy is NextCheckPolicy.CLEAR
+
+
 @pytest.mark.parametrize("current_status", list(WatchStatus))
 @pytest.mark.parametrize("target_status", list(WatchStatus))
 def test_allowed_transition_field_mutation_policy(

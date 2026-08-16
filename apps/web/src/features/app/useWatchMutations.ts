@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import type { WatchReadModel } from "../../api/watches";
+import type { ManualRearmReason } from "../../domain/reservationAttempt";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
 
 export type WatchMutationRecord = WatchReadModel;
@@ -21,7 +22,10 @@ interface WatchMutationRequests {
   pauseWatchRequest: (id: string) => Promise<WatchMutationRecord>;
   startWatchRequest: (id: string) => Promise<WatchMutationRecord>;
   cancelWatchRequest: (id: string) => Promise<WatchMutationRecord>;
-  rearmReservationRequest: (id: string) => Promise<WatchMutationRecord>;
+  rearmReservationRequest: (
+    id: string,
+    reason: ManualRearmReason,
+  ) => Promise<WatchMutationRecord>;
   updateWatchRequest: (
     id: string,
     payload: { reservation_policy: ReservationPolicy },
@@ -44,7 +48,7 @@ export interface WatchMutationController {
   pauseWatch: (id: string) => Promise<void>;
   resumeWatch: (id: string) => Promise<void>;
   cancelWatch: (id: string) => Promise<WatchCancellationResult>;
-  rearmReservation: (id: string) => Promise<void>;
+  rearmReservation: (id: string, reason: ManualRearmReason) => Promise<void>;
   changeReservationPolicy: (id: string, policy: ReservationPolicy) => Promise<void>;
   deleteWatchRecord: (id: string) => Promise<void>;
   reservationPolicyUpdatingIds: ReadonlySet<string>;
@@ -255,7 +259,10 @@ export function useWatchMutations({
     watches,
   ]);
 
-  const rearmReservation = useCallback(async (id: string): Promise<void> => {
+  const rearmReservation = useCallback(async (
+    id: string,
+    reason: ManualRearmReason,
+  ): Promise<void> => {
     if (!beginMutation(id)) return;
     try {
       if (demo) {
@@ -268,7 +275,7 @@ export function useWatchMutations({
               : { ...watch.latestReservationAttempt, manualRearmAvailable: false },
           }));
       } else {
-        const updated = await rearmReservationRequest(id);
+        const updated = await rearmReservationRequest(id, reason);
         commitWatches((items) => replaceWatch(items, id, updated));
       }
       pushToast("자동 예매 재시작을 확인했습니다. 좌석을 다시 관측한 뒤 가능하면 한 번 시도합니다.");

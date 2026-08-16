@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging as _logging
 import re
 import time
 from collections.abc import Callable
@@ -25,7 +26,13 @@ from SRT import (  # type: ignore[import-untyped]
 )
 from SRT.errors import SRTNetFunnelError  # type: ignore[import-untyped]
 
-from ..domain import ReservationOutcome, SeatClass
+from ..domain import (
+    ReservationOutcome,
+    SeatClass,
+)
+from ..domain import (
+    ReservationResultReasonCode as _ReservationResultReasonCode,
+)
 from ..provider_adapters.srt_identity import (
     normalize_srt_date,
     normalize_srt_time,
@@ -38,12 +45,20 @@ from ..provider_adapters.srt_station_roster import (
     SrtStationRosterUnavailable,
     load_srt_station_roster,
 )
+from ..provider_call_context import current_request_id as _current_request_id
+from ..reservations import contracts as _reservation_contracts
 from ..reservations.contracts import ReservationRequest, ReservationResult
 from ..reservations.contracts import ReservedSeat as _ReservedSeat
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode as _ReservationConfirmationDiagnosticCode,
+)
 from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
+)
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationSeat as _ReservationConfirmationSeat,
 )
 from ..reservations.provider_confirmation.srt import (
     SRT_RESERVATION_LIST_SOURCE,
@@ -62,6 +77,7 @@ SRT_RESERVATION_SOURCE = "srtrain-2.6.7-reservation"
 SRT_RESERVATION_HANDOFF_URL = (
     "https://etk.srail.kr/hpg/hra/02/selectReservationList.do?pageId=TK0102010000"
 )
+_LOGGER = _logging.getLogger(__name__)
 
 
 class SrtReservationCredentials(Protocol):
@@ -236,14 +252,26 @@ def _reservation_passenger_count(reservation: _SrtReservation) -> int | None:
 
 def _reservation_seats(reservation: _SrtReservation) -> tuple[_ReservedSeat, ...]:
     try:
-        seats = tuple(
-            _ReservedSeat(car_number=str(ticket.car), seat_number=str(ticket.seat))
-            for ticket in reservation.tickets
-        )
+        seats: list[_ReservedSeat] = []
+        for ticket in reservation.tickets:
+            raw_car = ticket.car
+            raw_seat = ticket.seat
+            if not isinstance(raw_car, str) or not isinstance(raw_seat, str):
+                return ()
+            car_number = raw_car.strip()
+            seat_number = raw_seat.strip()
+            if (
+                not car_number
+                or not seat_number
+                or car_number.casefold() in {"none", "null", "undefined", "-"}
+                or seat_number.casefold() in {"none", "null", "undefined", "-"}
+            ):
+                return ()
+            seats.append(_ReservedSeat(car_number=car_number, seat_number=seat_number))
     except (AttributeError, TypeError, ValueError):
         return ()
     keys = {(seat.car_number, seat.seat_number) for seat in seats}
-    return seats if len(keys) == len(seats) else ()
+    return tuple(seats) if len(keys) == len(seats) else ()
 
 
 @dataclass
@@ -454,6 +482,13 @@ class SrtReservationExecutor:
                         paid=bool(item.paid),
                         seat_class=_reservation_seat_class(item),
                         passenger_count=_reservation_passenger_count(item),
+                        seats=tuple(
+                            _ReservationConfirmationSeat(
+                                car_number=seat.car_number,
+                                seat_number=seat.seat_number,
+                            )
+                            for seat in _reservation_seats(item)
+                        ),
                     )
                     for item in client.get_reservations(paid_only=False)
                 )
@@ -478,15 +513,51 @@ class SrtReservationExecutor:
                     credential_version=credentials.credential_version,
                     provider_blocked=True,
                 )
-            except (RequestException, SRTError, TypeError, ValueError):
-                self._session_actor_state = SrtSessionActorState.STALE
-                return ReservationConfirmationResult(
-                    provider=target.provider,
-                    outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
-                    source=SRT_RESERVATION_LIST_SOURCE,
+            except RequestException:
+                return self._confirmation_read_failure(
+                    target=target,
                     observed_at=observed_at,
+                    failure_stage="transport",
+                )
+            except SRTError:
+                return self._confirmation_read_failure(
+                    target=target,
+                    observed_at=observed_at,
+                    failure_stage="provider_library",
+                )
+            except (TypeError, ValueError):
+                return self._confirmation_read_failure(
+                    target=target,
+                    observed_at=observed_at,
+                    failure_stage="response_validation",
                 )
         return normalize_srt_reservation_records(target, evidence)
+
+    def _confirmation_read_failure(
+        self,
+        *,
+        target: ReservationConfirmationTarget,
+        observed_at: datetime,
+        failure_stage: Literal["transport", "provider_library", "response_validation"],
+    ) -> ReservationConfirmationResult:
+        self._session_actor_state = SrtSessionActorState.STALE
+        _LOGGER.warning(
+            "SRT reservation confirmation read failed "
+            "event=provider_confirmation_read_failed provider=SRT "
+            "operation=confirm_reservation request_id=%s outcome=inconclusive "
+            "diagnostic_code=%s source=%s phase=reservation_list failure_stage=%s",
+            _current_request_id() or "unbound",
+            _ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE.value,
+            SRT_RESERVATION_LIST_SOURCE,
+            failure_stage,
+        )
+        return ReservationConfirmationResult(
+            provider=target.provider,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=(_ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE),
+            source=SRT_RESERVATION_LIST_SOURCE,
+            observed_at=observed_at,
+        )
 
     def _reserve_sync(
         self,
@@ -510,6 +581,7 @@ class SrtReservationExecutor:
                 self._session_actor_state = SrtSessionActorState.AUTH_REQUIRED
                 return ReservationResult(
                     outcome=ReservationOutcome.AUTH_REQUIRED,
+                    result_reason_code=_ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
                     source=SRT_RESERVATION_SOURCE,
                     observed_at=observed_at,
                 )
@@ -518,6 +590,7 @@ class SrtReservationExecutor:
                 self._session_actor_state = SrtSessionActorState.BLOCKED
                 return ReservationResult(
                     outcome=ReservationOutcome.PROVIDER_BLOCKED,
+                    result_reason_code=_ReservationResultReasonCode.PROVIDER_BLOCKED,
                     source=SRT_RESERVATION_SOURCE,
                     observed_at=observed_at,
                 )
@@ -526,6 +599,7 @@ class SrtReservationExecutor:
                 self._session_actor_state = SrtSessionActorState.STALE
                 return ReservationResult(
                     outcome=ReservationOutcome.FAILED,
+                    result_reason_code=_ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
                     source=SRT_RESERVATION_SOURCE,
                     observed_at=observed_at,
                 )
@@ -536,6 +610,11 @@ class SrtReservationExecutor:
                         ReservationOutcome.NOT_AVAILABLE
                         if not matches
                         else ReservationOutcome.UNKNOWN
+                    ),
+                    result_reason_code=(
+                        _ReservationResultReasonCode.TARGET_NOT_AVAILABLE
+                        if not matches
+                        else _ReservationResultReasonCode.TARGET_AMBIGUOUS
                     ),
                     source=SRT_RESERVATION_SOURCE,
                     observed_at=observed_at,
@@ -554,10 +633,18 @@ class SrtReservationExecutor:
             if not available:
                 return ReservationResult(
                     outcome=ReservationOutcome.NOT_AVAILABLE,
+                    result_reason_code=_ReservationResultReasonCode.SEAT_NOT_AVAILABLE,
                     source=SRT_RESERVATION_SOURCE,
                     observed_at=observed_at,
                 )
 
+            reservation_requested_at = datetime.now(KOREA)
+            reservation_progress = (
+                _reservation_contracts.ReservationProgressStage(
+                    stage="reservation_requested",
+                    occurred_at=reservation_requested_at,
+                ),
+            )
             try:
                 reservation = client.reserve(
                     train,
@@ -570,42 +657,74 @@ class SrtReservationExecutor:
                 self._session_actor_state = SrtSessionActorState.AUTH_REQUIRED
                 return ReservationResult(
                     outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=_ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
                     source=SRT_RESERVATION_SOURCE,
-                    observed_at=observed_at,
+                    observed_at=datetime.now(KOREA),
+                    progress_stages=reservation_progress,
                 )
             except SRTNetFunnelError:
                 self._active_session = None
                 self._session_actor_state = SrtSessionActorState.BLOCKED
                 return ReservationResult(
-                    outcome=ReservationOutcome.PROVIDER_BLOCKED,
+                    outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=_ReservationResultReasonCode.PROVIDER_BLOCKED,
                     source=SRT_RESERVATION_SOURCE,
-                    observed_at=observed_at,
+                    observed_at=datetime.now(KOREA),
+                    progress_stages=reservation_progress,
                 )
             except SRTResponseError:
                 return ReservationResult(
                     outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=(
+                        _ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+                    ),
                     source=SRT_RESERVATION_SOURCE,
-                    observed_at=observed_at,
+                    observed_at=datetime.now(KOREA),
+                    progress_stages=reservation_progress,
                 )
             except (RequestException, SRTError, ValueError):
                 return ReservationResult(
                     outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=(
+                        _ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+                    ),
                     source=SRT_RESERVATION_SOURCE,
-                    observed_at=observed_at,
+                    observed_at=datetime.now(KOREA),
+                    progress_stages=reservation_progress,
                 )
 
-            if (
-                reservation.paid
-                or not _matches_request(reservation, request)
-                or _reservation_seat_class(reservation) is not request.seat_class
-                or _reservation_passenger_count(reservation) != request.passenger_count
-            ):
+            observed_at = datetime.now(KOREA)
+            exact_identity = _matches_request(reservation, request)
+            exact_seat_class = _reservation_seat_class(reservation) is request.seat_class
+            exact_passenger_count = (
+                _reservation_passenger_count(reservation) == request.passenger_count
+            )
+            returned_seats = _reservation_seats(reservation)
+            exact_returned_seats = (
+                returned_seats if len(returned_seats) == request.passenger_count else ()
+            )
+            if reservation.paid:
                 return ReservationResult(
                     outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=_ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID,
                     source=SRT_RESERVATION_SOURCE,
                     observed_at=observed_at,
+                    progress_stages=reservation_progress,
+                    confirmation_correlation_seats=(
+                        exact_returned_seats
+                        if exact_identity and exact_seat_class and exact_passenger_count
+                        else ()
+                    ),
                 )
-            reserved_seats = _reservation_seats(reservation)
+            if not exact_identity or not exact_seat_class or not exact_passenger_count:
+                return ReservationResult(
+                    outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=_ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID,
+                    source=SRT_RESERVATION_SOURCE,
+                    observed_at=observed_at,
+                    progress_stages=reservation_progress,
+                )
+            reserved_seats = returned_seats
             if len(reserved_seats) != request.passenger_count:
                 reserved_seats = ()
             deadline = _payment_deadline(reservation)
@@ -613,10 +732,12 @@ class SrtReservationExecutor:
                 deadline = None
             return ReservationResult(
                 outcome=ReservationOutcome.PAYMENT_REQUIRED,
+                result_reason_code=_ReservationResultReasonCode.PAYMENT_HOLD_CREATED,
                 source=SRT_RESERVATION_SOURCE,
                 observed_at=observed_at,
                 payment_deadline=deadline,
                 official_handoff_url=_cast(_AnyHttpUrl, SRT_RESERVATION_HANDOFF_URL),
+                progress_stages=reservation_progress,
                 reserved_seats=reserved_seats,
             )
 

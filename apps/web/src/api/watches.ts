@@ -2,6 +2,7 @@ import {
   isWatchSeatClass,
   type WatchSeatClass,
 } from "../domain/watch";
+import type { ManualRearmReason } from "../domain/reservationAttempt";
 import { ApiError, request } from "./client";
 import {
   awareTimestamp,
@@ -21,6 +22,7 @@ export {
   type MappedWatchCandidate,
   type ProjectedWatch,
   type ProjectedWatchCandidate,
+  type ReservationAttemptCandidateContext,
   type ReservationCandidateContext,
   type SeatFoundObservation,
   type WatchReadModel,
@@ -261,8 +263,17 @@ export function buildWatchCreatePayloads(
   return providers.flatMap((provider) => payloadsByProvider.get(provider) ?? []);
 }
 
-export async function fetchWatches(): Promise<ProjectedWatch[]> {
-  const payload = await request("/watches");
+export type WatchListView = "all" | "live";
+
+export interface FetchWatchesOptions {
+  view?: WatchListView;
+}
+
+export async function fetchWatches(
+  options: FetchWatchesOptions = {},
+): Promise<ProjectedWatch[]> {
+  const query = options.view ? `?view=${encodeURIComponent(options.view)}` : "";
+  const payload = await request(`/watches${query}`);
   if (!Array.isArray(payload)) throw new ApiError("대기 작업 목록 응답 형식을 확인할 수 없습니다.");
   return payload.map(mapWatch);
 }
@@ -348,11 +359,18 @@ export async function cancelWatch(id: string): Promise<ProjectedWatch> {
   }));
 }
 
-export async function rearmWatchReservation(id: string): Promise<ProjectedWatch> {
+export async function rearmWatchReservation(
+  id: string,
+  reason: ManualRearmReason,
+): Promise<ProjectedWatch> {
   const normalizedId = watchId(id);
   return mapWatch(await request(`/watches/${normalizedId}/reservation-rearm`, {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({
+      reason,
+      official_reservation_state_confirmed: true,
+    }),
   }));
 }
 

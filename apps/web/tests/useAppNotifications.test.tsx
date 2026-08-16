@@ -120,4 +120,34 @@ describe("useAppNotifications dismissal persistence", () => {
     }));
     expect(timedAgain.result.current.state.notices).toHaveLength(1);
   });
+
+  it("exposes a stable automatic prune that does not persist a user dismissal", () => {
+    const rendered = renderHook(() => useAppNotifications());
+    const initialPrune = rendered.result.current.pruneStaleSubjects;
+    rendered.rerender();
+    expect(rendered.result.current.pruneStaleSubjects).toBe(initialPrune);
+
+    act(() => rendered.result.current.pushMany([
+      stickyNotice(),
+      {
+        title: "감시 상태가 변경되었습니다",
+        subjectKey: "watch:timed",
+        revisionKey: "watch:timed:recovery",
+        revisionAt: "2026-08-03T12:10:00Z",
+        kind: "recovery",
+      },
+    ]));
+    act(() => rendered.result.current.pruneStaleSubjects(["watch:one", "watch:timed"]));
+
+    expect(rendered.result.current.state.notices.map((notice) => notice.subjectKey))
+      .toEqual(["watch:timed"]);
+    expect(loadNotificationDismissalLedger()).toEqual([]);
+    rendered.unmount();
+
+    const remounted = renderHook(() => useAppNotifications());
+    act(() => remounted.result.current.push(stickyNotice()));
+    expect(remounted.result.current.state.notices).toContainEqual(expect.objectContaining({
+      subjectKey: "watch:one",
+    }));
+  });
 });

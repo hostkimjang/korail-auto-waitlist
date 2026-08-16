@@ -14,6 +14,9 @@ from ..domain import (
     SeatObservationStatus,
     WatchStatus,
 )
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
+)
 from ..schema_base import ApiModel
 
 OperationFreshness = Literal["fresh", "stale", "unknown"]
@@ -28,13 +31,21 @@ OperationEntryKind = Literal[
 OperationEntryLevel = Literal["info", "warning", "error"]
 OperationEntryReasonCode = Literal[
     "reservation_pending",
-    "reservation_payment_required",
-    "reservation_reserved",
-    "reservation_not_available",
-    "reservation_auth_required",
-    "reservation_provider_blocked",
+    "payment_hold_created",
+    "target_not_available",
+    "target_ambiguous",
+    "seat_not_available",
+    "reservation_control_unavailable",
+    "seat_selection_lost",
+    "delay_consent_required",
+    "existing_reservation_action_required",
+    "provider_notice_action_required",
+    "authentication_required",
+    "provider_blocked",
+    "provider_unavailable",
+    "provider_response_invalid",
+    "reservation_request_result_unknown",
     "reservation_failed",
-    "reservation_unknown",
     "payment_completed",
     "payment_deadline_elapsed_monitoring_resumed",
     "payment_hold_no_longer_present_monitoring_resumed",
@@ -142,6 +153,7 @@ class OperationEntry(ApiModel):
     departure_at: datetime | None = None
     seat_class: SeatClass | None = None
     reason_code: OperationEntryReasonCode | None = None
+    confirmation_diagnostic_code: ReservationConfirmationDiagnosticCode | None = None
 
 
 class OperationsSummary(ApiModel):

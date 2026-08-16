@@ -51,7 +51,7 @@ async def test_watch_read_projects_only_an_active_unexpired_observation_claim_as
             watch,
             latest_observations={},
             latest_reservation_attempts={},
-            manual_rearm_ready_providers=frozenset(),
+            manual_rearm_account_versions={},
             read_at=NOW,
         )
 

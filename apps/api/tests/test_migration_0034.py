@@ -20,7 +20,9 @@ def test_migration_0034_normalizes_terminal_time_after_progress(tmp_path, monkey
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == ("0034_progress_terminal_time")
+    assert ScriptDirectory.from_config(config).get_current_head() == (
+        "0039_confirmation_corr_seats"
+    )
 
     command.upgrade(config, "0033_observation_in_flight")
     started_at = datetime(2030, 8, 1, 0, 15, tzinfo=UTC)

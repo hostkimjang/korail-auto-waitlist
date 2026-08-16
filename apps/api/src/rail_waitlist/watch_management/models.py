@@ -27,11 +27,17 @@ from ..domain import (
     Provider,
     ReservationOutcome,
     ReservationPolicy,
+    ReservationResultReasonCode,
     SeatObservationMode,
     SeatObservationStatus,
     WatchStatus,
+    reservation_result_reason_code_for_outcome,
 )
-from ..reservations.provider_confirmation.contracts import ReservationConfirmationOutcome
+from ..reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
+    ReservationConfirmationOutcome,
+)
+from ..reservations.reconciliation_policy import ReservationReconciliationResolution
 from ..timetable_management.models import TimetableSeatEvidence
 
 
@@ -286,7 +292,7 @@ class SeatObservation(Base):
         ),
         CheckConstraint(
             "status IN ('UNAVAILABLE', 'UNKNOWN', 'AVAILABLE', 'LIMITED', "
-            "'STANDING_PLUS_SEAT', 'NOT_ENOUGH_SEATS', 'SOLD_OUT', "
+            "'STANDING_PLUS_SEAT', 'STANDING_ONLY', 'NOT_ENOUGH_SEATS', 'SOLD_OUT', "
             "'WAITLIST_AVAILABLE', 'RESERVATION_COMPLETED', 'NOT_OFFERED', "
             "'DEPARTED', 'OUT_OF_SERVICE', 'STALE', 'ERROR')",
             name="ck_seat_observation_status_allowed",
@@ -342,12 +348,32 @@ class ReservationAttempt(Base):
             name="ck_reservation_attempt_outcome_allowed",
         ),
         CheckConstraint(
+            "result_reason_code IN ('RESERVATION_PENDING', 'PAYMENT_HOLD_CREATED', "
+            "'TARGET_NOT_AVAILABLE', 'TARGET_AMBIGUOUS', 'SEAT_NOT_AVAILABLE', "
+            "'RESERVATION_CONTROL_UNAVAILABLE', 'SEAT_SELECTION_LOST', "
+            "'DELAY_CONSENT_REQUIRED', 'EXISTING_RESERVATION_ACTION_REQUIRED', "
+            "'PROVIDER_NOTICE_ACTION_REQUIRED', 'AUTHENTICATION_REQUIRED', "
+            "'PROVIDER_BLOCKED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_RESPONSE_INVALID', "
+            "'RESERVATION_REQUEST_RESULT_UNKNOWN', 'RESERVATION_FAILED')",
+            name="ck_reservation_attempt_result_reason_code_allowed",
+        ),
+        CheckConstraint(
             "credential_version IS NULL OR credential_version >= 1",
             name="ck_reservation_attempt_credential_version_positive",
         ),
         CheckConstraint(
             "confirmation_source IS NULL OR length(trim(confirmation_source)) > 0",
             name="ck_reservation_attempt_confirmation_source_nonempty",
+        ),
+        CheckConstraint(
+            "confirmation_diagnostic_code IS NULL OR confirmation_diagnostic_code IN "
+            "('OFFICIAL_READ_UNAVAILABLE', 'CREDENTIAL_CONTEXT_MISMATCH', "
+            "'OFFICIAL_RECORD_AMBIGUOUS', 'OFFICIAL_EVIDENCE_INSUFFICIENT', 'UNSPECIFIED')",
+            name="ck_reservation_attempt_confirm_diag_allowed",
+        ),
+        CheckConstraint(
+            "confirmation_diagnostic_code IS NULL OR confirmation_outcome = 'INCONCLUSIVE'",
+            name="ck_reservation_attempt_confirm_diag_inconclusive",
         ),
         CheckConstraint(
             "(confirmation_outcome IS NULL AND confirmation_source IS NULL "
@@ -364,6 +390,24 @@ class ReservationAttempt(Base):
         CheckConstraint(
             "reconciliation_attempt_count >= 0 AND reconciliation_attempt_count <= 6",
             name="ck_reservation_attempt_reconciliation_attempt_count_bounded",
+        ),
+        CheckConstraint(
+            "reconciliation_resolution IS NULL OR reconciliation_resolution IN "
+            "('CONFIRMED_ABSENT', 'EXHAUSTED_UNRESOLVED')",
+            name="ck_reservation_attempt_reconcile_resolution_allowed",
+        ),
+        CheckConstraint(
+            "reconciliation_resolution IS NULL OR "
+            "(reconciliation_resolution = 'CONFIRMED_ABSENT' "
+            "AND outcome = 'UNKNOWN' AND confirmation_outcome = 'NOT_FOUND' "
+            "AND confirmation_observed_at IS NOT NULL AND last_reconciled_at IS NOT NULL "
+            "AND reconciliation_attempt_count >= 1 AND next_reconcile_at IS NULL) OR "
+            "(reconciliation_resolution = 'EXHAUSTED_UNRESOLVED' "
+            "AND outcome = 'UNKNOWN' "
+            "AND confirmation_outcome IN ('INCONCLUSIVE', 'NOT_FOUND') "
+            "AND confirmation_observed_at IS NOT NULL AND last_reconciled_at IS NOT NULL "
+            "AND reconciliation_attempt_count >= 6 AND next_reconcile_at IS NULL)",
+            name="ck_reservation_attempt_reconcile_resolution_shape",
         ),
         Index("ix_reservation_attempts_started_at", "started_at"),
         Index("ix_reservation_attempts_outcome_started_at", "outcome", "started_at"),
@@ -401,6 +445,12 @@ class ReservationAttempt(Base):
     outcome: Mapped[ReservationOutcome] = mapped_column(
         Enum(ReservationOutcome, native_enum=False), default=ReservationOutcome.PENDING
     )
+    result_reason_code: Mapped[ReservationResultReasonCode] = mapped_column(
+        Enum(ReservationResultReasonCode, native_enum=False),
+        default=lambda context: reservation_result_reason_code_for_outcome(
+            context.get_current_parameters().get("outcome", ReservationOutcome.PENDING)
+        ),
+    )
     payment_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -408,6 +458,9 @@ class ReservationAttempt(Base):
     credential_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     confirmation_outcome: Mapped[ReservationConfirmationOutcome | None] = mapped_column(
         Enum(ReservationConfirmationOutcome, native_enum=False), nullable=True
+    )
+    confirmation_diagnostic_code: Mapped[ReservationConfirmationDiagnosticCode | None] = (
+        mapped_column(Enum(ReservationConfirmationDiagnosticCode, native_enum=False), nullable=True)
     )
     confirmation_source: Mapped[str | None] = mapped_column(String(80), nullable=True)
     confirmation_observed_at: Mapped[datetime | None] = mapped_column(
@@ -422,6 +475,10 @@ class ReservationAttempt(Base):
     next_reconcile_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    reconciliation_resolution: Mapped[ReservationReconciliationResolution | None] = mapped_column(
+        Enum(ReservationReconciliationResolution, native_enum=False),
+        nullable=True,
+    )
     post_deadline_reconciled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -431,6 +488,11 @@ class ReservationAttempt(Base):
         server_default="[]",
     )
     reserved_seats: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON,
+        default=list,
+        server_default="[]",
+    )
+    confirmation_correlation_seats: Mapped[list[dict[str, str]]] = mapped_column(
         JSON,
         default=list,
         server_default="[]",

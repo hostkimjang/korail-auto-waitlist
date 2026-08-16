@@ -33,7 +33,7 @@ CONTRACT_MODULE = "rail_waitlist.srt_sidecar.contracts"
 CLIENT_MODULE = "rail_waitlist.srt_sidecar.client"
 SESSION_MODULE = "rail_waitlist.srt_sidecar.session_contract"
 CREDENTIAL_MODULE = "rail_waitlist.provider_account_management.contracts"
-SCHEMA_SHA256 = "43292bfe6e2642ab8f92ce1b325162e66f7c0445f24e29a9c6e3e4963861ed7c"
+SCHEMA_SHA256 = "398f150d21d573f18add3bce3e7c5737dcb14cb410feaaea5e0790bdc0fe34c1"
 
 CONTRACT_SYMBOLS = {
     "BaseModel",
@@ -353,9 +353,17 @@ def test_wire_models_keep_canonical_modules_and_schema_fingerprint() -> None:
         separators=(",", ":"),
     ).encode()
     target_fields = contract_owner.SrtReservationConfirmationTarget.model_fields
-    assert tuple(target_fields)[-2:] == ("purpose", "reserved_seats")
+    result_fields = contract_owner.ReservationResult.model_fields
+    assert tuple(target_fields)[-3:] == (
+        "purpose",
+        "reserved_seats",
+        "confirmation_correlation_seats",
+    )
     assert target_fields["purpose"].default is contract_owner.ReservationConfirmationPurpose.INITIAL
     assert target_fields["reserved_seats"].default == ()
+    assert target_fields["confirmation_correlation_seats"].default == ()
+    assert tuple(result_fields)[:2] == ("outcome", "result_reason_code")
+    assert result_fields["result_reason_code"].default.value == "reservation_pending"
     assert hashlib.sha256(encoded).hexdigest() == SCHEMA_SHA256
     assert client_owner.SrtProviderAdapterClient.__module__ == CLIENT_MODULE
     assert client_owner.SrtProviderAdapterUnavailable.__module__ == CLIENT_MODULE
@@ -374,11 +382,33 @@ def test_srt_sidecar_openapi_shape_is_unchanged() -> None:
     ).encode()
 
     assert hashlib.sha256(encoded).hexdigest() == (
-        "94eb46d4ae98fae41811af652aa33fe9101e8e0eb3f22653df347b378c5aca38"
+        "6acd2151996016897d2572b696c5b7904eef938669e31a20d65326079ad00df9"
     )
     assert len(schema["paths"]) == 9
-    assert len(schema["components"]["schemas"]) == 41
+    assert len(schema["components"]["schemas"]) == 43
     components = schema["components"]["schemas"]
+    assert components["ReservationResult"]["properties"]["result_reason_code"] == {
+        "$ref": "#/components/schemas/ReservationResultReasonCode",
+        "default": "reservation_pending",
+    }
+    assert components["ReservationResultReasonCode"]["enum"] == [
+        "reservation_pending",
+        "payment_hold_created",
+        "target_not_available",
+        "target_ambiguous",
+        "seat_not_available",
+        "reservation_control_unavailable",
+        "seat_selection_lost",
+        "delay_consent_required",
+        "existing_reservation_action_required",
+        "provider_notice_action_required",
+        "authentication_required",
+        "provider_blocked",
+        "provider_unavailable",
+        "provider_response_invalid",
+        "reservation_request_result_unknown",
+        "reservation_failed",
+    ]
     assert components["ReservationConfirmationOutcome"]["enum"] == [
         "confirmed_payment_required",
         "confirmed_paid",
@@ -387,9 +417,23 @@ def test_srt_sidecar_openapi_shape_is_unchanged() -> None:
         "provider_blocked",
         "inconclusive",
     ]
+    assert components["ReservationConfirmationDiagnosticCode"]["enum"] == [
+        "official_read_unavailable",
+        "credential_context_mismatch",
+        "official_record_ambiguous",
+        "official_evidence_insufficient",
+        "unspecified",
+    ]
+    assert components["SrtReservationConfirmationResult"]["properties"]["diagnostic_code"] == {
+        "anyOf": [
+            {"$ref": "#/components/schemas/ReservationConfirmationDiagnosticCode"},
+            {"type": "null"},
+        ]
+    }
     assert components["ReservationConfirmationPurpose"]["enum"] == [
         "initial",
         "payment_follow_up",
+        "unknown_result_follow_up",
     ]
     assert components["ReservationConfirmationSeat"]["required"] == [
         "car_number",
@@ -404,6 +448,12 @@ def test_srt_sidecar_openapi_shape_is_unchanged() -> None:
         "default": [],
         "items": {"$ref": "#/components/schemas/ReservationConfirmationSeat"},
         "title": "Reserved Seats",
+        "type": "array",
+    }
+    assert target_properties["confirmation_correlation_seats"] == {
+        "default": [],
+        "items": {"$ref": "#/components/schemas/ReservationConfirmationSeat"},
+        "title": "Confirmation Correlation Seats",
         "type": "array",
     }
 

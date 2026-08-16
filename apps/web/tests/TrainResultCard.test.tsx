@@ -114,6 +114,59 @@ describe("TrainResultCard", () => {
     expect(screen.queryByText("공식 시간표")).toBeNull();
   });
 
+  it("offers official standing booking and cancellation-seat waiting without automatic booking", async () => {
+    const user = userEvent.setup();
+    const onChooseSeat = vi.fn();
+    const timetable = mapTimetable({
+      provider: "korail",
+      train_number: "KTX 223",
+      train_type: "KTX-산천",
+      origin: "서울",
+      destination: "대전",
+      departure_at: "2026-08-15T22:08:00+09:00",
+      arrival_at: "2026-08-15T23:07:00+09:00",
+      adult_fare: 23_700,
+      fare_currency: "KRW",
+      timetable_source: "official_provider",
+      timetable_retrieved_at: "2026-08-15T12:20:00Z",
+      official_booking_url: "https://www.korail.com/ticket/search",
+      seat_classes: [{
+        seat_class: "standard",
+        status: "standing_only",
+        fare: 23_700,
+        provenance: {
+          kind: "official_provider",
+          source: "korail-official-page-browser",
+          observed_at: "2026-08-15T12:20:00Z",
+        },
+        registration_evidence_id: "evidence-standing-only",
+        actions: [
+          { kind: "official_check", url: "https://www.korail.com/ticket/search" },
+          { kind: "add_to_watch", url: null },
+        ],
+      }],
+    });
+
+    render(<TrainResultCard
+      train={timetable}
+      registrationBySeat={{}}
+      onChooseSeat={onChooseSeat}
+      officialHandoffComponent={OfficialHandoff}
+      automaticReservationEnabled
+    />);
+
+    const panel = screen.getByLabelText("KTX 223 일반실");
+    expect(within(panel).getByText("입석만 가능")).toBeTruthy();
+    expect(within(panel).getByRole("button", {
+      name: "KTX 223 일반실 공식 예매 전 안내 열기",
+    })).toBeTruthy();
+    const waitButton = within(panel).getByRole("button", { name: "일반실 취소좌석 대기" });
+    expect(within(panel).queryByRole("button", { name: "일반실 자동 예매" })).toBeNull();
+
+    await user.click(waitButton);
+    expect(onChooseSeat).toHaveBeenCalledWith(timetable.id, "standard");
+  });
+
   it("skips equal snapshots and rerenders when the train identity changes", () => {
     const timetable = mapTimetable({
       provider: "korail",

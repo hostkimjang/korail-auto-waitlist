@@ -24,6 +24,7 @@ class SeatObservationStatus(StrEnum):
     AVAILABLE = "available"
     LIMITED = "limited"
     STANDING_PLUS_SEAT = "standing_plus_seat"
+    STANDING_ONLY = "standing_only"
     NOT_ENOUGH_SEATS = "not_enough_seats"
     SOLD_OUT = "sold_out"
     WAITLIST_AVAILABLE = "waitlist_available"
@@ -61,6 +62,51 @@ class ReservationOutcome(StrEnum):
     PROVIDER_BLOCKED = "provider_blocked"
     FAILED = "failed"
     UNKNOWN = "unknown"
+
+
+class ReservationResultReasonCode(StrEnum):
+    """Provider-neutral reason for one persisted reservation result.
+
+    Provider transport messages stay outside the durable/public contract.  These
+    values describe only the evidence boundary that the application can safely
+    present to users and operators.
+    """
+
+    RESERVATION_PENDING = "reservation_pending"
+    PAYMENT_HOLD_CREATED = "payment_hold_created"
+    TARGET_NOT_AVAILABLE = "target_not_available"
+    TARGET_AMBIGUOUS = "target_ambiguous"
+    SEAT_NOT_AVAILABLE = "seat_not_available"
+    RESERVATION_CONTROL_UNAVAILABLE = "reservation_control_unavailable"
+    SEAT_SELECTION_LOST = "seat_selection_lost"
+    DELAY_CONSENT_REQUIRED = "delay_consent_required"
+    EXISTING_RESERVATION_ACTION_REQUIRED = "existing_reservation_action_required"
+    PROVIDER_NOTICE_ACTION_REQUIRED = "provider_notice_action_required"
+    AUTHENTICATION_REQUIRED = "authentication_required"
+    PROVIDER_BLOCKED = "provider_blocked"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    PROVIDER_RESPONSE_INVALID = "provider_response_invalid"
+    RESERVATION_REQUEST_RESULT_UNKNOWN = "reservation_request_result_unknown"
+    RESERVATION_FAILED = "reservation_failed"
+
+
+def reservation_result_reason_code_for_outcome(
+    outcome: ReservationOutcome,
+) -> ReservationResultReasonCode:
+    """Return the conservative reason used when only a legacy outcome is known."""
+
+    return {
+        ReservationOutcome.PENDING: ReservationResultReasonCode.RESERVATION_PENDING,
+        ReservationOutcome.PAYMENT_REQUIRED: ReservationResultReasonCode.PAYMENT_HOLD_CREATED,
+        ReservationOutcome.RESERVED: ReservationResultReasonCode.PAYMENT_HOLD_CREATED,
+        ReservationOutcome.NOT_AVAILABLE: ReservationResultReasonCode.TARGET_NOT_AVAILABLE,
+        ReservationOutcome.AUTH_REQUIRED: ReservationResultReasonCode.AUTHENTICATION_REQUIRED,
+        ReservationOutcome.PROVIDER_BLOCKED: ReservationResultReasonCode.PROVIDER_BLOCKED,
+        ReservationOutcome.FAILED: ReservationResultReasonCode.RESERVATION_FAILED,
+        ReservationOutcome.UNKNOWN: (
+            ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+        ),
+    }[outcome]
 
 
 class ReservationPolicy(StrEnum):
@@ -121,6 +167,7 @@ ALLOWED_TRANSITIONS: dict[WatchStatus, set[WatchStatus]] = {
         WatchStatus.OFFICIAL_WAITLIST,
         WatchStatus.SEAT_FOUND,
         WatchStatus.PAYMENT_REQUIRED,
+        WatchStatus.COMPLETED,
         WatchStatus.PAUSED,
         WatchStatus.COOLDOWN,
         WatchStatus.AUTH_REQUIRED,

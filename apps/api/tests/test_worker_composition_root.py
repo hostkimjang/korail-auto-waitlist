@@ -93,6 +93,7 @@ DEPENDENCY_WIRING = {
         "get_or_create_provider_circuit": "get_or_create_provider_circuit",
         "is_confirmed_absent_retry_source": "is_confirmed_absent_retry_source",
         "is_payment_hold_ended": "is_payment_hold_ended",
+        "is_unresolved_unknown_manual_rearm_source": ("is_unresolved_unknown_manual_rearm_source"),
         "latest_observation_fingerprint": "latest_observation_fingerprint",
         "lease_is_current": "lease_is_current",
         "lease_is_current_in_session": ("cast(LockedLeaseCurrent, lock_execution_lease_current)"),

@@ -1,6 +1,12 @@
 import type { ToastProgressStep } from "../../shared/ui/AppToast";
-import { formatReservedSeats } from "../../domain/reservationAttempt";
+import {
+  formatReservedSeats,
+  type ReservationConfirmationDiagnosticCode,
+  type ReservationConfirmationOutcome,
+  type ReservationResultReasonCode,
+} from "../../domain/reservationAttempt";
 import type { AppNotificationInput } from "./notificationCenter";
+import { reservationConfirmationDiagnosticDescriptions } from "../../shared/lib/reservationConfirmationDiagnostic";
 import type {
   ReservationRecoveryResult,
   ReservationProgressStageName,
@@ -10,6 +16,101 @@ import type {
 import { formatWatchIdentity, formatWatchSchedule } from "./watchJourney";
 
 export type { ReservationRecoveryResult, ReservationResultOutcome } from "./watchSnapshots";
+
+interface ReservationEvidence {
+  resultReasonCode?: ReservationResultReasonCode | null;
+  confirmationOutcome?: ReservationConfirmationOutcome | null;
+  confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
+  confirmationObservedAt?: string | null;
+  reconciliationAttemptCount?: number;
+  nextReconcileAt?: string | null;
+}
+
+const resultReasonDescriptions: Record<ReservationResultReasonCode, string> = {
+  reservation_pending: "철도사 예매 요청이 끝나지 않아 결과를 기다리고 있습니다.",
+  payment_hold_created: "철도사 응답에서 결제가 필요한 임시 예약을 확인했습니다.",
+  target_not_available: "예매 시점에 대상 열차를 찾지 못했습니다.",
+  target_ambiguous: "검색 결과에서 대상 열차를 하나로 구분하지 못했습니다.",
+  seat_not_available: "예매 시점에 선택 가능한 좌석이 없었습니다.",
+  reservation_control_unavailable: "철도사 예매 화면의 예약 기능을 사용할 수 없었습니다.",
+  seat_selection_lost: "예약 화면에서 선택한 좌석 상태가 예약 요청까지 유지되지 않았습니다.",
+  delay_consent_required: "철도사 지연 안내창에서 운행 지연 동의가 필요합니다.",
+  existing_reservation_action_required: "철도사 기존 예약 안내창에서 진행할 예약을 선택해야 합니다.",
+  provider_notice_action_required: "철도사 안내창에서 사용자 확인이 필요합니다.",
+  authentication_required: "철도사 로그인이 만료되었거나 추가 인증이 필요합니다.",
+  provider_blocked: "운영사 요청 제한으로 예매 처리를 계속할 수 없었습니다.",
+  provider_unavailable: "철도사 예매 처리 중 연결 또는 응답 확인에 실패했습니다.",
+  provider_response_invalid: "철도사 응답 형식을 확인할 수 없어 결과를 신뢰하지 않았습니다.",
+  reservation_request_result_unknown: "예약 요청 처리 중 전달 여부 또는 철도사 결과를 확정하지 못했습니다.",
+  reservation_failed: "철도사 예매 요청이 완료되지 않았습니다.",
+};
+
+const confirmationDescriptions: Record<ReservationConfirmationOutcome, string> = {
+  confirmed_payment_required: "공식 예약 내역에서 결제가 필요한 임시 예약을 확인했습니다.",
+  confirmed_paid: "공식 예약 내역에서 결제 완료를 확인했습니다.",
+  not_found: "공식 예약 내역에서 대상 예약을 찾지 못했습니다.",
+  auth_required: "공식 예약 내역을 확인하려면 로그인이 필요합니다.",
+  provider_blocked: "운영사 제한으로 공식 예약 내역을 확인하지 못했습니다.",
+  inconclusive: "공식 예약 내역 확인으로 결과를 확정하지 못했습니다.",
+};
+
+function reconciliationTimeLabel(value: string | null | undefined): string | null {
+  if (!value || !Number.isFinite(Date.parse(value))) return null;
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Seoul",
+  }).format(new Date(value));
+}
+
+function evidenceDescription(evidence: ReservationEvidence): string {
+  const confirmationDescription = evidence.confirmationOutcome === "inconclusive"
+    ? reservationConfirmationDiagnosticDescriptions[
+        evidence.confirmationDiagnosticCode ?? "unspecified"
+      ]
+    : evidence.confirmationOutcome
+      ? confirmationDescriptions[evidence.confirmationOutcome]
+      : null;
+  const details = [
+    evidence.resultReasonCode ? resultReasonDescriptions[evidence.resultReasonCode] : null,
+    confirmationDescription,
+  ];
+  const count = evidence.reconciliationAttemptCount ?? 0;
+  const nextAt = reconciliationTimeLabel(evidence.nextReconcileAt);
+  if (count > 0) details.push(`공식 내역 자동 재확인 ${count}/6회 수행.`);
+  if (nextAt !== null) details.push(`다음 자동 재확인은 ${nextAt} 예정입니다.`);
+  return details.filter((detail): detail is string => detail !== null).join(" ");
+}
+
+function appendEvidence(description: string, evidence: ReservationEvidence): string {
+  const detail = evidenceDescription(evidence);
+  return detail ? `${description} · ${detail}` : description;
+}
+
+function manualCheckTitle(result: ReservationRecoveryResult): string {
+  switch (result.resultReasonCode) {
+    case "delay_consent_required":
+      return "운행 지연 동의가 필요합니다";
+    case "existing_reservation_action_required":
+      return "기존 예약 안내를 확인해야 합니다";
+    case "provider_notice_action_required":
+      return "철도사 안내창 확인이 필요합니다";
+    case "target_ambiguous":
+      return "대상 열차를 구분하지 못했습니다";
+    case "reservation_control_unavailable":
+      return "철도사 예매 기능을 사용할 수 없습니다";
+    case "provider_unavailable":
+      return "철도사 연결 문제로 예매 결과를 확인해야 합니다";
+    case "provider_response_invalid":
+    case "reservation_request_result_unknown":
+      return "예매 요청 결과를 확인해야 합니다";
+    default:
+      return result.nextReconcileAt
+        ? "공식 예매 결과를 다시 확인 중입니다"
+        : "예매 결과를 확인해야 합니다";
+  }
+}
 
 type StepTiming = Pick<
   ToastProgressStep,
@@ -277,7 +378,10 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         sortAt: transition.paymentDeadline ?? null,
         tone: "success",
         title: "결제 직전까지 예매되었습니다",
-        description: `${base.description}${reservedSeatLabel === null ? "" : ` · 예약 좌석 ${reservedSeatLabel}`} · 공식 플랫폼에서 결제해 주세요.`,
+        description: appendEvidence(
+          `${base.description}${reservedSeatLabel === null ? "" : ` · 예약 좌석 ${reservedSeatLabel}`} · 공식 플랫폼에서 결제해 주세요.`,
+          transition,
+        ),
         autoCloseMs: null,
         steps: [
           ...(detailedResultSteps(transition, "payment_required") ?? [
@@ -294,7 +398,10 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         kind: "recovery" as const,
         tone: "success",
         title: "결제가 완료되었습니다",
-        description: `${base.description} · 공식 예약 내역에서 결제 완료를 확인했습니다. 결제 안내를 종료합니다.`,
+        description: appendEvidence(
+          `${base.description} · 공식 예약 내역에서 결제 완료를 확인했습니다. 결제 안내를 종료합니다.`,
+          transition,
+        ),
         steps: [
           ...(detailedResultSteps(transition, "payment_completed") ?? [
             completed("좌석 임시 확보", times.attempted),
@@ -305,25 +412,28 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
     case "payment_hold_ended": {
       const monitoringResumed = transition.automaticReservationRetry === true;
       const deadlineElapsed = transition.paymentHoldEndReason === "confirmed_payment_deadline_elapsed";
+      const holdEvidence = deadlineElapsed
+        ? "공식 확인에서 결제 가능 기한이 지난 것을 확인했습니다."
+        : "공식 내역에서 대상 임시 예약을 더 이상 찾지 못했습니다.";
       return {
         ...base,
         kind: "recovery" as const,
         tone: "warning",
         title: deadlineElapsed
-          ? "결제기한 안에 결제되지 않아 예매가 취소되었습니다"
-          : "공식 확인 결과 임시 예약이 종료되었습니다",
+          ? "결제 가능 기한이 지났습니다"
+          : "공식 내역에서 대상 임시 예약을 더 이상 찾지 못했습니다",
         description: monitoringResumed
-          ? `${base.description} · 공식 확인에서 임시 예약 종료를 확인했습니다. 감시는 다시 시작되며, 매진 뒤 좌석이 다시 열리면 자동 예매를 시도합니다.`
-          : `${base.description} · 공식 확인에서 임시 예약 종료를 확인했습니다. 이 1회 알림 작업은 종료되었습니다.`,
+          ? `${base.description} · ${holdEvidence} 감시는 다시 시작되며, 매진 뒤 좌석이 다시 열리면 자동 예매를 시도합니다.`
+          : `${base.description} · ${holdEvidence} 이 1회 알림 작업은 종료되었습니다.`,
         steps: [
           completed("좌석 발견", times.detected),
           completed("자동 예매 요청 시작", times.started),
           completed("좌석 임시 확보", times.attempted),
           deadlineElapsed
-            ? failed("결제기한 내 결제 미완료", times.current)
-            : failed("임시 예약 종료", times.current),
+            ? failed("결제 가능 시간 종료", times.current)
+            : failed("대상 임시 예약 목록 부재", times.current),
           completed(
-            deadlineElapsed ? "결제 가능 시간 종료 확인" : "임시 예약 종료 확인",
+            deadlineElapsed ? "결제 가능 시간 종료 확인" : "공식 내역 목록 부재 확인",
             times.current,
           ),
           completed(monitoringResumed ? "감시 재개" : "작업 종료", times.current),
@@ -331,12 +441,39 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
       };
     }
     case "auth_required":
+      if (
+        transition.resultReasonCode === "provider_blocked"
+        || transition.confirmationOutcome === "provider_blocked"
+      ) {
+        return {
+          ...base,
+          kind: "auth_required" as const,
+          tone: "warning",
+          title: "운영사 요청 제한으로 확인이 필요합니다",
+          description: appendEvidence(
+            `${base.description} · 자동 예매와 공식 내역 확인을 중단했습니다. 운영사 이용 상태를 확인한 뒤 감시를 재개해 주세요.`,
+            transition,
+          ),
+          autoCloseMs: null,
+          steps: [
+            ...(detailedResultSteps(transition, "auth_required") ?? [
+              completed("좌석 발견", times.detected),
+              completed("자동 예매 요청 시작", times.started),
+              failed("운영사 요청 제한 확인", times.attempted),
+            ]),
+            pending("운영사 상태 확인 후 감시 재개", times.current),
+          ],
+        };
+      }
       return {
         ...base,
         kind: "auth_required" as const,
         tone: "warning",
         title: "로그인 확인이 필요합니다",
-        description: `${base.description} · 설정에서 철도 계정을 다시 확인해 주세요. 로그인 확인 후 감시를 재개합니다.`,
+        description: appendEvidence(
+          `${base.description} · 설정에서 철도 계정을 다시 확인해 주세요. 로그인 확인 후 감시를 재개합니다.`,
+          transition,
+        ),
         autoCloseMs: null,
         steps: [
           ...(detailedResultSteps(transition, "auth_required") ?? [
@@ -361,7 +498,10 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         kind: "recovery" as const,
         tone: "error",
         title: "예매에 실패했습니다",
-        description: `${base.description} · 상태를 확인한 뒤 감시를 다시 시작해 주세요.`,
+        description: appendEvidence(
+          `${base.description} · 상태를 확인한 뒤 감시를 다시 시작해 주세요.`,
+          transition,
+        ),
         steps: detailedResultSteps(transition, "failed") ?? [
           completed("좌석 발견", times.detected),
           completed("자동 예매 요청 시작", times.started),
@@ -374,6 +514,12 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         retryable: false,
         manualCheckRequired: true,
         retryCondition: null,
+        resultReasonCode: transition.resultReasonCode ?? null,
+        confirmationOutcome: transition.confirmationOutcome ?? null,
+        confirmationDiagnosticCode: transition.confirmationDiagnosticCode ?? null,
+        confirmationObservedAt: transition.confirmationObservedAt ?? null,
+        reconciliationAttemptCount: transition.reconciliationAttemptCount ?? 0,
+        nextReconcileAt: transition.nextReconcileAt ?? null,
       });
   }
 }
@@ -384,22 +530,29 @@ export function buildReservationRecoveryToast(
 ): AppNotificationInput {
   const { outcome } = result;
   const times = stageTimes(transition);
+  const reservedSeatLabel = formatReservedSeats(transition.reservedSeats ?? []);
+  const journey = journeyFields(transition);
   const base = {
     key: `reservation:${transition.id}`,
     ...lifecycleFields(transition),
     tone: outcome === "failed" ? "error" as const : "warning" as const,
-    ...journeyFields(transition),
+    ...journey,
+    ...(reservedSeatLabel === null
+      ? {}
+      : { meta: `${journey.meta} · 예약 좌석 ${reservedSeatLabel}` }),
   };
   if (result.manualCheckRequired || !result.retryable) {
     const monitoringResumed = transition.monitoringResumed !== false;
+    const automaticRecheckPending = Boolean(result.nextReconcileAt);
+    const summary = monitoringResumed
+      ? `${base.description} · 자동 재예매를 보류합니다. 공식 예약 내역을 확인해 주세요. 감시는 계속됩니다.`
+      : `${base.description} · 자동 재예매를 보류합니다. 감시는 종료되었습니다. 공식 예약 내역을 확인해 주세요.`;
     return {
       ...base,
       kind: "manual_check",
       autoCloseMs: null,
-      title: "예매 결과를 확인해야 합니다",
-      description: monitoringResumed
-        ? `${base.description} · 결과가 불명확해 자동 재예매를 보류합니다. 공식 예약 내역을 확인해 주세요. 감시는 계속됩니다.`
-        : `${base.description} · 결과가 불명확해 자동 재예매를 보류합니다. 감시는 종료되었습니다. 공식 예약 내역을 확인해 주세요.`,
+      title: manualCheckTitle(result),
+      description: appendEvidence(summary, result),
       steps: [
         ...(detailedResultSteps(transition, "manual_check") ?? [
           completed("좌석 발견", times.detected),
@@ -407,7 +560,12 @@ export function buildReservationRecoveryToast(
           completed("예매 요청", times.attempted),
           failed("공식 결과 확인"),
         ]),
-        active(monitoringResumed ? "감시·수동 확인" : "공식 결과 수동 확인", times.current),
+        active(
+          automaticRecheckPending
+            ? "공식 결과 자동 재확인 대기"
+            : monitoringResumed ? "감시·수동 확인" : "공식 결과 수동 확인",
+          times.current,
+        ),
       ],
     };
   }
@@ -420,8 +578,11 @@ export function buildReservationRecoveryToast(
         ? "좌석이 사라져 다시 감시 중입니다"
         : "좌석을 확보하지 못해 작업이 종료되었습니다",
       description: monitoringResumed
-        ? `${base.description} · 예약된 좌석은 없습니다. 좌석이 다시 확인되면 예매를 다시 시도합니다.`
-        : `${base.description} · 예약된 좌석은 없습니다. 감시는 종료되었습니다.`,
+        ? appendEvidence(
+            `${base.description} · 예약된 좌석은 없습니다. 좌석이 다시 확인되면 예매를 다시 시도합니다.`,
+            result,
+          )
+        : appendEvidence(`${base.description} · 예약된 좌석은 없습니다. 감시는 종료되었습니다.`, result),
       steps: [
         ...(detailedResultSteps(transition, "not_available") ?? [
           completed("좌석 발견", times.detected),
@@ -438,7 +599,10 @@ export function buildReservationRecoveryToast(
     ...base,
     kind: "recovery",
     title: "예매에 실패해 다시 감시 중입니다",
-    description: `${base.description} · 예약된 좌석은 없습니다. 좌석이 다시 확인되면 예매를 다시 시도합니다.`,
+    description: appendEvidence(
+      `${base.description} · 예약된 좌석은 없습니다. 좌석이 다시 확인되면 예매를 다시 시도합니다.`,
+      result,
+    ),
     steps: [
       ...(detailedResultSteps(transition, "failed") ?? [
         completed("좌석 발견", times.detected),

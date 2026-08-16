@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from typing import Self
 from unittest.mock import AsyncMock
@@ -13,6 +15,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import rail_waitlist.korail_pydoll_browser as pydoll_module
+import rail_waitlist.korail_sidecar.http as korail_http_module
 from rail_waitlist.domain import Provider, SeatClass
 from rail_waitlist.korail_browser_adapter_service import create_adapter_app
 from rail_waitlist.korail_browser_automation import BrowserSeatSearchRequest
@@ -29,6 +32,11 @@ from rail_waitlist.korail_reservation_confirmation import (
     normalize_korail_same_session_detail,
 )
 from rail_waitlist.korail_reservation_contract import KorailReservationConfirmationResult
+from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserProtectionDetected,
+    BrowserRateLimited,
+    BrowserSourceUnavailable,
+)
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import (
     PydollIssuedTicketListSnapshot,
     PydollIssuedTicketSummary,
@@ -41,6 +49,7 @@ from rail_waitlist.korail_sidecar.pydoll.search_driver import (
     _reservation_list_snapshot_from_script_response,
 )
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationSeat,
@@ -55,6 +64,7 @@ def confirmation_target(
     credential_version: int = 7,
     purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
     reserved_seats: tuple[ReservationConfirmationSeat, ...] = (),
+    confirmation_correlation_seats: tuple[ReservationConfirmationSeat, ...] = (),
 ) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
         attempt_id="attempt-fixture",
@@ -70,6 +80,7 @@ def confirmation_target(
         credential_version=credential_version,
         purpose=purpose,
         reserved_seats=reserved_seats,
+        confirmation_correlation_seats=confirmation_correlation_seats,
     )
 
 
@@ -88,6 +99,7 @@ def confirmation_payload() -> dict[str, object]:
         "credential_version": target.credential_version,
         "purpose": target.purpose.value,
         "reserved_seats": [],
+        "confirmation_correlation_seats": [],
     }
 
 
@@ -99,6 +111,9 @@ class ReadOnlyDetailSession:
         reservation_list_snapshot: PydollReservationListSnapshot | None = None,
         issued_ticket_snapshot: PydollIssuedTicketListSnapshot | None = None,
         snapshot_error: Exception | None = None,
+        reservation_list_error: Exception | None = None,
+        issued_ticket_error: Exception | None = None,
+        official_session_error: Exception | None = None,
         officially_authenticated: bool = False,
         header_authenticated: bool = False,
     ) -> None:
@@ -106,6 +121,9 @@ class ReadOnlyDetailSession:
         self.reservation_list_snapshot = reservation_list_snapshot
         self.issued_ticket_snapshot = issued_ticket_snapshot
         self.snapshot_error = snapshot_error
+        self.reservation_list_error = reservation_list_error
+        self.issued_ticket_error = issued_ticket_error
+        self.official_session_error = official_session_error
         self.officially_authenticated = officially_authenticated
         self.header_authenticated = header_authenticated
         self.events: list[str] = []
@@ -134,6 +152,8 @@ class ReadOnlyDetailSession:
 
     async def _probe_official_authenticated_session(self) -> bool:
         self.events.append("login_check")
+        if self.official_session_error is not None:
+            raise self.official_session_error
         return self.officially_authenticated
 
     async def _has_authenticated_header(self) -> bool:
@@ -142,12 +162,19 @@ class ReadOnlyDetailSession:
 
     async def read_reservation_list(self) -> PydollReservationListSnapshot:
         self.events.append("reservation_list")
+        if self.reservation_list_error is not None:
+            raise self.reservation_list_error
         if self.reservation_list_snapshot is None:
-            raise RuntimeError("reservation list fixture not configured")
+            # Most detail-focused tests intentionally leave the fallback surface
+            # incomplete. A generic exception is reserved for tests that verify
+            # the production source-unavailable stage wrapping.
+            return PydollReservationListSnapshot(url="https://www.korail.com/")
         return self.reservation_list_snapshot
 
     async def read_issued_ticket_list(self) -> PydollIssuedTicketListSnapshot:
         self.events.append("issued_ticket_list")
+        if self.issued_ticket_error is not None:
+            raise self.issued_ticket_error
         if self.issued_ticket_snapshot is None:
             raise RuntimeError("issued ticket fixture not configured")
         return self.issued_ticket_snapshot
@@ -220,6 +247,9 @@ async def detail_client(
     reservation_list_snapshot: PydollReservationListSnapshot | None = None,
     issued_ticket_snapshot: PydollIssuedTicketListSnapshot | None = None,
     snapshot_error: Exception | None = None,
+    reservation_list_error: Exception | None = None,
+    issued_ticket_error: Exception | None = None,
+    official_session_error: Exception | None = None,
     officially_authenticated: bool = False,
     header_authenticated: bool = False,
 ) -> tuple[PydollKorailBrowserClient, ReadOnlyDetailSession]:
@@ -228,6 +258,9 @@ async def detail_client(
         reservation_list_snapshot=reservation_list_snapshot,
         issued_ticket_snapshot=issued_ticket_snapshot,
         snapshot_error=snapshot_error,
+        reservation_list_error=reservation_list_error,
+        issued_ticket_error=issued_ticket_error,
+        official_session_error=official_session_error,
         officially_authenticated=officially_authenticated,
         header_authenticated=header_authenticated,
     )
@@ -392,12 +425,45 @@ async def test_pydoll_confirmation_does_not_trust_transient_login_route_alone(
 
     assert evidence.auth_required is False
     assert evidence.exact_identity_matched is False
+    expected_auth_events = ["login_check"]
+    if not officially_authenticated:
+        expected_auth_events.append("auth_header")
+    assert session.events == ["snapshot", *expected_auth_events, "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_pydoll_confirmation_uses_header_after_unavailable_official_probe() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(url="https://www.korail.com/ticket/login"),
+        official_session_error=BrowserSourceUnavailable("session_keepalive"),
+        header_authenticated=True,
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+
+    assert evidence.auth_required is False
     assert session.events == [
         "snapshot",
         "login_check",
         "auth_header",
         "reservation_list",
     ]
+
+
+@pytest.mark.asyncio
+async def test_pydoll_confirmation_preserves_uncertainty_when_header_is_absent() -> None:
+    uncertainty = BrowserSourceUnavailable("session_keepalive")
+    client, session = await detail_client(
+        exact_detail_snapshot(url="https://www.korail.com/ticket/login"),
+        official_session_error=uncertainty,
+        header_authenticated=False,
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as captured:
+        await client.read_reservation_detail(confirmation_target())
+
+    assert captured.value is uncertainty
+    assert session.events == ["snapshot", "login_check", "auth_header", "reservation_list"]
 
 
 def reservation_list_snapshot(
@@ -689,6 +755,22 @@ def paid_follow_up_target(
     )
 
 
+def unknown_follow_up_target(
+    *,
+    car_number: str = "4",
+    seat_number: str = "8A",
+) -> ReservationConfirmationTarget:
+    return confirmation_target(
+        purpose=ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP,
+        confirmation_correlation_seats=(
+            ReservationConfirmationSeat(
+                car_number=car_number,
+                seat_number=seat_number,
+            ),
+        ),
+    )
+
+
 def exact_issued_ticket(
     **overrides: object,
 ) -> PydollIssuedTicketSummary:
@@ -837,6 +919,96 @@ async def test_payment_follow_up_exact_issued_ticket_overrides_stale_pending_det
 
 
 @pytest.mark.asyncio
+async def test_unknown_follow_up_confirms_only_exact_issued_ticket_as_paid() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(exact_issued_ticket()),
+    )
+    target = unknown_follow_up_target()
+
+    evidence = await client.read_reservation_detail(target)
+    result = normalize_korail_same_session_detail(target, evidence)
+
+    assert evidence.issued_ticket_exact_match is True
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
+    assert session.events == ["snapshot", "issued_ticket_list"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_follow_up_never_confirms_itinerary_only_unpaid_hold() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(empty_state_visible=True),
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+    )
+    target = unknown_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_follow_up_complete_issued_and_unpaid_absence_is_not_found() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(empty_state_visible=True),
+        reservation_list_snapshot=reservation_list_snapshot(explicit_empty_visible=True),
+    )
+    target = unknown_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.NOT_FOUND
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_follow_up_incomplete_issued_read_never_proves_absence() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(malformed_card_count=1),
+        reservation_list_snapshot=reservation_list_snapshot(explicit_empty_visible=True),
+    )
+    target = unknown_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_follow_up_wrong_issued_seat_and_unpaid_row_stays_inconclusive() -> None:
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_snapshot=issued_ticket_list_snapshot(
+            exact_issued_ticket(car_number="5", seat_number="9B")
+        ),
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+    )
+    target = unknown_follow_up_target()
+
+    result = normalize_korail_same_session_detail(
+        target,
+        await client.read_reservation_detail(target),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("issued_snapshot", "expected"),
     [
@@ -854,13 +1026,13 @@ async def test_payment_follow_up_exact_issued_ticket_overrides_stale_pending_det
         ),
         (
             issued_ticket_list_snapshot(empty_state_visible=True),
-            ReservationConfirmationOutcome.INCONCLUSIVE,
+            None,
         ),
     ],
 )
 async def test_payment_follow_up_issued_probe_survives_detail_snapshot_failure(
     issued_snapshot: PydollIssuedTicketListSnapshot,
-    expected: ReservationConfirmationOutcome,
+    expected: ReservationConfirmationOutcome | None,
 ) -> None:
     client, session = await detail_client(
         exact_detail_snapshot(),
@@ -869,11 +1041,17 @@ async def test_payment_follow_up_issued_probe_survives_detail_snapshot_failure(
     )
     target = paid_follow_up_target()
 
+    if expected is None:
+        with pytest.raises(BrowserSourceUnavailable) as captured:
+            await client.read_reservation_detail(target)
+        assert captured.value.stage == "confirmation_detail_snapshot"
+        assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+        return
+
     result = normalize_korail_same_session_detail(
         target,
         await client.read_reservation_detail(target),
     )
-
     assert result.outcome is expected
     assert session.events[:2] == ["snapshot", "issued_ticket_list"]
 
@@ -940,7 +1118,17 @@ async def test_payment_follow_up_does_not_accept_unpaid_absence_after_unsafe_iss
     )
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
-    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+    duplicate_exact = len(issued_snapshot.tickets) > 1
+    assert result.diagnostic_code is (
+        ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+        if duplicate_exact
+        else ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
+    assert session.events == [
+        "snapshot",
+        "issued_ticket_list",
+        *([] if duplicate_exact else ["reservation_list"]),
+    ]
 
 
 @pytest.mark.asyncio
@@ -959,6 +1147,213 @@ async def test_payment_follow_up_snapshot_failure_still_uses_fresh_unpaid_list()
     )
 
     assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        BrowserProtectionDetected(stage="confirmation_read"),
+        BrowserRateLimited(),
+    ],
+    ids=("protected", "rate_limited"),
+)
+@pytest.mark.parametrize(
+    "surface",
+    ["detail", "reservation_list", "issued_ticket_list"],
+)
+async def test_confirmation_reader_propagates_explicit_provider_failures(
+    error: Exception,
+    surface: str,
+) -> None:
+    target = confirmation_target()
+    options: dict[str, object] = {}
+    if surface == "detail":
+        options["snapshot_error"] = error
+    elif surface == "reservation_list":
+        options["reservation_list_error"] = error
+    else:
+        target = paid_follow_up_target()
+        options["issued_ticket_error"] = error
+    client, session = await detail_client(
+        PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
+        **options,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(type(error)) as captured:
+        await client.read_reservation_detail(target)
+
+    assert captured.value is error
+    assert (
+        session.events
+        == {
+            "detail": ["snapshot"],
+            "reservation_list": ["snapshot", "reservation_list"],
+            "issued_ticket_list": ["snapshot", "issued_ticket_list"],
+        }[surface]
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirmation_reader_uses_list_after_detail_source_unavailable() -> None:
+    source_error = BrowserSourceUnavailable("detail_snapshot")
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        snapshot_error=source_error,
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+
+    assert evidence.source == "korail-reservation-list"
+    assert evidence.payment_pending_markers_present is True
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_reader_uses_list_after_generic_detail_snapshot_failure() -> None:
+    secret = "generic-detail-secret-must-not-escape"
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        snapshot_error=RuntimeError(secret),
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+    result = normalize_korail_same_session_detail(confirmation_target(), evidence)
+
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    assert result.diagnostic_code is None
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_complete_empty_list_without_arrival_stays_evidence_insufficient() -> None:
+    client, session = await detail_client(
+        PydollPageSnapshot(
+            body_text="예약 상세를 판독하지 못했습니다",
+            rows=(),
+            url="https://www.korail.com/ticket/reservation/detail",
+        ),
+        reservation_list_snapshot=reservation_list_snapshot(explicit_empty_visible=True),
+    )
+    target = replace(confirmation_target(), arrival_at=None)
+
+    evidence = await client.read_reservation_detail(target)
+    result = normalize_korail_same_session_detail(target, evidence)
+
+    assert evidence.official_list_read_completed is True
+    assert evidence.official_list_target_absent is False
+    assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        result.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_reader_uses_list_after_login_attestation_is_unavailable() -> None:
+    source_error = BrowserSourceUnavailable("session_keepalive")
+    client, session = await detail_client(
+        exact_detail_snapshot(url="https://www.korail.com/ticket/login"),
+        official_session_error=source_error,
+        header_authenticated=False,
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+    )
+
+    evidence = await client.read_reservation_detail(confirmation_target())
+
+    assert evidence.source == "korail-reservation-list"
+    assert evidence.payment_pending_markers_present is True
+    assert session.events == [
+        "snapshot",
+        "login_check",
+        "auth_header",
+        "reservation_list",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_reader_reraises_source_error_without_conclusive_list() -> None:
+    source_error = BrowserSourceUnavailable("detail_snapshot")
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        snapshot_error=source_error,
+        reservation_list_snapshot=reservation_list_snapshot(loading_visible=True),
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as captured:
+        await client.read_reservation_detail(confirmation_target())
+
+    assert captured.value is source_error
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_reader_wraps_generic_list_failure_with_closed_stage() -> None:
+    secret = "generic-reservation-list-secret-must-not-escape"
+    client, session = await detail_client(
+        PydollPageSnapshot(body_text="다른 화면", rows=(), url="https://www.korail.com/"),
+        reservation_list_error=RuntimeError(secret),
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as captured:
+        await client.read_reservation_detail(confirmation_target())
+
+    assert captured.value.stage == "confirmation_reservation_list"
+    assert secret not in str(captured.value)
+    assert session.events == ["snapshot", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_payment_follow_up_uses_issued_ticket_after_detail_source_unavailable() -> None:
+    source_error = BrowserSourceUnavailable("detail_snapshot")
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        snapshot_error=source_error,
+        issued_ticket_snapshot=issued_ticket_list_snapshot(exact_issued_ticket()),
+    )
+    target = paid_follow_up_target()
+
+    evidence = await client.read_reservation_detail(target)
+
+    assert evidence.issued_ticket_exact_match is True
+    assert session.events == ["snapshot", "issued_ticket_list"]
+
+
+@pytest.mark.asyncio
+async def test_payment_follow_up_uses_list_after_issued_source_unavailable() -> None:
+    source_error = BrowserSourceUnavailable("issued_ticket_read")
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_error=source_error,
+        reservation_list_snapshot=exact_reservation_list_snapshot(),
+    )
+    target = paid_follow_up_target()
+
+    evidence = await client.read_reservation_detail(target)
+
+    assert evidence.source == "korail-reservation-list"
+    assert evidence.payment_pending_markers_present is True
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+
+
+@pytest.mark.asyncio
+async def test_payment_follow_up_reraises_issued_source_error_without_conclusive_list() -> None:
+    source_error = BrowserSourceUnavailable("issued_ticket_read")
+    client, session = await detail_client(
+        exact_detail_snapshot(),
+        issued_ticket_error=source_error,
+        reservation_list_snapshot=reservation_list_snapshot(loading_visible=True),
+    )
+    target = paid_follow_up_target()
+
+    with pytest.raises(BrowserSourceUnavailable) as captured:
+        await client.read_reservation_detail(target)
+
+    assert captured.value is source_error
     assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
 
 
@@ -1236,7 +1631,7 @@ class FakeAutomation:
 
 
 class FakeReservationClient:
-    def __init__(self, evidence: KorailSameSessionDetailEvidence) -> None:
+    def __init__(self, evidence: KorailSameSessionDetailEvidence | Exception) -> None:
         self.evidence = evidence
         self.targets: list[ReservationConfirmationTarget] = []
 
@@ -1244,6 +1639,8 @@ class FakeReservationClient:
         self, target: ReservationConfirmationTarget
     ) -> KorailSameSessionDetailEvidence:
         self.targets.append(target)
+        if isinstance(self.evidence, Exception):
+            raise self.evidence
         return self.evidence
 
 
@@ -1292,16 +1689,181 @@ def test_confirmation_endpoint_requires_bearer_redacts_validation_and_sets_no_st
     assert accepted.json()["source"] == "korail-reservation-list"
     assert (
         "KORAIL reservation confirmation completed purpose=initial "
-        "outcome=confirmed_payment_required source=korail-reservation-list"
+        "outcome=confirmed_payment_required diagnostic_code=none "
+        "source=korail-reservation-list phase=completed"
     ) in caplog.text
     assert secret not in rejected.text
     assert secret not in caplog.text
     assert reservation_client.targets == [confirmation_target()]
 
 
+class _SecretBearingSourceUnavailable(BrowserSourceUnavailable):
+    def __init__(self, stage: str, secret: str) -> None:
+        super().__init__(stage)
+        self.secret = secret
+
+    def __str__(self) -> str:
+        return f"raw provider exception containing {self.secret}"
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected_stage"),
+    [
+        ("session_keepalive", "session_keepalive"),
+        ("confirmation_reservation_list", "confirmation_reservation_list"),
+        ("credential=confirmation-secret-must-not-appear", "unspecified"),
+    ],
+    ids=("safe_stage", "reservation_list_stage", "unsafe_stage"),
+)
+def test_confirmation_endpoint_reports_source_unavailable_without_raw_exception_log(
+    caplog: pytest.LogCaptureFixture,
+    stage: str,
+    expected_stage: str,
+) -> None:
+    secret = "confirmation-secret-must-not-appear"
+    reservation_client = FakeReservationClient(_SecretBearingSourceUnavailable(stage, secret))
+    app = create_adapter_app(
+        automation=FakeAutomation(),
+        reservation_client=reservation_client,
+        token="t" * 32,
+        readiness_probe=AsyncMock(return_value=None),
+    )
+
+    with caplog.at_level(logging.INFO), TestClient(app) as http:
+        response = http.post(
+            "/v1/confirm-reservation",
+            json=confirmation_payload(),
+            headers={"Authorization": f"Bearer {'t' * 32}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "inconclusive"
+    assert response.json()["diagnostic_code"] == "official_read_unavailable"
+    assert response.json()["source"] == "korail-same-session-detail"
+    failure_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("KORAIL reservation confirmation failed")
+    ]
+    assert len(failure_records) == 1
+    assert re.fullmatch(
+        "KORAIL reservation confirmation failed "
+        "failure=source_unavailable diagnostic_code=official_read_unavailable "
+        f"phase=official_read stage={expected_stage} "
+        r"operation=confirm_reservation request_id=[0-9a-f]{32}",
+        failure_records[0].getMessage(),
+    )
+    assert failure_records[0].levelno == logging.ERROR
+    assert secret not in caplog.text
+    assert "raw provider exception" not in caplog.text
+    assert reservation_client.targets == [confirmation_target()]
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_diagnostic"),
+    [
+        ("official_read", "official_read_unavailable"),
+        ("evidence_normalization", "official_evidence_insufficient"),
+    ],
+)
+def test_confirmation_endpoint_logs_closed_phase_for_redacted_generic_errors(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    expected_diagnostic: str,
+) -> None:
+    secret = "generic-confirmation-secret-must-not-appear"
+    evidence = KorailSameSessionDetailEvidence(
+        observed_at=datetime(2026, 8, 3, 7, tzinfo=UTC),
+        credential_version=7,
+        exact_identity_matched=False,
+        payment_pending_markers_present=False,
+    )
+    reservation_client = FakeReservationClient(
+        RuntimeError(secret) if phase == "official_read" else evidence
+    )
+    if phase == "evidence_normalization":
+
+        def fail_normalization(*_args: object) -> object:
+            raise RuntimeError(secret)
+
+        monkeypatch.setattr(
+            korail_http_module,
+            "normalize_korail_same_session_detail",
+            fail_normalization,
+        )
+    app = create_adapter_app(
+        automation=FakeAutomation(),
+        reservation_client=reservation_client,
+        token="t" * 32,
+        readiness_probe=AsyncMock(return_value=None),
+    )
+
+    with caplog.at_level(logging.INFO), TestClient(app) as http:
+        response = http.post(
+            "/v1/confirm-reservation",
+            json=confirmation_payload(),
+            headers={"Authorization": f"Bearer {'t' * 32}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "inconclusive"
+    assert response.json()["diagnostic_code"] == expected_diagnostic
+    assert f"diagnostic_code={expected_diagnostic} phase={phase}" in caplog.text
+    assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        BrowserProtectionDetected(stage="session_keepalive"),
+        BrowserRateLimited(),
+    ],
+    ids=("protected", "rate_limited"),
+)
+def test_confirmation_endpoint_maps_explicit_provider_failures_to_blocked(
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    reservation_client = FakeReservationClient(error)
+    app = create_adapter_app(
+        automation=FakeAutomation(),
+        reservation_client=reservation_client,
+        token="t" * 32,
+        readiness_probe=AsyncMock(return_value=None),
+    )
+
+    with caplog.at_level(logging.INFO), TestClient(app) as http:
+        response = http.post(
+            "/v1/confirm-reservation",
+            json=confirmation_payload(),
+            headers={"Authorization": f"Bearer {'t' * 32}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "provider_blocked"
+    assert response.json()["diagnostic_code"] is None
+    assert response.json()["source"] == "korail-same-session-detail"
+    failure_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("KORAIL reservation confirmation failed")
+    ]
+    assert len(failure_records) == 1
+    assert re.fullmatch(
+        "KORAIL reservation confirmation failed failure=provider_blocked "
+        "diagnostic_code=none phase=official_read "
+        r"operation=confirm_reservation request_id=[0-9a-f]{32}",
+        failure_records[0].getMessage(),
+    )
+    assert failure_records[0].levelno == logging.WARNING
+    assert reservation_client.targets == [confirmation_target()]
+
+
 def test_confirmation_dto_rejects_extra_and_inconsistent_fields() -> None:
     base = {
         "outcome": "inconclusive",
+        "diagnostic_code": "official_evidence_insufficient",
         "source": "korail-same-session-detail",
         "observed_at": datetime(2026, 8, 3, 7, tzinfo=UTC),
     }
@@ -1311,6 +1873,17 @@ def test_confirmation_dto_rejects_extra_and_inconsistent_fields() -> None:
     with pytest.raises(ValidationError):
         KorailReservationConfirmationResult.model_validate(
             {**base, "official_handoff_url": "https://www.korail.com/ticket/mypage/mykorail"}
+        )
+    with pytest.raises(ValidationError, match="requires a diagnostic code"):
+        KorailReservationConfirmationResult.model_validate(
+            {key: value for key, value in base.items() if key != "diagnostic_code"}
+        )
+    with pytest.raises(ValidationError, match="requires a diagnostic code"):
+        KorailReservationConfirmationResult.model_validate(
+            {
+                **base,
+                "outcome": "not_found",
+            }
         )
 
 
@@ -1343,6 +1916,7 @@ async def test_source_preserves_exact_request_generation_and_protection_outcome(
     transport = FakeConfirmationTransport(
         KorailReservationConfirmationResult(
             outcome="inconclusive",
+            diagnostic_code="official_evidence_insufficient",
             source="korail-same-session-detail",
             observed_at=datetime(2026, 8, 3, 7, tzinfo=UTC),
         )
@@ -1354,6 +1928,10 @@ async def test_source_preserves_exact_request_generation_and_protection_outcome(
 
     request = transport.requests[0]
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        result.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
     assert request.credential_version == 7
     assert request.train_number == "43"
     assert request.departure_at == confirmation_target().departure_at

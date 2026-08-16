@@ -20,6 +20,7 @@ from rail_waitlist.provider_call_context import (
     validated_log_id,
 )
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationTarget,
@@ -41,6 +42,7 @@ from rail_waitlist.srt_sidecar.client import (
 )
 from rail_waitlist.srt_sidecar.contracts import (
     SrtCredentialRequest,
+    SrtReservationConfirmationResult,
     SrtTimetableSearchRequest,
     SrtTimetableTrain,
 )
@@ -60,12 +62,14 @@ async def test_srt_sidecar_uses_operational_cache_and_cooldown_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("SRT_SEAT_STATUS_CACHE_TTL_SECONDS", raising=False)
+    monkeypatch.delenv("SRT_SEAT_STATUS_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", raising=False)
     monkeypatch.delenv("SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", raising=False)
 
     source, redis = adapter_service._build_default_source()
     try:
         assert source.cache_ttl_seconds == 1
+        assert source.timeout_seconds == 60
         assert source.rate_limit_cooldown_seconds == 300
         assert source.protection_cooldown_seconds == 60
     finally:
@@ -251,7 +255,9 @@ def timetable_item() -> TimetableItem:
 
 
 @pytest.mark.asyncio
-async def test_sidecar_client_contract_reuses_process_owned_source_and_session() -> None:
+async def test_sidecar_client_contract_reuses_process_owned_source_and_session(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     source = FakeSource()
     executor = FakeExecutor()
     app = create_srt_provider_adapter_app(
@@ -295,7 +301,9 @@ async def test_sidecar_client_contract_reuses_process_owned_source_and_session()
             passenger_count=1,
         )
         reservation = await client.reserve_once(reservation_request(), credentials)
-        confirmation = await client.confirm_reservation(confirmation_target(), credentials)
+        confirmation_request_id = "42b41ae2322242b18e98ec989d09a994"
+        with caplog.at_level(logging.INFO), bind_request_id(confirmation_request_id):
+            confirmation = await client.confirm_reservation(confirmation_target(), credentials)
         await client.aclose()
 
     assert status.state is SrtSessionActorState.READY
@@ -325,6 +333,28 @@ async def test_sidecar_client_contract_reuses_process_owned_source_and_session()
     ]
     assert reservation.outcome is ReservationOutcome.NOT_AVAILABLE
     assert confirmation.outcome is ReservationConfirmationOutcome.NOT_FOUND
+    confirmation_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "operation=confirm_reservation" in record.getMessage()
+        and f"request_id={confirmation_request_id}" in record.getMessage()
+    ]
+    assert any(
+        "event=provider_confirmation_completed" in message
+        and "outcome=not_found" in message
+        and "diagnostic_code=none" in message
+        and "source=test-srt-confirmation" in message
+        and "phase=completed" in message
+        for message in confirmation_logs
+    )
+    assert any(
+        "event=provider_sidecar_request_completed" in message
+        and "terminal_outcome=not_found" in message
+        and "diagnostic_code=none" in message
+        and "source=test-srt-confirmation" in message
+        and "phase=completed" in message
+        for message in confirmation_logs
+    )
     assert source.observe_calls == 1
     assert source.overlay_calls == 1
     assert source.timetable_calls == 1
@@ -333,6 +363,125 @@ async def test_sidecar_client_contract_reuses_process_owned_source_and_session()
     assert executor.reserve_versions == [7]
     assert executor.confirm_arrivals == [datetime(2026, 8, 3, 14, 30, tzinfo=UTC)]
     assert executor.confirm_versions == [7]
+
+
+def test_srt_confirmation_wire_requires_and_round_trips_closed_diagnostic() -> None:
+    now = datetime(2026, 8, 3, 3, 29, tzinfo=UTC)
+    valid = SrtReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        diagnostic_code=(ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS),
+        source="test-srt-confirmation",
+        observed_at=now,
+    )
+
+    assert valid.model_dump(mode="json")["diagnostic_code"] == "official_record_ambiguous"
+    assert (
+        valid.to_domain().diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+    )
+    with pytest.raises(ValidationError, match="requires a diagnostic code"):
+        SrtReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            source="test-srt-confirmation",
+            observed_at=now,
+        )
+    with pytest.raises(ValidationError, match="requires a diagnostic code"):
+        SrtReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            diagnostic_code=(ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT),
+            source="test-srt-confirmation",
+            observed_at=now,
+        )
+
+
+@pytest.mark.asyncio
+async def test_srt_inconclusive_wire_and_logs_preserve_closed_diagnostic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class InconclusiveExecutor(FakeExecutor):
+        async def confirm_reservation(self, target, _credentials):
+            return ReservationConfirmationResult(
+                provider=target.provider,
+                outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+                diagnostic_code=(ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS),
+                source="test-srt-confirmation",
+                observed_at=datetime.now(UTC),
+            )
+
+    app = create_srt_provider_adapter_app(
+        source=FakeSource(),
+        executor=InconclusiveExecutor(),
+        token=TOKEN,
+        monotonic=lambda: 20.0,
+    )
+    request_id = "52b41ae2322242b18e98ec989d09a994"
+    async with app.router.lifespan_context(app):
+        client = SrtProviderAdapterClient(
+            SRT_PROVIDER_ADAPTER_ORIGIN,
+            10,
+            TOKEN,
+            transport=httpx.ASGITransport(app=app),
+        )
+        with caplog.at_level(logging.INFO), bind_request_id(request_id):
+            result = await client.confirm_reservation(
+                confirmation_target(),
+                ProviderCredentials("1234567890", "private-password", 7),
+            )
+        await client.aclose()
+
+    assert result.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+    correlated = [
+        record.getMessage()
+        for record in caplog.records
+        if f"request_id={request_id}" in record.getMessage()
+        and "operation=confirm_reservation" in record.getMessage()
+    ]
+    assert sum("diagnostic_code=official_record_ambiguous" in item for item in correlated) == 2
+    assert all("private-password" not in item for item in correlated)
+
+
+@pytest.mark.asyncio
+async def test_srt_confirmation_exception_log_is_correlated_and_secret_free(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "srt-confirmation-secret-must-not-appear"
+
+    class FailingExecutor(FakeExecutor):
+        async def confirm_reservation(self, _target, _credentials):
+            raise RuntimeError(secret)
+
+    app = create_srt_provider_adapter_app(
+        source=FakeSource(),
+        executor=FailingExecutor(),
+        token=TOKEN,
+        monotonic=lambda: 20.0,
+    )
+    request_id = "62b41ae2322242b18e98ec989d09a994"
+    async with app.router.lifespan_context(app):
+        client = SrtProviderAdapterClient(
+            SRT_PROVIDER_ADAPTER_ORIGIN,
+            10,
+            TOKEN,
+            transport=httpx.ASGITransport(app=app),
+        )
+        with caplog.at_level(logging.INFO), bind_request_id(request_id):
+            with pytest.raises(SrtProviderAdapterUnavailable):
+                await client.confirm_reservation(
+                    confirmation_target(),
+                    ProviderCredentials("1234567890", "private-password", 7),
+                )
+        await client.aclose()
+
+    assert (
+        "event=provider_confirmation_failed provider=SRT operation=confirm_reservation "
+        f"request_id={request_id} outcome=inconclusive "
+        "diagnostic_code=official_read_unavailable "
+        "source=srtrain-reservation-list phase=official_read"
+    ) in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -813,14 +962,17 @@ def test_adapter_token_is_strong_and_secret_repr_is_redacted() -> None:
     assert "not-visible-in-repr" not in repr(credential)
 
 
-def test_settings_require_outer_srt_sidecar_timeout_to_exceed_operation_budget() -> None:
+@pytest.mark.parametrize("outer_timeout", [59, 60])
+def test_settings_require_outer_srt_sidecar_timeout_to_exceed_operation_budget(
+    outer_timeout: float,
+) -> None:
     with pytest.raises(ValidationError, match="must be greater"):
         Settings(
             _env_file=None,
             srt_provider_adapter_enabled=True,
             srt_provider_adapter_token=TOKEN,
-            srt_seat_status_timeout_seconds=25,
-            srt_provider_adapter_timeout_seconds=25,
+            srt_seat_status_timeout_seconds=60,
+            srt_provider_adapter_timeout_seconds=outer_timeout,
         )
 
 

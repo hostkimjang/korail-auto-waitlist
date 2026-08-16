@@ -63,6 +63,7 @@ describe("mapOperationalCandidate", () => {
 
   it.each([
     "sold_out",
+    "standing_only",
     "unavailable",
     "not_enough_seats",
     "not_offered",
@@ -97,6 +98,7 @@ describe("mapOperationalCandidate", () => {
     "available",
     "limited",
     "standing_plus_seat",
+    "standing_only",
     "waitlist_available",
     "reservation_completed",
     "sold_out",

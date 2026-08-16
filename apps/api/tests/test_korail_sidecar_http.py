@@ -23,6 +23,9 @@ from rail_waitlist.provider_call_context import (
     current_request_id,
     validated_log_id,
 )
+from rail_waitlist.reservations.provider_confirmation.korail import (
+    KorailSameSessionDetailEvidence,
+)
 
 SOURCE_ROOT = Path(__file__).parents[1] / "src" / "rail_waitlist"
 TOKEN = "k" * 32
@@ -55,6 +58,37 @@ class CapturingAutomation:
         return
 
 
+class CapturingReservationClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def reserve_once(self, _request: object, *, on_progress=None) -> object:
+        operation = "reserve_once_stream" if on_progress is not None else "reserve_once"
+        self.calls.append((operation, current_request_id()))
+        return SimpleNamespace(
+            outcome=SimpleNamespace(value="failed"),
+            reason="fixture_terminal",
+            seat_clicked=False,
+            reservation_clicked=False,
+            session_ready_at=None,
+            target_rechecked_at=None,
+            seat_selected_at=None,
+            reservation_requested_at=None,
+            reserved_seats=(),
+            confirmation_correlation_seats=(),
+        )
+
+    async def read_reservation_detail(self, target: object) -> KorailSameSessionDetailEvidence:
+        credential_version = cast(int, cast(SimpleNamespace, target).credential_version)
+        self.calls.append(("confirm_reservation", current_request_id()))
+        return KorailSameSessionDetailEvidence(
+            observed_at=datetime(2026, 8, 13, tzinfo=UTC),
+            credential_version=credential_version,
+            exact_identity_matched=False,
+            payment_pending_markers_present=False,
+        )
+
+
 async def ready_probe() -> None:
     return
 
@@ -68,6 +102,41 @@ def seat_snapshot_payload() -> dict[str, object]:
         departure_to=time(14),
         passenger_count=1,
     ).model_dump(mode="json")
+
+
+def reserve_once_payload() -> dict[str, object]:
+    return {
+        "origin": "서울",
+        "destination": "부산",
+        "travel_date": "2026-08-13",
+        "train_number": "43",
+        "train_type": "KTX",
+        "departure_time": "12:00:00",
+        "arrival_time": "14:00:00",
+        "seat_class": "general",
+        "credential": {
+            "login_method": "membership_number",
+            "login_id": "fixture-login-secret",
+            "password": "fixture-password-secret",
+            "version": "credential:7",
+        },
+    }
+
+
+def confirmation_payload() -> dict[str, object]:
+    return {
+        "attempt_id": "attempt-fixture",
+        "candidate_id": "candidate-fixture",
+        "train_number": "43",
+        "origin": "서울",
+        "destination": "부산",
+        "departure_at": "2026-08-13T03:00:00Z",
+        "arrival_at": "2026-08-13T05:00:00Z",
+        "seat_class": "standard",
+        "passenger_count": 1,
+        "credential_version": 7,
+        "purpose": "initial",
+    }
 
 
 def test_sidecar_facade_references_the_canonical_http_factory() -> None:
@@ -248,12 +317,25 @@ def test_seat_snapshot_validates_request_and_timeout_headers_and_resets_context(
     assert generated_request_id != malicious
     assert automation.calls[1] == (None, generated_request_id)
     assert unauthorized.status_code == 401
-    assert REQUEST_ID_HEADER not in unauthorized.headers
+    assert unauthorized.headers[REQUEST_ID_HEADER] == request_id
     assert invalid_timeout.status_code == 422
     assert invalid_timeout.json() == {"detail": "request_validation_failed"}
+    assert validated_log_id(invalid_timeout.headers[REQUEST_ID_HEADER]) is not None
     assert "1000000" not in invalid_timeout.text
     assert len(automation.calls) == 2
     assert malicious not in caplog.text
+    rejected = [
+        record.getMessage()
+        for record in caplog.records
+        if "KORAIL adapter request rejected" in record.getMessage()
+    ]
+    assert any(
+        f"failure=unauthorized operation=seat_snapshot request_id={request_id}" in message
+        for message in rejected
+    )
+    assert any(
+        "failure=request_validation operation=seat_snapshot" in message for message in rejected
+    )
     assert current_request_id() is None
 
 
@@ -276,6 +358,139 @@ def test_seat_snapshot_projects_internal_deadlines_as_bounded_504() -> None:
     assert response.json() == {"detail": {"reason": "source_unavailable"}}
     assert validated_log_id(response.headers[REQUEST_ID_HEADER]) is not None
     assert automation.calls[0][0] is None
+    assert current_request_id() is None
+
+
+def test_reservation_routes_bind_echo_and_log_secret_free_request_ids(caplog) -> None:
+    automation = CapturingAutomation()
+    reservation_client = CapturingReservationClient()
+    app = compatibility_service.create_adapter_app(
+        automation=cast(canonical_http.KorailBrowserAutomation, automation),
+        token=TOKEN,
+        readiness_probe=ready_probe,
+        reservation_client=cast(canonical_http._ReservationClient, reservation_client),
+    )
+    supplied_request_id = "42b41ae2322242b18e98ec989d09a994"
+    malformed_request_id = "bad request_id=ffffffffffffffffffffffffffffffff"
+
+    with caplog.at_level(logging.INFO), TestClient(app) as client:
+        legacy = client.post(
+            "/v1/reserve-once",
+            json=reserve_once_payload(),
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                REQUEST_ID_HEADER: supplied_request_id,
+            },
+        )
+        streamed = client.post(
+            "/v1/reserve-once/stream",
+            json=reserve_once_payload(),
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                REQUEST_ID_HEADER: malformed_request_id,
+            },
+        )
+        confirmed = client.post(
+            "/v1/confirm-reservation",
+            json=confirmation_payload(),
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+
+    stream_request_id = streamed.headers[REQUEST_ID_HEADER]
+    confirmation_request_id = confirmed.headers[REQUEST_ID_HEADER]
+    assert legacy.status_code == 200
+    assert streamed.status_code == 200
+    assert confirmed.status_code == 200
+    assert legacy.headers[REQUEST_ID_HEADER] == supplied_request_id
+    assert validated_log_id(stream_request_id) == stream_request_id
+    assert stream_request_id != malformed_request_id
+    assert validated_log_id(confirmation_request_id) == confirmation_request_id
+    assert reservation_client.calls == [
+        ("reserve_once", supplied_request_id),
+        ("reserve_once_stream", stream_request_id),
+        ("confirm_reservation", confirmation_request_id),
+    ]
+    messages = [record.getMessage() for record in caplog.records]
+    for operation, request_id in reservation_client.calls:
+        correlated = [
+            message
+            for message in messages
+            if f"operation={operation} request_id={request_id}" in message
+        ]
+        assert len(correlated) == 2
+        assert any("started" in message for message in correlated)
+        assert any("completed" in message for message in correlated)
+    assert malformed_request_id not in caplog.text
+    assert "attempt-fixture" not in caplog.text
+    assert "candidate-fixture" not in caplog.text
+    assert "fixture-login-secret" not in caplog.text
+    assert "fixture-password-secret" not in caplog.text
+    assert current_request_id() is None
+
+
+def test_reservation_rejections_keep_request_correlation_without_logging_secrets(caplog) -> None:
+    automation = CapturingAutomation()
+    reservation_client = CapturingReservationClient()
+    app = compatibility_service.create_adapter_app(
+        automation=cast(canonical_http.KorailBrowserAutomation, automation),
+        token=TOKEN,
+        readiness_probe=ready_probe,
+        reservation_client=cast(canonical_http._ReservationClient, reservation_client),
+    )
+    unauthorized_request_id = "42b41ae2322242b18e98ec989d09a994"
+    invalid_request_id = "52b41ae2322242b18e98ec989d09a994"
+    combined_request_id = "62b41ae2322242b18e98ec989d09a994"
+    authorization_secret = "authorization-secret-must-not-appear"
+    body_secret = "body-secret-must-not-appear"
+
+    with caplog.at_level(logging.INFO), TestClient(app) as client:
+        unauthorized = client.post(
+            "/v1/confirm-reservation",
+            json=confirmation_payload(),
+            headers={
+                "Authorization": f"Bearer {authorization_secret}",
+                REQUEST_ID_HEADER: unauthorized_request_id,
+            },
+        )
+        invalid = client.post(
+            "/v1/reserve-once",
+            json={"credential": {"password": body_secret}},
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                REQUEST_ID_HEADER: invalid_request_id,
+            },
+        )
+        combined = client.post(
+            "/v1/reserve-once",
+            json={"credential": {"password": body_secret}},
+            headers={
+                "Authorization": f"Bearer {authorization_secret}",
+                REQUEST_ID_HEADER: combined_request_id,
+            },
+        )
+
+    assert unauthorized.status_code == 401
+    assert unauthorized.headers[REQUEST_ID_HEADER] == unauthorized_request_id
+    assert invalid.status_code == 422
+    assert invalid.headers[REQUEST_ID_HEADER] == invalid_request_id
+    assert combined.status_code == 401
+    assert combined.headers[REQUEST_ID_HEADER] == combined_request_id
+    rejected = [
+        record.getMessage()
+        for record in caplog.records
+        if "KORAIL adapter request rejected" in record.getMessage()
+    ]
+    assert rejected == [
+        "KORAIL adapter request rejected failure=unauthorized "
+        f"operation=confirm_reservation request_id={unauthorized_request_id}",
+        "KORAIL adapter request rejected failure=request_validation "
+        f"operation=reserve_once request_id={invalid_request_id}",
+        "KORAIL adapter request rejected failure=unauthorized "
+        f"operation=reserve_once request_id={combined_request_id}",
+    ]
+    assert authorization_secret not in caplog.text
+    assert body_secret not in caplog.text
+    assert reservation_client.calls == []
     assert current_request_id() is None
 
 

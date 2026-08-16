@@ -26,6 +26,13 @@ EXPECTED_MEMBERS = (
     ("PROVIDER_BLOCKED", "provider_blocked"),
     ("INCONCLUSIVE", "inconclusive"),
 )
+EXPECTED_DIAGNOSTIC_MEMBERS = (
+    ("OFFICIAL_READ_UNAVAILABLE", "official_read_unavailable"),
+    ("CREDENTIAL_CONTEXT_MISMATCH", "credential_context_mismatch"),
+    ("OFFICIAL_RECORD_AMBIGUOUS", "official_record_ambiguous"),
+    ("OFFICIAL_EVIDENCE_INSUFFICIENT", "official_evidence_insufficient"),
+    ("UNSPECIFIED", "unspecified"),
+)
 
 
 def test_confirmation_outcome_has_one_canonical_enum_and_legacy_alias() -> None:
@@ -39,6 +46,23 @@ def test_confirmation_outcome_has_one_canonical_enum_and_legacy_alias() -> None:
 
 def test_confirmation_outcome_pickle_round_trip_uses_the_canonical_identity() -> None:
     for member in canonical.ReservationConfirmationOutcome:
+        assert pickle.loads(pickle.dumps(member)) is member
+
+
+def test_confirmation_diagnostic_has_one_canonical_enum_and_nullable_model_column() -> None:
+    diagnostic = canonical.ReservationConfirmationDiagnosticCode
+    column = watch_models.ReservationAttempt.__table__.c.confirmation_diagnostic_code
+
+    assert legacy.ReservationConfirmationDiagnosticCode is diagnostic
+    assert issubclass(diagnostic, StrEnum)
+    assert tuple((member.name, member.value) for member in diagnostic) == (
+        EXPECTED_DIAGNOSTIC_MEMBERS
+    )
+    assert isinstance(column.type, Enum)
+    assert column.type.enum_class is diagnostic
+    assert column.type.enums == [name for name, _value in EXPECTED_DIAGNOSTIC_MEMBERS]
+    assert column.nullable
+    for member in diagnostic:
         assert pickle.loads(pickle.dumps(member)) is member
 
 

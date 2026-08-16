@@ -26,6 +26,19 @@ describe("server seat status summary", () => {
     });
   });
 
+  it("accepts standing-only as a complete observed server status", () => {
+    expect(summarizeServerSeatStatus(
+      [train("KORAIL", "standing_only")],
+      ["KORAIL"],
+      { KORAIL: { status: "success" } },
+      [],
+    )).toMatchObject({
+      state: "complete",
+      observedSeatCount: 2,
+      unknownSeatCount: 0,
+    });
+  });
+
   it("keeps unknown seats fail-closed and identifies only their provider for retry", () => {
     const summary = summarizeServerSeatStatus(
       [train("KORAIL", "unknown", "not_observed"), train("SRT", "sold_out")],

@@ -134,7 +134,7 @@ def test_observation_models_have_the_canonical_owner_and_unchanged_field_contrac
         ),
         (
             canonical.SeatObservationResult,
-            "74ba9139d30530ca93bef20c976df4c3ab3cc52c9bac9254f69d7d841298ad0d",
+            "23ff628c55a4fd371af033d64a7cf3f0a6f122688ffc6f71e18bfa61ff830113",
         ),
     ],
 )

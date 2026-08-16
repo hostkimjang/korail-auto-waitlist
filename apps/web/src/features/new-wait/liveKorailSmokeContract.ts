@@ -4,6 +4,7 @@ export type LiveKorailSeatStatus =
   | "available"
   | "limited"
   | "standing_plus_seat"
+  | "standing_only"
   | "sold_out"
   | "waitlist_available"
   | "not_offered";
@@ -68,6 +69,7 @@ const seatStatuses = new Set<LiveKorailSeatStatus>([
   "available",
   "limited",
   "standing_plus_seat",
+  "standing_only",
   "sold_out",
   "waitlist_available",
   "not_offered",
@@ -212,6 +214,9 @@ function expectedRawActions(
   if (["available", "limited", "standing_plus_seat"].includes(status)) {
     return seatMonitoring ? ["official_check", "add_to_watch"] : ["official_check"];
   }
+  if (status === "standing_only") {
+    return seatMonitoring ? ["official_check", "add_to_watch"] : ["official_check"];
+  }
   if (status === "waitlist_available") {
     return seatMonitoring ? ["official_waitlist", "add_to_watch"] : ["official_waitlist"];
   }
@@ -243,6 +248,7 @@ function parseSeat(
       "available",
       "limited",
       "standing_plus_seat",
+      "standing_only",
       "sold_out",
       "waitlist_available",
     ].includes(value.status);
@@ -348,6 +354,9 @@ export function expectedLiveKorailActions(
   seatMonitoring: boolean,
 ): LiveKorailExpectedAction[] {
   if (["available", "limited", "standing_plus_seat"].includes(status)) {
+    return seatMonitoring ? ["official_booking", "add_to_watch"] : ["official_booking"];
+  }
+  if (status === "standing_only") {
     return seatMonitoring ? ["official_booking", "add_to_watch"] : ["official_booking"];
   }
   if (status === "waitlist_available") {

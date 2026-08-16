@@ -127,6 +127,8 @@ describe("watch lifecycle snapshot", () => {
       latestReservationAttempt: {
         outcome: "not_available",
         retryable: true,
+        confirmationOutcome: "inconclusive",
+        confirmationDiagnosticCode: "future_diagnostic_code",
       },
       payment_deadline: "2026-08-08T12:10:00+09:00",
       updated_at: "2026-08-08T03:01:00Z",
@@ -140,6 +142,8 @@ describe("watch lifecycle snapshot", () => {
       latestReservationAttempt: {
         outcome: "not_available",
         retryable: true,
+        confirmationOutcome: "inconclusive",
+        confirmationDiagnosticCode: "unspecified",
       },
       paymentDeadline: "2026-08-08T12:10:00+09:00",
       updatedAt: "2026-08-08T03:01:00Z",

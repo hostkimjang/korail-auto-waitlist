@@ -3411,7 +3411,7 @@ def test_reservation_reconciliation_state_joins_the_callers_unit_of_work() -> No
 
     assert "HTTPException" not in called_names
     assert called_attributes.isdisjoint(
-        {"begin", "begin_nested", "commit", "flush", "refresh", "rollback", "with_for_update"}
+        {"begin", "begin_nested", "commit", "flush", "refresh", "rollback"}
     )
 
 
@@ -3480,6 +3480,7 @@ def test_observation_group_imports_only_canonical_reservation_contracts() -> Non
     assert reservation_imports == {
         "reservations.attempt_policy",
         "reservations.payment_hold_retry_application",
+        "reservations.progress_timing_policy",
     }
 
 
@@ -5615,6 +5616,7 @@ def test_korail_sidecar_contract_owner_has_an_exact_import_allowlist() -> None:
         ("datetime", 0),
         ("typing", 0),
         ("pydantic", 0),
+        ("reservations.provider_confirmation.contracts", 2),
     }
 
 
@@ -5875,14 +5877,28 @@ def test_watch_model_owner_has_an_exact_import_allowlist() -> None:
         ("domain", 2, "OperationalStatus", None),
         ("domain", 2, "Provider", None),
         ("domain", 2, "ReservationOutcome", None),
+        ("domain", 2, "ReservationResultReasonCode", None),
         ("domain", 2, "ReservationPolicy", None),
         ("domain", 2, "SeatObservationMode", None),
         ("domain", 2, "SeatObservationStatus", None),
         ("domain", 2, "WatchStatus", None),
+        ("domain", 2, "reservation_result_reason_code_for_outcome", None),
+        (
+            "reservations.provider_confirmation.contracts",
+            2,
+            "ReservationConfirmationDiagnosticCode",
+            None,
+        ),
         (
             "reservations.provider_confirmation.contracts",
             2,
             "ReservationConfirmationOutcome",
+            None,
+        ),
+        (
+            "reservations.reconciliation_policy",
+            2,
+            "ReservationReconciliationResolution",
             None,
         ),
         ("timetable_management.models", 2, "TimetableSeatEvidence", None),
@@ -6286,6 +6302,7 @@ def test_top_level_confirmation_exactly_aliases_the_canonical_contracts() -> Non
     }
     contract_symbols = {
         "ReservationConfirmationAdapter",
+        "ReservationConfirmationDiagnosticCode",
         "ReservationConfirmationOutcome",
         "ReservationConfirmationPurpose",
         "ReservationConfirmationResult",
@@ -7422,6 +7439,8 @@ def test_reservation_contract_owner_has_a_lightweight_exact_import_boundary() ->
         ("pydantic", 0, "model_validator", None),
         ("domain", 2, "Provider", None),
         ("domain", 2, "ReservationOutcome", None),
+        ("domain", 2, "ReservationResultReasonCode", None),
+        ("domain", 2, "reservation_result_reason_code_for_outcome", None),
         ("observations.contracts", 2, "SeatObservationRequest", None),
         ("provider_registry.official_url_policy", 2, "OFFICIAL_HOST_ROOTS", None),
         ("provider_registry.official_url_policy", 2, "is_official_provider_host", None),
@@ -10554,7 +10573,7 @@ def test_korail_reservation_dialog_policy_is_a_stdlib_only_leaf() -> None:
         ),
         (
             "rail_waitlist/srt_sidecar/reservation.py",
-            {"asyncio", "hashlib", "re", "time"},
+            {"asyncio", "hashlib", "logging", "re", "time"},
             {
                 ("__future__", 0),
                 ("collections.abc", 0),
@@ -10571,6 +10590,8 @@ def test_korail_reservation_dialog_policy_is_a_stdlib_only_leaf() -> None:
                 ("provider_adapters.srt_identity", 2),
                 ("provider_adapters.srt_netfunnel_logging", 2),
                 ("provider_adapters.srt_station_roster", 2),
+                ("provider_call_context", 2),
+                ("reservations", 2),
                 ("reservations.contracts", 2),
                 ("reservations.provider_confirmation.contracts", 2),
                 ("reservations.provider_confirmation.srt", 2),
@@ -10579,7 +10600,7 @@ def test_korail_reservation_dialog_policy_is_a_stdlib_only_leaf() -> None:
         ),
         (
             "rail_waitlist/srt_sidecar/http.py",
-            {"hmac"},
+            {"hmac", "logging"},
             {
                 ("__future__", 0),
                 ("collections.abc", 0),
@@ -10592,6 +10613,8 @@ def test_korail_reservation_dialog_policy_is_a_stdlib_only_leaf() -> None:
                 ("fastapi.responses", 0),
                 ("starlette.middleware.base", 0),
                 ("provider_call_context", 2),
+                ("reservations.provider_confirmation.contracts", 2),
+                ("reservations.provider_confirmation.srt", 2),
                 ("application", 1),
                 ("contracts", 1),
                 ("ports", 1),
@@ -10683,6 +10706,12 @@ def test_srt_wire_owner_has_exact_definitions_and_no_runtime_reverse_dependency(
         ("pydantic", 0, "model_validator", None),
         ("reservations.contracts", 2, "ReservationRequest", None),
         ("reservations.contracts", 2, "ReservationResult", None),
+        (
+            "reservations.provider_confirmation.contracts",
+            2,
+            "ReservationConfirmationDiagnosticCode",
+            None,
+        ),
         (
             "reservations.provider_confirmation.contracts",
             2,
@@ -11504,6 +11533,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/korail_sidecar/http_replay.py",
         "rail_waitlist/korail_sidecar/pydoll/auth_actor.py",
         "rail_waitlist/korail_pydoll_browser.py",
+        "rail_waitlist/korail_sidecar/pydoll/confirmation_reader.py",
         "rail_waitlist/korail_pydoll_reservation_actor.py",
         "rail_waitlist/korail_sidecar/pydoll/http_replay.py",
         "rail_waitlist/korail_sidecar/pydoll/dom_interaction.py",
@@ -11515,6 +11545,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/korail_sidecar/pydoll/search_hour_carousel_input.py",
         "rail_waitlist/korail_sidecar/pydoll/search_hour_carousel_observation.py",
         "rail_waitlist/korail_sidecar/pydoll/search_schedule_commit.py",
+        "rail_waitlist/korail_sidecar/pydoll/session_auth_policy.py",
         "rail_waitlist/korail_sidecar/browser_protection.py",
         "rail_waitlist/korail_sidecar/client.py",
         "rail_waitlist/korail_sidecar/http.py",

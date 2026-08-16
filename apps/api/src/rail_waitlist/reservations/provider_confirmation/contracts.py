@@ -24,9 +24,31 @@ class ReservationConfirmationOutcome(StrEnum):
     INCONCLUSIVE = "inconclusive"
 
 
+class ReservationConfirmationDiagnosticCode(StrEnum):
+    """Safe, provider-neutral reason why official confirmation was inconclusive."""
+
+    OFFICIAL_READ_UNAVAILABLE = "official_read_unavailable"
+    CREDENTIAL_CONTEXT_MISMATCH = "credential_context_mismatch"
+    OFFICIAL_RECORD_AMBIGUOUS = "official_record_ambiguous"
+    OFFICIAL_EVIDENCE_INSUFFICIENT = "official_evidence_insufficient"
+    UNSPECIFIED = "unspecified"
+
+
+def effective_reservation_confirmation_diagnostic_code(
+    outcome: ReservationConfirmationOutcome | None,
+    diagnostic_code: ReservationConfirmationDiagnosticCode | None,
+) -> ReservationConfirmationDiagnosticCode | None:
+    """Normalize legacy inconclusive evidence without inventing a cause."""
+
+    if outcome is ReservationConfirmationOutcome.INCONCLUSIVE:
+        return diagnostic_code or ReservationConfirmationDiagnosticCode.UNSPECIFIED
+    return None
+
+
 class ReservationConfirmationPurpose(StrEnum):
     INITIAL = "initial"
     PAYMENT_FOLLOW_UP = "payment_follow_up"
+    UNKNOWN_RESULT_FOLLOW_UP = "unknown_result_follow_up"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,21 +88,24 @@ class ReservationConfirmationTarget:
     arrival_at: datetime | None = None
     purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL
     reserved_seats: tuple[ReservationConfirmationSeat, ...] = ()
+    confirmation_correlation_seats: tuple[ReservationConfirmationSeat, ...] = ()
 
     def __setstate__(self, state: object) -> None:
         """Restore pre-purpose slot pickles with fail-closed defaults."""
 
-        if not isinstance(state, list) or len(state) not in {11, 13}:
+        if not isinstance(state, list) or len(state) not in {11, 13, 14}:
             raise ValueError("invalid reservation confirmation target state")
-        values = (
-            [
+        if len(state) == 11:
+            values = [
                 *state,
                 ReservationConfirmationPurpose.INITIAL,
                 (),
+                (),
             ]
-            if len(state) == 11
-            else state
-        )
+        elif len(state) == 13:
+            values = [*state, ()]
+        else:
+            values = state
         for name, value in zip(self.__slots__, values, strict=True):
             object.__setattr__(self, name, value)
         self.__post_init__()
@@ -118,13 +143,43 @@ class ReservationConfirmationTarget:
             not isinstance(seat, ReservationConfirmationSeat) for seat in self.reserved_seats
         ):
             raise ValueError("reserved_seats must contain sanitized confirmation seats")
+        if not isinstance(self.confirmation_correlation_seats, tuple) or any(
+            not isinstance(seat, ReservationConfirmationSeat)
+            for seat in self.confirmation_correlation_seats
+        ):
+            raise ValueError(
+                "confirmation_correlation_seats must contain sanitized confirmation seats"
+            )
         seat_keys = tuple((seat.car_number, seat.seat_number) for seat in self.reserved_seats)
         if len(seat_keys) != len(set(seat_keys)):
             raise ValueError("reserved_seats must contain unique car and seat pairs")
+        correlation_seat_keys = tuple(
+            (seat.car_number, seat.seat_number) for seat in self.confirmation_correlation_seats
+        )
+        if len(correlation_seat_keys) != len(set(correlation_seat_keys)):
+            raise ValueError(
+                "confirmation_correlation_seats must contain unique car and seat pairs"
+            )
         if len(self.reserved_seats) > self.passenger_count:
             raise ValueError("reserved_seats cannot exceed passenger_count")
-        if self.purpose is ReservationConfirmationPurpose.INITIAL and self.reserved_seats:
-            raise ValueError("only payment follow-up may carry reserved seats")
+        if len(self.confirmation_correlation_seats) > self.passenger_count:
+            raise ValueError("confirmation_correlation_seats cannot exceed passenger_count")
+        if self.purpose is ReservationConfirmationPurpose.INITIAL and (
+            self.reserved_seats or self.confirmation_correlation_seats
+        ):
+            raise ValueError("initial confirmation cannot carry seat identity")
+        if (
+            self.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+            and self.confirmation_correlation_seats
+        ):
+            raise ValueError("payment follow-up cannot carry uncertain correlation seats")
+        if self.purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP and (
+            self.reserved_seats
+            or len(self.confirmation_correlation_seats) not in {0, self.passenger_count}
+        ):
+            raise ValueError(
+                "unknown result follow-up allows no correlation or one exact seat per passenger"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +192,17 @@ class ReservationConfirmationResult:
     observed_at: datetime
     payment_deadline: datetime | None = None
     official_handoff_url: str | None = None
+    diagnostic_code: ReservationConfirmationDiagnosticCode | None = None
+
+    def __setstate__(self, state: object) -> None:
+        """Restore pre-diagnostic slot pickles with a fail-closed fallback."""
+
+        if not isinstance(state, list) or len(state) not in {6, 7}:
+            raise ValueError("invalid reservation confirmation result state")
+        values = [*state, None] if len(state) == 6 else state
+        for name, value in zip(self.__slots__, values, strict=True):
+            object.__setattr__(self, name, value)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if _SOURCE_PATTERN.fullmatch(self.source) is None:
@@ -149,6 +215,21 @@ class ReservationConfirmationResult:
             raise ValueError("payment_deadline must include a timezone")
         if self.provider not in {Provider.KORAIL, Provider.SRT}:
             raise ValueError("reservation confirmation supports only KORAIL or SRT")
+        if self.diagnostic_code is not None and not isinstance(
+            self.diagnostic_code, ReservationConfirmationDiagnosticCode
+        ):
+            raise ValueError("confirmation diagnostic code is invalid")
+        if self.outcome is ReservationConfirmationOutcome.INCONCLUSIVE:
+            object.__setattr__(
+                self,
+                "diagnostic_code",
+                effective_reservation_confirmation_diagnostic_code(
+                    self.outcome,
+                    self.diagnostic_code,
+                ),
+            )
+        elif self.diagnostic_code is not None:
+            raise ValueError("only an inconclusive confirmation may contain a diagnostic code")
         confirmed = self.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
         if confirmed != (self.official_handoff_url is not None):
             raise ValueError("only a confirmed payment hold may contain an official handoff URL")

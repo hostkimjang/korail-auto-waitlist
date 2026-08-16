@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from rail_waitlist import korail_pydoll_browser as browser
+from rail_waitlist.korail_sidecar.pydoll import reservation_contracts
 
 API_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = API_ROOT / "src" / "rail_waitlist"
@@ -66,6 +67,7 @@ METHOD_INVENTORIES = {
         "wait_for_result",
         "expand_results",
         "reserve_once",
+        "confirmation_correlation_seats_from_fresh_state",
         "read_reservation_list",
         "read_issued_ticket_list",
         "_snapshot",
@@ -156,6 +158,7 @@ METHOD_INVENTORIES = {
         "wait_for_result",
         "expand_results",
         "reserve_once",
+        "confirmation_correlation_seats_from_fresh_state",
         "_has_exact_preserved_booking_state",
         "_actionable_seat_controls",
         "_seat_price_box_metadata",
@@ -387,12 +390,13 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    assert len(source.splitlines()) <= 1_450
+    assert len(source.splitlines()) <= 1_465
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")
     }
-    assert len(private_names) == 29
+    assert len(private_names) == 30
+    assert browser._ActorKorailReservedSeat is reservation_contracts.KorailReservedSeat
     assert not hasattr(browser, "__all__")
 
 

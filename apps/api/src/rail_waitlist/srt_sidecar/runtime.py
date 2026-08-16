@@ -80,7 +80,7 @@ def build_default_source(
     source = dependencies.source_factory(
         enabled=True,
         cache_ttl_seconds=int(number_reader("SRT_SEAT_STATUS_CACHE_TTL_SECONDS", 1, 1, 300)),
-        timeout_seconds=number_reader("SRT_SEAT_STATUS_TIMEOUT_SECONDS", 25, 3, 30),
+        timeout_seconds=number_reader("SRT_SEAT_STATUS_TIMEOUT_SECONDS", 60, 3, 90),
         rate_limit_cooldown_seconds=int(
             number_reader("SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS", 300, 60, 86400)
         ),

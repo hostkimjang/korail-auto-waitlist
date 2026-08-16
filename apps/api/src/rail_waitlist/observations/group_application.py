@@ -22,13 +22,19 @@ from ..provider_contracts import ObservationProvider
 from ..reservations.attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
     CONFIRMED_ABSENT_RETRY_OBSERVATIONS,
+    active_unresolved_unknown_attempt_ids,
+    exact_paid_reservation_attempt_id,
     manual_payment_hold_rearm_episode_key,
+    manual_unknown_rearm_episode_key,
     official_seat_observation_source,
     payment_hold_retry_episode_key,
 )
 from ..reservations.payment_hold_retry_application import (
     active_watch_payment_hold_fence,
     conclusive_unavailable_after_hold,
+)
+from ..reservations.progress_timing_policy import (
+    has_persisted_reservation_requested_progress,
 )
 from ..watch_management.models import (
     ReservationAttempt,
@@ -54,6 +60,7 @@ CONCLUSIVE_UNAVAILABLE_SEAT_STATUSES = frozenset(
     {
         SeatObservationStatus.UNAVAILABLE,
         SeatObservationStatus.NOT_ENOUGH_SEATS,
+        SeatObservationStatus.STANDING_ONLY,
         SeatObservationStatus.SOLD_OUT,
         SeatObservationStatus.NOT_OFFERED,
         SeatObservationStatus.DEPARTED,
@@ -180,6 +187,10 @@ class ConfirmedAbsentRetryPredicate(Protocol):
     def __call__(self, attempt: ReservationAttempt) -> bool: ...
 
 
+class UnresolvedUnknownManualRearmPredicate(Protocol):
+    def __call__(self, attempt: ReservationAttempt) -> bool: ...
+
+
 class PaymentHoldEndedPredicate(Protocol):
     def __call__(self, attempt: ReservationAttempt) -> bool: ...
 
@@ -216,6 +227,7 @@ class ObservationGroupDependencies:
     record_seat_observation: RecordSeatObservation
     finish_observation_cycle: FinishObservationCycle
     is_confirmed_absent_retry_source: ConfirmedAbsentRetryPredicate
+    is_unresolved_unknown_manual_rearm_source: UnresolvedUnknownManualRearmPredicate
     is_payment_hold_ended: PaymentHoldEndedPredicate
     reserve_winner: ReservationDelegate
     # Runtime composition owns the concrete grant; the application only passes its
@@ -239,20 +251,53 @@ async def retryable_reservation_episode_key(
     provider: Provider,
     *,
     is_confirmed_absent_retry_source: ConfirmedAbsentRetryPredicate,
+    is_unresolved_unknown_manual_rearm_source: UnresolvedUnknownManualRearmPredicate,
     is_payment_hold_ended: PaymentHoldEndedPredicate,
 ) -> str | None:
     """Return one stable provider-call fence for the current availability episode."""
+    watch_attempts = list(
+        (
+            await session.scalars(
+                select(ReservationAttempt)
+                .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+                .where(WatchCandidate.watch_id == candidate.watch_id)
+                .order_by(
+                    ReservationAttempt.started_at.desc(),
+                    ReservationAttempt.attempt_sequence.desc(),
+                    ReservationAttempt.id.desc(),
+                )
+            )
+        ).all()
+    )
+    attempts_by_id = {attempt.id: attempt for attempt in watch_attempts}
+    paid_attempt_id = exact_paid_reservation_attempt_id(watch_attempts)
+    if paid_attempt_id is not None:
+        return None
+    unresolved_unknown_ids = active_unresolved_unknown_attempt_ids(watch_attempts)
+    if len(unresolved_unknown_ids) > 1:
+        return None
+    unresolved_unknown_attempt = (
+        attempts_by_id[next(iter(unresolved_unknown_ids))] if unresolved_unknown_ids else None
+    )
+    if (
+        unresolved_unknown_attempt is not None
+        and unresolved_unknown_attempt.candidate_id != candidate.id
+    ):
+        return None
     payment_hold_fence = await active_watch_payment_hold_fence(
         session,
         candidate.watch_id,
         is_payment_hold_ended=is_payment_hold_ended,
     )
+    if unresolved_unknown_attempt is not None and payment_hold_fence is not None:
+        return None
     if payment_hold_fence is not None:
         manual_rearm_authorized_at = candidate.manual_rearm_authorized_at
         if (
             current_observation.source == official_seat_observation_source(provider)
             and candidate.manual_rearm_source_attempt_id == payment_hold_fence.attempt.id
             and manual_rearm_authorized_at is not None
+            and _as_utc(manual_rearm_authorized_at) >= payment_hold_fence.ended_at
             and _as_utc(current_observation.observed_at) > _as_utc(manual_rearm_authorized_at)
         ):
             return manual_payment_hold_rearm_episode_key(
@@ -280,6 +325,36 @@ async def retryable_reservation_episode_key(
     )
     if latest_attempt is None:
         return f"availability:{current_observation.id}"
+    manual_rearm_authorized_at = candidate.manual_rearm_authorized_at
+    manual_rearm_source_attempt_id = candidate.manual_rearm_source_attempt_id
+    if (
+        manual_rearm_authorized_at is not None
+        and manual_rearm_source_attempt_id == latest_attempt.id
+        and latest_attempt.credential_version is not None
+        and is_unresolved_unknown_manual_rearm_source(latest_attempt)
+        and current_observation.source == official_seat_observation_source(provider)
+        and current_observation.status in CONFIRMED_ABSENT_RETRY_OBSERVATIONS
+        and _as_utc(current_observation.observed_at) > _as_utc(manual_rearm_authorized_at)
+    ):
+        current_credential_version = await session.scalar(
+            select(RailProviderAccount.credential_version).where(
+                RailProviderAccount.provider == provider,
+                RailProviderAccount.enabled.is_(True),
+                RailProviderAccount.last_auth_status == "authenticated",
+            )
+        )
+        if (
+            unresolved_unknown_attempt is not None
+            and unresolved_unknown_attempt.id == latest_attempt.id
+            and current_credential_version == latest_attempt.credential_version
+        ):
+            return manual_unknown_rearm_episode_key(
+                latest_attempt.id,
+                candidate.id,
+                current_observation.id,
+            )
+    if unresolved_unknown_attempt is not None:
+        return None
     if latest_attempt.outcome is ReservationOutcome.NOT_AVAILABLE:
         finished_at = _as_utc(latest_attempt.finished_at or latest_attempt.started_at)
         unavailable_observation = await session.scalar(
@@ -300,6 +375,8 @@ async def retryable_reservation_episode_key(
         ReservationOutcome.AUTH_REQUIRED,
         ReservationOutcome.PROVIDER_BLOCKED,
     }:
+        if has_persisted_reservation_requested_progress(latest_attempt.progress_stages):
+            return None
         account = await session.scalar(
             select(RailProviderAccount).where(
                 RailProviderAccount.provider == provider,
@@ -741,6 +818,9 @@ async def persist_observation_cycle(
                         watch.provider,
                         is_confirmed_absent_retry_source=(
                             dependencies.is_confirmed_absent_retry_source
+                        ),
+                        is_unresolved_unknown_manual_rearm_source=(
+                            dependencies.is_unresolved_unknown_manual_rearm_source
                         ),
                         is_payment_hold_ended=dependencies.is_payment_hold_ended,
                     )

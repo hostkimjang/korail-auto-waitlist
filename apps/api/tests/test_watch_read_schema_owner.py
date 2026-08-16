@@ -20,6 +20,7 @@ from rail_waitlist.domain import (
     BookingWindowStatus,
     OperationalStatus,
     ReservationOutcome,
+    ReservationResultReasonCode,
     SeatClass,
     SeatObservationStatus,
 )
@@ -149,7 +150,13 @@ def test_watch_read_contracts_have_canonical_owners_and_nested_identities() -> N
 def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     assert tuple(canonical.WatchCandidateLatestReservationAttemptRead.model_fields) == (
         "outcome",
+        "result_reason_code",
         "confirmation_outcome",
+        "confirmation_diagnostic_code",
+        "confirmation_observed_at",
+        "reconciliation_attempt_count",
+        "reconciliation_resolution",
+        "next_reconcile_at",
         "started_at",
         "finished_at",
         "progress_stages",
@@ -159,6 +166,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "retryable",
         "manual_check_required",
         "manual_rearm_available",
+        "manual_rearm_reason",
         "retry_condition",
     )
     assert tuple(canonical.WatchCandidateRead.model_fields) == (
@@ -227,6 +235,18 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     assert canonical.WatchCandidateRead.model_fields["latest_reservation_attempt"].default is None
     assert canonical.WatchRead.model_fields["last_checked_at"].default is None
     assert canonical.WatchRead.model_fields["observation_execution_state"].default == "idle"
+    assert (
+        canonical.WatchCandidateLatestReservationAttemptRead.model_fields[
+            "result_reason_code"
+        ].default
+        is ReservationResultReasonCode.RESERVATION_PENDING
+    )
+    assert (
+        canonical.WatchCandidateLatestReservationAttemptRead.model_fields[
+            "reconciliation_attempt_count"
+        ].default
+        == 0
+    )
     confirmation_schema = canonical.WatchCandidateLatestReservationAttemptRead.model_json_schema()[
         "properties"
     ]["confirmation_outcome"]["anyOf"][0]
@@ -237,6 +257,16 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "auth_required",
         "provider_blocked",
         "inconclusive",
+    ]
+    diagnostic_schema = canonical.WatchCandidateLatestReservationAttemptRead.model_json_schema()[
+        "$defs"
+    ]["ReservationConfirmationDiagnosticCode"]
+    assert diagnostic_schema["enum"] == [
+        "official_read_unavailable",
+        "credential_context_mismatch",
+        "official_record_ambiguous",
+        "official_evidence_insufficient",
+        "unspecified",
     ]
     execution_state_annotation = canonical.WatchRead.model_fields[
         "observation_execution_state"
@@ -256,24 +286,43 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
     )
 
 
+def test_watch_read_normalizes_only_legacy_inconclusive_diagnostics() -> None:
+    legacy = canonical.WatchCandidateLatestReservationAttemptRead.model_validate(
+        _attempt_payload(
+            outcome=ReservationOutcome.UNKNOWN,
+            confirmation_outcome="inconclusive",
+        )
+    )
+    assert legacy.confirmation_diagnostic_code is not None
+    assert legacy.confirmation_diagnostic_code.value == "unspecified"
+
+    with pytest.raises(ValueError, match="requires an inconclusive"):
+        canonical.WatchCandidateLatestReservationAttemptRead.model_validate(
+            _attempt_payload(
+                confirmation_outcome="not_found",
+                confirmation_diagnostic_code="official_read_unavailable",
+            )
+        )
+
+
 @pytest.mark.parametrize(
     ("model", "expected_sha256"),
     [
         (
             canonical.WatchCandidateLatestReservationAttemptRead,
-            "2ad25e016a532f23b6a549237e6cc78c58cfc8b7e9c6d56089bd606632264295",
+            "d7f78a3b6add93107d473afa7ee82632d1f4dd356daadf52670817e4154528e9",
         ),
         (
             canonical.WatchCandidateRead,
-            "4aecaeaa168b02d27a6586589fd5823167566eb7b7e68c9569eae21114677cbe",
+            "b68e57e78f487e1b61fd4f4fe8f1fd17b8b3937c36b4cb3cf7df42c432084097",
         ),
         (
             canonical.WatchCandidateLatestObservationRead,
-            "1f7c9505bb3c708c90db32b6a615aa83cc447000e6ee7d00d315963c7a1dc8e1",
+            "7bec2c9b52d4ddc527fc2f3794333e3a274f298c16828af9066391c8f25d9d91",
         ),
         (
             canonical.WatchRead,
-            "3949e4e843ca2a9372848957e25ed6349c16be23029a1f7f8474484b3b2349dc",
+            "c2796fa9f1a0142c568c301ebd22bd558c901428cbbee4cc3b3c4b34f4c9010e",
         ),
     ],
 )

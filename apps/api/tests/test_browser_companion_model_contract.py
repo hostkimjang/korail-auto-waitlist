@@ -138,8 +138,8 @@ def test_browser_companion_constraints_indexes_foreign_keys_and_relationships() 
         (
             "ck_korail_browser_snapshot_status",
             (
-                "status IN ('AVAILABLE', 'LIMITED', 'STANDING_PLUS_SEAT', 'SOLD_OUT', "
-                "'WAITLIST_AVAILABLE', 'NOT_OFFERED')"
+                "status IN ('AVAILABLE', 'LIMITED', 'STANDING_PLUS_SEAT', 'STANDING_ONLY', "
+                "'SOLD_OUT', 'WAITLIST_AVAILABLE', 'NOT_OFFERED')"
             ),
         ),
     }

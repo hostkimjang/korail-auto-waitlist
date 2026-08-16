@@ -218,7 +218,7 @@ async def test_endpoint_accepts_only_normalized_snapshot_contract(app, public_cl
     assert batches[0].source == SOURCE
 
 
-async def test_endpoint_accepts_and_persists_standing_plus_seat(app, public_client, db_engine):
+async def test_endpoint_accepts_and_persists_standing_statuses(app, public_client, db_engine):
     previous = enable_bridge()
     try:
         await seed_bridge_credential(app)
@@ -230,7 +230,7 @@ async def test_endpoint_accepts_and_persists_standing_plus_seat(app, public_clie
                         "train_number": "26",
                         "departure_at": "2030-07-30T12:00:00+09:00",
                         "standard": "standing_plus_seat",
-                        "first": "not_offered",
+                        "first": "standing_only",
                     }
                 ]
             ),
@@ -245,7 +245,7 @@ async def test_endpoint_accepts_and_persists_standing_plus_seat(app, public_clie
             snapshot.status.value
             for snapshot in (await session.scalars(select(KorailBrowserSeatSnapshot))).all()
         }
-    assert statuses == {"standing_plus_seat", "not_offered"}
+    assert statuses == {"standing_plus_seat", "standing_only"}
 
 
 async def test_endpoint_rejects_raw_secrets_protection_markers_and_ambiguous_identity(
@@ -456,6 +456,7 @@ async def test_overlay_recalculates_actions_for_every_bridge_status(db_engine):
         "available",
         "limited",
         "standing_plus_seat",
+        "standing_only",
         "sold_out",
         "waitlist_available",
         "not_offered",
@@ -500,6 +501,7 @@ async def test_overlay_recalculates_actions_for_every_bridge_status(db_engine):
         "available": ["official_check"],
         "limited": ["official_check"],
         "standing_plus_seat": ["official_check"],
+        "standing_only": ["official_check", "add_to_watch"],
         "sold_out": ["add_to_watch"],
         "waitlist_available": ["official_waitlist", "add_to_watch"],
         "not_offered": [],

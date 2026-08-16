@@ -1,5 +1,9 @@
 import type { WatchReadModel } from "../../api/watchProjection";
-import type { ReservedSeat } from "../../domain/reservationAttempt";
+import type {
+  ReservationConfirmationDiagnosticCode,
+  ReservationConfirmationOutcome,
+  ReservedSeat,
+} from "../../domain/reservationAttempt";
 import type { WatchProvider } from "../../domain/watch";
 
 export interface PaymentRequiredViewModel {
@@ -17,6 +21,11 @@ export interface PaymentRequiredViewModel {
   reservedSeats?: ReadonlyArray<ReservedSeat>;
   paymentDeadline: string | null;
   officialBookingUrl: string | null;
+  confirmationOutcome?: ReservationConfirmationOutcome | null;
+  confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
+  confirmationObservedAt?: string | null;
+  reconciliationAttemptCount?: number;
+  nextReconcileAt?: string | null;
 }
 
 export interface LegacyPaymentRequiredWatch {
@@ -56,6 +65,14 @@ export function mapPaymentRequiredWatch(watch: WatchReadModel): PaymentRequiredV
     reservedSeats: watch.paymentRequiredReservedSeats,
     paymentDeadline: watch.paymentDeadline,
     officialBookingUrl: watch.officialBookingUrl,
+    confirmationOutcome: watch.paymentRequiredReservationAttempt?.confirmationOutcome ?? null,
+    confirmationDiagnosticCode:
+      watch.paymentRequiredReservationAttempt?.confirmationDiagnosticCode ?? null,
+    confirmationObservedAt:
+      watch.paymentRequiredReservationAttempt?.confirmationObservedAt ?? null,
+    reconciliationAttemptCount:
+      watch.paymentRequiredReservationAttempt?.reconciliationAttemptCount ?? 0,
+    nextReconcileAt: watch.paymentRequiredReservationAttempt?.nextReconcileAt ?? null,
   };
 }
 
@@ -77,5 +94,10 @@ export function mapLegacyPaymentRequiredWatch(
     reservedSeats: watch.reservedSeats ?? [],
     paymentDeadline: watch.payment_deadline ?? null,
     officialBookingUrl: watch.official_booking_url ?? null,
+    confirmationOutcome: null,
+    confirmationDiagnosticCode: null,
+    confirmationObservedAt: null,
+    reconciliationAttemptCount: 0,
+    nextReconcileAt: null,
   };
 }

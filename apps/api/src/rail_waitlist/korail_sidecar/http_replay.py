@@ -576,6 +576,8 @@ def _seat_status(value: str) -> SeatStatus:
         return "limited"
     if re.search(r"입석\s*\+\s*(?:좌석|예매)", normalized):
         return "standing_plus_seat"
+    if re.fullmatch(r"(?:일반실\s*)?입석(?:\s*예매)?", normalized):
+        return "standing_only"
     if re.search(r"매진", normalized):
         return "sold_out"
     if re.fullmatch(r"(?:-|–|—|없음|해당\s*없음|미운행|미운영|특실\s*없음)", normalized):

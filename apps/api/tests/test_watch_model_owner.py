@@ -19,11 +19,18 @@ from rail_waitlist.domain import (
     Provider,
     ReservationOutcome,
     ReservationPolicy,
+    ReservationResultReasonCode,
     SeatObservationMode,
     SeatObservationStatus,
     WatchStatus,
 )
-from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
+from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
+    ReservationConfirmationOutcome,
+)
+from rail_waitlist.reservations.reconciliation_policy import (
+    ReservationReconciliationResolution,
+)
 from rail_waitlist.timetable_management.models import TimetableSeatEvidence
 from rail_waitlist.watch_management import models as canonical
 
@@ -107,18 +114,22 @@ COLUMN_ORDERS = {
         "started_at",
         "finished_at",
         "outcome",
+        "result_reason_code",
         "payment_deadline",
         "official_handoff_url",
         "credential_version",
         "confirmation_outcome",
+        "confirmation_diagnostic_code",
         "confirmation_source",
         "confirmation_observed_at",
         "last_reconciled_at",
         "reconciliation_attempt_count",
         "next_reconcile_at",
+        "reconciliation_resolution",
         "post_deadline_reconciled_at",
         "progress_stages",
         "reserved_seats",
+        "confirmation_correlation_seats",
     ),
     "WatchTransitionHistory": (
         "id",
@@ -160,10 +171,12 @@ NULLABLE_COLUMNS = {
         "official_handoff_url",
         "credential_version",
         "confirmation_outcome",
+        "confirmation_diagnostic_code",
         "confirmation_source",
         "confirmation_observed_at",
         "last_reconciled_at",
         "next_reconcile_at",
+        "reconciliation_resolution",
         "post_deadline_reconciled_at",
     },
     "WatchTransitionHistory": {"observation_id"},
@@ -302,12 +315,20 @@ CHECK_CONSTRAINTS = {
         "ck_seat_observation_source_nonempty": "length(trim(source)) > 0",
         "ck_seat_observation_status_allowed": (
             "status IN ('UNAVAILABLE', 'UNKNOWN', 'AVAILABLE', 'LIMITED', "
-            "'STANDING_PLUS_SEAT', 'NOT_ENOUGH_SEATS', 'SOLD_OUT', "
+            "'STANDING_PLUS_SEAT', 'STANDING_ONLY', 'NOT_ENOUGH_SEATS', 'SOLD_OUT', "
             "'WAITLIST_AVAILABLE', 'RESERVATION_COMPLETED', 'NOT_OFFERED', "
             "'DEPARTED', 'OUT_OF_SERVICE', 'STALE', 'ERROR')"
         ),
     },
     "ReservationAttempt": {
+        "ck_reservation_attempt_confirm_diag_allowed": (
+            "confirmation_diagnostic_code IS NULL OR confirmation_diagnostic_code IN "
+            "('OFFICIAL_READ_UNAVAILABLE', 'CREDENTIAL_CONTEXT_MISMATCH', "
+            "'OFFICIAL_RECORD_AMBIGUOUS', 'OFFICIAL_EVIDENCE_INSUFFICIENT', 'UNSPECIFIED')"
+        ),
+        "ck_reservation_attempt_confirm_diag_inconclusive": (
+            "confirmation_diagnostic_code IS NULL OR confirmation_outcome = 'INCONCLUSIVE'"
+        ),
         "ck_reservation_attempt_confirmation_provenance_shape": (
             "(confirmation_outcome IS NULL AND confirmation_source IS NULL AND "
             "confirmation_observed_at IS NULL) OR (confirmation_outcome IS NOT NULL "
@@ -328,12 +349,37 @@ CHECK_CONSTRAINTS = {
             "outcome IN ('PENDING', 'PAYMENT_REQUIRED', 'RESERVED', 'NOT_AVAILABLE', "
             "'AUTH_REQUIRED', 'PROVIDER_BLOCKED', 'FAILED', 'UNKNOWN')"
         ),
+        "ck_reservation_attempt_result_reason_code_allowed": (
+            "result_reason_code IN ('RESERVATION_PENDING', 'PAYMENT_HOLD_CREATED', "
+            "'TARGET_NOT_AVAILABLE', 'TARGET_AMBIGUOUS', 'SEAT_NOT_AVAILABLE', "
+            "'RESERVATION_CONTROL_UNAVAILABLE', 'SEAT_SELECTION_LOST', "
+            "'DELAY_CONSENT_REQUIRED', 'EXISTING_RESERVATION_ACTION_REQUIRED', "
+            "'PROVIDER_NOTICE_ACTION_REQUIRED', 'AUTHENTICATION_REQUIRED', "
+            "'PROVIDER_BLOCKED', 'PROVIDER_UNAVAILABLE', 'PROVIDER_RESPONSE_INVALID', "
+            "'RESERVATION_REQUEST_RESULT_UNKNOWN', 'RESERVATION_FAILED')"
+        ),
         "ck_reservation_attempt_reconciliation_attempt_count_bounded": (
             "reconciliation_attempt_count >= 0 AND reconciliation_attempt_count <= 6"
         ),
         "ck_reservation_attempt_reconciliation_timestamp_order": (
             "last_reconciled_at IS NULL OR (confirmation_observed_at IS NOT NULL AND "
             "last_reconciled_at >= confirmation_observed_at)"
+        ),
+        "ck_reservation_attempt_reconcile_resolution_allowed": (
+            "reconciliation_resolution IS NULL OR reconciliation_resolution IN "
+            "('CONFIRMED_ABSENT', 'EXHAUSTED_UNRESOLVED')"
+        ),
+        "ck_reservation_attempt_reconcile_resolution_shape": (
+            "reconciliation_resolution IS NULL OR "
+            "(reconciliation_resolution = 'CONFIRMED_ABSENT' "
+            "AND outcome = 'UNKNOWN' AND confirmation_outcome = 'NOT_FOUND' "
+            "AND confirmation_observed_at IS NOT NULL AND last_reconciled_at IS NOT NULL "
+            "AND reconciliation_attempt_count >= 1 AND next_reconcile_at IS NULL) OR "
+            "(reconciliation_resolution = 'EXHAUSTED_UNRESOLVED' "
+            "AND outcome = 'UNKNOWN' "
+            "AND confirmation_outcome IN ('INCONCLUSIVE', 'NOT_FOUND') "
+            "AND confirmation_observed_at IS NOT NULL AND last_reconciled_at IS NOT NULL "
+            "AND reconciliation_attempt_count >= 6 AND next_reconcile_at IS NULL)"
         ),
         "ck_reservation_attempt_sequence_positive": "attempt_sequence >= 1",
         "ck_reservation_attempt_timestamp_order": (
@@ -420,6 +466,7 @@ NON_ENUM_TYPE_SIGNATURES = {
         "post_deadline_reconciled_at": ("DateTime", None, True),
         "progress_stages": ("JSON", None, None),
         "reserved_seats": ("JSON", None, None),
+        "confirmation_correlation_seats": ("JSON", None, None),
     },
     "WatchTransitionHistory": {
         "id": ("String", 36, None),
@@ -499,9 +546,11 @@ CLIENT_DEFAULT_COLUMNS = {
         "episode_key",
         "started_at",
         "outcome",
+        "result_reason_code",
         "reconciliation_attempt_count",
         "progress_stages",
         "reserved_seats",
+        "confirmation_correlation_seats",
     },
     "WatchTransitionHistory": {"id", "created_at"},
 }
@@ -524,6 +573,7 @@ SERVER_DEFAULTS = {
         "reconciliation_attempt_count": "0",
         "progress_stages": "[]",
         "reserved_seats": "[]",
+        "confirmation_correlation_seats": "[]",
     },
     "WatchTransitionHistory": {},
 }
@@ -536,7 +586,16 @@ ENUM_COLUMNS = {
     ("WatchCandidate", "booking_window_status"): BookingWindowStatus,
     ("SeatObservation", "status"): SeatObservationStatus,
     ("ReservationAttempt", "outcome"): ReservationOutcome,
+    ("ReservationAttempt", "result_reason_code"): ReservationResultReasonCode,
     ("ReservationAttempt", "confirmation_outcome"): ReservationConfirmationOutcome,
+    (
+        "ReservationAttempt",
+        "confirmation_diagnostic_code",
+    ): ReservationConfirmationDiagnosticCode,
+    (
+        "ReservationAttempt",
+        "reconciliation_resolution",
+    ): ReservationReconciliationResolution,
     ("WatchTransitionHistory", "from_status"): WatchStatus,
     ("WatchTransitionHistory", "to_status"): WatchStatus,
 }
@@ -784,6 +843,10 @@ def test_watch_graph_callable_defaults_keep_behavior() -> None:
     second_seats = attempt_table.c.reserved_seats.default.arg(None)
     assert first_seats == second_seats == []
     assert first_seats is not second_seats
+    first_correlation_seats = attempt_table.c.confirmation_correlation_seats.default.arg(None)
+    second_correlation_seats = attempt_table.c.confirmation_correlation_seats.default.arg(None)
+    assert first_correlation_seats == second_correlation_seats == []
+    assert first_correlation_seats is not second_correlation_seats
 
     departure = datetime(2026, 8, 7, 12, tzinfo=UTC)
 
@@ -801,6 +864,18 @@ def test_watch_graph_callable_defaults_keep_behavior() -> None:
     episode_key = episode_default.arg(None)
     assert episode_key.startswith("legacy:")
     uuid.UUID(episode_key.removeprefix("legacy:"))
+
+    class AttemptDefaultContext:
+        @staticmethod
+        def get_current_parameters() -> dict[str, ReservationOutcome]:
+            return {"outcome": ReservationOutcome.UNKNOWN}
+
+    result_reason_default = attempt_table.c.result_reason_code.default
+    assert result_reason_default is not None and result_reason_default.is_callable
+    assert (
+        result_reason_default.arg(AttemptDefaultContext())
+        is ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+    )
 
     for column in (
         canonical.Watch.__table__.c.created_at,

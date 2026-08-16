@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import AnyHttpUrl, SecretStr
 
-from ..domain import Provider, ReservationOutcome, SeatClass
+from ..domain import Provider, ReservationOutcome, ReservationResultReasonCode, SeatClass
 from ..korail_sidecar.contracts import (
     KorailCredentialRequest,
     KorailReserveOnceRequest,
@@ -82,6 +82,11 @@ def project_reservation_failure(
         outcome=(
             ReservationOutcome.PROVIDER_BLOCKED if provider_blocked else ReservationOutcome.FAILED
         ),
+        result_reason_code=(
+            ReservationResultReasonCode.PROVIDER_BLOCKED
+            if provider_blocked
+            else ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+        ),
         source=RESERVATION_SOURCE,
         observed_at=observed_at,
     )
@@ -107,10 +112,18 @@ def project_reservation_result(
         observed_at,
         (progress.occurred_at for progress in progress_stages),
     )
+    provider_unavailable = (
+        result.reason.startswith(("source_unavailable:", "browser_error:"))
+        or result.reason == "reservation_backend_error"
+    )
 
+    post_request_command_may_have_been_issued = (
+        result.reservation_clicked and result.reservation_requested_at is not None
+    )
     if result.outcome == "payment_required":
         return ReservationResult(
             outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            result_reason_code=ReservationResultReasonCode.PAYMENT_HOLD_CREATED,
             source=RESERVATION_SOURCE,
             observed_at=observed_at,
             official_handoff_url=PAYMENT_HANDOFF_URL,
@@ -124,15 +137,52 @@ def project_reservation_result(
             ),
         )
     if result.outcome == "auth_required":
-        outcome = ReservationOutcome.AUTH_REQUIRED
+        if post_request_command_may_have_been_issued:
+            outcome = ReservationOutcome.UNKNOWN
+            reason_code = ReservationResultReasonCode.AUTHENTICATION_REQUIRED
+        else:
+            outcome = ReservationOutcome.AUTH_REQUIRED
+            reason_code = ReservationResultReasonCode.AUTHENTICATION_REQUIRED
     elif result.outcome in {"consent_required", "action_required"}:
         # Reaching an official manual-intervention boundary does not prove that the
         # saved credentials or provider session are invalid.
         outcome = ReservationOutcome.UNKNOWN
+        if result.reservation_clicked and provider_unavailable:
+            reason_code = ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+        elif result.reservation_clicked or result.reason.endswith("_result_unknown"):
+            reason_code = ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+        elif result.reason.startswith("delay_consent_"):
+            reason_code = ReservationResultReasonCode.DELAY_CONSENT_REQUIRED
+        elif result.reason == "existing_reservation_action_required":
+            reason_code = ReservationResultReasonCode.EXISTING_RESERVATION_ACTION_REQUIRED
+        else:
+            reason_code = ReservationResultReasonCode.PROVIDER_NOTICE_ACTION_REQUIRED
     elif result.outcome == "provider_blocked":
-        outcome = ReservationOutcome.PROVIDER_BLOCKED
+        if post_request_command_may_have_been_issued:
+            outcome = ReservationOutcome.UNKNOWN
+            reason_code = ReservationResultReasonCode.PROVIDER_BLOCKED
+        else:
+            outcome = ReservationOutcome.PROVIDER_BLOCKED
+            reason_code = ReservationResultReasonCode.PROVIDER_BLOCKED
     elif result.outcome == "unavailable":
-        outcome = ReservationOutcome.NOT_AVAILABLE
+        outcome = (
+            ReservationOutcome.UNKNOWN
+            if result.reason == "target_not_unique"
+            else ReservationOutcome.NOT_AVAILABLE
+        )
+        reason_code = {
+            "target_not_unique": ReservationResultReasonCode.TARGET_AMBIGUOUS,
+            "seat_not_available": ReservationResultReasonCode.SEAT_NOT_AVAILABLE,
+            "seat_control_not_unique": (
+                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
+            ),
+            "reservation_control_ambiguous": (
+                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
+            ),
+            "reservation_control_disabled": (
+                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
+            ),
+        }.get(result.reason, ReservationResultReasonCode.TARGET_NOT_AVAILABLE)
     elif (
         result.outcome == "failed"
         and result.reason == "reservation_result_unknown:reservation_click_error"
@@ -141,14 +191,43 @@ def project_reservation_result(
         # command behind the UNKNOWN/manual-confirmation fence without claiming that
         # the provider request stage itself was completed.
         outcome = ReservationOutcome.UNKNOWN
+        reason_code = ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
     elif result.reservation_clicked:
         # A final click with no authoritative terminal state is never replayed.
         outcome = ReservationOutcome.UNKNOWN
+        reason_code = (
+            ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+            if provider_unavailable
+            else ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+        )
     else:
         outcome = ReservationOutcome.FAILED
+        if provider_unavailable:
+            reason_code = ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+        else:
+            reason_code = {
+                "reservation_selection_not_preserved": (
+                    ReservationResultReasonCode.SEAT_SELECTION_LOST
+                ),
+                "reservation_control_timeout": (
+                    ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
+                ),
+            }.get(result.reason, ReservationResultReasonCode.RESERVATION_FAILED)
     return ReservationResult(
         outcome=outcome,
+        result_reason_code=reason_code,
         source=RESERVATION_SOURCE,
         observed_at=observed_at,
         progress_stages=progress_stages,
+        confirmation_correlation_seats=(
+            tuple(
+                ReservedSeat(
+                    car_number=seat.car_number,
+                    seat_number=seat.seat_number,
+                )
+                for seat in result.confirmation_correlation_seats
+            )
+            if outcome is ReservationOutcome.UNKNOWN
+            else ()
+        ),
     )

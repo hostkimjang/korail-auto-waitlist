@@ -19,6 +19,7 @@ from rail_waitlist.korail_sidecar.contracts import (
 )
 from rail_waitlist.reservations.provider_confirmation import korail_sidecar_runtime as owner
 from rail_waitlist.reservations.provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
@@ -137,6 +138,7 @@ async def test_owner_fails_closed_before_transport_for_ineligible_targets(
     )
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert result.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
     assert result.observed_at == NOW
 
 
@@ -188,6 +190,11 @@ async def test_owner_normalizes_transport_failures_without_retry(
     assert calls == 1
     assert clock_calls == 1
     assert result.outcome is expected
+    assert result.diagnostic_code is (
+        ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+        if expected is ReservationConfirmationOutcome.INCONCLUSIVE
+        else None
+    )
     assert result.observed_at == NOW
 
 
@@ -244,6 +251,11 @@ async def test_owner_fails_closed_for_invalid_request_or_wire_result() -> None:
     assert invalid_request.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     assert invalid_normalizer_result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     assert invalid_wire.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert {
+        invalid_request.diagnostic_code,
+        invalid_normalizer_result.diagnostic_code,
+        invalid_wire.diagnostic_code,
+    } == {ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT}
 
 
 @pytest.mark.parametrize(
@@ -280,6 +292,10 @@ async def test_owner_rejects_wire_paid_for_ineligible_target_correlation(
     )
 
     assert result.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        result.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
 
 
 async def test_owner_accepts_wire_paid_for_follow_up_with_one_persisted_seat() -> None:
@@ -342,6 +358,7 @@ async def test_legacy_wrapper_keeps_pickle_late_runtime_and_dependency_seams(
             self.requests.append(request)
             return KorailReservationConfirmationResult(
                 outcome="inconclusive",
+                diagnostic_code="official_evidence_insufficient",
                 source="korail-same-session-detail",
                 observed_at=NOW,
             )

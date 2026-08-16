@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from rail_waitlist import schemas as legacy
-from rail_waitlist.domain import Provider, SeatClass
+from rail_waitlist.domain import Provider, ReservationResultReasonCode, SeatClass
 from rail_waitlist.observations.contracts import SeatObservationRequest
 from rail_waitlist.provider_registry import official_url_policy
 from rail_waitlist.reservations import contracts as canonical
@@ -160,6 +160,7 @@ def test_reservation_models_have_canonical_owners_and_unchanged_fields() -> None
     assert tuple(canonical.ReservedSeat.model_fields) == ("car_number", "seat_number")
     assert tuple(canonical.ReservationResult.model_fields) == (
         "outcome",
+        "result_reason_code",
         "source",
         "observed_at",
         "credential_version",
@@ -167,6 +168,7 @@ def test_reservation_models_have_canonical_owners_and_unchanged_fields() -> None
         "official_handoff_url",
         "progress_stages",
         "reserved_seats",
+        "confirmation_correlation_seats",
     )
     assert canonical.ReservationResult.model_fields["progress_stages"].default == ()
     assert canonical.ReservationResult.model_fields["reserved_seats"].default == ()
@@ -189,7 +191,7 @@ def test_reservation_models_have_canonical_owners_and_unchanged_fields() -> None
         ),
         (
             canonical.ReservationResult,
-            "8fd38d98c43eeab874c5ab80a7aabd59fc9023cb646c638eec1acb490ad69a2f",
+            "8f5963fbd7c82dfd2bb5b23706651370ecef7a5edc68a97936194a4033882e3f",
         ),
     ],
 )
@@ -229,6 +231,7 @@ def test_reservation_progress_and_result_fail_closed_contract_is_preserved() -> 
     result = canonical.ReservationResult(**result_payload())
     assert result.source == "mock"
     assert result.outcome == "payment_required"
+    assert result.result_reason_code is ReservationResultReasonCode.PAYMENT_HOLD_CREATED
     assert result.progress_stages[0].stage == "target_rechecked"
 
     invalid_payloads = (
@@ -271,6 +274,19 @@ def test_reservation_progress_and_result_fail_closed_contract_is_preserved() -> 
     ):
         with pytest.raises(ValidationError):
             canonical.ReservationProgressStage(**stage_payload)
+
+
+def test_unknown_result_accepts_provider_unavailable_without_weakening_manual_fence() -> None:
+    result = canonical.ReservationResult(
+        outcome="unknown",
+        result_reason_code=ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+        source="korail-pydoll-reservation",
+        observed_at="2026-08-06T21:37:00Z",
+    )
+
+    assert result.outcome == "unknown"
+    assert result.result_reason_code is ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+    assert result.official_handoff_url is None
 
 
 def test_canonical_and_pre_move_legacy_pickles_restore_exact_contract_objects() -> None:

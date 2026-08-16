@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from rail_waitlist.domain import Provider, ReservationOutcome, ReservationPolicy, WatchStatus
 from rail_waitlist.models import (
@@ -14,9 +15,11 @@ from rail_waitlist.models import (
     Watch,
     WatchCandidate,
 )
+from rail_waitlist.provider_call_context import current_request_id
 from rail_waitlist.provider_execution_lease import ExecutionLeaseGrant
 from rail_waitlist.providers import ProviderUnavailable
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationPurpose,
     ReservationConfirmationResult,
@@ -27,7 +30,14 @@ from rail_waitlist.reservations.reconciliation_application import (
     ReconciliationDependencies,
     reconcile_reservation_attempt,
 )
+from rail_waitlist.reservations.reconciliation_state_application import (
+    ReservationReconciliationStateDependencies,
+)
+from rail_waitlist.reservations.reconciliation_state_runtime import (
+    reservation_reconciliation_state_dependencies,
+)
 from rail_waitlist.schemas import ProviderCapabilities
+from rail_waitlist.security import secret_box
 from rail_waitlist.services import apply_reservation_reconciliation
 
 NOW = datetime(2026, 8, 5, 6, tzinfo=timezone.utc)
@@ -74,6 +84,7 @@ class RecordingAdapter:
         self.on_confirm = on_confirm
         self.error = error
         self.targets: list[ReservationConfirmationTarget] = []
+        self.request_ids: list[str | None] = []
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -91,6 +102,7 @@ class RecordingAdapter:
     ) -> ReservationConfirmationResult:
         self.events.append("confirm")
         self.targets.append(target)
+        self.request_ids.append(current_request_id())
         if self.on_confirm is not None:
             await self.on_confirm(target)
         if self.error is not None:
@@ -223,6 +235,7 @@ def _dependencies(
     lease_granted: bool = True,
     locked_current: bool | tuple[bool, ...] = True,
     apply_reconciliation: Callable[..., Awaitable[None]] | None = None,
+    state_dependencies: ReservationReconciliationStateDependencies | None = None,
     now: Callable[[], datetime] | None = None,
 ) -> ReconciliationDependencies:
     locked_results = locked_current if isinstance(locked_current, tuple) else (locked_current,)
@@ -273,6 +286,7 @@ def _dependencies(
         close_execution_adapter=close_execution_adapter,
         provider_circuit_is_closed=provider_circuit_is_closed,
         lease_is_current_in_session=lease_is_current_in_session,
+        state_dependencies=state_dependencies,
         apply_reconciliation=apply_reconciliation or fail_if_applied,
         now=now or (lambda: NOW),
     )
@@ -284,6 +298,185 @@ async def _attempt_state(session_factory, attempt_id: str) -> tuple[ReservationO
         assert attempt is not None
         outbox_count = await session.scalar(select(func.count()).select_from(OutboxEvent))
         return attempt.outcome, attempt.reconciliation_attempt_count, outbox_count or 0
+
+
+async def _add_legacy_exact_paid_fence(session_factory, source_attempt_id: str) -> None:
+    async with session_factory() as session:
+        source_attempt = await session.get(ReservationAttempt, source_attempt_id)
+        assert source_attempt is not None
+        source_candidate = await session.get(WatchCandidate, source_attempt.candidate_id)
+        assert source_candidate is not None
+        paid_candidate = WatchCandidate(
+            watch_id=source_candidate.watch_id,
+            train_number="303",
+            departure_at=NOW + timedelta(hours=6, minutes=10),
+            scheduled_departure_at=NOW + timedelta(hours=6, minutes=10),
+            seat_class="standard",
+            priority=2,
+            state="expired",
+        )
+        session.add(
+            ReservationAttempt(
+                candidate=paid_candidate,
+                attempt_sequence=1,
+                episode_key="availability:legacy-paid-fence",
+                idempotency_key=f"legacy-paid-fence:{source_attempt_id}",
+                started_at=NOW - timedelta(minutes=3),
+                finished_at=NOW - timedelta(minutes=2),
+                outcome=ReservationOutcome.RESERVED,
+                confirmation_outcome=ReservationConfirmationOutcome.CONFIRMED_PAID,
+                confirmation_source="official-reservation-list",
+                confirmation_observed_at=NOW - timedelta(minutes=2),
+            )
+        )
+        await session.commit()
+
+
+async def test_watch_wide_exact_paid_fence_stops_other_candidate_before_provider_read(app) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_attempt(session_factory)
+    await _add_legacy_exact_paid_fence(session_factory, attempt_id)
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.AUTH_REQUIRED,
+            source="must-not-be-read",
+            observed_at=NOW,
+        ),
+    )
+
+    applied = await reconcile_reservation_attempt(
+        attempt_id,
+        dependencies=_dependencies(
+            session_factory,
+            adapter,
+            RecordingLeaseService(events),
+            events,
+        ),
+        adapter=adapter,
+    )
+
+    assert applied == 0
+    assert adapter.targets == []
+    assert events == []
+    assert await _attempt_state(session_factory, attempt_id) == (
+        ReservationOutcome.UNKNOWN,
+        0,
+        0,
+    )
+
+
+async def test_paid_fence_inserted_during_confirmation_blocks_locked_state_write(app) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_attempt(session_factory)
+
+    async def add_paid_fence(_target: ReservationConfirmationTarget) -> None:
+        await _add_legacy_exact_paid_fence(session_factory, attempt_id)
+
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.AUTH_REQUIRED,
+            source="raced-confirmation",
+            observed_at=NOW,
+        ),
+        on_confirm=add_paid_fence,
+    )
+
+    applied = await reconcile_reservation_attempt(
+        attempt_id,
+        dependencies=_dependencies(
+            session_factory,
+            adapter,
+            RecordingLeaseService(events),
+            events,
+        ),
+        adapter=adapter,
+    )
+
+    assert applied == 0
+    assert len(adapter.targets) == 1
+    assert await _attempt_state(session_factory, attempt_id) == (
+        ReservationOutcome.UNKNOWN,
+        0,
+        0,
+    )
+
+
+async def test_auth_demotion_commits_when_watch_is_deleted_during_reconciliation_io(app) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_attempt(session_factory)
+    async with session_factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
+        )
+        assert account is not None
+        account.credentials_ciphertext = secret_box.encrypt_dict(
+            {
+                "login_method": "membership_number",
+                "login_id": "0987654321",
+                "password": "test-password",
+            }
+        )
+        await session.commit()
+
+    async def delete_watch(_target: ReservationConfirmationTarget) -> None:
+        async with session_factory() as session:
+            attempt = await session.get(ReservationAttempt, attempt_id)
+            assert attempt is not None
+            candidate = await session.get(WatchCandidate, attempt.candidate_id)
+            assert candidate is not None
+            watch = await session.get(Watch, candidate.watch_id)
+            assert watch is not None
+            await session.execute(
+                delete(ReservationAttempt).where(ReservationAttempt.candidate_id == candidate.id)
+            )
+            await session.execute(delete(WatchCandidate).where(WatchCandidate.watch_id == watch.id))
+            await session.execute(delete(Watch).where(Watch.id == watch.id))
+            await session.commit()
+
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.AUTH_REQUIRED,
+            source="deleted-owner-auth-evidence",
+            observed_at=NOW,
+        ),
+        on_confirm=delete_watch,
+    )
+
+    applied = await reconcile_reservation_attempt(
+        attempt_id,
+        dependencies=_dependencies(
+            session_factory,
+            adapter,
+            RecordingLeaseService(events),
+            events,
+            state_dependencies=reservation_reconciliation_state_dependencies(),
+        ),
+        adapter=adapter,
+    )
+
+    assert applied == 0
+    assert len(adapter.targets) == 1
+    async with session_factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.SRT)
+        )
+        assert account is not None
+        assert account.credential_version == 3
+        assert account.last_auth_status == "auth_required"
+        assert await session.get(ReservationAttempt, attempt_id) is None
+        assert await session.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
 async def test_due_unknown_not_found_runs_one_scheduled_confirmation_then_stops(app) -> None:
@@ -343,6 +536,57 @@ async def test_due_unknown_not_found_runs_one_scheduled_confirmation_then_stops(
         == 0
     )
     assert len(adapter.targets) == 1
+
+
+async def test_uncorrelated_unknown_follow_up_rejects_positive_provider_result(app) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_attempt(session_factory)
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            source="unsafe-positive-fixture",
+            observed_at=NOW,
+            official_handoff_url=(
+                "https://etk.srail.kr/hpg/hra/02/selectReservationList.do?pageId=TK0102010000"
+            ),
+        ),
+    )
+
+    reconciled = await reconcile_reservation_attempt(
+        attempt_id,
+        dependencies=_dependencies(
+            session_factory,
+            adapter,
+            RecordingLeaseService(events),
+            events,
+            apply_reconciliation=apply_reservation_reconciliation,
+        ),
+        adapter=adapter,
+    )
+
+    assert reconciled == 1
+    assert len(adapter.targets) == 1
+    assert adapter.targets[0].purpose is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+    assert adapter.targets[0].confirmation_correlation_seats == ()
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.outcome is ReservationOutcome.UNKNOWN
+        assert attempt.confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+        assert (
+            attempt.confirmation_diagnostic_code
+            is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+        )
+        assert attempt.reserved_seats == []
+        watch = await session.scalar(
+            select(Watch).join(WatchCandidate).where(WatchCandidate.id == attempt.candidate_id)
+        )
+        assert watch is not None
+        assert watch.status is WatchStatus.WATCHING
 
 
 async def test_known_payment_hold_remains_follow_up_after_inconclusive_read(app) -> None:
@@ -677,7 +921,7 @@ async def test_lock_wait_uses_fresh_reconciliation_time_for_expired_payment_hand
     )
 
     assert reconciled == 1
-    assert await _attempt_state(session_factory, attempt_id) == (ReservationOutcome.UNKNOWN, 1, 0)
+    assert await _attempt_state(session_factory, attempt_id) == (ReservationOutcome.UNKNOWN, 1, 1)
     assert events == [
         "circuit",
         "acquire",
@@ -785,6 +1029,7 @@ async def test_lease_epoch_is_fenced_again_after_domain_rows_are_locked(app) -> 
 async def test_owned_adapter_cleanup_wraps_success_and_provider_failure(
     app,
     provider_error: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     session_factory = app.state.test_session_factory
     attempt_id = await _seed_due_attempt(session_factory)
@@ -798,12 +1043,21 @@ async def test_owned_adapter_cleanup_wraps_success_and_provider_failure(
             source="test",
             observed_at=NOW,
         ),
-        error=ProviderUnavailable("synthetic provider failure") if provider_error else None,
+        error=(ProviderUnavailable("private provider response body") if provider_error else None),
     )
     lease_service = RecordingLeaseService(events)
 
-    async def apply_reconciliation(*_args, **_kwargs) -> None:
+    captured_confirmation: ReservationConfirmationResult | None = None
+
+    async def apply_reconciliation(*args, **_kwargs) -> None:
+        nonlocal captured_confirmation
+        captured_confirmation = args[4]
         events.append("apply")
+
+    caplog.set_level(
+        logging.INFO,
+        logger="rail_waitlist.reservations.reconciliation_application",
+    )
 
     reconciled = await reconcile_reservation_attempt(
         attempt_id,
@@ -817,6 +1071,41 @@ async def test_owned_adapter_cleanup_wraps_success_and_provider_failure(
     )
 
     assert reconciled == 1
+    assert captured_confirmation is not None
+    expected_diagnostic = (
+        ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+        if provider_error
+        else ReservationConfirmationDiagnosticCode.UNSPECIFIED
+    )
+    expected_source = "worker-reconciliation" if provider_error else "test"
+    assert captured_confirmation.diagnostic_code is expected_diagnostic
+    assert adapter.request_ids[-1] is not None
+    classified = next(
+        record.message
+        for record in caplog.records
+        if "event=reservation_confirmation_classified" in record.message
+    )
+    persisted = next(
+        record.message
+        for record in caplog.records
+        if "event=reservation_confirmation_persisted" in record.message
+    )
+    for message in (classified, persisted):
+        for field in (
+            "phase=worker_reconciliation",
+            "provider=srt",
+            "purpose=unknown_result_follow_up",
+            "outcome=inconclusive",
+            f"confirmation_diagnostic_code={expected_diagnostic.value}",
+            f"source={expected_source}",
+            f"attempt_id={attempt_id}",
+            f"request_id={adapter.request_ids[-1]}",
+            "reconciliation_attempt=1",
+        ):
+            assert field in message
+    assert "reconciliation_attempt_count=0" in persisted
+    assert "next_reconcile_at=none" in persisted
+    assert "private provider response body" not in caplog.text
     assert events == [
         "circuit",
         "acquire",

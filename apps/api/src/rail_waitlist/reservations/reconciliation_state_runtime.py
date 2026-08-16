@@ -4,7 +4,13 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..domain import Provider
 from ..outbox import add_outbox_event
+from ..provider_account_management.application import update_provider_auth_status
+from ..provider_account_management.reservation_runtime import (
+    update_provider_auth_status_in_reservation_transaction,
+)
+from ..provider_account_management.schemas import RailProviderAuthStatus
 from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
 from ..watch_management.transition_runtime import apply_watch_transition
 from .attempt_result_application import record_reservation_confirmation
@@ -15,6 +21,7 @@ from .reconciliation_state_application import (
     ApplyWatchTransition,
     RecordReservationConfirmation,
     ReservationReconciliationStateDependencies,
+    UpdateProviderAuthStatusInTransaction,
     UtcInstant,
 )
 from .reconciliation_state_application import (
@@ -27,6 +34,7 @@ def reservation_reconciliation_state_dependencies(
     apply_watch_transition_override: ApplyWatchTransition | None = None,
     add_outbox_event_override: AddOutboxEvent | None = None,
     record_reservation_confirmation_override: RecordReservationConfirmation | None = None,
+    update_provider_auth_status_override: UpdateProviderAuthStatusInTransaction | None = None,
     utc_instant_override: UtcInstant | None = None,
 ) -> ReservationReconciliationStateDependencies:
     """Compose state side effects without owning or ending the caller's transaction."""
@@ -45,7 +53,28 @@ def reservation_reconciliation_state_dependencies(
             if record_reservation_confirmation_override is None
             else record_reservation_confirmation_override
         ),
+        update_provider_auth_status=(
+            _update_provider_auth_status_in_reconciliation_transaction
+            if update_provider_auth_status_override is None
+            else update_provider_auth_status_override
+        ),
         utc_instant=_utc_instant if utc_instant_override is None else utc_instant_override,
+    )
+
+
+async def _update_provider_auth_status_in_reconciliation_transaction(
+    session: AsyncSession,
+    provider: Provider,
+    status: RailProviderAuthStatus,
+    *,
+    expected_credential_version: int,
+) -> bool:
+    return await update_provider_auth_status_in_reservation_transaction(
+        session,
+        provider,
+        status,
+        expected_credential_version=expected_credential_version,
+        persist_auth_status=update_provider_auth_status,
     )
 
 

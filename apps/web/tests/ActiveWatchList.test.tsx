@@ -4,11 +4,13 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ActiveWatchList, type ActiveWatch } from "../src/features/home/ActiveWatchList";
+import { ReservationRearmConfirm } from "../src/features/home/ReservationRearmConfirm";
 
 function watch(index: number): ActiveWatch {
+  const provider = index % 2 === 0 ? "KORAIL" : "SRT";
   return {
     id: `watch-${index}`,
-    provider: index % 2 === 0 ? "KORAIL" : "SRT",
+    provider,
     route: `서울 → 부산 ${index}`,
     train: `열차 ${index}`,
     date: "8월 1일",
@@ -19,6 +21,18 @@ function watch(index: number): ActiveWatch {
     seatClass: "standard",
     seatClassLabel: "일반실",
     seatEvidenceLabel: `일반실 · 매진 · 공식 관측 12:${String(index).padStart(2, "0")}`,
+    latestReservationAttemptCandidateId: `candidate-${index}`,
+    latestReservationAttemptContext: {
+      candidateId: `candidate-${index}`,
+      provider,
+      train: `열차 ${index}`,
+      trainType: null,
+      date: "8월 1일",
+      departure: "12:00",
+      arrival: "14:30",
+      seatClass: "standard",
+      seatClassLabel: "일반실",
+    },
   };
 }
 
@@ -336,7 +350,7 @@ describe("ActiveWatchList", () => {
     );
 
     expect(screen.getByText(
-      "예매 시도 · 좌석 확보 실패 · 감시 계속 · 22:05:07 · 매진 후 좌석이 다시 열리면 자동 예매",
+      "예매 대상 · KORAIL · 열차 2 · 8월 1일 · 12:00 출발 · 14:30 도착 · 일반실 · 예매 시도 · 좌석 확보 실패 · 감시 계속 · 22:05:07 · 매진 후 좌석이 다시 열리면 자동 예매",
     )).toBeTruthy();
     expect(screen.getByText("좌석 재발견마다 자동 예매")).toBeTruthy();
     expect(screen.getByRole("switch", {
@@ -408,14 +422,66 @@ describe("ActiveWatchList", () => {
     );
 
     expect(screen.getByText(
-      "예매 시도 결과 확인 필요 · 22:11:00 · 공식 예매 내역을 확인해 주세요",
+      "예매 대상 · SRT · 열차 1 · 8월 1일 · 12:00 출발 · 14:30 도착 · 일반실 · 예매 시도 결과 확인 필요 · 22:11:00 · 공식 예매 내역을 확인해 주세요",
     )).toBeTruthy();
-    expect(screen.getByText("예매 시도 · 철도 계정 재확인 필요 · 22:13:00")).toBeTruthy();
-    expect(screen.getByText("예매 시도 중 · 22:14:00")).toBeTruthy();
-    expect(screen.getByText("좌석 임시 확보 · 결제 필요 · 22:16:00")).toBeTruthy();
+    expect(screen.getByText(
+      "예매 대상 · KORAIL · 열차 2 · 8월 1일 · 12:00 출발 · 14:30 도착 · 일반실 · 예매 시도 · 철도 계정 재확인 필요 · 22:13:00",
+    )).toBeTruthy();
+    expect(screen.getByText(
+      "예매 대상 · SRT · 열차 3 · 8월 1일 · 12:00 출발 · 14:30 도착 · 일반실 · 예매 시도 중 · 22:14:00",
+    )).toBeTruthy();
+    expect(screen.getByText(
+      "예매 대상 · KORAIL · 열차 4 · 8월 1일 · 12:00 출발 · 14:30 도착 · 일반실 · 좌석 임시 확보 · 결제 필요 · 22:16:00",
+    )).toBeTruthy();
   });
 
-  it("offers a confirmation-gated manual rearm after an ended unpaid hold", async () => {
+  it("shows a detailed cause with the exact attempted candidate instead of the current row train", () => {
+    const attempted: ActiveWatch = {
+      ...watch(2),
+      train: "KTX 033",
+      latestReservationAttempt: {
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-02T13:04:43Z",
+        finishedAt: "2026-08-02T13:05:07Z",
+        retryable: false,
+        manualCheckRequired: true,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: "inconclusive",
+        confirmationDiagnosticCode: "official_record_ambiguous",
+      },
+      latestReservationAttemptContext: {
+        candidateId: "candidate-2",
+        provider: "KORAIL",
+        train: "326",
+        trainType: "KTX-산천",
+        date: "8월 2일",
+        departure: "14:11",
+        arrival: "16:52",
+        seatClass: "first",
+        seatClassLabel: "특실",
+      },
+    };
+
+    render(
+      <ActiveWatchList
+        watches={[attempted]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("KTX 033 · 8월 1일")).toBeTruthy();
+    expect(screen.getByText(/예매 대상 · KORAIL · KTX-산천 · 326 · 8월 2일/)).toBeTruthy();
+    expect(screen.getByText(/14:11 출발 · 16:52 도착 · 특실/)).toBeTruthy();
+    expect(screen.getByText(/정확히 일치하는 항목을 하나로 구분하지 못했습니다/)).toBeTruthy();
+  });
+
+  it("offers a confirmation-gated manual rearm after a confirmed deadline end", async () => {
     const user = userEvent.setup();
     let resolveRearm: (() => void) | undefined;
     const rearmTask = new Promise<void>((resolve) => { resolveRearm = resolve; });
@@ -434,7 +500,9 @@ describe("ActiveWatchList", () => {
         manualCheckRequired: false,
         retryCondition: "new_availability_episode",
         paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        paymentHoldEndReason: "confirmed_payment_deadline_elapsed",
         manualRearmAvailable: true,
+        manualRearmReason: "payment_hold_ended",
       },
     };
 
@@ -450,9 +518,9 @@ describe("ActiveWatchList", () => {
       />,
     );
 
-    expect(screen.getByText("이전 예약 미결제 · 감시 중")).toBeTruthy();
+    expect(screen.getByText("결제 가능 기한 종료 확인 · 감시 중")).toBeTruthy();
     expect(screen.getByText(
-      "이전 예약을 결제하지 않았습니다 · 17:24:00 · 다시 시도하려면 사용자 확인 필요",
+      "예매 대상 · KORAIL · 열차 4 · 8월 1일 · 12:00 출발 · 14:30 도착 · 일반실 · 공식 확인에서 결제 가능 기한 종료 · 17:24:00 · 다시 시도하려면 사용자 확인 필요",
     )).toBeTruthy();
     expect(screen.queryByText(/좌석 임시 확보 · 결제 필요/)).toBeNull();
 
@@ -463,13 +531,19 @@ describe("ActiveWatchList", () => {
     expect(dialog.getAttribute("aria-busy")).toBe("false");
     expect(within(dialog).getByText("열차 4")).toBeTruthy();
     expect(within(dialog).getByText("일반실")).toBeTruthy();
+    expect(within(dialog).getByText("공식 확인에서 결제 가능 기한이 종료됐습니다")).toBeTruthy();
     expect(within(dialog).getByText(/좌석 감시를 즉시 실행/)).toBeTruthy();
     expect(onManualReservationRearm).not.toHaveBeenCalled();
 
     const confirm = within(dialog).getByRole("button", { name: "확인하고 다시 시작" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(dialog).getByRole("checkbox", {
+      name: /이 예약을 더 이상 결제할 수 없음을 확인했습니다/,
+    }));
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
     await user.click(confirm);
     expect(onManualReservationRearm).toHaveBeenCalledOnce();
-    expect(onManualReservationRearm).toHaveBeenCalledWith("watch-4");
+    expect(onManualReservationRearm).toHaveBeenCalledWith("watch-4", "payment_hold_ended");
     expect(dialog.getAttribute("aria-busy")).toBe("true");
     expect((within(dialog).getByRole("button", {
       name: "다시 시작 중…",
@@ -479,6 +553,143 @@ describe("ActiveWatchList", () => {
 
     resolveRearm?.();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("describes a missing official-list hold without inferring payment failure", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReservationRearmConfirm
+        watchId="missing-hold"
+        trainLabel="KTX 086"
+        travelDate="8월 2일"
+        departure="17:30"
+        seatClassLabel="일반실"
+        mode={{
+          kind: "payment_hold",
+          reason: "payment_hold_ended",
+          paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
+        }}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /자동 예매 다시 시도/ }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(
+      "공식 내역에서 대상 임시 예약을 더 이상 찾지 못했습니다",
+    )).toBeTruthy();
+    expect(dialog.textContent).not.toContain("결제되지");
+  });
+
+  it("offers UNKNOWN rearm from the exact attempt candidate after explicit official absence confirmation", async () => {
+    const user = userEvent.setup();
+    const onManualReservationRearm = vi.fn();
+    const unresolved: ActiveWatch = {
+      ...watch(4),
+      train: "111",
+      status: "watching",
+      statusLabel: "감시 중",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttemptCandidateId: "candidate-223-first",
+      latestReservationAttemptContext: {
+        candidateId: "candidate-223-first",
+        provider: "KORAIL",
+        train: "223",
+        trainType: "KTX-산천",
+        date: "8월 15일 (토)",
+        departure: "22:08",
+        arrival: "23:07",
+        seatClass: "first",
+        seatClassLabel: "특실",
+      },
+      latestReservationAttempt: {
+        outcome: "unknown",
+        startedAt: "2026-08-15T12:20:00Z",
+        finishedAt: "2026-08-15T12:21:00Z",
+        retryable: false,
+        manualCheckRequired: true,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: "2026-08-15T12:24:00Z",
+        reconciliationAttemptCount: 3,
+        reconciliationResolution: null,
+        nextReconcileAt: "2026-08-15T12:39:00Z",
+        manualRearmAvailable: true,
+        manualRearmReason: "unknown_result_unresolved",
+      },
+    };
+
+    render(
+      <ActiveWatchList
+        watches={[unresolved]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+        onManualReservationRearm={onManualReservationRearm}
+      />,
+    );
+
+    expect(screen.getByText("예약 결과 자동 확인 불가 · 감시 중")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /자동 예매 다시 시도/ }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("KTX-산천 · 223")).toBeTruthy();
+    expect(within(dialog).getByText("8월 15일 (토)")).toBeTruthy();
+    expect(within(dialog).getByText("22:08")).toBeTruthy();
+    expect(within(dialog).getByText("특실")).toBeTruthy();
+    expect(within(dialog).getByText("예약 결과를 자동으로 확인할 수 없습니다")).toBeTruthy();
+    expect(within(dialog).getByText(/자동 재확인은 계속되며/)).toBeTruthy();
+    const submit = within(dialog).getByRole("button", { name: "확인하고 다시 시작" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(dialog).getByRole("checkbox", {
+      name: /이 열차와 좌석 등급의 예약이 없음을 확인했습니다/,
+    }));
+    await user.click(submit);
+
+    expect(onManualReservationRearm).toHaveBeenCalledWith(
+      "watch-4",
+      "unknown_result_unresolved",
+    );
+  });
+
+  it("fails closed when an eligible UNKNOWN attempt has no exact candidate context", () => {
+    const unresolved: ActiveWatch = {
+      ...watch(4),
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttemptCandidateId: "candidate-missing",
+      latestReservationAttemptContext: null,
+      latestReservationAttempt: {
+        outcome: "unknown",
+        startedAt: "2026-08-15T12:20:00Z",
+        finishedAt: "2026-08-15T12:21:00Z",
+        retryable: false,
+        manualCheckRequired: true,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: "2026-08-15T12:24:00Z",
+        reconciliationAttemptCount: 3,
+        nextReconcileAt: "2026-08-15T12:39:00Z",
+        manualRearmAvailable: true,
+        manualRearmReason: "unknown_result_unresolved",
+      },
+    };
+
+    render(
+      <ActiveWatchList
+        watches={[unresolved]}
+        onCreate={vi.fn()}
+        onViewAll={vi.fn()}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+        onManualReservationRearm={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /자동 예매 다시 시도/ })).toBeNull();
   });
 
   it("keeps direct official handoff distinct from manual rearm for a fresh ended-hold observation", () => {
@@ -494,7 +705,9 @@ describe("ActiveWatchList", () => {
         manualCheckRequired: false,
         retryCondition: null,
         paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
         manualRearmAvailable: true,
+        manualRearmReason: "payment_hold_ended",
       },
       seatFoundObservation: {
         kind: "official_provider",
@@ -535,7 +748,9 @@ describe("ActiveWatchList", () => {
         manualCheckRequired: false,
         retryCondition: null,
         paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
         manualRearmAvailable: true,
+        manualRearmReason: "payment_hold_ended",
       },
     };
 
@@ -553,6 +768,7 @@ describe("ActiveWatchList", () => {
 
     await user.click(screen.getByRole("button", { name: /자동 예매 다시 시도/ }));
     const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("checkbox"));
     await user.click(within(dialog).getByRole("button", { name: "확인하고 다시 시작" }));
 
     await waitFor(() => expect(dialog.getAttribute("aria-busy")).toBe("false"));
@@ -574,7 +790,9 @@ describe("ActiveWatchList", () => {
         manualCheckRequired: false,
         retryCondition: null,
         paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
         manualRearmAvailable: true,
+        manualRearmReason: "payment_hold_ended",
       },
     };
     const onManualReservationRearm = vi.fn();
@@ -589,8 +807,8 @@ describe("ActiveWatchList", () => {
           onPause={vi.fn()}
           onResume={vi.fn()}
           onCancel={vi.fn()}
-          onManualReservationRearm={async (watchId) => {
-            onManualReservationRearm(watchId);
+          onManualReservationRearm={async (watchId, reason) => {
+            onManualReservationRearm(watchId, reason);
             setCurrent((item) => {
               const attempt = item.latestReservationAttempt;
               return {
@@ -609,12 +827,13 @@ describe("ActiveWatchList", () => {
     const row = screen.getByRole("article");
     expect(row.getAttribute("tabindex")).toBe("-1");
     await user.click(screen.getByRole("button", { name: /자동 예매 다시 시도/ }));
+    await user.click(screen.getByRole("checkbox"));
     await user.click(screen.getByRole("button", { name: "확인하고 다시 시작" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.queryByRole("button", { name: /자동 예매 다시 시도/ })).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(row));
-    expect(onManualReservationRearm).toHaveBeenCalledWith("watch-4");
+    expect(onManualReservationRearm).toHaveBeenCalledWith("watch-4", "payment_hold_ended");
   });
 
   it("does not expose manual rearm without every server-confirmed precondition", () => {
@@ -677,7 +896,9 @@ describe("ActiveWatchList", () => {
     );
 
     expect(screen.getByText("좌석 발견 · 감시 계속")).toBeTruthy();
-    expect(screen.getByText("좌석 임시 확보 · 결제 필요 · 17:22:00")).toBeTruthy();
+    expect(screen.getByText(
+      "예매 대상 · KORAIL · 열차 4 · 8월 1일 · 12:00 출발 · 14:30 도착 · 일반실 · 좌석 임시 확보 · 결제 필요 · 17:22:00",
+    )).toBeTruthy();
     expect(screen.queryByText(/결제 보류 종료 확인/)).toBeNull();
   });
 

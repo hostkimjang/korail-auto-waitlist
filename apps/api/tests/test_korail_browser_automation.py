@@ -883,13 +883,20 @@ async def test_running_search_deadline_cancels_client_without_opening_backoff(
             return result()
 
     client = DeadlineClient()
-    automation = KorailBrowserAutomation(client, search_timeout_seconds=0.02)
+    automation = KorailBrowserAutomation(client, search_timeout_seconds=1)
     caplog.set_level(logging.INFO, logger="rail_waitlist.korail_browser_automation")
 
-    with pytest.raises(BrowserSourceUnavailable) as expired:
-        await automation.search(request())
+    first = asyncio.create_task(automation.search(request(), timeout_seconds=0.5))
+    try:
+        await asyncio.wait_for(client.started.wait(), timeout=1)
+        with pytest.raises(BrowserSourceUnavailable) as expired:
+            await first
+    finally:
+        if not first.done():
+            first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        await automation.drain_pending_calls()
     assert expired.value.stage in {"caller_deadline", "search_deadline"}
-    await automation.drain_pending_calls()
 
     assert client.cancelled.is_set()
     assert automation._failure_backoffs == {}

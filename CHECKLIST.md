@@ -166,6 +166,7 @@
 - [x] 격리 fullstack E2E가 등록 근거와 최신 관측의 fresh·만료 전이를 분리하도록 시간 경쟁 제거
 - [x] GitHub Actions의 핵심 검증과 실험 Chromium 검증 분리 후 원격 실행 확인
 - [x] GitHub Actions에서 Web(Node)과 API(Python)의 Playwright Chromium·OS 의존성을 각각 설치하고 host loopback API fixture에만 test sandbox opt-in 적용
+- [x] Ubuntu Chromium에서 긴 운행 상태가 320px 가로 넘침을 만들지 않고 768px 세로 태블릿의 마지막 행동이 고정 하단 메뉴에 가리지 않는 반응형 회귀 검증
 
 상세한 공개 전 점검은 [공개 릴리스 체크리스트](docs/PUBLIC_RELEASE_CHECKLIST.md)에서 관리합니다.
 

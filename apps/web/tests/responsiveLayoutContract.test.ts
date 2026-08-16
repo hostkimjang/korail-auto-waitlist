@@ -332,6 +332,23 @@ describe("responsive layout CSS contracts", () => {
     expect(rowActions520).toContain('"controls"');
   });
 
+  it("wraps long operational labels and keeps the tablet trailing action clear", () => {
+    const operationalStatus = extractCssBlock(
+      featureStyles,
+      ".watch-state > span.watch-operational",
+    ).body;
+    expect(operationalStatus).toMatch(/max-width:\s*100%\s*;/);
+    expect(operationalStatus).toMatch(/overflow-wrap:\s*anywhere\s*;/);
+    expect(operationalStatus).toMatch(/white-space:\s*normal\s*;/);
+
+    const portraitTablet = extractCssBlock(
+      responsiveStyles,
+      "@media (min-width: 761px) and (max-width: 980px)",
+    ).body;
+    const trailingAction = extractCssBlock(portraitTablet, ".button-new-wide").body;
+    expect(trailingAction).toMatch(/margin-top:\s*12px\s*;/);
+  });
+
   it("uses one bounded notification surface without the removed second fixed offset", () => {
     const notificationCenter = extractCssBlock(styles, ".notification-center").body;
     expect(notificationCenter).toMatch(/width:\s*min\(560px, calc\(100vw - 48px\)\)\s*;/);

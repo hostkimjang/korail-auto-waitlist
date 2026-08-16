@@ -710,6 +710,7 @@ for (const viewport of viewportCases) {
       ".watch-provider > div",
       ".watch-time",
       ".watch-state",
+      ".watch-operational",
       ".watch-seat-evidence",
       ".watch-policy-control",
       ".watch-policy-label",
@@ -722,6 +723,13 @@ for (const viewport of viewportCases) {
     }
 
     await expect(page.locator(".watch-policy-label")).toHaveText("좌석 재발견마다 자동 예매");
+    const operationalLayout = await page.locator(".watch-operational").evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      whiteSpace: getComputedStyle(element).whiteSpace,
+    }));
+    expect(operationalLayout.whiteSpace).toBe("normal");
+    expect(operationalLayout.scrollWidth).toBeLessThanOrEqual(operationalLayout.clientWidth);
     await expectVisibleActionTarget(page.locator(".watch-booking-button"), "official booking action");
     await expectCoreActionTargets(page);
     await expectWatchRegionsDoNotOverlap(page);

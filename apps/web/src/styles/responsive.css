@@ -115,6 +115,10 @@
     display: none;
   }
 
+  .button-new-wide {
+    margin-top: 12px;
+  }
+
   .bottom-nav {
     min-height: 72px;
     position: fixed;

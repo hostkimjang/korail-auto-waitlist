@@ -443,13 +443,16 @@
   white-space: normal;
 }
 
-.watch-state > .watch-operational {
+.watch-state > span.watch-operational {
   width: fit-content;
+  max-width: 100%;
   border-radius: 999px;
   padding: 0.22rem 0.56rem;
   background: #eef3f7;
   color: #486174;
   font-weight: 750;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .watch-state > .watch-operational.is-delayed,

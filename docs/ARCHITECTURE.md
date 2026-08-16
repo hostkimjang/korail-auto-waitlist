@@ -53,7 +53,7 @@ Docker Compose는 위 서비스를 하나의 배포 단위로 실행합니다. �
 
 UI preference API와 DB는 구버전 호환을 위해 `timetable_refresh_interval_seconds` 1~300초 필드를 계속 읽고 반환하지만, 현행 웹은 이를 사용자 설정이나 런타임 주기로 사용하지 않고 응답 경계에서 유효성만 확인합니다. 중요 상태·예약 SSE와 Push·수동 갱신은 canonical 재조회를 즉시 요청합니다. 반복되는 `watch.seat_observed`도 SSE 수신은 유지하지만 목록 무효화는 다음 내부 고정 5초 복구 조회에 합쳐, 관측 이벤트가 많아도 canonical GET을 5초보다 자주 시작하지 않습니다. 새 대기 3단계도 같은 고정 5초마다 서버의 마지막 정상 query snapshot만 동기화합니다. 설정에는 이를 읽기 전용 `실시간` 상태로 표시하고 초 입력을 노출하지 않습니다. 사용자가 저장하는 전역 좌석 관측 목표는 `observation_interval_seconds` 1~600초 단일 DTO 필드입니다. 좌석 관측의 1초는 scheduler 목표 하한이지 provider I/O의 주기 보장이 아니며, 운영사별 단일 실행 gate, worker 처리량, cache, timeout, 실패 backoff와 보호 cooldown이 우선합니다. 기본 5초는 보호 응답 위험과 freshness 사이의 운영 기본값으로 유지합니다. 브라우저 문서가 숨겨지면 정기 목록 조회와 SSE별 lifecycle snapshot 투영을 생략하고 무효화만 한 건으로 접은 뒤, 다시 보일 때 한 번 최신 목록을 읽습니다. 결제기한 시계와 철도 계정 런타임 조회도 같은 가시성 경계를 지킵니다.
 
-`GET /api/v1/watches`와 명시적인 `view=all`은 기존 전체 이력을 반환합니다. `view=live`는 SQL 조회 단계에서 최근 24시간 안에 갱신된 작업을 상태와 무관하게 남기고, 그보다 오래된 작업은 watch 전체에 exact `CONFIRMED_PAID` 근거가 없으면서 비종단이거나 후보별 최신 예약 시도의 outcome이 수동 확인을 요구할 때만 남깁니다. 따라서 결제 완료 적용 경합으로 `PAUSED`·`AUTH_REQUIRED`·`COOLDOWN`에 보존된 watch도 exact paid 근거가 있으면 24시간 창이 지난 뒤 live 목록에서 제외합니다. 선택적인 `status`는 이 조건과 AND로 조합합니다. 웹은 홈·새 대기·설정에서 `view=live`, `내 예약`에서 `view=all`을 사용합니다. 따라서 오래된 일반 만료 이력은 5초 동기화 payload에서 제외하면서 완료·실패·결제보류 종료 같은 최근 종단 전이는 SSE 누락 뒤에도 복구합니다. exact paid 근거가 없는 경우에는 24시간 창이 지나도 만료된 `UNKNOWN`·`PROVIDER_BLOCKED`·`FAILED` 최신 시도를 수동 확인이 끝나지 않은 canonical 상태로 보존합니다.
+`GET /api/v1/watches`와 명시적인 `view=all`은 기존 전체 이력을 반환합니다. `view=live`는 SQL 조회 단계에서 최근 24시간 안에 갱신된 작업을 상태와 무관하게 남기고, 그보다 오래된 작업은 watch 전체에 exact `CONFIRMED_PAID` 근거가 없으면서 비종단이거나 후보별 최신 예약 시도의 outcome이 수동 확인을 요구할 때만 남깁니다. 따라서 결제 완료 적용 경합으로 `PAUSED`·`AUTH_REQUIRED`·`COOLDOWN`에 보존된 watch도 exact paid 근거가 있으면 24시간 창이 지난 뒤 live 목록에서 제외합니다. `confirmed_absent`로 정확히 해소된 최신 `UNKNOWN`도 수동 확인이 끝난 이력으로 제외하지만, `exhausted_unresolved`는 공식 성공·부재를 확정하지 못했으므로 계속 보존합니다. 선택적인 `status`는 이 조건과 AND로 조합합니다. 웹은 홈·새 대기·설정에서 `view=live`, `내 예약`에서 `view=all`을 사용합니다. 따라서 오래된 일반 만료 이력은 5초 동기화 payload에서 제외하면서 완료·실패·결제보류 종료 같은 최근 종단 전이는 SSE 누락 뒤에도 복구합니다. exact paid 근거가 없는 경우에는 24시간 창이 지나도 만료된 미해소 `UNKNOWN`·`PROVIDER_BLOCKED` 최신 시도를 수동 확인이 끝나지 않은 canonical 상태로 보존합니다.
 
 성공한 `view=live` canonical 응답을 수용할 때는 직전 snapshot에만 남아 있고 새 응답에서 사라진 watch subject의 sticky 알림만 현재 브라우저 세션에서 제거합니다. 이 정리는 종단 상태나 예약 결과를 추정하지 않으며 사용자의 명시적 dismissal로 취급하지 않으므로 dismissal ledger에도 기록하지 않습니다.
 
@@ -323,8 +323,9 @@ Pydoll 예약 actor는 내부 진행 callback을 항상 감싸 `target_rechecked
 `reservation_requested`의 시각과 click 사실을 자체 누적합니다. 내부 `BrowserSourceUnavailable`이 발생해도
 검증된 `error.stage`를 바깥 `reserve_once`로 덮어쓰지 않으며, terminal은 이미 발행한 진행 event와
 모순되지 않아야 합니다. 재사용한 인증 lease는 예약 driver에 들어가기 전에 공식 session probe를 반드시
-통과합니다. 명확한 로그아웃이면 기존 session을 닫고 fresh login으로 교체하며, probe가 불명확하면 예약
-control을 누르기 전에 session을 폐기하고 원래 source stage를 보존합니다. 예약 동작이 시작된 뒤 transient
+통과합니다. 명확한 로그아웃이거나 source 불가로 판정할 수 없으면 기존 session을 먼저 닫고 fresh login을
+정확히 한 번만 시도합니다. 새 인증도 확인되지 않으면 예약 control을 누르기 전에 중단하고 원래 source stage를
+보존하며, 보호·rate-limit·취소에는 이 복구를 적용하지 않습니다. 예약 동작이 시작된 뒤 transient
 `/ticket/login` terminal과 공식 확인은 같은 인증 판정 정책을 사용하되, 공식 양성 응답이나 정확한 인증 header
 어느 쪽도 양성이 아니면 예약 버튼을 새로 누르지 않습니다. 객실 등급 또는 예약 click 뒤 결과가 불명확하면
 비공개 상관 근거를 제한적으로 수집한 뒤 session을 폐기하고, fresh login 뒤 bounded 읽기 전용 확인만 이어갑니다.
@@ -358,12 +359,12 @@ iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push
 이 기능은 운영사별 설정, 로그인 확인, 작업별 선택이 모두 갖춰진 경우에만 실행됩니다.
 
 - 같은 좌석 가용 상태가 이어지는 동안 최대 한 번만 시도합니다.
-- 결과가 불확실하면 같은 요청을 즉시 자동 반복하지 않습니다. read-only reconciliation에서 대상 부재가 연속 두 번 확인되면 `confirmed_absent`로 닫고, 그 확인보다 새로운 공식 `AVAILABLE`·`LIMITED` 관측이 생긴 경우에만 별도 복구 episode를 한 번 허용합니다. 그 복구 결과가 다시 불명확해도 연쇄 재시도하지 않습니다.
+- 결과가 불확실하면 같은 요청을 즉시 자동 반복하지 않습니다. read-only reconciliation에서 대상 부재가 연속 두 번 확인되면 `confirmed_absent`로 닫고, 그 확인보다 새로운 공식 `AVAILABLE`·`LIMITED` 관측이 생긴 경우에만 별도 복구 episode를 한 번 허용합니다. 이 해소 상태는 수동 공식 확인 필요 상태가 아니며 오래된 terminal 작업을 live 목록에 붙잡지 않습니다. 그 복구 결과가 다시 불명확해도 연쇄 재시도하지 않습니다. 최신 attempt가 이 복구 episode 자체를 소비한 뒤 다시 `confirmed_absent`가 되면 REST와 reconciliation SSE는 raw episode key 대신 닫힌 `automatic_reservation_retry_fence_reason=confirmed_absent_recovery_consumed`만 공개해 추가 자동 예매 차단 근거를 표시합니다.
 - 미해소 `UNKNOWN`과 정확한 결제 완료 근거의 fence는 후보별이 아니라 watch 전체의 모든 attempt를 대상으로 계산합니다. 한 후보에 active 미해소 `UNKNOWN`이 있으면 다른 후보의 더 늦은 시도나 새 공식 가용 관측도 우회 예약을 열지 못하고, 정확한 결제 완료 근거가 하나라도 있으면 모든 후속 예약을 막습니다. 원본이 `CONFIRMED_ABSENT`로 해소되면 이 watch-global fence도 끝나므로 다른 후보 B의 fresh 가용성은 정상 최초 episode를 열 수 있고, 원본 A 자체만 confirmed-absent 복구 episode를 한 번 사용합니다. 수동 복구는 유일한 원본 attempt를 가리키는 child lineage로 한 번만 소비하며, 그 child가 다시 `UNKNOWN`이 되어도 같은 예외를 재귀 적용하지 않습니다.
 - `UNKNOWN`의 공식 확인이 계속 `INCONCLUSIVE`이면 최초 확인과 별도로 최대 6회까지 30초, 30초, 30초, 5분, 15분, 60분 간격으로 확인합니다. 세 번째 재확인부터는 자동 확인을 계속하면서도 사용자가 공식 예약 내역을 직접 확인해 제한적인 1회 재개를 승인할 수 있습니다. 여섯 번째까지 결론이 없거나 마지막 한 번만 `NOT_FOUND`인 경우는 `exhausted_unresolved`로 닫아 더 이상 무한 재확인하지 않습니다.
 - 인증 필요·운영사 보호 신호는 예약 명령 경계를 기준으로 분리합니다. 영속된 `reservation_requested` 전에 끝난 시도만 `AUTH_REQUIRED`·`PROVIDER_BLOCKED`와 재인증 뒤 `auth:` 예약 episode를 가질 수 있습니다. 그 단계 뒤의 terminal 또는 최초 공식 확인에서 같은 신호가 나오면 명령 결과를 `UNKNOWN`으로 보존하고 계정·watch만 `auth_required`로 멈추며, 같은 credential generation을 다시 인증해도 새 예약 없이 read-only reconciliation만 재개합니다. 단, 같은 최초 확인에서 provider별 exact `CONFIRMED_PAYMENT_REQUIRED`·`CONFIRMED_PAID` 양성 근거를 얻었다면 그 근거가 terminal의 인증·보호 신호보다 우선합니다. 재확인 중의 인증·보호 신호는 6회 evidence 횟수를 소비하지 않고 기존 수동 승인 marker를 지우며, 새 generation은 과거 시도의 예약 상태를 자동으로 이어서 판단하지 않습니다. legacy `AUTH_REQUIRED`·`PROVIDER_BLOCKED` 행도 `reservation_requested`가 남아 있으면 재인증 시 `UNKNOWN`으로 정규화하고 예약 claim을 허용하지 않습니다. 인증·보호 근거는 해당 provider와 credential generation의 계정 행에 먼저 적용합니다. 외부 I/O 중 watch 삭제가 이긴 경합에서는 존재하지 않는 watch 전이·outbox를 만들지 않지만 계정 강등만 커밋해 provider-global 호출 gate가 삭제된 aggregate와 함께 사라지지 않게 합니다.
 - `NOT_AVAILABLE` 뒤에는 확정적인 판매 불가 관측과 그 이후의 새 행동 가능 관측이 모두 있어야 다음 가용성 에피소드를 엽니다. 연속 행동 가능 관측만으로 즉시 재시도하지 않습니다.
-- 일반 실패·보호 응답과 공식 부재가 두 번 확인되지 않은 `UNKNOWN`은 자동으로 새 시도를 열지 않고 공식 예약 내역 확인 또는 계정·운영 상태 확인을 안내합니다.
+- adapter가 정상 반환한 `FAILED`는 예약 명령 전달 전 종료가 확인된 결과이므로 공식 예약 내역 수동 확인을 요구하지 않습니다. 반대로 KORAIL·SRT 외부 호출 경계를 탈출한 timeout·transport·5xx·응답 검증 예외는 명령 전달 여부를 증명할 수 없으므로 `UNKNOWN`으로 보존해 공식 확인과 재조정으로 보냅니다. KORAIL은 예약 click 사실이나 `reservation_requested` 시각 중 하나만 남은 부분 증거도 전달 가능성으로 간주해 `UNKNOWN`으로 잠급니다. `0040_legacy_failed_unknown`은 이 구분을 영속하기 전 외부 provider가 남긴 `FAILED/PROVIDER_UNAVAILABLE` 중 확인·재조정 근거가 없는 완료 행을 배포 시 한 번 `UNKNOWN`으로 보수 정규화하고 즉시 읽기 전용 재확인을 예약합니다. 이 데이터 fence는 downgrade로 되돌리지 않으며, 구버전으로 복귀해야 하면 업그레이드 전 검증 백업을 복원합니다. 보호 응답과 공식 부재가 두 번 확인되지 않은 `UNKNOWN`은 자동으로 새 시도를 열지 않고 공식 예약 내역 확인 또는 계정·운영 상태 확인을 안내합니다.
 - 공식 확인에서 결제보류 종료가 확정되면 감시로 복귀하되, 예약 목록 부재와 목록에 남은 결제기한 경과를 같은 보류 종료 정책으로 다룹니다. 두 경우 모두 보류 종료 뒤 확정 비가용 관측과 그 이후의 새 행동 가능 관측이 있어야 다음 에피소드를 엽니다.
 - 미래 결제기한이 있는 `PAYMENT_REQUIRED`는 최초 공식 확인과 별도로 기한 전 후속 read-only reconciliation을 최대 6회 실행합니다. 첫 후속 확인은 즉시 실행하고, 완료된 후속 확인 횟수 기준 다음 간격은 30초, 30초, 2분, 5분, 10분이며 여섯 번째 뒤에는 추가 기한 전 확인을 예약하지 않습니다. 기한 경계에서는 기존 post-deadline final read를 별도로 한 번 수행할 수 있습니다. 인증 필요·운영사 보호 신호는 이 evidence 횟수를 소비하지 않고 계정 자동 호출을 멈추지만, 기존 결제기한·후보·공식 인계 CTA는 보존합니다. 동일 credential generation이 다시 인증된 뒤에만 결제 상태 읽기를 재개합니다. 정확한 `CONFIRMED_PAID` 양성 근거는 `PAYMENT_REQUIRED`를 `COMPLETED`로 해소합니다. 모든 `UNKNOWN` 공식 확인은 `unknown_result_follow_up`을 사용합니다. 예약 요청 뒤 영속되고 현재 승객 수와 정확히 일치하는 신뢰 가능한 비공개 `confirmation_correlation_seats`가 있는 경우에만 양성 결과를 허용합니다. 상관 좌석이 없으면 예약 상태 근거로 `NOT_FOUND`·`INCONCLUSIVE`만 수용하며 provider가 반환한 결제완료·결제보류는 공용 경계에서 `INCONCLUSIVE`로 강등합니다. KORAIL은 이 purpose에서 상관 좌석과 유일한 공식 발권 카드가 정확히 일치한 `CONFIRMED_PAID`만 허용하며, 좌석등급·호차·좌석을 제공하지 않는 미결제 목록으로 보류를 확정하지 않습니다. SRT는 provider가 반환한 공식 예약 결과에서 모든 승객의 정규화된 호차·좌석을 확보한 채 `UNKNOWN` fence로 이동한 경우에만, 공식 record의 여정·객실·인원·좌석 집합까지 유일하게 일치한 미결제 보류 또는 결제 완료를 허용합니다. `confirmation_correlation_seats`는 불확실한 동안 공개 REST·SSE·UI에 노출하거나 `reserved_seats`로 투영하지 않습니다. 단, SRT의 exact 공식 미결제 보류가 확인되면 그때 상관 좌석을 확정 `reserved_seats`로 승격하고 비공개 필드를 비웁니다. 결제 완료에서는 원래 attempt의 outcome·reason을 감사 근거로 보존하고, watch의 결제기한·공식 인계 URL·다음 관측을 지우며, 모든 나머지 후보를 종료합니다. active pre-reservation 상태인 `SCHEDULED`·`OFFICIAL_WAITLIST`·`SEAT_FOUND`·`RESERVING`은 먼저 `WATCHING`으로 정규화하고, 기존 `WATCHING`·`PAYMENT_REQUIRED`를 포함해 실제 `COMPLETED`로 전이한 경우에만 결제 완료 outbox를 attempt별로 한 번 생성합니다. provider I/O 동안 watch가 `PAUSED`·`AUTH_REQUIRED`·`COOLDOWN`으로 바뀐 보존 경합에서는 기존 watch 상태를 유지하되 exact paid 근거를 절대 fence로 남기고 결제·관측·재시도 상태와 모든 후보의 수동 승인 marker를 닫은 뒤 `confirmed_paid`의 `watch.reservation_reconciled`만 발행합니다. 이때 `watch.payment_completed`나 수동 확인 알림을 합성하지 않으며 비공개 상관 좌석은 REST·SSE·UI에 노출하지 않습니다. 해당 confirmation이 attempt에 투영된 뒤에는 바깥 watch 상태 전이가 아직 반영되지 않았어도 웹의 긴급 결제 카드·공식 결제 CTA·수동 재시도 안내를 숨깁니다. 부재·불명확 결과를 결제 완료로 추정하지 않습니다.
 - `watch.payment_completed` SSE는 event type과 aggregate/watch/candidate identity, terminal, `payment_required | watching → completed`, exact `reason=confirmed_paid`, `automatic_reservation_retry=false`의 닫힌 필드만 검증하고 payload의 raw message를 UI 근거로 사용하지 않습니다. 같은 `watch:{id}` subject의 sticky 결제 안내나 `UNKNOWN` 수동 확인 안내를 timed 성공 알림으로 교체하며, event가 유실돼도 canonical 목록의 exact `CONFIRMED_PAID` 근거와 완료 edge가 같은 복구를 수행합니다. `watch.reservation_reconciled`의 다른 outcome이나 불완전한 후보 문맥만으로 완료 알림을 합성하지 않습니다. timed 완료 알림의 닫기는 dismissal ledger에 저장하지 않습니다.
@@ -375,8 +376,10 @@ iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push
 예약 진단은 provider 내부 구현을 그대로 노출하지 않는 닫힌 projection입니다. DB attempt와 공개 REST의
 `candidates[].latest_reservation_attempt`, SSE `watch.reservation_result`·`watch.reservation_reconciled`는
 `result_reason_code`, `confirmation_outcome`, `confirmation_diagnostic_code`, `confirmation_observed_at`,
-`reconciliation_attempt_count`, `reconciliation_resolution`, `next_reconcile_at`을 같은 의미로 전달합니다.
-REST는 여기에 서버가 판정한 `manual_rearm_reason`을 함께 전달합니다. 마이그레이션
+`reconciliation_attempt_count`, `reconciliation_resolution`, `next_reconcile_at`,
+`manual_check_required`를 같은 의미로 전달합니다. REST는 여기에 서버가 판정한
+`manual_rearm_reason`을 함께 전달하고, REST와 `watch.reservation_reconciled`는 confirmed-absent 복구
+child까지 닫힌 경우에만 `automatic_reservation_retry_fence_reason`을 전달합니다. 마이그레이션
 `0038_reconciliation_resolution`은 기존 확정 부재와 한도 소진 불명확 행을 두 resolution으로 분리하고,
 과거 count 6의 단일 `NOT_FOUND`에 남아 있던 실행 불가능한 다음 확인 시각을 제거합니다. 첫 필드는 다음 값만
 허용합니다.
@@ -708,8 +711,9 @@ non-persistent context 종료까지는 같은 auth lock 안에서 직렬화합�
 출발 시·1명 승객을 모두 확인하고, 결과 snapshot은 열차 번호·선택적 종류·경로·출도착 시각이 정확히 하나인
 경우에만 더보기를 생략합니다. 확정할 수 없으면 bounded expansion 뒤 DOM 예약을 한 번만 호출하며, 좌석 또는
 예약 click 이후 불확실한 결과를 재시도하지 않습니다. 이미 인증된 lease를 재사용할 때도 예약 화면에 들어가기
-직전 공식 same-origin probe를 수행합니다. 명확한 로그아웃이면 기존 session을 닫고 새 로그인을 최대 한 번만
-수행하며, probe 결과가 불명확하면 객실 등급 control을 누르기 전에 session을 폐기하고 중단합니다. 객실 등급
+직전 공식 same-origin probe를 수행합니다. 명확한 로그아웃이거나 source 불가로 판정할 수 없는 응답이면 기존
+session을 먼저 닫고 새 session에서 로그인을 최대 한 번만 수행합니다. 새 인증도 끝내 확인되지 않으면 객실 등급
+control을 누르기 전에 중단하며, 보호·rate-limit·취소에는 새 로그인을 시작하지 않습니다. 객실 등급
 또는 예약 click 뒤 source 불가·일반 오류·취소로 결과를 확정하지 못하면 비공개 상관 근거 수집을 제한적으로
 시도한 뒤 active session을 폐기하여 같은 session으로 새 예약을 시작하지 못하게 합니다. 최초 공식 확인이
 불명확하면 새로 검증한 session의 bounded read-only reconciliation만 이어갑니다. 취소는 session을 `STALE`,

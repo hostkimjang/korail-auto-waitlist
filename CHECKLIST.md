@@ -34,7 +34,7 @@
 - [x] 운행·예매 projection 유무·freshness와 독립된 활성 오류·cooldown·30초 초과 지연 판정, 정상 관측 숨김, 비활성 경고 제거와 종단 사실 보존, 홈 최근 확인 초 단위 표시
 - [x] 최근 진행 기록에서 반복 정상 좌석 관측을 제외하고 조회 오류·확인 불가·자료 만료, 인증·보호 상태와 상태 전이·예매·알림·결제보류 종료·결제완료 활동을 최신 20건으로 표시하며 전체 관측 집계는 유지
 - [x] hidden 탭의 SSE별 snapshot 투영 생략과 갱신 요청 단일 pending 접기, 결제기한·철도계정 polling 중단·복귀 즉시 갱신
-- [x] 홈·새 대기·설정의 live 목록과 내 예약 전체 이력 분리, 24시간 종단 전이 복구 창과 오래된 일반 만료 이력 제외, 최신 `UNKNOWN`·보호·실패 수동 확인 보존
+- [x] 홈·새 대기·설정의 live 목록과 내 예약 전체 이력 분리, 24시간 종단 전이 복구 창과 오래된 일반 만료 이력 제외, 최신 미해소 `UNKNOWN`·보호 수동 확인과 `exhausted_unresolved` 보존, `confirmed_paid`·`confirmed_absent` 해소 이력 제외
 - [x] 성공한 canonical live 응답에서 사라진 이전 watch subject의 sticky 알림만 현재 세션에서 정리하며 종단 결과를 추정하거나 사용자 dismissal ledger에 기록하지 않는 계약
 - [x] 브라우저 푸시·Telegram·Discord·Webhook 설정 화면
 - [x] 브라우저·설치 PWA별 Web Push 구독 저장과 모든 활성 기기 동시 발송, 현재 기기 연결·해제 계약
@@ -120,7 +120,11 @@
 - [x] KORAIL Pydoll credential-bound 인증 session actor canonical owner 이동과 secret-free fingerprint·TTL/횟수·취소 안전 cleanup·legacy exact facade 보존
 - [x] 활성 철도 계정의 시작 예열과 30초 sanitized telemetry 점검, 동일 generation `READY` 생략·120초 전 bounded 재예열, KORAIL 인증 JSON positive-only probe·최초 로그인 DOM fallback·keepalive fail-closed, 403/429 보호 유지, 60~900초 backoff와 auth revision fence 계약
 - [x] KORAIL 인증 session 재사용 TTL을 `last_verified_at` 절대 기준으로 고정하고 검색·예약·실패의 `last_used_at` 갱신으로 연장하지 않는 계약
-- [x] 재사용 KORAIL session의 예약 직전 공식 probe, 로그아웃 session 선폐기·새 로그인 1회, 불명확 probe의 click 전 중단과 click 뒤 불명확 session 폐기·동일 session 신규 예약 차단·fresh read-only reconciliation 계약
+- [x] 재사용 KORAIL session의 예약 직전 공식 probe, 로그아웃·source 불가 session 선폐기와 fresh 로그인 정확히 1회, 새 인증 실패의 click 전 중단, 보호·rate-limit·취소 시 무복구, click 뒤 불명확 session 폐기·동일 session 신규 예약 차단·fresh read-only reconciliation 계약
+- [x] 현재 adapter가 명시적으로 반환한 pre-dispatch `FAILED/provider_unavailable`만 수동 공식 확인에서 제외하고, 웹이 `예약 요청`·`공식 결과 확인`을 합성하지 않는 진실한 실패 표시, 기존 외부 provider의 모호한 동일 행은 `0040_legacy_failed_unknown`으로 `UNKNOWN`·즉시 재확인에 보수 정규화
+- [x] KORAIL·SRT 외부 예약 호출에서 timeout·transport·5xx·응답 검증 예외가 탈출하면 전달 전 실패로 단정하지 않고 `UNKNOWN`·공식 확인으로 잠그며, KORAIL 부분 click 근거도 같은 무재전송 fence로 보존하는 계약
+- [x] confirmed-absent 자동 복구 child가 다시 공식 부재로 닫힌 경우 raw episode lineage 없이 닫힌 `confirmed_absent_recovery_consumed` 사유로 추가 자동 예매 차단을 REST·재확인 SSE·웹에 표시
+- [x] `confirmed_absent` 해소 뒤 수동 확인 경고·오래된 live 보존을 끝내고, REST·재확인 SSE·활동 행·알림이 자동 복구 소진 사유를 동일하게 표시하는 계약
 - [x] 실제 `provider_blocked` 계정의 좌석 관측 provider I/O 차단과 인증 성공 뒤 즉시 감시 재스케줄 계약
 - [x] KORAIL Pydoll 단일 예약 actor canonical owner 이동과 exact identity·bounded expansion·1회 예약·취소/보호 cleanup·legacy exact facade 보존
 - [x] KORAIL Pydoll 로그인 DOM driver canonical owner 이동과 유일 method tab·active panel·공식 session 확인·secret-free stage·legacy exact facade 보존
@@ -221,6 +225,7 @@
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
 - [ ] Oracle 재가동 전에 같은 KORAIL 계정을 사용하는 로컬 scheduler·worker를 drain한 뒤 API provider session manager·sidecar를 포함한 Compose profile 전체를 volume 보존 상태로 정지하고 단일 활성 배포를 유지하며, hotfix 배포 뒤 자연 발생 예약에서 예약 직전 probe·필요 시 fresh login·불확실 session 폐기·fresh reconciliation과 공식 자동 배정 좌석 표시를 끝까지 확인
+- [x] 2026년 8월 17일 Oracle 00:56 KORAIL 70편과 로컬 01:00 KORAIL 107편에서 `session_keepalive`가 예약 control 전 0.5초 안에 실패하고 progress·click이 없음을 분리 확인했으며, 중간의 로컬 fresh 예매 성공과 Oracle 재로그인 뒤 로컬 session 무효화로 동일 계정 이중 실행 충돌을 확인하고 로컬 전체 Compose profile을 queue 0·volume 보존 상태로 정지
 - [ ] 실제 SRT 혼잡 시간대에 접속 대기 진입→통과→조회 재개 또는 caller timeout→late 종료 로그 순서와 비밀값 미노출 확인
 - [ ] 새 60/90초 timeout과 UUID correlation 배포 뒤 실제 SRT 혼잡 시간대에서 조기 caller 실패 감소, queue→query→late 종료의 동일 `provider_call_id`와 secret-free 로그 확인
 - [x] Playwright v1.55.0 Chromium seccomp 프로필과 최소 `SYS_CHROOT` capability를 KORAIL adapter에만 적용하고 `pwuser`·읽기 전용 루트·`cap_drop: ALL`·`no-new-privileges`를 보존한 재배포 확인

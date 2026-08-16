@@ -29,9 +29,7 @@ def test_migration_0039_adds_private_correlation_seats_with_empty_backfill(
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == (
-        "0039_confirmation_corr_seats"
-    )
+    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
 
     command.upgrade(config, "0038_reconciliation_resolution")
     started_at = datetime(2030, 8, 1, tzinfo=UTC).isoformat()

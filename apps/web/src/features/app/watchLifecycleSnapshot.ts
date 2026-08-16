@@ -1,11 +1,13 @@
 import type { ReservationCandidateContext, WatchReadModel } from "../../api/watchProjection";
 import type {
+  AutomaticReservationRetryFenceReason,
   PaymentHoldEndReason,
   ReservedSeat,
   ReservationAttemptOutcome,
   ReservationConfirmationDiagnosticCode,
   ReservationConfirmationOutcome,
   ReservationProgressStage,
+  ReservationReconciliationResolution,
   ReservationResultReasonCode,
   ReservationRetryCondition,
 } from "../../domain/reservationAttempt";
@@ -52,6 +54,8 @@ export interface WatchLifecycleAttempt {
   confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
   confirmationObservedAt?: string | null;
   reconciliationAttemptCount?: number;
+  reconciliationResolution?: ReservationReconciliationResolution | null;
+  automaticReservationRetryFenceReason?: AutomaticReservationRetryFenceReason | null;
   nextReconcileAt?: string | null;
   reservedSeats?: ReadonlyArray<ReservedSeat>;
 }
@@ -127,6 +131,26 @@ function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
     && Number(value.reconciliationAttemptCount) <= 6
     ? Number(value.reconciliationAttemptCount)
     : 0;
+  let reconciliationResolution: ReservationReconciliationResolution | null = null;
+  if (
+    value.reconciliationResolution === "confirmed_absent"
+    && outcome === "unknown"
+    && confirmationOutcome === "not_found"
+  ) {
+    reconciliationResolution = value.reconciliationResolution;
+  } else if (
+    value.reconciliationResolution === "exhausted_unresolved"
+    && outcome === "unknown"
+  ) {
+    reconciliationResolution = value.reconciliationResolution;
+  }
+  const automaticReservationRetryFenceReason =
+    value.automaticReservationRetryFenceReason === "confirmed_absent_recovery_consumed"
+    && outcome === "unknown"
+    && confirmationOutcome === "not_found"
+    && reconciliationResolution === "confirmed_absent"
+      ? value.automaticReservationRetryFenceReason
+      : null;
   return {
     outcome,
     resultReasonCode: isReservationResultReasonCode(value.resultReasonCode)
@@ -159,6 +183,8 @@ function legacyAttempt(value: unknown): WatchLifecycleAttempt | null {
     ),
     confirmationObservedAt: nonEmptyString(value.confirmationObservedAt),
     reconciliationAttemptCount,
+    reconciliationResolution,
+    automaticReservationRetryFenceReason,
     nextReconcileAt: nonEmptyString(value.nextReconcileAt),
     reservedSeats: normalizeReservedSeats(legacyReservedSeats),
   };
@@ -219,6 +245,9 @@ export function mapWatchLifecycleSnapshot(watch: WatchReadModel): WatchLifecycle
         confirmationDiagnosticCode: attempt.confirmationDiagnosticCode ?? null,
         confirmationObservedAt: attempt.confirmationObservedAt ?? null,
         reconciliationAttemptCount: attempt.reconciliationAttemptCount ?? 0,
+        reconciliationResolution: attempt.reconciliationResolution ?? null,
+        automaticReservationRetryFenceReason:
+          attempt.automaticReservationRetryFenceReason ?? null,
         nextReconcileAt: attempt.nextReconcileAt ?? null,
         reservedSeats: attempt.reservedSeats ?? [],
       },

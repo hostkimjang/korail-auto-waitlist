@@ -1769,6 +1769,7 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
         "reserved_seats": [],
         "post_deadline_reconciled_at": None,
         "payment_hold_end_reason": None,
+        "automatic_reservation_retry_fence_reason": None,
         "retryable": True,
         "manual_check_required": False,
         "manual_rearm_available": False,
@@ -1777,7 +1778,7 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
     }
     assert attempts[1]["outcome"] == "failed"
     assert attempts[1]["retryable"] is False
-    assert attempts[1]["manual_check_required"] is True
+    assert attempts[1]["manual_check_required"] is False
     assert attempts[1]["retry_condition"] is None
     assert attempts[2]["outcome"] == "unknown"
     assert attempts[2]["started_at"] == (started_at + timedelta(minutes=2)).isoformat().replace(
@@ -1901,6 +1902,7 @@ async def test_watch_read_projects_ended_srt_374_hold_as_new_episode_retry(app, 
         "reserved_seats": [],
         "post_deadline_reconciled_at": reconciled_at.isoformat().replace("+00:00", "Z"),
         "payment_hold_end_reason": "confirmed_payment_hold_no_longer_present",
+        "automatic_reservation_retry_fence_reason": None,
         "retryable": True,
         "manual_check_required": False,
         "manual_rearm_available": False,
@@ -2039,7 +2041,7 @@ async def test_watch_read_keeps_incomplete_payment_hold_end_evidence_fail_closed
     assert response.status_code == 200, response.text
     attempt_payload = response.json()["candidates"][0]["latest_reservation_attempt"]
     assert attempt_payload["retryable"] is False
-    assert attempt_payload["manual_check_required"] is (outcome is ReservationOutcome.FAILED)
+    assert attempt_payload["manual_check_required"] is False
     assert attempt_payload["retry_condition"] is None
 
 

@@ -917,19 +917,60 @@ async def test_stale_credential_result_cannot_write_new_generation_state(app) ->
 
 
 class FailingExternalReservationAdapter:
+    def __init__(
+        self,
+        provider: Provider,
+        confirmation_outcome: ReservationConfirmationOutcome = (
+            ReservationConfirmationOutcome.INCONCLUSIVE
+        ),
+    ) -> None:
+        self.provider = provider
+        self.confirmation_outcome = confirmation_outcome
+        self.confirmation_calls = 0
+        self.confirmation_target = None
+
     async def reserve_once(self, request) -> ReservationResult:
         assert request.expected_credential_version == 4
         raise RuntimeError("fixture provider failure")
 
-    async def confirm_reservation(self, target):
-        raise AssertionError("FAILED must not trigger a confirmation read")
+    async def confirm_reservation(self, target) -> ReservationConfirmationResult:
+        self.confirmation_calls += 1
+        self.confirmation_target = target
+        return ReservationConfirmationResult(
+            provider=self.provider,
+            outcome=self.confirmation_outcome,
+            diagnostic_code=(
+                ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+                if self.confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+                else None
+            ),
+            source=(
+                "korail-reservation-list"
+                if self.provider is Provider.KORAIL
+                else "srtrain-reservation-list"
+            ),
+            observed_at=datetime.now(UTC),
+        )
 
 
-async def test_external_provider_error_retains_claim_generation_and_completes(app) -> None:
+@pytest.mark.parametrize("provider", [Provider.KORAIL, Provider.SRT])
+@pytest.mark.parametrize(
+    "confirmation_outcome",
+    [
+        ReservationConfirmationOutcome.INCONCLUSIVE,
+        ReservationConfirmationOutcome.AUTH_REQUIRED,
+        ReservationConfirmationOutcome.PROVIDER_BLOCKED,
+    ],
+)
+async def test_external_provider_error_becomes_unknown_and_requires_confirmation(
+    app,
+    provider: Provider,
+    confirmation_outcome: ReservationConfirmationOutcome,
+) -> None:
     departure_at = datetime.now(UTC) + timedelta(days=1)
     async with app.state.test_session_factory() as session:
         account = RailProviderAccount(
-            provider=Provider.KORAIL,
+            provider=provider,
             credentials_ciphertext=secret_box.encrypt_dict(
                 {
                     "login_method": "membership_number",
@@ -943,7 +984,7 @@ async def test_external_provider_error_retains_claim_generation_and_completes(ap
             last_authenticated_at=datetime.now(UTC),
         )
         watch = Watch(
-            provider=Provider.KORAIL,
+            provider=provider,
             origin="대전",
             origin_node_id="NAT011668",
             destination="서울",
@@ -955,7 +996,7 @@ async def test_external_provider_error_retains_claim_generation_and_completes(ap
             mode="official",
             reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
             status=WatchStatus.SEAT_FOUND,
-            dedupe_key="execution-provider-error-generation",
+            dedupe_key=f"execution-provider-error-generation-{provider.value}",
         )
         candidate = WatchCandidate(
             train_number="00055",
@@ -984,21 +1025,79 @@ async def test_external_provider_error_retains_claim_generation_and_completes(ap
             reservation_episode_key="availability:provider-error",
         )
 
+    adapter = FailingExternalReservationAdapter(provider, confirmation_outcome)
     await execute_reservation(
-        FailingExternalReservationAdapter(),
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.confirmation_calls == 1
+    assert adapter.confirmation_target is not None
+    assert (
+        adapter.confirmation_target.purpose
+        is ReservationConfirmationPurpose.UNKNOWN_RESULT_FOLLOW_UP
+    )
+    async with app.state.test_session_factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        watch = await session.get(Watch, target.watch_id)
+        candidate = await session.get(WatchCandidate, target.candidate_id)
+        result_event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_id == target.watch_id,
+                OutboxEvent.event_type == "watch.reservation_result",
+            )
+        )
+        assert attempt is not None and attempt.outcome is ReservationOutcome.UNKNOWN
+        assert attempt.result_reason_code is ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+        assert attempt.credential_version == 4
+        assert attempt.finished_at is not None
+        assert (attempt.next_reconcile_at is not None) is (
+            confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+        )
+        assert attempt.confirmation_outcome is confirmation_outcome
+        assert watch is not None
+        assert watch.status is (
+            WatchStatus.WATCHING
+            if confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+            else WatchStatus.AUTH_REQUIRED
+        )
+        assert candidate is not None and candidate.state == "observed"
+        assert result_event is not None
+        assert result_event.payload["manual_check_required"] is True
+        assert result_event.payload["retryable"] is False
+
+
+class FailingMockReservationAdapter:
+    async def reserve_once(self, _request) -> ReservationResult:
+        raise RuntimeError("fixture mock failure")
+
+    async def confirm_reservation(self, _target):
+        raise AssertionError("mock failures must not trigger a confirmation read")
+
+
+async def test_mock_provider_error_remains_conclusive_failed(app) -> None:
+    target = await _persist_actionable_mock_target(app.state.test_session_factory)
+
+    await execute_reservation(
+        FailingMockReservationAdapter(),
         target,
         dependencies=dependencies(app.state.test_session_factory),
     )
 
     async with app.state.test_session_factory() as session:
         attempt = await session.scalar(select(ReservationAttempt))
-        watch = await session.get(Watch, target.watch_id)
-        candidate = await session.get(WatchCandidate, target.candidate_id)
+        result_event = await session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.aggregate_id == target.watch_id,
+                OutboxEvent.event_type == "watch.reservation_result",
+            )
+        )
         assert attempt is not None and attempt.outcome is ReservationOutcome.FAILED
-        assert attempt.credential_version == 4
-        assert attempt.finished_at is not None
-        assert watch is not None and watch.status is WatchStatus.WATCHING
-        assert candidate is not None and candidate.state == "observed"
+        assert attempt.result_reason_code is ReservationResultReasonCode.PROVIDER_UNAVAILABLE
+        assert attempt.progress_stages == []
+        assert result_event is not None
+        assert result_event.payload["manual_check_required"] is False
 
 
 async def _persist_actionable_korail_target(session_factory) -> ReservationExecutionTarget:
@@ -1369,6 +1468,69 @@ class UnknownProviderUnavailableKorailAdapter:
         )
 
 
+class ProgressThenFailingKorailAdapter:
+    def __init__(self) -> None:
+        self.reported: tuple[ReservationProgressStage, ...] = ()
+        self.confirmation_calls = 0
+
+    async def reserve_once(self, _request) -> ReservationResult:
+        raise AssertionError("KORAIL progress adapter must use reserve_once_with_progress")
+
+    async def reserve_once_with_progress(self, _request, on_progress) -> ReservationResult:
+        started = datetime.now(UTC)
+        self.reported = tuple(
+            ReservationProgressStage(
+                stage=stage,
+                occurred_at=started + timedelta(milliseconds=index),
+            )
+            for index, stage in enumerate(
+                (
+                    "authenticated_session_ready",
+                    "target_rechecked",
+                    "seat_selected",
+                    "reservation_requested",
+                )
+            )
+        )
+        for stage in self.reported:
+            await on_progress(stage)
+        raise RuntimeError("fixture transport lost after reservation dispatch")
+
+    async def confirm_reservation(self, _target) -> ReservationConfirmationResult:
+        self.confirmation_calls += 1
+        return ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=(ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE),
+            source="korail-reservation-list",
+            observed_at=datetime.now(UTC),
+        )
+
+
+async def test_external_provider_error_preserves_progress_before_unknown_fence(app) -> None:
+    target = await _persist_actionable_korail_target(app.state.test_session_factory)
+    adapter = ProgressThenFailingKorailAdapter()
+
+    await execute_reservation(
+        adapter,
+        target,
+        dependencies=dependencies(app.state.test_session_factory),
+    )
+
+    assert adapter.confirmation_calls == 1
+    async with app.state.test_session_factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        assert attempt is not None and attempt.outcome is ReservationOutcome.UNKNOWN
+        assert attempt.progress_stages == [
+            {
+                "stage": stage.stage,
+                "occurred_at": stage.occurred_at.isoformat(),
+            }
+            for stage in adapter.reported
+        ]
+        assert attempt.next_reconcile_at is not None
+
+
 async def test_korail_unknown_provider_failure_is_confirmed_and_persisted(
     app,
     caplog: pytest.LogCaptureFixture,
@@ -1409,6 +1571,8 @@ async def test_korail_unknown_provider_failure_is_confirmed_and_persisted(
         assert event.payload["result_reason_code"] == "provider_unavailable"
         assert event.payload["confirmation_outcome"] == "inconclusive"
         assert event.payload["confirmation_diagnostic_code"] == "unspecified"
+        assert event.payload["manual_check_required"] is True
+        assert event.payload["retryable"] is False
         persisted = next(
             record.message
             for record in caplog.records
@@ -1453,7 +1617,6 @@ class ProgressReportingKorailAdapter:
                     "authenticated_session_ready",
                     "target_rechecked",
                     "seat_selected",
-                    "reservation_requested",
                 )
             )
         )
@@ -1563,7 +1726,7 @@ async def test_korail_progress_callback_persists_cumulative_idempotent_snapshots
                 )
             ).all()
         )
-        assert len(events) == 4
+        assert len(events) == len(adapter.reported)
         for index, event in enumerate(events):
             expected = adapter.reported[index]
             assert event.dedupe_key == (f"reservation-progress:{attempt.id}:{expected.stage}")

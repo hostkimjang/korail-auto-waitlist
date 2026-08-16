@@ -18,9 +18,7 @@ def test_migration_0033_adds_expiring_watch_observation_claim(tmp_path, monkeypa
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == (
-        "0039_confirmation_corr_seats"
-    )
+    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
 
     command.upgrade(config, "0032_manual_reservation_rearm")
     command.upgrade(config, "head")

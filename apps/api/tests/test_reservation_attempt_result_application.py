@@ -420,7 +420,7 @@ async def test_expired_success_deadline_becomes_unknown_manual_check_fence() -> 
             "observed",
             WatchStatus.WATCHING,
             "reservation_failed_monitoring_resumed",
-            True,
+            False,
         ),
         (
             ReservationOutcome.AUTH_REQUIRED,

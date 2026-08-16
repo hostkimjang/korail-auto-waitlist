@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { buildLiveReservationNotice } from "../src/features/app/liveReservationNotice";
+import {
+  initialNotificationCenterState,
+  pushNotifications,
+} from "../src/features/app/notificationCenter";
 import type { WatchSnapshot } from "../src/features/app/watchSnapshots";
 import type { WatchLifecycleSnapshot } from "../src/features/app/watchLifecycleSnapshot";
 
@@ -688,6 +692,159 @@ describe("live reservation notices", () => {
       autoCloseMs: null,
     });
     expect(notice?.description).toContain(evidence);
+  });
+
+  it("replaces a sticky manual notice when SSE confirms absence and its recovery fence", () => {
+    const unknownWatch: WatchLifecycleSnapshot = {
+      ...watch,
+      latestReservationAttemptCandidateId: "candidate",
+      latestReservationAttempt: {
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-18T03:20:00Z",
+        finishedAt: "2026-08-18T03:20:08Z",
+        retryable: false,
+        manualCheckRequired: true,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: "2026-08-18T03:20:10Z",
+        reconciliationAttemptCount: 1,
+        nextReconcileAt: "2026-08-18T03:20:20Z",
+      },
+    };
+    const event = {
+      id: "reconciled-confirmed-absent-consumed",
+      event_type: "watch.reservation_reconciled",
+      aggregate_id: watch.id,
+      created_at: "2026-08-18T03:20:21Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        outcome: "unknown",
+        monitoring_resumed: true,
+        manual_check_required: false,
+        retryable: false,
+        retry_condition: null,
+        result_reason_code: "reservation_request_result_unknown",
+        confirmation_outcome: "not_found",
+        confirmation_observed_at: "2026-08-18T03:20:20Z",
+        reconciliation_attempt_count: 2,
+        reconciliation_resolution: "confirmed_absent",
+        automatic_reservation_retry_fence_reason: "confirmed_absent_recovery_consumed",
+        next_reconcile_at: null,
+        attempt_started_at: "2026-08-18T03:20:00Z",
+        attempt_finished_at: "2026-08-18T03:20:08Z",
+      },
+    };
+
+    const notice = buildLiveReservationNotice(event, [unknownWatch]);
+    expect(notice).toMatchObject({
+      subjectKey: `watch:${watch.id}`,
+      kind: "recovery",
+      title: "자동 복구 1회 사용을 마쳐 감시 중입니다",
+    });
+    expect(notice?.description).toContain("추가 자동 예매는 차단됩니다");
+    expect(notice?.description).not.toMatch(/수동 확인|확인해 주세요|다시 예매/);
+
+    const manualState = pushNotifications(initialNotificationCenterState, [{
+      subjectKey: `watch:${watch.id}`,
+      revisionKey: `watch:${watch.id}:manual-before-reconcile`,
+      revisionAt: "2026-08-18T03:20:10Z",
+      kind: "manual_check",
+      title: "예매 결과를 확인해야 합니다",
+      description: "공식 예약 내역을 확인해 주세요.",
+      autoCloseMs: null,
+    }]);
+    const reconciledState = notice === null
+      ? manualState
+      : pushNotifications(manualState, [notice]);
+    expect(reconciledState.notices).toHaveLength(1);
+    expect(reconciledState.notices[0]).toMatchObject({
+      kind: "recovery",
+      title: "자동 복구 1회 사용을 마쳐 감시 중입니다",
+    });
+    expect(reconciledState.notices[0]?.persistence).toBe("timed");
+  });
+
+  it("keeps future SSE fields compatible and degrades incompatible closure evidence", () => {
+    const unknownWatch: WatchLifecycleSnapshot = {
+      ...watch,
+      latestReservationAttemptCandidateId: "candidate",
+      latestReservationAttempt: {
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-18T03:20:00Z",
+        finishedAt: "2026-08-18T03:20:08Z",
+        retryable: false,
+        manualCheckRequired: true,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+      },
+    };
+    const baseEvent = {
+      event_type: "watch.reservation_reconciled",
+      aggregate_id: watch.id,
+      created_at: "2026-08-18T03:20:21Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        outcome: "unknown",
+        monitoring_resumed: true,
+        manual_check_required: false,
+        result_reason_code: "reservation_request_result_unknown",
+        confirmation_outcome: "not_found",
+        confirmation_observed_at: "2026-08-18T03:20:20Z",
+        reconciliation_attempt_count: 2,
+        reconciliation_resolution: "confirmed_absent",
+        next_reconcile_at: null,
+      },
+    };
+
+    const futureFence = buildLiveReservationNotice({
+      ...baseEvent,
+      id: "reconciled-future-fence",
+      payload: {
+        ...baseEvent.payload,
+        automatic_reservation_retry_fence_reason: "future_fence_reason",
+      },
+    }, [unknownWatch]);
+    expect(futureFence).toMatchObject({
+      kind: "recovery",
+      title: "공식 예약 없음이 확인되어 감시 중입니다",
+    });
+    expect(futureFence?.description).not.toContain("자동 복구 1회");
+
+    const incompatibleFence = buildLiveReservationNotice({
+      ...baseEvent,
+      id: "reconciled-incompatible-known-fence",
+      payload: {
+        ...baseEvent.payload,
+        confirmation_outcome: "inconclusive",
+        reconciliation_resolution: "exhausted_unresolved",
+        automatic_reservation_retry_fence_reason: "confirmed_absent_recovery_consumed",
+      },
+    }, [unknownWatch]);
+    expect(incompatibleFence).toMatchObject({
+      kind: "manual_check",
+      title: "예매 요청 결과를 확인해야 합니다",
+    });
+    expect(incompatibleFence?.description).toContain("공식 예약 내역을 확인해 주세요");
+    expect(incompatibleFence?.description).not.toContain("대상 예약이 없음을 확인");
+
+    const incompatibleAbsence = buildLiveReservationNotice({
+      ...baseEvent,
+      id: "reconciled-incompatible-confirmed-absence",
+      payload: {
+        ...baseEvent.payload,
+        confirmation_outcome: "inconclusive",
+      },
+    }, [unknownWatch]);
+    expect(incompatibleAbsence).toMatchObject({
+      kind: "manual_check",
+      title: "예매 요청 결과를 확인해야 합니다",
+    });
+    expect(incompatibleAbsence?.description).not.toContain("대상 예약이 없음을 확인");
   });
 
   it("rejects stale UNKNOWN authentication reconciliation that does not own the latest attempt", () => {

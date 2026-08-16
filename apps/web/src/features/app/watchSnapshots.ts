@@ -4,10 +4,12 @@ import {
   type WatchLifecycleSnapshot,
 } from "./watchLifecycleSnapshot";
 import type {
+  AutomaticReservationRetryFenceReason,
   ReservedSeat,
   ReservationConfirmationDiagnosticCode,
   ReservationConfirmationOutcome,
   ReservationProgressStage,
+  ReservationReconciliationResolution,
   ReservationResultReasonCode,
   ReservationRetryCondition,
 } from "../../domain/reservationAttempt";
@@ -41,6 +43,8 @@ export interface SeatFoundTransition {
   confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
   confirmationObservedAt?: string | null;
   reconciliationAttemptCount?: number;
+  reconciliationResolution?: ReservationReconciliationResolution | null;
+  automaticReservationRetryFenceReason?: AutomaticReservationRetryFenceReason | null;
   nextReconcileAt?: string | null;
 }
 
@@ -58,6 +62,8 @@ export interface ReservationRecoveryResult {
   confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
   confirmationObservedAt?: string | null;
   reconciliationAttemptCount?: number;
+  reconciliationResolution?: ReservationReconciliationResolution | null;
+  automaticReservationRetryFenceReason?: AutomaticReservationRetryFenceReason | null;
   nextReconcileAt?: string | null;
 }
 
@@ -194,6 +200,10 @@ function transitionContext(
     confirmationObservedAt: watch.latestReservationAttempt?.confirmationObservedAt ?? null,
     reconciliationAttemptCount:
       watch.latestReservationAttempt?.reconciliationAttemptCount ?? 0,
+    reconciliationResolution:
+      watch.latestReservationAttempt?.reconciliationResolution ?? null,
+    automaticReservationRetryFenceReason:
+      watch.latestReservationAttempt?.automaticReservationRetryFenceReason ?? null,
     nextReconcileAt: watch.latestReservationAttempt?.nextReconcileAt ?? null,
     reservationPolicy: watch.reservationPolicy,
     paymentDeadline: watch.paymentDeadline,
@@ -319,6 +329,9 @@ function canonicalRecoveryResult(
     confirmationDiagnosticCode: attempt.confirmationDiagnosticCode ?? null,
     confirmationObservedAt: attempt.confirmationObservedAt ?? null,
     reconciliationAttemptCount: attempt.reconciliationAttemptCount ?? 0,
+    reconciliationResolution: attempt.reconciliationResolution ?? null,
+    automaticReservationRetryFenceReason:
+      attempt.automaticReservationRetryFenceReason ?? null,
     nextReconcileAt: attempt.nextReconcileAt ?? null,
   };
 }
@@ -341,6 +354,8 @@ function canonicalRecoveryRevision(watch: WatchLifecycleSnapshot): string | null
     result.confirmationDiagnosticCode ?? "no-confirmation-diagnostic",
     result.confirmationObservedAt ?? "no-confirmation-time",
     `reconcile-${result.reconciliationAttemptCount}`,
+    result.reconciliationResolution ?? "no-reconciliation-resolution",
+    result.automaticReservationRetryFenceReason ?? "no-automatic-retry-fence",
     result.nextReconcileAt ?? "no-next-reconcile",
   ].join(":");
 }

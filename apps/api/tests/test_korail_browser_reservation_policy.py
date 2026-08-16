@@ -298,24 +298,24 @@ PROGRESS_TIMES = (
             ),
             ReservationOutcome.PAYMENT_REQUIRED,
         ),
-        (_wire_result("auth_required", reservation_clicked=True), ReservationOutcome.AUTH_REQUIRED),
+        (_wire_result("auth_required", reservation_clicked=True), ReservationOutcome.UNKNOWN),
         (_wire_result("consent_required", reservation_clicked=True), ReservationOutcome.UNKNOWN),
         (_wire_result("action_required", reservation_clicked=True), ReservationOutcome.UNKNOWN),
         (
             _wire_result("provider_blocked", reservation_clicked=True),
-            ReservationOutcome.PROVIDER_BLOCKED,
+            ReservationOutcome.UNKNOWN,
         ),
-        (_wire_result("unavailable", reservation_clicked=True), ReservationOutcome.NOT_AVAILABLE),
+        (_wire_result("unavailable", reservation_clicked=True), ReservationOutcome.UNKNOWN),
         (_wire_result("failed", reservation_clicked=True), ReservationOutcome.UNKNOWN),
         (_wire_result("failed"), ReservationOutcome.FAILED),
     ],
     ids=(
         "payment-priority",
-        "auth-priority",
+        "auth-partial-click-unknown",
         "consent-manual",
         "action-manual",
-        "provider-blocked-priority",
-        "unavailable-priority",
+        "provider-blocked-partial-click-unknown",
+        "unavailable-partial-click-unknown",
         "post-click-unknown",
         "default-failed",
     ),
@@ -368,6 +368,29 @@ def test_click_error_remains_unknown_without_claiming_request_progress() -> None
         "target_rechecked",
         "seat_selected",
     ]
+
+
+@pytest.mark.parametrize(
+    ("wire_outcome", "expected_reason"),
+    [
+        ("auth_required", ReservationResultReasonCode.AUTHENTICATION_REQUIRED),
+        ("provider_blocked", ReservationResultReasonCode.PROVIDER_BLOCKED),
+        ("unavailable", ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN),
+    ],
+)
+def test_partial_click_evidence_without_request_timestamp_is_never_replayed(
+    wire_outcome: str,
+    expected_reason: ReservationResultReasonCode,
+) -> None:
+    wire = _wire_result(wire_outcome, reservation_clicked=True)
+
+    result = policy.project_reservation_result(wire, observed_at=OBSERVED_AT)
+
+    assert wire.reservation_clicked is True
+    assert wire.reservation_requested_at is None
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert result.result_reason_code is expected_reason
+    assert result.progress_stages == ()
 
 
 def test_result_projection_survives_wall_clock_rollback_after_progress() -> None:

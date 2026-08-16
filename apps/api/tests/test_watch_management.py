@@ -9,6 +9,9 @@ from sqlalchemy import select
 from rail_waitlist.domain import ReservationOutcome, ReservationPolicy, WatchStatus
 from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
 from rail_waitlist.reservations.manual_rearm_contracts import ManualReservationRearmReason
+from rail_waitlist.reservations.reconciliation_policy import (
+    ReservationReconciliationResolution,
+)
 from rail_waitlist.watch_management import http as watch_http
 from rail_waitlist.watch_management.models import ReservationAttempt, Watch, WatchCandidate
 from rail_waitlist.watch_management.read_model import reservation_attempt_projection
@@ -120,6 +123,8 @@ async def test_live_watch_view_filters_history_before_projection_and_preserves_m
             ("completed", "KTX-LIVE-COMPLETED"),
             ("paid_unknown", "KTX-HISTORY-PAID-UNKNOWN"),
             ("failed", "KTX-LIVE-FAILED"),
+            ("confirmed_absent", "KTX-HISTORY-CONFIRMED-ABSENT"),
+            ("exhausted", "KTX-LIVE-EXHAUSTED"),
         )
     }
     now = datetime.now(UTC)
@@ -144,14 +149,31 @@ async def test_live_watch_view_filters_history_before_projection_and_preserves_m
         watches["completed"].status = WatchStatus.COMPLETED
         watches["paid_unknown"].status = WatchStatus.PAUSED
         watches["failed"].status = WatchStatus.FAILED
+        watches["confirmed_absent"].status = WatchStatus.EXPIRED
+        watches["exhausted"].status = WatchStatus.EXPIRED
 
         candidates["payment"].state = "payment_required"
-        for name in ("expired", "recent", "manual", "superseded"):
+        for name in (
+            "expired",
+            "recent",
+            "manual",
+            "superseded",
+            "confirmed_absent",
+            "exhausted",
+        ):
             candidates[name].state = "expired"
         candidates["completed"].state = "payment_required"
         candidates["paid_unknown"].state = "expired"
         candidates["failed"].state = "failed"
-        for name in ("expired", "manual", "superseded", "paid_unknown", "failed"):
+        for name in (
+            "expired",
+            "manual",
+            "superseded",
+            "paid_unknown",
+            "failed",
+            "confirmed_absent",
+            "exhausted",
+        ):
             watches[name].updated_at = now - timedelta(days=2)
         paid_unknown_latest_candidate = WatchCandidate(
             watch=watches["paid_unknown"],
@@ -233,6 +255,40 @@ async def test_live_watch_view_filters_history_before_projection_and_preserves_m
                     started_at=now,
                     finished_at=now,
                 ),
+                ReservationAttempt(
+                    candidate_id=candidates["confirmed_absent"].id,
+                    attempt_sequence=1,
+                    episode_key="confirmed-absent-source-episode",
+                    idempotency_key="confirmed-absent-source-attempt",
+                    outcome=ReservationOutcome.UNKNOWN,
+                    confirmation_outcome=ReservationConfirmationOutcome.NOT_FOUND,
+                    confirmation_source="official-reservation-list",
+                    confirmation_observed_at=now - timedelta(days=2),
+                    last_reconciled_at=now - timedelta(days=2),
+                    reconciliation_attempt_count=2,
+                    reconciliation_resolution=(
+                        ReservationReconciliationResolution.CONFIRMED_ABSENT
+                    ),
+                    started_at=now - timedelta(days=2, minutes=2),
+                    finished_at=now - timedelta(days=2, minutes=1),
+                ),
+                ReservationAttempt(
+                    candidate_id=candidates["exhausted"].id,
+                    attempt_sequence=1,
+                    episode_key="exhausted-unresolved-episode",
+                    idempotency_key="exhausted-unresolved-attempt",
+                    outcome=ReservationOutcome.UNKNOWN,
+                    confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+                    confirmation_source="official-reservation-list",
+                    confirmation_observed_at=now - timedelta(days=2),
+                    last_reconciled_at=now - timedelta(days=2),
+                    reconciliation_attempt_count=6,
+                    reconciliation_resolution=(
+                        ReservationReconciliationResolution.EXHAUSTED_UNRESOLVED
+                    ),
+                    started_at=now - timedelta(days=2, minutes=2),
+                    finished_at=now - timedelta(days=2, minutes=1),
+                ),
             ]
         )
         await session.commit()
@@ -254,7 +310,7 @@ async def test_live_watch_view_filters_history_before_projection_and_preserves_m
         watch_ids["recent"],
         watch_ids["manual"],
         watch_ids["completed"],
-        watch_ids["failed"],
+        watch_ids["exhausted"],
     }
     manual_watch = next(watch for watch in live.json() if watch["id"] == watch_ids["manual"])
     assert (
@@ -279,17 +335,34 @@ async def test_live_watch_view_filters_history_before_projection_and_preserves_m
     assert paid_unknown_attempt["manual_check_required"] is False
     assert paid_unknown_attempt["manual_rearm_available"] is False
     assert paid_unknown_attempt["manual_rearm_reason"] is None
+    confirmed_absent_watch = next(
+        watch for watch in full_history.json() if watch["id"] == watch_ids["confirmed_absent"]
+    )
+    exhausted_watch = next(watch for watch in live.json() if watch["id"] == watch_ids["exhausted"])
+    assert (
+        confirmed_absent_watch["candidates"][0]["latest_reservation_attempt"][
+            "manual_check_required"
+        ]
+        is False
+    )
+    assert (
+        exhausted_watch["candidates"][0]["latest_reservation_attempt"]["manual_check_required"]
+        is True
+    )
     assert expired_history.status_code == 200
     assert {watch["id"] for watch in expired_history.json()} == {
         watch_ids["expired"],
         watch_ids["recent"],
         watch_ids["manual"],
         watch_ids["superseded"],
+        watch_ids["confirmed_absent"],
+        watch_ids["exhausted"],
     }
     assert live_expired.status_code == 200
     assert {watch["id"] for watch in live_expired.json()} == {
         watch_ids["recent"],
         watch_ids["manual"],
+        watch_ids["exhausted"],
     }
 
 

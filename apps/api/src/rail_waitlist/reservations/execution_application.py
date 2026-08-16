@@ -578,6 +578,7 @@ async def confirm_provider_reservation_result(
             confirmation_target.purpose,
         )
     command_may_have_been_issued = result.outcome in {
+        ReservationOutcome.UNKNOWN,
         ReservationOutcome.PAYMENT_REQUIRED,
         ReservationOutcome.RESERVED,
     } or _has_reservation_requested_progress(result)
@@ -820,9 +821,9 @@ async def execute_reservation(
         idempotency_key,
         expected_credential_version=provider_credential_version,
     )
+    cumulative_progress: tuple[ReservationProgressStage, ...] = ()
     try:
         if target.provider is Provider.KORAIL and isinstance(adapter, ReservationProgressProvider):
-            cumulative_progress: tuple[ReservationProgressStage, ...] = ()
 
             async def on_progress(progress: ReservationProgressStage) -> None:
                 nonlocal cumulative_progress
@@ -853,12 +854,21 @@ async def execute_reservation(
         else:
             result = await adapter.reserve_once(reservation_request)
     except dependencies.provider_call_errors:
+        # A provider adapter that returns FAILED has proved that its reservation
+        # command never crossed the dispatch boundary. An exception escaping an
+        # external adapter carries no such proof: the sidecar may have accepted
+        # the command before its response was lost. Preserve the no-retry/manual
+        # confirmation fence by classifying that boundary failure as UNKNOWN.
+        command_status_unknown = target.provider in EXTERNAL_RESERVATION_PROVIDERS
         result = ReservationResult(
-            outcome=ReservationOutcome.FAILED,
+            outcome=(
+                ReservationOutcome.UNKNOWN if command_status_unknown else ReservationOutcome.FAILED
+            ),
             result_reason_code=ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
             source=("mock" if target.provider is Provider.MOCK else "authorized-provider"),
             observed_at=dependencies.now(),
             credential_version=provider_credential_version,
+            progress_stages=cumulative_progress if command_status_unknown else (),
         )
     evaluation = await confirm_provider_reservation_result(
         adapter,

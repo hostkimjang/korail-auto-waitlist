@@ -748,6 +748,26 @@ async def test_reserve_progress_stream_preserves_click_error_without_request_sta
     assert result.reservation_requested_at is None
 
 
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+async def test_reserve_progress_stream_marks_server_errors_as_command_uncertain(
+    status_code: int,
+) -> None:
+    client = FakeStreamHttpClient([])
+    client.response.status_code = status_code
+    transport = transport_with(client)  # type: ignore[arg-type]
+
+    async def on_progress(stage):
+        return None
+
+    with pytest.raises(owner._AdapterFailure) as captured:
+        await transport.reserve_with_progress(reserve_request(), on_progress)
+
+    assert captured.value.reason == "source_unavailable"
+    assert captured.value.reservation_command_uncertain is True
+    assert captured.value.progress_stages == ()
+    assert len(client.requests) == 1
+
+
 @pytest.mark.parametrize(
     "lines",
     [

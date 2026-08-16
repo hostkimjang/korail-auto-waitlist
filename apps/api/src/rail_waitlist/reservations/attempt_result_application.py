@@ -430,9 +430,7 @@ async def complete_reservation_attempt(
             ),
             "monitoring_resumed": monitoring_resumed if not successful_hold else False,
             "retryable": result_policy.retryable,
-            "manual_check_required": (
-                result_policy.manual_check_required and not unknown_confirmation_auth_failure
-            ),
+            "manual_check_required": result_policy.manual_check_required,
             "retry_condition": result_policy.retry_condition,
             "reserved_seats": [seat.model_dump() for seat in result.reserved_seats],
             **({"progress_stages": persisted_progress} if persisted_progress else {}),

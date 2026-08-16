@@ -118,7 +118,7 @@ def project_reservation_result(
     )
 
     post_request_command_may_have_been_issued = (
-        result.reservation_clicked and result.reservation_requested_at is not None
+        result.reservation_clicked or result.reservation_requested_at is not None
     )
     if result.outcome == "payment_required":
         return ReservationResult(
@@ -165,24 +165,28 @@ def project_reservation_result(
             outcome = ReservationOutcome.PROVIDER_BLOCKED
             reason_code = ReservationResultReasonCode.PROVIDER_BLOCKED
     elif result.outcome == "unavailable":
-        outcome = (
-            ReservationOutcome.UNKNOWN
-            if result.reason == "target_not_unique"
-            else ReservationOutcome.NOT_AVAILABLE
-        )
-        reason_code = {
-            "target_not_unique": ReservationResultReasonCode.TARGET_AMBIGUOUS,
-            "seat_not_available": ReservationResultReasonCode.SEAT_NOT_AVAILABLE,
-            "seat_control_not_unique": (
-                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
-            ),
-            "reservation_control_ambiguous": (
-                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
-            ),
-            "reservation_control_disabled": (
-                ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
-            ),
-        }.get(result.reason, ReservationResultReasonCode.TARGET_NOT_AVAILABLE)
+        if post_request_command_may_have_been_issued:
+            outcome = ReservationOutcome.UNKNOWN
+            reason_code = ReservationResultReasonCode.RESERVATION_REQUEST_RESULT_UNKNOWN
+        else:
+            outcome = (
+                ReservationOutcome.UNKNOWN
+                if result.reason == "target_not_unique"
+                else ReservationOutcome.NOT_AVAILABLE
+            )
+            reason_code = {
+                "target_not_unique": ReservationResultReasonCode.TARGET_AMBIGUOUS,
+                "seat_not_available": ReservationResultReasonCode.SEAT_NOT_AVAILABLE,
+                "seat_control_not_unique": (
+                    ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
+                ),
+                "reservation_control_ambiguous": (
+                    ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
+                ),
+                "reservation_control_disabled": (
+                    ReservationResultReasonCode.RESERVATION_CONTROL_UNAVAILABLE
+                ),
+            }.get(result.reason, ReservationResultReasonCode.TARGET_NOT_AVAILABLE)
     elif (
         result.outcome == "failed"
         and result.reason == "reservation_result_unknown:reservation_click_error"

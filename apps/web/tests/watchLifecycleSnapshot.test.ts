@@ -150,6 +150,41 @@ describe("watch lifecycle snapshot", () => {
     });
   });
 
+  it("preserves only a compatible legacy confirmed-absence retry fence", () => {
+    const baseAttempt = {
+      outcome: "unknown",
+      manualCheckRequired: false,
+      confirmationOutcome: "not_found",
+      reconciliationResolution: "confirmed_absent",
+    };
+    const base: WatchSnapshot = {
+      id: "legacy-confirmed-absent",
+      status: "watching",
+      latestReservationAttempt: baseAttempt,
+    };
+
+    expect(mapLegacyWatchLifecycleSnapshot({
+      ...base,
+      latestReservationAttempt: {
+        ...baseAttempt,
+        automaticReservationRetryFenceReason: "confirmed_absent_recovery_consumed",
+      },
+    }).latestReservationAttempt).toMatchObject({
+      reconciliationResolution: "confirmed_absent",
+      automaticReservationRetryFenceReason: "confirmed_absent_recovery_consumed",
+    });
+    expect(mapLegacyWatchLifecycleSnapshot({
+      ...base,
+      latestReservationAttempt: {
+        ...baseAttempt,
+        automaticReservationRetryFenceReason: "future_fence_reason",
+      },
+    }).latestReservationAttempt).toMatchObject({
+      reconciliationResolution: "confirmed_absent",
+      automaticReservationRetryFenceReason: null,
+    });
+  });
+
   it("trims only legacy candidate text while preserving provider and time fallback semantics", () => {
     const mapped = mapLegacyWatchLifecycleSnapshot({
       id: "legacy-text",

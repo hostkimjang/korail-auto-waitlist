@@ -86,9 +86,7 @@ def test_migration_0038_backfills_terminal_resolution_and_downgrades_safely(
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == (
-        "0039_confirmation_corr_seats"
-    )
+    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
 
     command.upgrade(config, "0037_standing_only_status")
     observed_at = "2030-08-01T00:01:00+00:00"

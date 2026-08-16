@@ -26,6 +26,9 @@ from ..reservations.provider_confirmation.contracts import (
     ReservationConfirmationDiagnosticCode,
 )
 from ..reservations.reconciliation_policy import ReservationReconciliationResolution
+from ..reservations.retry_fence_contracts import (
+    AutomaticReservationRetryFenceReason as _AutomaticReservationRetryFenceReason,
+)
 from ..schema_base import ApiModel
 from ..timetable_management.schemas import TimetableSeatEvidenceRead
 
@@ -201,6 +204,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
         ]
         | None
     ) = None
+    automatic_reservation_retry_fence_reason: _AutomaticReservationRetryFenceReason | None = None
     retryable: bool
     manual_check_required: bool
     manual_rearm_available: bool = False
@@ -243,6 +247,15 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
         if self.manual_rearm_available != (self.manual_rearm_reason is not None):
             raise ValueError(
                 "manual_rearm_available and manual_rearm_reason must be projected together"
+            )
+        if self.automatic_reservation_retry_fence_reason is not None and not (
+            self.outcome is ReservationOutcome.UNKNOWN
+            and self.confirmation_outcome == "not_found"
+            and self.reconciliation_resolution
+            is ReservationReconciliationResolution.CONFIRMED_ABSENT
+        ):
+            raise ValueError(
+                "automatic reservation retry fence requires a confirmed-absent UNKNOWN recovery"
             )
         stage_order = {
             "authenticated_session_ready": 0,

@@ -356,6 +356,7 @@ async def test_unknown_requires_two_official_absence_reads_before_terminal_fence
 
 
 async def test_unknown_initial_absence_and_delayed_absence_close_reconciliation() -> None:
+    events: list[dict[str, object]] = []
     attempt = make_attempt()
     attempt.confirmation_outcome = ReservationConfirmationOutcome.NOT_FOUND
     attempt.confirmation_source = "srt.owner-test"
@@ -374,12 +375,46 @@ async def test_unknown_initial_absence_and_delayed_absence_close_reconciliation(
         attempt,
         confirmation,
         reconciled_at=NOW,
-        dependencies=make_dependencies([], []),
+        dependencies=make_dependencies([], events),
     )
 
     assert attempt.reconciliation_attempt_count == 1
     assert attempt.next_reconcile_at is None
     assert attempt.reconciliation_resolution is ReservationReconciliationResolution.CONFIRMED_ABSENT
+    assert len(events) == 1
+    payload = cast(dict[str, object], events[0]["payload"])
+    assert payload["manual_check_required"] is False
+    assert payload["automatic_reservation_retry_fence_reason"] is None
+
+
+async def test_confirmed_absent_recovery_child_closes_manual_check_and_retry_fence() -> None:
+    events: list[dict[str, object]] = []
+    attempt = make_attempt()
+    attempt.episode_key = "confirmed-absent-retry:source-attempt"
+    attempt.confirmation_outcome = ReservationConfirmationOutcome.NOT_FOUND
+    attempt.confirmation_source = "srt.owner-test"
+    attempt.confirmation_observed_at = NOW - timedelta(seconds=30)
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        make_watch(),
+        make_candidate(),
+        attempt,
+        ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.NOT_FOUND,
+            source="srt.owner-test",
+            observed_at=NOW,
+        ),
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], events),
+    )
+
+    payload = cast(dict[str, object], events[0]["payload"])
+    assert payload["manual_check_required"] is False
+    assert (
+        payload["automatic_reservation_retry_fence_reason"] == "confirmed_absent_recovery_consumed"
+    )
 
 
 async def test_unknown_final_single_absence_is_exhausted_not_confirmed_absent() -> None:
@@ -412,6 +447,8 @@ async def test_unknown_final_single_absence_is_exhausted_not_confirmed_absent() 
     )
     payload = cast(dict[str, object], events[-1]["payload"])
     assert payload["reconciliation_resolution"] == "exhausted_unresolved"
+    assert payload["manual_check_required"] is True
+    assert payload["automatic_reservation_retry_fence_reason"] is None
 
 
 @pytest.mark.parametrize(
@@ -535,11 +572,13 @@ async def test_expired_confirmed_hold_for_unknown_attempt_emits_canonical_progre
                 "confirmation_observed_at": NOW.isoformat(),
                 "reconciliation_attempt_count": 2,
                 "reconciliation_resolution": None,
+                "automatic_reservation_retry_fence_reason": None,
                 "next_reconcile_at": (NOW + RESERVATION_RECONCILIATION_INTERVAL).isoformat(),
                 "payment_deadline": watch.payment_deadline.isoformat(),
                 "progress_stages": attempt.progress_stages,
                 "reserved_seats": [],
                 "retryable": False,
+                "manual_check_required": True,
             },
             "dedupe_key": f"reservation-reconciled:attempt-1:{NOW.isoformat()}",
         }
@@ -656,11 +695,13 @@ async def test_positive_confirmation_restores_handoff_and_suppresses_lower_candi
                 "confirmation_observed_at": NOW.isoformat(),
                 "reconciliation_attempt_count": 1,
                 "reconciliation_resolution": None,
+                "automatic_reservation_retry_fence_reason": None,
                 "next_reconcile_at": (NOW + timedelta(seconds=30)).isoformat(),
                 "payment_deadline": deadline.isoformat(),
                 "progress_stages": attempt.progress_stages,
                 "reserved_seats": attempt.reserved_seats,
                 "retryable": False,
+                "manual_check_required": False,
             },
             "dedupe_key": f"reservation-reconciled:attempt-1:{NOW.isoformat()}",
         }
@@ -811,6 +852,8 @@ async def test_exact_paid_confirmation_resolves_unknown_without_rewriting_attemp
     assert reconciliation_payload["outcome"] == "unknown"
     assert reconciliation_payload["confirmation_outcome"] == "confirmed_paid"
     assert reconciliation_payload["reconciliation_resolution"] is None
+    assert reconciliation_payload["manual_check_required"] is False
+    assert reconciliation_payload["automatic_reservation_retry_fence_reason"] is None
 
 
 async def test_exact_paid_confirmation_preserves_paused_state_but_closes_all_retry_state() -> None:

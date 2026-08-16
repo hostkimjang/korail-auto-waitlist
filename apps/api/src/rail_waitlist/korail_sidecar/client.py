@@ -388,7 +388,11 @@ class HttpBrowserAdapterTransport:
                 if response.status_code in {403, 423}:
                     raise _AdapterFailure("provider_access_restricted", protection=True)
                 if response.status_code != 200:
-                    raise _AdapterFailure("source_unavailable")
+                    raise _AdapterFailure(
+                        "source_unavailable",
+                        reservation_command_uncertain=500 <= response.status_code < 600,
+                        progress_stages=tuple(progress),
+                    )
                 async for line in response.aiter_lines():
                     if not line.strip():
                         continue

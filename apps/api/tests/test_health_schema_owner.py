@@ -8,6 +8,7 @@ import pickle
 import subprocess
 import sys
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from pydantic_core import PydanticUndefined
@@ -15,6 +16,12 @@ from pydantic_core import PydanticUndefined
 from rail_waitlist import schemas as legacy
 from rail_waitlist.health import schemas as canonical
 from rail_waitlist.main import app as production_app
+from rail_waitlist.reservations.retry_fence_contracts import (
+    AutomaticReservationRetryFenceReason,
+)
+from rail_waitlist.watch_management.schemas import (
+    WatchCandidateLatestReservationAttemptRead,
+)
 
 API_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = API_ROOT / "src"
@@ -184,16 +191,38 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     encoded = json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
 
     assert len(schema["paths"]) == 36
-    assert len(schema["components"]["schemas"]) == 76
+    assert len(schema["components"]["schemas"]) == 77
+    assert AutomaticReservationRetryFenceReason.__module__ == (
+        "rail_waitlist.reservations.retry_fence_contracts"
+    )
+    assert AutomaticReservationRetryFenceReason in get_args(
+        WatchCandidateLatestReservationAttemptRead.model_fields[
+            "automatic_reservation_retry_fence_reason"
+        ].annotation
+    )
+    assert schema["components"]["schemas"]["AutomaticReservationRetryFenceReason"] == {
+        "description": "Closed reasons why another automatic reservation command is fenced.",
+        "enum": ["confirmed_absent_recovery_consumed"],
+        "title": "AutomaticReservationRetryFenceReason",
+        "type": "string",
+    }
+    assert schema["components"]["schemas"]["WatchCandidateLatestReservationAttemptRead"][
+        "properties"
+    ]["automatic_reservation_retry_fence_reason"] == {
+        "anyOf": [
+            {"$ref": "#/components/schemas/AutomaticReservationRetryFenceReason"},
+            {"type": "null"},
+        ]
+    }
     assert schema["components"]["schemas"]["HealthResponse"] == (
         canonical.HealthResponse.model_json_schema()
     )
     assert schema["paths"]["/health"]["get"]["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/HealthResponse"}
-    assert len(encoded) == 89775
+    assert len(encoded) == 90149
     assert hashlib.sha256(encoded).hexdigest() == (
-        "4d4d7cefd430ea78aeedf4340ac1eb4247ae031232d979bc8d101d36c85f8f6d"
+        "d3dd0fab58f903354fa8ef0d6113baec6ac584471bd1880903eff2dc2ab05c20"
     )
 
 

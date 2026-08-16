@@ -682,6 +682,7 @@ describe("watch API boundary", () => {
       confirmationObservedAt: "2026-08-02T13:05:08Z",
       reconciliationAttemptCount: 2,
       reconciliationResolution: null,
+      automaticReservationRetryFenceReason: null,
       nextReconcileAt: "2026-08-02T13:06:08Z",
       progressStages: [],
       reservedSeats: [],
@@ -1119,8 +1120,11 @@ describe("watch API boundary", () => {
       manualRearmAvailable: false,
     });
     expect(mapAttempt({ reconciliation_resolution: "confirmed_absent" })).toMatchObject({
+      manualCheckRequired: true,
       manualRearmAvailable: false,
       manualRearmReason: null,
+      reconciliationResolution: null,
+      automaticReservationRetryFenceReason: null,
     });
     expect(mapAttempt({ manual_rearm_reason: "payment_hold_ended" })).toMatchObject({
       manualRearmAvailable: false,
@@ -1140,10 +1144,63 @@ describe("watch API boundary", () => {
       reconciliation_resolution: "confirmed_absent",
       next_reconcile_at: null,
     })).toMatchObject({
+      manualCheckRequired: true,
       manualRearmAvailable: false,
       manualRearmReason: null,
+      reconciliationResolution: null,
     });
     expect(mapAttempt({ manual_rearm_reason: "future_reason" })).toBeNull();
+  });
+
+  it("maps only the closed automatic reservation retry fence reason", () => {
+    const attempt = {
+      outcome: "unknown",
+      result_reason_code: "reservation_request_result_unknown",
+      started_at: "2026-08-02T08:20:00Z",
+      finished_at: "2026-08-02T08:22:00Z",
+      retryable: false,
+      manual_check_required: false,
+      retry_condition: null,
+      confirmation_outcome: "not_found",
+      confirmation_observed_at: "2026-08-02T08:24:00Z",
+      reconciliation_attempt_count: 2,
+      reconciliation_resolution: "confirmed_absent",
+      automatic_reservation_retry_fence_reason: "confirmed_absent_recovery_consumed",
+      next_reconcile_at: null,
+    };
+    const mapAttempt = (overrides: Record<string, unknown> = {}) => mapWatch({
+      ...apiWatch,
+      candidates: [{
+        ...apiWatch.candidates[0],
+        latest_reservation_attempt: { ...attempt, ...overrides },
+      }],
+    }).latestReservationAttempt;
+
+    expect(mapAttempt()).toMatchObject({
+      automaticReservationRetryFenceReason: "confirmed_absent_recovery_consumed",
+    });
+    expect(mapAttempt({
+      automatic_reservation_retry_fence_reason: "future_reason",
+    })).toMatchObject({
+      outcome: "unknown",
+      manualCheckRequired: false,
+      automaticReservationRetryFenceReason: null,
+    });
+    expect(mapAttempt({ reconciliation_resolution: null })).toMatchObject({
+      manualCheckRequired: true,
+      reconciliationResolution: null,
+      automaticReservationRetryFenceReason: null,
+    });
+    expect(mapAttempt({ confirmation_outcome: "inconclusive" })).toMatchObject({
+      manualCheckRequired: true,
+      reconciliationResolution: null,
+      automaticReservationRetryFenceReason: null,
+    });
+    expect(mapAttempt({ manual_check_required: true })).toMatchObject({
+      manualCheckRequired: true,
+      reconciliationResolution: null,
+      automaticReservationRetryFenceReason: null,
+    });
   });
 
   it("labels a safe official scheduled watch without claiming an automatic check", () => {

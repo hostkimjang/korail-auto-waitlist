@@ -263,6 +263,14 @@ def test_reservation_progress_and_result_fail_closed_contract_is_preserved() -> 
                 {"stage": "target_rechecked", "occurred_at": "2026-08-06T21:38:00Z"},
             )
         },
+        {
+            "outcome": "failed",
+            "payment_deadline": None,
+            "official_handoff_url": None,
+            "progress_stages": (
+                {"stage": "reservation_requested", "occurred_at": "2026-08-06T21:36:00Z"},
+            ),
+        },
     )
     for updates in invalid_payloads:
         with pytest.raises(ValidationError):

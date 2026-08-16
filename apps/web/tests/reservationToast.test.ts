@@ -166,17 +166,175 @@ describe("reservation recovery toast", () => {
     ]);
   });
 
-  it.each([
-    result({ outcome: "unknown" }),
-    result({ outcome: "failed", manualCheckRequired: false }),
-  ])("keeps ambiguous or non-retryable results in manual-check mode", (reservationResult) => {
+  it("keeps ambiguous results in manual-check mode", () => {
+    const reservationResult = result({ outcome: "unknown" });
     const toast = buildReservationRecoveryToast(transition, reservationResult);
 
     expect(toast.title).toBe("예매 결과를 확인해야 합니다");
     expect(toast.description).toContain("자동 재예매를 보류합니다");
     expect(toast.description).toContain("공식 예약 내역을 확인해 주세요");
     expect(toast.description).not.toContain("예매를 다시 시도합니다");
+    expect(toast.steps?.some(({ label }) => label === "예매 요청")).toBe(false);
+    expect(toast.steps?.some(({ label }) => label === "자동 예매 요청 시작")).toBe(false);
+    expect(toast.steps?.some(({ label }) => label === "예매 결과 불명확")).toBe(true);
     expect(toast.steps?.at(-1)).toEqual({ label: "감시·수동 확인", state: "active" });
+  });
+
+  it("does not infer a completed reservation request from an empty UNKNOWN progress stream", () => {
+    const toast = buildReservationRecoveryToast({
+      ...transition,
+      detectedAt: "2026-08-17T01:00:20.900Z",
+      startedAt: "2026-08-17T01:00:21.457Z",
+      finishedAt: "2026-08-17T01:00:21.913Z",
+      revisionAt: "2026-08-17T01:00:22.000Z",
+      monitoringResumed: true,
+    }, result({
+      outcome: "unknown",
+      resultReasonCode: "provider_unavailable",
+    }));
+
+    expect(toast.steps?.map(({ label, state }) => [label, state])).toEqual([
+      ["좌석 발견", "completed"],
+      ["자동 예매 처리 시작", "completed"],
+      ["예매 결과 불명확", "failed"],
+      ["감시·수동 확인", "active"],
+    ]);
+    expect(toast.steps?.some(({ label }) => label === "예매 요청")).toBe(false);
+    expect(toast.steps?.some(({ label }) => label === "공식 결과 확인")).toBe(false);
+  });
+
+  it("closes a source confirmed-absence result without asking for retry or manual confirmation", () => {
+    const toast = buildReservationRecoveryToast({
+      ...transition,
+      detectedAt: "2026-08-18T03:19:59Z",
+      startedAt: "2026-08-18T03:20:00Z",
+      finishedAt: "2026-08-18T03:20:08Z",
+      revisionAt: "2026-08-18T03:20:20Z",
+      monitoringResumed: true,
+    }, result({
+      outcome: "unknown",
+      manualCheckRequired: false,
+      resultReasonCode: "reservation_request_result_unknown",
+      confirmationOutcome: "not_found",
+      confirmationObservedAt: "2026-08-18T03:20:20Z",
+      reconciliationAttemptCount: 2,
+      reconciliationResolution: "confirmed_absent",
+    }));
+
+    expect(toast).toMatchObject({
+      kind: "recovery",
+      title: "공식 예약 없음이 확인되어 감시 중입니다",
+    });
+    expect(toast.description).toContain("대상 예약이 없음을 확인해 결과 확인을 마쳤습니다");
+    expect(toast.description).toContain("감시는 계속됩니다");
+    expect(toast.description).not.toMatch(/다시 (시도|예매)|수동 확인|확인해 주세요|자동 재예매/);
+    expect(toast.steps?.some(({ label }) => label === "예매 요청")).toBe(false);
+    expect(toast.steps?.at(-1)).toEqual(expect.objectContaining({
+      label: "감시 계속",
+      state: "active",
+    }));
+  });
+
+  it("timestamps a progress-present confirmed absence only from its official observation", () => {
+    const progressTransition: WatchActionTransition = {
+      ...transition,
+      startedAt: "2026-08-18T03:20:00Z",
+      finishedAt: "2026-08-18T03:20:08Z",
+      revisionAt: "2026-08-18T03:20:21Z",
+      monitoringResumed: true,
+      reservationProgress: [
+        { stage: "authenticated_session_ready", occurredAt: "2026-08-18T03:20:02Z" },
+        { stage: "target_rechecked", occurredAt: "2026-08-18T03:20:04Z" },
+        { stage: "seat_selected", occurredAt: "2026-08-18T03:20:06Z" },
+        { stage: "reservation_requested", occurredAt: "2026-08-18T03:20:07Z" },
+      ],
+    };
+    const confirmedAbsent = result({
+      outcome: "unknown",
+      manualCheckRequired: false,
+      resultReasonCode: "reservation_request_result_unknown",
+      confirmationOutcome: "not_found",
+      confirmationObservedAt: "2026-08-18T03:20:20Z",
+      reconciliationAttemptCount: 2,
+      reconciliationResolution: "confirmed_absent",
+    });
+
+    const observedToast = buildReservationRecoveryToast(progressTransition, confirmedAbsent);
+    expect(observedToast.steps?.find(({ label }) => label === "공식 결과 확인")).toEqual({
+      label: "공식 결과 확인",
+      state: "completed",
+      occurredAt: "2026-08-18T03:20:20Z",
+      durationMs: 13_000,
+      durationPrefix: "이전 단계 후",
+    });
+
+    const unobservedToast = buildReservationRecoveryToast(progressTransition, {
+      ...confirmedAbsent,
+      confirmationObservedAt: null,
+    });
+    expect(unobservedToast.steps?.some(({ label }) => label === "공식 결과 확인")).toBe(false);
+  });
+
+  it("explains the consumed confirmed-absence recovery fence without offering another booking", () => {
+    const toast = buildReservationRecoveryToast({
+      ...transition,
+      startedAt: "2026-08-18T03:20:00Z",
+      finishedAt: "2026-08-18T03:20:08Z",
+      revisionAt: "2026-08-18T03:20:20Z",
+      monitoringResumed: true,
+    }, result({
+      outcome: "unknown",
+      manualCheckRequired: false,
+      resultReasonCode: "reservation_request_result_unknown",
+      confirmationOutcome: "not_found",
+      confirmationObservedAt: "2026-08-18T03:20:20Z",
+      reconciliationAttemptCount: 2,
+      reconciliationResolution: "confirmed_absent",
+      automaticReservationRetryFenceReason: "confirmed_absent_recovery_consumed",
+    }));
+
+    expect(toast.title).toBe("자동 복구 1회 사용을 마쳐 감시 중입니다");
+    expect(toast.description).toContain("자동 복구 1회를 이미 사용해 추가 자동 예매는 차단됩니다");
+    expect(toast.description).not.toMatch(/다시 (시도|예매)|수동 확인|확인해 주세요|자동 재예매/);
+    expect(toast.steps?.some(({ label }) => label === "예매 요청")).toBe(false);
+    expect(toast.steps?.at(-1)).toEqual(expect.objectContaining({
+      label: "감시 계속",
+      state: "active",
+    }));
+  });
+
+  it("does not turn a conclusive non-retryable failure into a manual official check", () => {
+    const toast = buildReservationRecoveryToast(transition, result({
+      outcome: "failed",
+      manualCheckRequired: false,
+      retryable: false,
+      resultReasonCode: "reservation_failed",
+    }));
+
+    expect(toast.title).toBe("예매 전 처리가 중단되어 감시 중입니다");
+    expect(toast.description).toContain("예약 요청 전 처리가 완료되지 않았습니다");
+    expect(toast.description).toContain("자동 재예매는 실행하지 않습니다");
+    expect(toast.description).not.toContain("공식 예약 내역을 확인");
+    expect(toast.steps?.some(({ label }) => label === "공식 결과 확인")).toBe(false);
+  });
+
+  it("keeps a canonical FAILED transition on the pre-request path", () => {
+    const toast = buildWatchActionToast({
+      ...transition,
+      status: "failed",
+      startedAt: "2026-08-16T15:56:19.482Z",
+      finishedAt: "2026-08-16T15:56:20.939Z",
+      resultReasonCode: "seat_selection_lost",
+      reservationProgress: [
+        { stage: "authenticated_session_ready", occurredAt: "2026-08-16T15:56:19.700Z" },
+        { stage: "target_rechecked", occurredAt: "2026-08-16T15:56:20.100Z" },
+      ],
+    });
+
+    expect(toast.title).toBe("예매 전 처리가 중단되었습니다");
+    expect(toast.description).toContain("예약 요청 전 처리가 완료되지 않았습니다");
+    expect(toast.steps?.some(({ label }) => label === "예매 요청")).toBe(false);
+    expect(toast.steps?.some(({ label }) => label === "공식 결과 확인")).toBe(false);
   });
 
   it.each([
@@ -222,6 +380,49 @@ describe("reservation recovery toast", () => {
     expect(toast.description).toContain("자동 재예매를 보류합니다");
     expect(toast.description).toContain("공식 예약 내역을 확인해 주세요");
     expect(toast.description).not.toMatch(/결제 (실패|완료)/);
+  });
+
+  it("shows a no-progress provider outage as a pre-booking connection failure", () => {
+    const noProgressTransition: WatchActionTransition = {
+      ...transition,
+      detectedAt: "2026-08-16T15:56:18.950Z",
+      startedAt: "2026-08-16T15:56:19.482Z",
+      finishedAt: "2026-08-16T15:56:19.939Z",
+      revisionAt: "2026-08-16T15:56:19.939Z",
+      monitoringResumed: true,
+    };
+    const toast = buildReservationRecoveryToast(noProgressTransition, result({
+      outcome: "failed",
+      manualCheckRequired: false,
+      resultReasonCode: "provider_unavailable",
+    }));
+
+    expect(toast.title).toBe("예매 전 철도사 연결 확인에 실패했습니다");
+    expect(toast.description).toContain("예약 요청 전 철도사 연결 또는 응답");
+    expect(toast.description).toContain("확인된 예약 요청 단계는 없습니다");
+    expect(toast.description).not.toContain("공식 예약 내역을 확인");
+    expect(toast.steps?.map(({ label, state }) => [label, state])).toEqual([
+      ["좌석 발견", "completed"],
+      ["자동 예매 처리 시작", "completed"],
+      ["예약 전 철도사 연결 확인", "failed"],
+      ["감시 계속", "active"],
+    ]);
+    expect(toast.steps?.some(({ label }) => label === "예매 요청")).toBe(false);
+    expect(toast.steps?.some(({ label }) => label === "공식 결과 확인")).toBe(false);
+  });
+
+  it("keeps provider outages with official confirmation on the manual-check path", () => {
+    const toast = buildReservationRecoveryToast(transition, result({
+      outcome: "failed",
+      manualCheckRequired: true,
+      resultReasonCode: "provider_unavailable",
+      confirmationOutcome: "inconclusive",
+      confirmationObservedAt: "2026-08-16T15:56:45Z",
+      reconciliationAttemptCount: 1,
+    }));
+
+    expect(toast.title).toBe("철도사 연결 문제로 예매 결과를 확인해야 합니다");
+    expect(toast.steps?.some(({ label }) => label === "공식 결과 확인")).toBe(true);
   });
 
   it("describes a lost room-class selection without implying a physical seat choice", () => {

@@ -172,6 +172,8 @@ class ReservationResult(ProviderContractModel):
         stage_names = [progress.stage for progress in self.progress_stages]
         if len(stage_names) != len(set(stage_names)):
             raise ValueError("reservation progress stages must be unique")
+        if self.outcome is ReservationOutcome.FAILED and "reservation_requested" in stage_names:
+            raise ValueError("failed outcome cannot include reservation request progress")
         progress_times = [progress.occurred_at for progress in self.progress_stages]
         if progress_times != sorted(progress_times):
             raise ValueError("reservation progress stages must be chronological")

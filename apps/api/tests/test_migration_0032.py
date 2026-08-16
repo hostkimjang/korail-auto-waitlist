@@ -18,9 +18,7 @@ def test_migration_0032_adds_manual_rearm_marker(tmp_path, monkeypatch) -> None:
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == (
-        "0039_confirmation_corr_seats"
-    )
+    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
 
     command.upgrade(config, "0031_watch_display_metadata")
     command.upgrade(config, "head")

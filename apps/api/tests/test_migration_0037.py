@@ -29,9 +29,7 @@ def test_migration_0037_adds_standing_only_and_downgrades_to_sold_out(
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == (
-        "0039_confirmation_corr_seats"
-    )
+    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
 
     command.upgrade(config, "0036_confirmation_diagnostic")
     with sqlite3.connect(database_path) as connection:

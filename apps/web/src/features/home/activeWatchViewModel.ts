@@ -9,13 +9,14 @@ import type {
   ReservationAttemptCandidateContext,
   WatchReadModel,
 } from "../../api/watchProjection";
-import type {
-  LatestReservationAttempt,
-  ManualRearmReason,
-  ReservationConfirmationOutcome,
-  ReservationResultReasonCode,
+import {
+  hasConfirmedAbsentReservationEvidence,
+  validatedManualRearmReason,
+  type LatestReservationAttempt,
+  type ManualRearmReason,
+  type ReservationConfirmationOutcome,
+  type ReservationResultReasonCode,
 } from "../../domain/reservationAttempt";
-import { validatedManualRearmReason } from "../../domain/reservationAttempt";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
 import type { OperationalCandidateMeta } from "../../domain/watchOperational";
 import { reservationConfirmationDiagnosticDescriptions } from "../../shared/lib/reservationConfirmationDiagnostic";
@@ -167,6 +168,12 @@ function reservationEvidenceLabel(attempt: LatestReservationAttempt): string {
     (attempt.reconciliationAttemptCount ?? 0) > 0
       ? `공식 재확인 ${attempt.reconciliationAttemptCount ?? 0}/6회`
       : null,
+    hasConfirmedAbsentReservationEvidence(attempt)
+      ? "공식 재확인에서 대상 예약 없음 확정"
+      : null,
+    attempt.automaticReservationRetryFenceReason === "confirmed_absent_recovery_consumed"
+      ? "공식 부재 확인 뒤 자동 복구 1회 사용 완료 · 추가 자동 예매 차단"
+      : null,
     attempt.nextReconcileAt
       ? `다음 재확인 ${koreaTimeLabel(attempt.nextReconcileAt)}`
       : null,
@@ -209,6 +216,17 @@ function reservationAttemptLabel(
   const occurredAt = attempt.finishedAt ?? attempt.startedAt;
   const time = koreaTimeLabel(occurredAt);
   const evidence = reservationEvidenceLabel(attempt);
+  const preBookingProviderFailure = attempt.outcome === "failed"
+    && !attempt.manualCheckRequired
+    && attempt.resultReasonCode === "provider_unavailable"
+    && !attempt.progressStages?.length
+    && attempt.confirmationOutcome == null
+    && attempt.confirmationObservedAt == null
+    && (attempt.reconciliationAttemptCount ?? 0) === 0
+    && attempt.nextReconcileAt == null;
+  if (preBookingProviderFailure) {
+    return `${contextLabel} · 예매 전 철도사 연결 확인 실패 · ${time}${evidence} · 확인된 예약 요청 단계 없음`;
+  }
   if (attempt.outcome === "pending") return `${contextLabel} · 예매 시도 중 · ${time}${evidence}`;
   if (attempt.outcome === "payment_required" || attempt.outcome === "reserved") {
     return `${contextLabel} · 좌석 임시 확보 · 결제 필요 · ${time}${evidence}`;
@@ -226,13 +244,28 @@ function reservationAttemptLabel(
   if (attempt.outcome === "provider_blocked") {
     return `${contextLabel} · 예매 시도 · 운영사 제한 · 자동 재확인 대기 · ${time}${evidence}`;
   }
+  if (attempt.outcome === "failed") {
+    if (attempt.manualCheckRequired) {
+      return `${contextLabel} · 예매 시도 결과 확인 필요 · ${time}${evidence} · 공식 예매 내역을 확인해 주세요`;
+    }
+    return `${contextLabel} · 예매 전 처리 중단 · ${time}${evidence} · 자동 재예매 미실행`;
+  }
+  if (
+    hasConfirmedAbsentReservationEvidence(attempt)
+  ) {
+    const recoveryState = attempt.automaticReservationRetryFenceReason
+      === "confirmed_absent_recovery_consumed"
+      ? "공식 예약 없음 확인 · 자동 복구 1회 사용 완료 · 추가 자동 예매 차단 · 감시 계속"
+      : "공식 예약 없음 확인 · 결과 확인 해소 · 감시 계속";
+    return `${contextLabel} · ${recoveryState} · ${time}${evidence}`;
+  }
   if (
     attempt.outcome === "unknown"
     && validatedManualRearmReason(attempt) === "unknown_result_unresolved"
   ) {
     return `${contextLabel} · 예약 결과 자동 확인 불가 · ${time}${evidence} · 공식 앱/홈에서 해당 열차·좌석 등급 예약 없음 확인 후 다시 시도 가능`;
   }
-  if (attempt.outcome === "failed" || attempt.outcome === "unknown" || attempt.manualCheckRequired) {
+  if (attempt.outcome === "unknown" || attempt.manualCheckRequired) {
     return `${contextLabel} · 예매 시도 결과 확인 필요 · ${time}${evidence} · 공식 예매 내역을 확인해 주세요`;
   }
   return `${contextLabel} · 예매 시도 중단 · 운영사 상태 확인 필요 · ${time}${evidence}`;
@@ -343,6 +376,8 @@ export function presentActiveWatchRow(
     ? null
     : validatedManualRearmReason(watch.latestReservationAttempt);
   const unknownResultUnresolved = manualRearmReason === "unknown_result_unresolved";
+  const confirmedAbsentRecoveryConsumed = watch.latestReservationAttempt
+    ?.automaticReservationRetryFenceReason === "confirmed_absent_recovery_consumed";
   const automaticReservationEnabled = watch.reservationPolicy === "reserve_once_before_payment";
   const reservationPolicyEditable = reservationPolicyEditableStatuses.has(watch.status);
   const policySwitchDisabled = isReservationPolicyUpdating
@@ -399,7 +434,9 @@ export function presentActiveWatchRow(
     shouldShowRegistrationEvidence: Boolean(
       watch.registrationEvidenceLabel && watch.registrationEvidenceLabel !== seatEvidenceLabel,
     ),
-    statusLabel: unknownResultUnresolved && watch.status === "watching"
+    statusLabel: confirmedAbsentRecoveryConsumed && watch.status === "watching"
+      ? "자동 복구 1회 사용 완료 · 감시 중"
+      : unknownResultUnresolved && watch.status === "watching"
       ? "예약 결과 자동 확인 불가 · 감시 중"
       : paymentHoldEnded && watch.status === "watching"
       ? watch.latestReservationAttempt?.paymentHoldEndReason === "confirmed_payment_deadline_elapsed"

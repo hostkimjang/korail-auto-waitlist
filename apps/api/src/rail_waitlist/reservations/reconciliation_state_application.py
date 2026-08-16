@@ -17,6 +17,8 @@ from ..domain import (
 )
 from ..provider_account_management.schemas import RailProviderAuthStatus
 from ..watch_management.models import ReservationAttempt, SeatObservation, Watch, WatchCandidate
+from .attempt_policy import automatic_reservation_retry_fence_reason
+from .domain import reservation_attempt_manual_check_required
 from .exact_paid_application import apply_exact_paid_resolution
 from .provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
@@ -199,6 +201,12 @@ async def _add_reconciliation_outbox_event(
                 if attempt.reconciliation_resolution is not None
                 else None
             ),
+            "automatic_reservation_retry_fence_reason": (
+                retry_fence_reason.value
+                if (retry_fence_reason := automatic_reservation_retry_fence_reason(attempt))
+                is not None
+                else None
+            ),
             "next_reconcile_at": (
                 dependencies.utc_instant(attempt.next_reconcile_at).isoformat()
                 if attempt.next_reconcile_at is not None
@@ -212,6 +220,11 @@ async def _add_reconciliation_outbox_event(
             "progress_stages": attempt.progress_stages or [],
             "reserved_seats": attempt.reserved_seats or [],
             "retryable": False,
+            "manual_check_required": reservation_attempt_manual_check_required(
+                attempt.outcome,
+                confirmation_outcome=attempt.confirmation_outcome,
+                reconciliation_resolution=attempt.reconciliation_resolution,
+            ),
         },
         dedupe_key=f"reservation-reconciled:{attempt.id}:{confirmation.observed_at.isoformat()}",
     )

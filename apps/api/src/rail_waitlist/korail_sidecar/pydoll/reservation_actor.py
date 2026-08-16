@@ -299,10 +299,21 @@ class PydollReservationActor[Session: PydollReservationSession]:
                 session = lease.session
                 if lease.authenticated:
                     stage = "reservation_session_probe"
-                    if not await self._probe_reused_authenticated_session(
-                        session,
-                        request.credential,
-                    ):
+                    try:
+                        reused_session_authenticated = (
+                            await self._probe_reused_authenticated_session(
+                                session,
+                                request.credential,
+                            )
+                        )
+                    except BrowserSourceUnavailable:
+                        # A reused browser generation can outlive KORAIL's official
+                        # login-check surface. No reservation control has been reached,
+                        # so the probe owner retires that generation and this actor
+                        # allows one fresh authentication. Protection, rate-limit, and
+                        # cancellation signals deliberately bypass this recovery path.
+                        reused_session_authenticated = False
+                    if not reused_session_authenticated:
                         lease = await self._acquire_session(
                             credential_version=request.credential.version,
                         )
@@ -413,10 +424,7 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error.stage) is not None
                     else stage
                 )
-                if seat_clicked or reservation_clicked or reservation_requested_at is not None:
-                    correlation_seats = await correlate_then_discard(KorailSessionActorState.STALE)
-                else:
-                    correlation_seats = await uncertain_result_correlation_seats()
+                correlation_seats = await correlate_then_discard(KorailSessionActorState.STALE)
                 return KorailReservationResult(
                     outcome=KorailReservationOutcome.FAILED,
                     reason=f"source_unavailable:{source_stage}",

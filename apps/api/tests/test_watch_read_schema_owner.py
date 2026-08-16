@@ -117,6 +117,7 @@ def _candidate_payload(**overrides: object) -> dict[str, object]:
 def test_central_schema_hub_preserves_exact_watch_read_aliases() -> None:
     for symbol in WATCH_READ_SYMBOLS:
         assert getattr(legacy, symbol) is getattr(canonical, symbol)
+    assert not hasattr(canonical, "AutomaticReservationRetryFenceReason")
 
 
 def test_watch_read_contracts_have_canonical_owners_and_nested_identities() -> None:
@@ -163,6 +164,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "reserved_seats",
         "post_deadline_reconciled_at",
         "payment_hold_end_reason",
+        "automatic_reservation_retry_fence_reason",
         "retryable",
         "manual_check_required",
         "manual_rearm_available",
@@ -268,6 +270,10 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "official_evidence_insufficient",
         "unspecified",
     ]
+    retry_fence_schema = canonical.WatchCandidateLatestReservationAttemptRead.model_json_schema()[
+        "$defs"
+    ]["AutomaticReservationRetryFenceReason"]
+    assert retry_fence_schema["enum"] == ["confirmed_absent_recovery_consumed"]
     execution_state_annotation = canonical.WatchRead.model_fields[
         "observation_execution_state"
     ].annotation
@@ -310,11 +316,11 @@ def test_watch_read_normalizes_only_legacy_inconclusive_diagnostics() -> None:
     [
         (
             canonical.WatchCandidateLatestReservationAttemptRead,
-            "d7f78a3b6add93107d473afa7ee82632d1f4dd356daadf52670817e4154528e9",
+            "cb596262e1941ad44ba22b24c43cabd420a1d63f23adb23127256e4a8594094d",
         ),
         (
             canonical.WatchCandidateRead,
-            "b68e57e78f487e1b61fd4f4fe8f1fd17b8b3937c36b4cb3cf7df42c432084097",
+            "7f355d778fdd0ba7ec41ad88bf4c24635ec1ed3913b0513bc52eea646321ca87",
         ),
         (
             canonical.WatchCandidateLatestObservationRead,
@@ -322,7 +328,7 @@ def test_watch_read_normalizes_only_legacy_inconclusive_diagnostics() -> None:
         ),
         (
             canonical.WatchRead,
-            "c2796fa9f1a0142c568c301ebd22bd558c901428cbbee4cc3b3c4b34f4c9010e",
+            "7228b3ca7bf8a7c822e1e0e2646fcff1803a1e17505d9db1e6ebd0e601674a48",
         ),
     ],
 )
@@ -361,6 +367,10 @@ def test_watch_read_timezone_and_fail_closed_validation_are_preserved() -> None:
         {"finished_at": "2026-08-06T23:59:00Z"},
         {"post_deadline_reconciled_at": "2026-08-07T00:02:00"},
         {"retry_condition": "retry_immediately"},
+        {"automatic_reservation_retry_fence_reason": "not_a_closed_reason"},
+        {
+            "automatic_reservation_retry_fence_reason": ("confirmed_absent_recovery_consumed"),
+        },
         {
             "progress_stages": [
                 {"stage": "seat_selected", "occurred_at": "2026-08-07T00:00:10Z"},

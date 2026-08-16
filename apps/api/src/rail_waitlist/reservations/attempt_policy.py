@@ -10,6 +10,9 @@ from .reconciliation_policy import (
     UNKNOWN_MANUAL_REARM_MIN_RECONCILIATIONS,
     ReservationReconciliationResolution,
 )
+from .retry_fence_contracts import (
+    AutomaticReservationRetryFenceReason as _AutomaticReservationRetryFenceReason,
+)
 
 CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX = "confirmed-absent-retry:"
 PAYMENT_HOLD_RETRY_EPISODE_PREFIX = "availability-after-hold:"
@@ -212,6 +215,28 @@ def is_confirmed_absent_retry_source(attempt: ConfirmedAbsentRetrySource) -> boo
         and attempt.payment_deadline is None
         and attempt.post_deadline_reconciled_at is None
     )
+
+
+def automatic_reservation_retry_fence_reason(
+    attempt: ConfirmedAbsentRetrySource,
+) -> _AutomaticReservationRetryFenceReason | None:
+    """Project a closed reason only when the one-shot recovery itself was exhausted."""
+
+    episode_key = attempt.episode_key or ""
+    source_attempt_id = (
+        episode_key.removeprefix(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
+        if episode_key.startswith(CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX)
+        else None
+    )
+    if (
+        bool(source_attempt_id)
+        and attempt.outcome is ReservationOutcome.UNKNOWN
+        and attempt.confirmation_outcome is ReservationConfirmationOutcome.NOT_FOUND
+        and attempt.reconciliation_resolution
+        is ReservationReconciliationResolution.CONFIRMED_ABSENT
+    ):
+        return _AutomaticReservationRetryFenceReason.CONFIRMED_ABSENT_RECOVERY_CONSUMED
+    return None
 
 
 def is_unresolved_unknown_manual_rearm_source(

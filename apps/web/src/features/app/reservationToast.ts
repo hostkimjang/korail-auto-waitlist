@@ -1,8 +1,10 @@
 import type { ToastProgressStep } from "../../shared/ui/AppToast";
 import {
   formatReservedSeats,
+  hasConfirmedAbsentReservationEvidence,
   type ReservationConfirmationDiagnosticCode,
   type ReservationConfirmationOutcome,
+  type ReservationReconciliationResolution,
   type ReservationResultReasonCode,
 } from "../../domain/reservationAttempt";
 import type { AppNotificationInput } from "./notificationCenter";
@@ -23,6 +25,7 @@ interface ReservationEvidence {
   confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
   confirmationObservedAt?: string | null;
   reconciliationAttemptCount?: number;
+  reconciliationResolution?: ReservationReconciliationResolution | null;
   nextReconcileAt?: string | null;
 }
 
@@ -184,6 +187,7 @@ type ReservationTerminalStage =
   | "payment_completed"
   | "auth_required"
   | "not_available"
+  | "confirmed_absent"
   | "manual_check"
   | "failed";
 
@@ -227,6 +231,7 @@ function knownReservingProgressSteps(
 function detailedResultSteps(
   transition: WatchActionTransition,
   terminal: ReservationTerminalStage,
+  terminalObservedAt?: string | null,
 ): ToastProgressStep[] | null {
   if (!transition.reservationProgress?.length) return null;
   const times = stageTimes(transition);
@@ -271,7 +276,9 @@ function detailedResultSteps(
   appendProgress("seat_selected", "객실 등급 선택");
   appendProgress("reservation_requested", "예약 요청");
 
-  const resultAt = transition.finishedAt ?? transition.revisionAt;
+  const resultAt = terminal === "confirmed_absent"
+    ? terminalObservedAt ?? undefined
+    : transition.finishedAt ?? transition.revisionAt;
   const resultInstant = resultAt === undefined ? Number.NaN : Date.parse(resultAt);
   const previousInstant = previousAt === undefined ? Number.NaN : Date.parse(previousAt);
   const resultTiming: StepTiming = resultAt === undefined
@@ -291,10 +298,83 @@ function detailedResultSteps(
     steps.push(failed("로그인 세션 확인", times.current));
   } else if (terminal === "payment_completed") {
     steps.push(completed("좌석 임시 확보", resultTiming));
-  } else if (terminal === "payment_required" || terminal === "not_available") {
+  } else if (terminal === "confirmed_absent" && resultAt === undefined) {
+    return steps;
+  } else if (
+    terminal === "payment_required"
+    || terminal === "not_available"
+    || terminal === "confirmed_absent"
+  ) {
     steps.push(completed("공식 결과 확인", resultTiming));
   } else {
     steps.push(failed("공식 결과 확인", resultTiming));
+  }
+  return steps;
+}
+
+function isPreBookingProviderFailure(
+  transition: WatchActionTransition,
+  evidence: ReservationEvidence,
+): boolean {
+  return !transition.reservationProgress?.length
+    && evidence.resultReasonCode === "provider_unavailable"
+    && evidence.confirmationOutcome == null
+    && evidence.confirmationObservedAt == null
+    && (evidence.reconciliationAttemptCount ?? 0) === 0
+    && evidence.nextReconcileAt == null;
+}
+
+function preBookingFailureSteps(
+  transition: WatchActionTransition,
+  failureLabel: string,
+  monitoringResumed: boolean | null,
+): ToastProgressStep[] {
+  const times = stageTimes(transition);
+  return [
+    ...(transition.detectedAt === undefined ? [] : [completed("좌석 발견", times.detected)]),
+    ...(transition.startedAt === undefined
+      ? []
+      : [completed("자동 예매 처리 시작", times.started)]),
+    failed(failureLabel, times.attempted),
+    ...(monitoringResumed === null
+      ? []
+      : [monitoringResumed
+          ? active("감시 계속", times.current)
+          : completed("작업 종료", times.current)]),
+  ];
+}
+
+function preBookingProviderFailureDescription(
+  description: string,
+  monitoringResumed: boolean | null,
+): string {
+  const monitoring = monitoringResumed === null
+    ? ""
+    : monitoringResumed
+      ? " 감시는 계속됩니다."
+      : " 감시는 종료되었습니다.";
+  return `${description} · 예약 요청 전 철도사 연결 또는 응답을 확인하지 못했습니다. 확인된 예약 요청 단계는 없습니다.${monitoring}`;
+}
+
+function uncertainRequestFallbackSteps(
+  transition: WatchActionTransition,
+  evidence: ReservationEvidence,
+): ToastProgressStep[] {
+  const times = stageTimes(transition);
+  const steps = [
+    ...(transition.detectedAt === undefined ? [] : [completed("좌석 발견", times.detected)]),
+    ...(transition.startedAt === undefined
+      ? []
+      : [completed("자동 예매 처리 시작", times.started)]),
+    failed("예매 결과 불명확", times.attempted),
+  ];
+  if (evidence.confirmationObservedAt != null) {
+    const timing = { occurredAt: evidence.confirmationObservedAt };
+    steps.push(
+      evidence.confirmationOutcome === "inconclusive"
+        ? failed("공식 결과 확인", timing)
+        : completed("공식 결과 확인", timing),
+    );
   }
   return steps;
 }
@@ -493,20 +573,30 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         steps: [completed("계정 확인"), active("감시 재개")],
       };
     case "failed":
+      if (isPreBookingProviderFailure(transition, transition)) {
+        return {
+          ...base,
+          kind: "recovery" as const,
+          tone: "error",
+          title: "예매 전 철도사 연결 확인에 실패했습니다",
+          description: preBookingProviderFailureDescription(base.description, null),
+          steps: preBookingFailureSteps(
+            transition,
+            "예약 전 철도사 연결 확인",
+            null,
+          ),
+        };
+      }
       return {
         ...base,
         kind: "recovery" as const,
         tone: "error",
-        title: "예매에 실패했습니다",
+        title: "예매 전 처리가 중단되었습니다",
         description: appendEvidence(
-          `${base.description} · 상태를 확인한 뒤 감시를 다시 시작해 주세요.`,
+          `${base.description} · 예약 요청 전 처리가 완료되지 않았습니다.`,
           transition,
         ),
-        steps: detailedResultSteps(transition, "failed") ?? [
-          completed("좌석 발견", times.detected),
-          completed("자동 예매 요청 시작", times.started),
-          failed("예매 요청", times.attempted),
-        ],
+        steps: preBookingFailureSteps(transition, "예약 전 처리", null),
       };
     case "monitoring_resumed":
       return buildReservationRecoveryToast(transition, transition.reservationResult ?? {
@@ -519,6 +609,9 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         confirmationDiagnosticCode: transition.confirmationDiagnosticCode ?? null,
         confirmationObservedAt: transition.confirmationObservedAt ?? null,
         reconciliationAttemptCount: transition.reconciliationAttemptCount ?? 0,
+        reconciliationResolution: transition.reconciliationResolution ?? null,
+        automaticReservationRetryFenceReason:
+          transition.automaticReservationRetryFenceReason ?? null,
         nextReconcileAt: transition.nextReconcileAt ?? null,
       });
   }
@@ -541,7 +634,61 @@ export function buildReservationRecoveryToast(
       ? {}
       : { meta: `${journey.meta} · 예약 좌석 ${reservedSeatLabel}` }),
   };
-  if (result.manualCheckRequired || !result.retryable) {
+  if (
+    outcome === "failed"
+    && !result.manualCheckRequired
+    && isPreBookingProviderFailure(transition, result)
+  ) {
+    const monitoringResumed = transition.monitoringResumed !== false;
+    return {
+      ...base,
+      kind: "recovery",
+      title: "예매 전 철도사 연결 확인에 실패했습니다",
+      description: preBookingProviderFailureDescription(base.description, monitoringResumed),
+      steps: preBookingFailureSteps(
+        transition,
+        "예약 전 철도사 연결 확인",
+        monitoringResumed,
+      ),
+    };
+  }
+  if (
+    hasConfirmedAbsentReservationEvidence({ ...result, outcome })
+  ) {
+    const monitoringResumed = transition.monitoringResumed !== false;
+    const recoveryConsumed = result.automaticReservationRetryFenceReason
+      === "confirmed_absent_recovery_consumed";
+    const resolutionSummary = recoveryConsumed
+      ? "공식 예약 내역에서 대상 예약이 없음을 확인해 결과 확인을 마쳤습니다. 자동 복구 1회를 이미 사용해 추가 자동 예매는 차단됩니다."
+      : "공식 예약 내역에서 대상 예약이 없음을 확인해 결과 확인을 마쳤습니다.";
+    return {
+      ...base,
+      kind: "recovery",
+      title: recoveryConsumed
+        ? monitoringResumed
+          ? "자동 복구 1회 사용을 마쳐 감시 중입니다"
+          : "자동 복구 1회 사용을 마치고 작업이 종료되었습니다"
+        : monitoringResumed
+          ? "공식 예약 없음이 확인되어 감시 중입니다"
+          : "공식 예약 없음이 확인되어 작업이 종료되었습니다",
+      description: appendEvidence(
+        `${base.description} · ${resolutionSummary} ${monitoringResumed ? "감시는 계속됩니다." : "감시는 종료되었습니다."}`,
+        result,
+      ),
+      steps: [
+        ...(detailedResultSteps(
+          transition,
+          "confirmed_absent",
+          result.confirmationObservedAt,
+        )
+          ?? uncertainRequestFallbackSteps(transition, result)),
+        monitoringResumed
+          ? active("감시 계속", times.current)
+          : completed("작업 종료", times.current),
+      ],
+    };
+  }
+  if (result.manualCheckRequired) {
     const monitoringResumed = transition.monitoringResumed !== false;
     const automaticRecheckPending = Boolean(result.nextReconcileAt);
     const summary = monitoringResumed
@@ -554,12 +701,8 @@ export function buildReservationRecoveryToast(
       title: manualCheckTitle(result),
       description: appendEvidence(summary, result),
       steps: [
-        ...(detailedResultSteps(transition, "manual_check") ?? [
-          completed("좌석 발견", times.detected),
-          completed("자동 예매 요청 시작", times.started),
-          completed("예매 요청", times.attempted),
-          failed("공식 결과 확인"),
-        ]),
+        ...(detailedResultSteps(transition, "manual_check")
+          ?? uncertainRequestFallbackSteps(transition, result)),
         active(
           automaticRecheckPending
             ? "공식 결과 자동 재확인 대기"
@@ -593,6 +736,21 @@ export function buildReservationRecoveryToast(
           ? active("감시·재예매 대기", times.current)
           : completed("작업 종료", times.current),
       ],
+    };
+  }
+  if (outcome === "failed" && !result.retryable) {
+    const monitoringResumed = transition.monitoringResumed !== false;
+    return {
+      ...base,
+      kind: "recovery",
+      title: monitoringResumed
+        ? "예매 전 처리가 중단되어 감시 중입니다"
+        : "예매 전 처리가 중단되어 작업이 종료되었습니다",
+      description: appendEvidence(
+        `${base.description} · 예약 요청 전 처리가 완료되지 않았습니다. 자동 재예매는 실행하지 않습니다. ${monitoringResumed ? "감시는 계속됩니다." : "감시는 종료되었습니다."}`,
+        result,
+      ),
+      steps: preBookingFailureSteps(transition, "예약 전 처리", monitoringResumed),
     };
   }
   return {

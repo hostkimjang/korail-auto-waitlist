@@ -286,6 +286,151 @@ describe("active watch view model", () => {
     expect(presentation.reservationAttemptLabel).not.toMatch(/결제 (미완료|완료)/);
   });
 
+  it("distinguishes a pre-booking provider failure from a sent reservation request", () => {
+    const presentation = presentActiveWatchRow(activeWatch({
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "failed",
+        resultReasonCode: "provider_unavailable",
+        startedAt: "2026-08-16T15:56:19.482Z",
+        finishedAt: "2026-08-16T15:56:19.939Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: null,
+        confirmationObservedAt: null,
+        reconciliationAttemptCount: 0,
+        nextReconcileAt: null,
+        progressStages: [],
+      },
+    }), false);
+
+    expect(presentation.reservationAttemptLabel).toContain("예매 전 철도사 연결 확인 실패");
+    expect(presentation.reservationAttemptLabel).toContain("확인된 예약 요청 단계 없음");
+    expect(presentation.reservationAttemptLabel).not.toContain("예매 시도 결과 확인 필요");
+    expect(presentation.reservationAttemptLabel).not.toContain("공식 예매 내역을 확인");
+  });
+
+  it("keeps every conclusive FAILED attempt out of official-result confirmation copy", () => {
+    const presentation = presentActiveWatchRow(activeWatch({
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "failed",
+        resultReasonCode: "seat_selection_lost",
+        startedAt: "2026-08-16T15:56:19.482Z",
+        finishedAt: "2026-08-16T15:56:20.939Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        progressStages: [
+          { stage: "authenticated_session_ready", occurredAt: "2026-08-16T15:56:19.700Z" },
+          { stage: "target_rechecked", occurredAt: "2026-08-16T15:56:20.100Z" },
+        ],
+      },
+    }), false);
+
+    expect(presentation.reservationAttemptLabel).toContain("예매 전 처리 중단");
+    expect(presentation.reservationAttemptLabel).toContain("자동 재예매 미실행");
+    expect(presentation.reservationAttemptLabel).not.toContain("예매 시도 결과 확인 필요");
+    expect(presentation.reservationAttemptLabel).not.toContain("공식 예매 내역을 확인");
+  });
+
+  it("shows confirmed official absence without inferring that its recovery was consumed", () => {
+    const presentation = presentActiveWatchRow(activeWatch({
+      status: "watching",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-18T03:20:00Z",
+        finishedAt: "2026-08-18T03:20:08Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: "not_found",
+        confirmationObservedAt: "2026-08-18T03:20:20Z",
+        reconciliationAttemptCount: 2,
+        reconciliationResolution: "confirmed_absent",
+        nextReconcileAt: null,
+      },
+    }), false);
+
+    expect(presentation.reservationAttemptLabel).toContain(
+      "공식 재확인에서 대상 예약 없음 확정",
+    );
+    expect(presentation.reservationAttemptLabel).toContain(
+      "공식 예약 없음 확인 · 결과 확인 해소 · 감시 계속",
+    );
+    expect(presentation.reservationAttemptLabel).not.toContain("자동 복구 1회 사용 완료");
+    expect(presentation.reservationAttemptLabel).not.toContain("공식 예매 내역을 확인");
+    expect(presentation.reservationAttemptLabel).not.toContain("다시 시도 가능");
+  });
+
+  it("does not present incompatible confirmed-absence evidence as resolved", () => {
+    const presentation = presentActiveWatchRow(activeWatch({
+      status: "watching",
+      statusLabel: "감시 중",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-18T03:20:00Z",
+        finishedAt: "2026-08-18T03:20:08Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: "2026-08-18T03:20:20Z",
+        reconciliationAttemptCount: 2,
+        reconciliationResolution: "confirmed_absent",
+        nextReconcileAt: null,
+      },
+    }), false);
+
+    expect(presentation.reservationAttemptLabel).toContain("예매 시도 결과 확인 필요");
+    expect(presentation.reservationAttemptLabel).toContain("공식 예매 내역을 확인해 주세요");
+    expect(presentation.reservationAttemptLabel).not.toContain("예약 없음 확정");
+    expect(presentation.reservationAttemptLabel).not.toContain("결과 확인 해소");
+  });
+
+  it("shows the server-confirmed consumed recovery fence without exposing episode details", () => {
+    const presentation = presentActiveWatchRow(activeWatch({
+      status: "watching",
+      statusLabel: "감시 중",
+      reservationPolicy: "reserve_once_before_payment",
+      latestReservationAttempt: {
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-18T03:20:00Z",
+        finishedAt: "2026-08-18T03:20:08Z",
+        retryable: false,
+        manualCheckRequired: false,
+        retryCondition: null,
+        paymentHoldEndedAt: null,
+        confirmationOutcome: "not_found",
+        confirmationObservedAt: "2026-08-18T03:20:20Z",
+        reconciliationAttemptCount: 2,
+        reconciliationResolution: "confirmed_absent",
+        automaticReservationRetryFenceReason: "confirmed_absent_recovery_consumed",
+        nextReconcileAt: null,
+      },
+    }), false);
+
+    expect(presentation.statusLabel).toBe("자동 복구 1회 사용 완료 · 감시 중");
+    expect(presentation.reservationAttemptLabel).toContain(
+      "공식 부재 확인 뒤 자동 복구 1회 사용 완료 · 추가 자동 예매 차단",
+    );
+    expect(presentation.reservationAttemptLabel).not.toContain("공식 예매 내역을 확인");
+    expect(presentation.reservationAttemptLabel).not.toContain("다시 시도 가능");
+    expect(presentation.reservationAttemptLabel).not.toMatch(/episode|sequence|confirmed-absent-retry/i);
+  });
+
   it.each([
     [
       "official_read_unavailable",

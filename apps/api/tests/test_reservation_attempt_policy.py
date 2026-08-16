@@ -6,6 +6,7 @@ import pytest
 from rail_waitlist.domain import ReservationOutcome, SeatObservationStatus
 from rail_waitlist.models import ReservationAttempt
 from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
+from rail_waitlist.reservations import attempt_policy as canonical_attempt_policy
 from rail_waitlist.reservations.attempt_policy import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
     CONFIRMED_ABSENT_RETRY_OBSERVATIONS,
@@ -13,6 +14,7 @@ from rail_waitlist.reservations.attempt_policy import (
     MANUAL_UNKNOWN_REARM_EPISODE_PREFIX,
     PAYMENT_HOLD_RETRY_EPISODE_PREFIX,
     RESERVATION_RETRY_EDGE_OBSERVATIONS,
+    automatic_reservation_retry_fence_reason,
     is_confirmed_absent_retry_source,
     is_unresolved_unknown_manual_rearm_source,
     manual_unknown_rearm_episode_key,
@@ -20,6 +22,9 @@ from rail_waitlist.reservations.attempt_policy import (
 )
 from rail_waitlist.reservations.reconciliation_policy import (
     ReservationReconciliationResolution,
+)
+from rail_waitlist.reservations.retry_fence_contracts import (
+    AutomaticReservationRetryFenceReason,
 )
 from rail_waitlist.services import (
     CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX as LEGACY_CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
@@ -67,6 +72,13 @@ def test_services_reexports_the_canonical_confirmed_absent_policy() -> None:
     assert legacy_is_confirmed_absent_retry_source is is_confirmed_absent_retry_source
 
 
+def test_automatic_retry_fence_reason_has_one_public_contract_owner() -> None:
+    assert AutomaticReservationRetryFenceReason.__module__ == (
+        "rail_waitlist.reservations.retry_fence_contracts"
+    )
+    assert not hasattr(canonical_attempt_policy, "AutomaticReservationRetryFenceReason")
+
+
 def test_exact_confirmed_absence_rearms_only_legacy_payment_hold_without_deadline() -> None:
     assert is_confirmed_absent_retry_source(make_attempt(ReservationOutcome.PAYMENT_REQUIRED))
 
@@ -90,6 +102,45 @@ def test_reconciled_unknown_exact_absence_rearms_only_a_non_retry_episode() -> N
             reconciliation_resolution=(ReservationReconciliationResolution.CONFIRMED_ABSENT),
         )
     )
+
+
+def test_confirmed_absent_recovery_projects_a_closed_nonrecursive_fence_reason() -> None:
+    reconciled_at = datetime(2026, 8, 5, 0, 0, 1, tzinfo=UTC)
+    consumed_recovery = make_attempt(
+        ReservationOutcome.UNKNOWN,
+        episode_key=f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}source-attempt",
+        last_reconciled_at=reconciled_at,
+        reconciliation_attempt_count=1,
+        reconciliation_resolution=ReservationReconciliationResolution.CONFIRMED_ABSENT,
+    )
+    eligible_source = make_attempt(
+        ReservationOutcome.UNKNOWN,
+        last_reconciled_at=reconciled_at,
+        reconciliation_attempt_count=1,
+        reconciliation_resolution=ReservationReconciliationResolution.CONFIRMED_ABSENT,
+    )
+    unresolved_recovery = make_attempt(
+        ReservationOutcome.UNKNOWN,
+        episode_key=f"{CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX}source-attempt",
+        confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        last_reconciled_at=reconciled_at,
+        reconciliation_attempt_count=1,
+    )
+    malformed_recovery = make_attempt(
+        ReservationOutcome.UNKNOWN,
+        episode_key=CONFIRMED_ABSENT_RETRY_EPISODE_PREFIX,
+        last_reconciled_at=reconciled_at,
+        reconciliation_attempt_count=1,
+        reconciliation_resolution=ReservationReconciliationResolution.CONFIRMED_ABSENT,
+    )
+
+    assert (
+        automatic_reservation_retry_fence_reason(consumed_recovery)
+        is AutomaticReservationRetryFenceReason.CONFIRMED_ABSENT_RECOVERY_CONSUMED
+    )
+    assert automatic_reservation_retry_fence_reason(eligible_source) is None
+    assert automatic_reservation_retry_fence_reason(unresolved_recovery) is None
+    assert automatic_reservation_retry_fence_reason(malformed_recovery) is None
 
 
 @pytest.mark.parametrize(

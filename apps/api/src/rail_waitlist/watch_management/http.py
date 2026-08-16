@@ -28,6 +28,7 @@ from ..reservations.manual_rearm_application import (
 )
 from ..reservations.manual_rearm_runtime import authorize_manual_reservation_rearm
 from ..reservations.provider_confirmation.contracts import ReservationConfirmationOutcome
+from ..reservations.reconciliation_policy import ReservationReconciliationResolution
 from .application import should_enqueue_after_policy_update, should_enqueue_after_start
 from .cancel_application import WatchCancellationInProgress
 from .cancel_runtime import cancel_watch as cancel_watch_runtime
@@ -90,6 +91,9 @@ def _live_watch_condition(read_at: datetime) -> ColumnElement[bool]:
             ReservationAttempt.outcome.in_(_MANUAL_CHECK_RESERVATION_OUTCOMES),
             ReservationAttempt.confirmation_outcome.is_distinct_from(
                 ReservationConfirmationOutcome.CONFIRMED_PAID
+            ),
+            ReservationAttempt.reconciliation_resolution.is_distinct_from(
+                ReservationReconciliationResolution.CONFIRMED_ABSENT
             ),
         )
     )

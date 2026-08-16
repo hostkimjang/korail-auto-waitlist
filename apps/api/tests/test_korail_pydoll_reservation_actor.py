@@ -19,7 +19,11 @@ from rail_waitlist.korail_pydoll_browser import (
     PydollKorailBrowserClient,
     PydollPageSnapshot,
 )
-from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
+from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserProtectionDetected,
+    BrowserRateLimited,
+    BrowserSourceUnavailable,
+)
 from rail_waitlist.korail_sidecar.pydoll.reservation_contracts import (
     KorailReservationProgress,
     KorailReservationProgressCallback,
@@ -570,13 +574,13 @@ async def test_reservation_reauthenticates_in_a_fresh_context_when_reused_probe_
 
 
 @pytest.mark.asyncio
-async def test_reservation_probe_uncertainty_discards_reused_session_without_click_or_retry(
+async def test_reservation_probe_source_unavailable_uses_one_fresh_auth_before_click(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _ProbeUnavailableSession(_ReservationSession):
         async def probe_authenticated_session(self) -> bool:
             self.probe_count += 1
-            raise BrowserSourceUnavailable("reservation_session_probe")
+            raise BrowserSourceUnavailable("session_keepalive")
 
     async def identity_guard(
         _session: object,
@@ -590,9 +594,111 @@ async def test_reservation_probe_uncertainty_discards_reused_session_without_cli
         "_assert_reservation_identity",
         staticmethod(identity_guard),
     )
-    session = _ProbeUnavailableSession()
+    stale = _ProbeUnavailableSession()
+    fresh = _ReservationSession()
+    factory = _SequenceReservationFactory(stale, fresh)
     client = PydollKorailBrowserClient(
-        session_factory=lambda *_args: _ReservationContext(session),  # type: ignore[arg-type]
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+    assert await client.verify_credentials(_request().credential) is True
+    observed_progress: list[KorailReservationProgress] = []
+
+    result = await client.reserve_once(_request(), on_progress=observed_progress.append)
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert stale.probe_count == 1
+    assert stale.closed == 1
+    assert "reserve" not in stale.events
+    assert fresh.events.count("authenticate") == 1
+    assert fresh.events.count("reserve") == 1
+    assert factory.calls == 2
+    assert [progress.stage for progress in observed_progress] == ["authenticated_session_ready"]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reservation_probe_source_unavailable_fresh_auth_failure_stays_no_click(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ProbeUnavailableSession(_ReservationSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            raise BrowserSourceUnavailable("session_keepalive")
+
+    async def identity_guard(
+        _session: object,
+        _request: KorailReservationRequest,
+        _stage: str,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_reservation_identity",
+        staticmethod(identity_guard),
+    )
+    stale = _ProbeUnavailableSession()
+    fresh = _ReservationSession(authenticated=False)
+    factory = _SequenceReservationFactory(stale, fresh)
+    client = PydollKorailBrowserClient(
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+    assert await client.verify_credentials(_request().credential) is True
+    observed_progress: list[KorailReservationProgress] = []
+
+    result = await client.reserve_once(_request(), on_progress=observed_progress.append)
+
+    assert result.outcome is KorailReservationOutcome.AUTH_REQUIRED
+    assert result.reason == "authentication_required"
+    assert result.seat_clicked is False
+    assert result.reservation_clicked is False
+    assert observed_progress == []
+    assert stale.probe_count == 1
+    assert stale.closed == 1
+    assert "reserve" not in stale.events
+    assert fresh.events.count("authenticate") == 1
+    assert "reserve" not in fresh.events
+    assert fresh.closed == 1
+    assert factory.calls == 2
+    assert client._active_session is None
+    assert client.session_snapshot().state is KorailSessionActorState.AUTH_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_reservation_probe_source_unavailable_does_not_retry_failed_fresh_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ProbeUnavailableSession(_ReservationSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            raise BrowserSourceUnavailable("session_keepalive")
+
+    class _FreshAuthUnavailableSession(_ReservationSession):
+        async def ensure_authenticated(self, _credential: KorailCredentialInput) -> bool:
+            self.events.append("authenticate")
+            raise BrowserSourceUnavailable("session_keepalive")
+
+    async def identity_guard(
+        _session: object,
+        _request: KorailReservationRequest,
+        _stage: str,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_reservation_identity",
+        staticmethod(identity_guard),
+    )
+    stale = _ProbeUnavailableSession()
+    fresh = _FreshAuthUnavailableSession()
+    factory = _SequenceReservationFactory(stale, fresh)
+    client = PydollKorailBrowserClient(
+        session_factory=factory,  # type: ignore[arg-type]
         session_reuse_ttl_seconds=60,
         session_reuse_max_searches=5,
     )
@@ -601,12 +707,108 @@ async def test_reservation_probe_uncertainty_discards_reused_session_without_cli
     result = await client.reserve_once(_request())
 
     assert result.outcome is KorailReservationOutcome.FAILED
-    assert result.reason == "source_unavailable:reservation_session_probe"
+    assert result.reason == "source_unavailable:session_keepalive"
+    assert result.seat_clicked is False
+    assert result.reservation_clicked is False
+    assert stale.closed == 1
+    assert fresh.events == ["open", "authenticate"]
+    assert fresh.closed == 1
+    assert factory.calls == 2
+    assert client._active_session is None
+    assert client.session_snapshot().state is KorailSessionActorState.STALE
+
+
+@pytest.mark.parametrize(
+    "probe_error",
+    [
+        BrowserProtectionDetected(stage="session_keepalive"),
+        BrowserRateLimited(),
+    ],
+    ids=["protection", "rate-limit"],
+)
+@pytest.mark.asyncio
+async def test_reservation_probe_restriction_never_starts_fresh_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    probe_error: Exception,
+) -> None:
+    class _RestrictedProbeSession(_ReservationSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            raise probe_error
+
+    async def identity_guard(
+        _session: object,
+        _request: KorailReservationRequest,
+        _stage: str,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_reservation_identity",
+        staticmethod(identity_guard),
+    )
+    session = _RestrictedProbeSession()
+    factory = _SequenceReservationFactory(session)
+    client = PydollKorailBrowserClient(
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+    assert await client.verify_credentials(_request().credential) is True
+
+    result = await client.reserve_once(_request())
+
+    assert result.outcome is KorailReservationOutcome.PROVIDER_BLOCKED
+    assert result.seat_clicked is False
     assert result.reservation_clicked is False
     assert session.probe_count == 1
     assert "reserve" not in session.events
     assert session.closed == 1
+    assert factory.calls == 1
     assert client._active_session is None
+    assert client.session_snapshot().state is KorailSessionActorState.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_reservation_probe_cancellation_never_starts_fresh_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CancelledProbeSession(_ReservationSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            raise asyncio.CancelledError
+
+    async def identity_guard(
+        _session: object,
+        _request: KorailReservationRequest,
+        _stage: str,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient,
+        "_assert_reservation_identity",
+        staticmethod(identity_guard),
+    )
+    session = _CancelledProbeSession()
+    factory = _SequenceReservationFactory(session)
+    client = PydollKorailBrowserClient(
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+    assert await client.verify_credentials(_request().credential) is True
+
+    with pytest.raises(asyncio.CancelledError):
+        await client.reserve_once(_request())
+
+    assert session.probe_count == 1
+    assert "reserve" not in session.events
+    assert session.closed == 1
+    assert factory.calls == 1
+    assert client._active_session is None
+    assert client.session_snapshot().state is KorailSessionActorState.STALE
 
 
 @pytest.mark.asyncio

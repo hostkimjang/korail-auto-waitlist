@@ -451,6 +451,103 @@ describe("watch snapshot reconciliation", () => {
     expect(secondState.notices[0]?.description).toContain("공식 내역 자동 재확인 2/6회 수행");
   });
 
+  it("replaces a REST manual-check snapshot with confirmed absence and revises its consumed fence", () => {
+    const candidateId = "candidate-confirmed-absent";
+    const manual: WatchLifecycleSnapshot = {
+      ...watch("confirmed-absent-rest", "watching"),
+      latestReservationAttemptCandidateId: candidateId,
+      reservationCandidateContexts: {
+        [candidateId]: {
+          train: "KTX 240",
+          seatClassLabel: "일반실",
+          date: "8월 19일 (수)",
+          departure: "12:28",
+          arrival: "13:36",
+        },
+      },
+      latestReservationAttempt: attempt({
+        outcome: "unknown",
+        resultReasonCode: "reservation_request_result_unknown",
+        startedAt: "2026-08-18T03:20:00Z",
+        finishedAt: "2026-08-18T03:20:08Z",
+        manualCheckRequired: true,
+        confirmationOutcome: "inconclusive",
+        confirmationObservedAt: "2026-08-18T03:20:10Z",
+        reconciliationAttemptCount: 1,
+        nextReconcileAt: "2026-08-18T03:20:20Z",
+      }),
+    };
+    const confirmedAbsentAttempt = attempt({
+      outcome: "unknown",
+      resultReasonCode: "reservation_request_result_unknown",
+      startedAt: "2026-08-18T03:20:00Z",
+      finishedAt: "2026-08-18T03:20:08Z",
+      manualCheckRequired: false,
+      confirmationOutcome: "not_found",
+      confirmationObservedAt: "2026-08-18T03:20:20Z",
+      reconciliationAttemptCount: 2,
+      reconciliationResolution: "confirmed_absent",
+      nextReconcileAt: null,
+    });
+    const confirmedAbsent: WatchLifecycleSnapshot = {
+      ...manual,
+      latestReservationAttempt: confirmedAbsentAttempt,
+    };
+    const consumed: WatchLifecycleSnapshot = {
+      ...confirmedAbsent,
+      latestReservationAttempt: attempt({
+        ...confirmedAbsentAttempt,
+        automaticReservationRetryFenceReason: "confirmed_absent_recovery_consumed",
+      }),
+    };
+
+    const manualTransition = hydrateCurrentWatchActionTransitions([manual])[0];
+    const sourceTransition = detectWatchActionTransitions([manual], [confirmedAbsent])[0];
+    const consumedTransition = detectWatchActionTransitions([confirmedAbsent], [consumed])[0];
+    if (
+      manualTransition === undefined
+      || sourceTransition === undefined
+      || consumedTransition === undefined
+    ) throw new Error("confirmed-absence REST transitions were not created");
+
+    expect(sourceTransition.reservationResult).toMatchObject({
+      outcome: "unknown",
+      manualCheckRequired: false,
+      reconciliationResolution: "confirmed_absent",
+      automaticReservationRetryFenceReason: null,
+    });
+    expect(consumedTransition.reservationResult).toMatchObject({
+      reconciliationResolution: "confirmed_absent",
+      automaticReservationRetryFenceReason: "confirmed_absent_recovery_consumed",
+    });
+    expect(consumedTransition.revision).not.toBe(sourceTransition.revision);
+
+    const manualState = pushNotifications(initialNotificationCenterState, [
+      buildWatchActionToast(manualTransition),
+    ]);
+    expect(manualState.notices[0]).toMatchObject({
+      kind: "manual_check",
+      persistence: "sticky",
+    });
+    const sourceState = pushNotifications(manualState, [buildWatchActionToast(sourceTransition)]);
+    expect(sourceState.notices).toHaveLength(1);
+    expect(sourceState.notices[0]).toMatchObject({
+      kind: "recovery",
+      title: "공식 예약 없음이 확인되어 감시 중입니다",
+    });
+    expect(sourceState.notices[0]?.description).not.toContain("공식 예약 내역을 확인해 주세요");
+
+    const consumedState = pushNotifications(sourceState, [
+      buildWatchActionToast(consumedTransition),
+    ]);
+    expect(consumedState.notices).toHaveLength(1);
+    expect(consumedState.notices[0]).toMatchObject({
+      kind: "recovery",
+      title: "자동 복구 1회 사용을 마쳐 감시 중입니다",
+    });
+    expect(consumedState.notices[0]?.description).toContain("추가 자동 예매는 차단됩니다");
+  });
+
   it("revises the same inconclusive outcome when only its diagnostic becomes more specific", () => {
     const first: WatchLifecycleSnapshot = {
       ...watch("diagnostic-revision", "watching"),

@@ -73,6 +73,9 @@ export type ReservationReconciliationResolution =
   | "confirmed_absent"
   | "exhausted_unresolved";
 
+export type AutomaticReservationRetryFenceReason =
+  | "confirmed_absent_recovery_consumed";
+
 export interface LatestReservationAttempt {
   outcome: ReservationAttemptOutcome;
   resultReasonCode?: ReservationResultReasonCode | null;
@@ -90,6 +93,7 @@ export interface LatestReservationAttempt {
   confirmationObservedAt?: string | null;
   reconciliationAttemptCount?: number;
   reconciliationResolution?: ReservationReconciliationResolution | null;
+  automaticReservationRetryFenceReason?: AutomaticReservationRetryFenceReason | null;
   nextReconcileAt?: string | null;
   progressStages?: ReadonlyArray<ReservationProgressStage>;
   reservedSeats?: ReadonlyArray<ReservedSeat>;
@@ -150,6 +154,59 @@ const reconciliationResolutions: ReadonlySet<string> = new Set([
   "confirmed_absent",
   "exhausted_unresolved",
 ]);
+const automaticReservationRetryFenceReasons: ReadonlySet<string> = new Set([
+  "confirmed_absent_recovery_consumed",
+]);
+
+interface ReservationReconciliationProjection {
+  outcome: ReservationAttemptOutcome | null;
+  confirmationOutcome: ReservationConfirmationOutcome | null;
+  manualCheckRequired: boolean;
+  reconciliationResolution: ReservationReconciliationResolution | null;
+  automaticReservationRetryFenceReason: AutomaticReservationRetryFenceReason | null;
+}
+
+export function hasConfirmedAbsentReservationEvidence(
+  projection: {
+    outcome: ReservationAttemptOutcome | null;
+    confirmationOutcome?: ReservationConfirmationOutcome | null;
+    manualCheckRequired: boolean;
+    reconciliationResolution?: ReservationReconciliationResolution | null;
+  },
+): boolean {
+  return projection.outcome === "unknown"
+    && projection.confirmationOutcome === "not_found"
+    && projection.manualCheckRequired === false
+    && projection.reconciliationResolution === "confirmed_absent";
+}
+
+export function normalizeReservationReconciliationProjection(
+  projection: ReservationReconciliationProjection,
+): Pick<
+  ReservationReconciliationProjection,
+  "manualCheckRequired" | "reconciliationResolution" | "automaticReservationRetryFenceReason"
+> & { invalidClosureEvidence: boolean } {
+  const confirmedAbsent = hasConfirmedAbsentReservationEvidence(projection);
+  const invalidConfirmedAbsent = projection.reconciliationResolution === "confirmed_absent"
+    && !confirmedAbsent;
+  const invalidRetryFence = projection.automaticReservationRetryFenceReason !== null
+    && !confirmedAbsent;
+  const unresolvedUnknown = projection.outcome === "unknown"
+    && projection.confirmationOutcome !== "confirmed_paid"
+    && !confirmedAbsent;
+  return {
+    invalidClosureEvidence: invalidConfirmedAbsent || invalidRetryFence,
+    manualCheckRequired: invalidConfirmedAbsent || invalidRetryFence || unresolvedUnknown
+      ? true
+      : projection.manualCheckRequired,
+    reconciliationResolution: invalidConfirmedAbsent
+      ? null
+      : projection.reconciliationResolution,
+    automaticReservationRetryFenceReason: invalidRetryFence
+      ? null
+      : projection.automaticReservationRetryFenceReason,
+  };
+}
 
 export function validatedManualRearmReason(
   attempt: LatestReservationAttempt,
@@ -390,6 +447,20 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
   const reconciliationResolution = typeof reconciliationResolutionValue === "string"
     ? reconciliationResolutionValue as ReservationReconciliationResolution
     : null;
+  const automaticReservationRetryFenceReasonValue =
+    value.automatic_reservation_retry_fence_reason;
+  const automaticReservationRetryFenceReason =
+    typeof automaticReservationRetryFenceReasonValue === "string"
+      && automaticReservationRetryFenceReasons.has(automaticReservationRetryFenceReasonValue)
+      ? automaticReservationRetryFenceReasonValue as AutomaticReservationRetryFenceReason
+      : null;
+  const normalizedReconciliation = normalizeReservationReconciliationProjection({
+    outcome: outcome as ReservationAttemptOutcome,
+    confirmationOutcome,
+    manualCheckRequired: value.manual_check_required,
+    reconciliationResolution,
+    automaticReservationRetryFenceReason,
+  });
   const nextReconcileAt = value.next_reconcile_at === null
     || value.next_reconcile_at === undefined
     ? null
@@ -454,16 +525,19 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
     startedAt,
     finishedAt,
     retryable: value.retryable,
-    manualCheckRequired: value.manual_check_required,
+    manualCheckRequired: normalizedReconciliation.manualCheckRequired,
     retryCondition,
     paymentHoldEndedAt,
-    manualRearmAvailable: value.manual_rearm_available === true,
+    manualRearmAvailable: value.manual_rearm_available === true
+      && !normalizedReconciliation.invalidClosureEvidence,
     manualRearmReason: requestedManualRearmReason,
     confirmationOutcome,
     confirmationDiagnosticCode,
     confirmationObservedAt,
     reconciliationAttemptCount,
-    reconciliationResolution,
+    reconciliationResolution: normalizedReconciliation.reconciliationResolution,
+    automaticReservationRetryFenceReason:
+      normalizedReconciliation.automaticReservationRetryFenceReason,
     nextReconcileAt,
     progressStages,
     reservedSeats,

@@ -16,10 +16,14 @@ from ..provider_account_management.models import RailProviderAccount
 from ..provider_registry.application import get_execution_provider
 from ..reservations.attempt_policy import (
     active_unresolved_unknown_attempt_ids,
+    automatic_reservation_retry_fence_reason,
     exact_paid_reservation_attempt_id,
     is_unresolved_unknown_manual_rearm_source,
 )
-from ..reservations.domain import reservation_attempt_result_policy
+from ..reservations.domain import (
+    reservation_attempt_manual_check_required,
+    reservation_attempt_result_policy,
+)
 from ..reservations.manual_rearm_contracts import ManualReservationRearmReason
 from ..reservations.payment_hold_application import payment_hold_end_reason
 from ..reservations.progress_timing_policy import (
@@ -99,9 +103,14 @@ def reservation_attempt_projection(
         "reserved_seats": attempt.reserved_seats or [],
         "post_deadline_reconciled_at": attempt.post_deadline_reconciled_at,
         "payment_hold_end_reason": hold_end_reason,
+        "automatic_reservation_retry_fence_reason": (
+            automatic_reservation_retry_fence_reason(attempt)
+        ),
         "retryable": automatic_hold_retry or (not payment_hold_ended and result_policy.retryable),
-        "manual_check_required": (
-            False if payment_hold_ended or confirmed_paid else result_policy.manual_check_required
+        "manual_check_required": reservation_attempt_manual_check_required(
+            attempt.outcome,
+            confirmation_outcome=attempt.confirmation_outcome,
+            reconciliation_resolution=attempt.reconciliation_resolution,
         ),
         "manual_rearm_available": manual_rearm_reason is not None,
         "manual_rearm_reason": manual_rearm_reason,

@@ -3,10 +3,13 @@ import {
   isReservationConfirmationOutcome,
   isReservationResultReasonCode,
   normalizeReservationConfirmationDiagnosticCode,
+  normalizeReservationReconciliationProjection,
   normalizeReservedSeats,
+  type AutomaticReservationRetryFenceReason,
   type ReservationAttemptOutcome,
   type ReservationConfirmationDiagnosticCode,
   type ReservationConfirmationOutcome,
+  type ReservationReconciliationResolution,
   type ReservationResultReasonCode,
 } from "../../domain/reservationAttempt";
 import {
@@ -40,6 +43,8 @@ interface ReservationResultEvidence {
   confirmationDiagnosticCode: ReservationConfirmationDiagnosticCode | null;
   confirmationObservedAt: string | null;
   reconciliationAttemptCount: number;
+  reconciliationResolution: ReservationReconciliationResolution | null;
+  automaticReservationRetryFenceReason: AutomaticReservationRetryFenceReason | null;
   nextReconcileAt: string | null;
 }
 
@@ -101,6 +106,24 @@ function reservationResultEvidence(
       || Number(countValue) > 6
     )
   ) return null;
+  const resolutionValue = payload.reconciliation_resolution;
+  if (
+    resolutionValue !== null
+    && resolutionValue !== undefined
+    && resolutionValue !== "confirmed_absent"
+    && resolutionValue !== "exhausted_unresolved"
+  ) return null;
+  const reconciliationResolution = resolutionValue === "confirmed_absent"
+    || resolutionValue === "exhausted_unresolved"
+    ? resolutionValue
+    : null;
+  // 롤링 배포 중 새 fence 값이 먼저 도착해도 이벤트는 보존하되, 현재 클라이언트가
+  // 이해하지 못한 차단 근거를 임의로 표시하지 않는다.
+  const retryFenceValue = payload.automatic_reservation_retry_fence_reason;
+  const automaticReservationRetryFenceReason = retryFenceValue
+    === "confirmed_absent_recovery_consumed"
+    ? retryFenceValue
+    : null;
   const nextValue = payload.next_reconcile_at;
   const nextReconcileAt = nextValue === null || nextValue === undefined
     ? null
@@ -115,6 +138,8 @@ function reservationResultEvidence(
     ),
     confirmationObservedAt,
     reconciliationAttemptCount: countValue === undefined ? 0 : Number(countValue),
+    reconciliationResolution,
+    automaticReservationRetryFenceReason,
     nextReconcileAt,
   };
 }
@@ -150,9 +175,22 @@ function reservationReconciledEvidence(
   if (paymentActionableValue !== undefined && typeof paymentActionableValue !== "boolean") {
     return null;
   }
+  const outcome = reservationAttemptOutcome(outcomeValue);
+  const normalizedReconciliation = normalizeReservationReconciliationProjection({
+    outcome,
+    confirmationOutcome: evidence.confirmationOutcome,
+    manualCheckRequired: typeof payload.manual_check_required === "boolean"
+      ? payload.manual_check_required
+      : true,
+    reconciliationResolution: evidence.reconciliationResolution,
+    automaticReservationRetryFenceReason: evidence.automaticReservationRetryFenceReason,
+  });
   return {
     ...evidence,
-    outcome: reservationAttemptOutcome(outcomeValue),
+    reconciliationResolution: normalizedReconciliation.reconciliationResolution,
+    automaticReservationRetryFenceReason:
+      normalizedReconciliation.automaticReservationRetryFenceReason,
+    outcome,
     paymentActionable: paymentActionableValue === true,
   };
 }
@@ -440,14 +478,24 @@ function recoveryResult(payload: Record<string, unknown>): ReservationRecoveryRe
     : null;
   const evidence = reservationResultEvidence(payload);
   if (evidence === null) return null;
-  return {
+  const normalizedReconciliation = normalizeReservationReconciliationProjection({
     outcome: outcome as ReservationResultOutcome,
-    retryable: payload.retryable === true,
+    confirmationOutcome: evidence.confirmationOutcome,
     manualCheckRequired: typeof payload.manual_check_required === "boolean"
       ? payload.manual_check_required
       : true,
+    reconciliationResolution: evidence.reconciliationResolution,
+    automaticReservationRetryFenceReason: evidence.automaticReservationRetryFenceReason,
+  });
+  return {
+    outcome: outcome as ReservationResultOutcome,
+    retryable: payload.retryable === true,
+    manualCheckRequired: normalizedReconciliation.manualCheckRequired,
     retryCondition,
     ...evidence,
+    reconciliationResolution: normalizedReconciliation.reconciliationResolution,
+    automaticReservationRetryFenceReason:
+      normalizedReconciliation.automaticReservationRetryFenceReason,
   };
 }
 

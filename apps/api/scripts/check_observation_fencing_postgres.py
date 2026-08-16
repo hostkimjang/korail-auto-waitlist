@@ -54,7 +54,11 @@ from rail_waitlist.provider_execution_lease import (
     lock_execution_lease_current,
 )
 from rail_waitlist.provider_registry.contracts import ProviderCapabilities
-from rail_waitlist.reservations.attempt_policy import is_confirmed_absent_retry_source
+from rail_waitlist.reservations.attempt_policy import (
+    is_confirmed_absent_retry_source,
+    is_unresolved_unknown_manual_rearm_source,
+)
+from rail_waitlist.reservations.payment_hold_application import is_payment_hold_ended
 from rail_waitlist.services import (
     apply_watch_transition,
     get_or_create_provider_circuit,
@@ -219,6 +223,8 @@ def _dependencies(
         record_seat_observation=record_seat_observation,
         finish_observation_cycle=finish_observation_cycle,
         is_confirmed_absent_retry_source=is_confirmed_absent_retry_source,
+        is_unresolved_unknown_manual_rearm_source=(is_unresolved_unknown_manual_rearm_source),
+        is_payment_hold_ended=is_payment_hold_ended,
         reserve_winner=reserve_winner,
         lease_is_current=service.is_current,
         lease_is_current_in_session=locked_lease_current,

@@ -248,13 +248,28 @@ Prometheus와 Grafana를 실행합니다. Grafana는 별도 관리자 비밀번�
 인증이 만료되면 해당 운영사의 예매 시도를 중단하고 다시 확인하도록 안내합니다. 비밀번호와 쿠키는 로그에 남기지 않습니다.
 
 API는 시작할 때 활성 철도 계정의 로그인 session을 예열하고, 이후 30초마다 sidecar의 비밀값 없는 session 상태를
-확인합니다. 같은 계정 generation의 `READY` session이 유효기간을 120초보다 많이 남겨 두고 있으면 아무 요청도
-보내지 않습니다. session이 없거나 오래됐거나 계정 generation이 다르거나, sidecar 재시작으로 메모리 session이
-사라졌거나, 남은 시간이 120초 이하이면 예열합니다. KORAIL은 기존 session을 공식 same-origin 요청으로 한 번
-확인해 유효하면 검증 시각과 로컬 재사용 기한을 갱신하고, 유효하지 않으면 폐기한 뒤 새 로그인을 한 번만 시도합니다.
+확인합니다. 같은 계정 generation의 `READY` session이 마지막 공식 인증 확인 시각 `last_verified_at`에서 계산한
+절대 유효기간을 120초보다 많이 남겨 두고 있으면 아무 요청도 보내지 않습니다. 검색·예약 시각을 기록하는
+`last_used_at`과 실패한 시도는 이 기한을 연장하지 않습니다. session이 없거나 오래됐거나 계정 generation이
+다르거나, sidecar 재시작으로 메모리 session이 사라졌거나, 남은 시간이 120초 이하이면 예열합니다. KORAIL은
+기존 session을 공식 same-origin 요청으로 한 번 확인해 유효하면 검증 시각과 로컬 재사용 기한을 갱신하고,
+유효하지 않으면 폐기한 뒤 새 로그인을 한 번만 시도합니다.
 KORAIL `loginCheck`는 인증된 JSON만 성공 근거로 사용합니다. 명확한 403·429는 보호·호출 제한으로 처리하고,
 200 비JSON이나 파싱할 수 없는 응답은 보호라고 단정하지 않지만 keepalive 성공으로도 인정하지 않습니다.
 자격증명을 제출한 새 로그인 흐름에서만 제한된 시간 동안 실제 로그아웃 버튼 DOM을 추가로 확인합니다.
+
+예약 actor는 재사용 중인 인증 session이라도 객실 등급 control을 누르기 직전에 공식 인증 probe를 다시
+실행합니다. 로그아웃이 확인되면 기존 session을 닫고 새 로그인을 한 번만 수행합니다. probe가 불명확하면
+예매 control을 누르지 않고 session을 폐기합니다. 객실 등급 또는 예매 click 뒤 결과가 불명확해진 경우에는
+비공개 상관 근거를 제한적으로 보존한 뒤 해당 session을 폐기하며, 같은 session으로 새 예약을 시작하지
+않습니다. 이후 확인은 새로 검증한 session의 bounded read-only reconciliation으로만 진행합니다.
+
+같은 KORAIL 계정을 로컬과 운영 서버처럼 둘 이상의 활성 배포에서 동시에 사용하지 마세요. 한쪽의 새 로그인이
+다른 쪽에서 진행 중인 session을 무효화할 수 있습니다. 환경을 바꿔 시험해야 한다면 먼저 기존 환경의 scheduler를
+정지하고 active·reserved·scheduled 작업과 rail queue가 모두 비었는지 확인합니다. 이어 API의 provider session
+manager, provider worker와 sidecar를 포함해 해당 환경의 provider I/O 가능 서비스를 모두 정지한 뒤 다른 환경에서
+로그인합니다. 개인 로컬 환경이라면 volume을 보존한 채 해당 Compose profile 전체를 정지하는 것이 가장 단순한
+경계입니다. 이는 2026년 8월 16일 장애의 가능한 촉발 요인이지만 당시 원인으로 확정된 것은 아닙니다.
 
 예열 실패는 60초부터 시작해 최대 900초까지 지수 backoff하며, 보호 응답은 처음부터 900초 동안 다시 시도하지
 않습니다. `auth_required`·`provider_blocked`로 저장된 같은 계정 revision은 한 번만 복구를 시도하므로 비밀번호를
@@ -655,6 +670,35 @@ terminal에 보존합니다.
 observation, attempt의 progress, `result_reason_code`, confirmation outcome·diagnostic·count·resolution,
 `manual_rearm_reason`, source attempt marker와 계정 generation을 한 시간축으로 대조합니다.
 
+2026년 8월 16일 Oracle 운영 서버의 KORAIL 67편 서울→대전 일반실 사례에서는 시간표 조회 장애와 인증
+session 장애를 분리해 확인했습니다.
+
+- 20:40:52 KST의 공식 시간표 조회는 약 404ms에 열차 12개를 반환했습니다. 따라서 같은 시각의 문제를
+  `코레일 열차 조회 전체 실패`나 잘못된 시간표 배포로 분류하지 않습니다.
+- 예약 시도는 20:40:53에 시작해 20:40:57까지 `authenticated_session_ready → target_rechecked →
+  seat_selected → reservation_requested`를 남겼지만, 20:41:22에 `source_unavailable:session_keepalive`로
+  끝났습니다. 20:41:25 최초 공식 확인도 `INCONCLUSIVE / official_read_unavailable`이었습니다. 20:46와
+  20:50의 후속 시도도 같은 session lifecycle 실패를 반복했습니다.
+- 여기서 `seat_selected`는 호차·좌석번호를 고른 단계가 아니라 요청한 일반실의 운임 control을 누른 단계입니다.
+  실제 좌석은 KORAIL이 자동 배정하며 공식 예약 결과에서 확인하기 전에는 레일웨잇이 좌석 위치를 추정하지
+  않습니다.
+- 운영 소스 SHA, Chrome 151, Python 3.12.3, Pydoll 2.23.1은 당시 로컬과 일치했습니다. 로컬에서는
+  20:41:08에 새 인증 session을 만들었고 20:46 시도가 `PAYMENT_REQUIRED`까지 진행했습니다. 같은 계정의 로컬
+  새 로그인이 운영 중 session을 무효화했을 가능성은 있지만, 당시 촉발 원인으로 확정하지 않습니다.
+- 코드로 확인된 지속 결함은 인증된 session TTL을 `last_used_at` 기준으로 미루고, 실패한 예약도 그 시각을
+  갱신하며, 같은 credential fast path가 공식 probe 없이 `READY`를 다시 부여한 점입니다. click 뒤 source
+  불가에서도 session을 폐기하지 않아 바쁜 운영 worker가 손상된 session을 계속 재사용했고 prewarm도
+  건너뛰었습니다. 이 경로는 해당 배포 직전에 새로 생긴 것이 아니므로 이미지 rollback만으로 해결되지 않습니다.
+- 추가 예약을 막기 위해 scheduler를 먼저 drain한 뒤 21:08:58 KST에 종료했고, rail queue와 Celery
+  active·reserved·scheduled가 모두 0인 상태에서 `experimental-rail`을 정상 종료해 21:09:32 KST에 멈췄습니다.
+  API·일반 worker·maintenance·notification·PostgreSQL·Redis·web·proxy와 두 adapter는 계속
+  running/healthy였고 DB·예약·사용자 데이터와 volume은 삭제하지 않았습니다.
+
+수정된 session lifecycle은 `last_verified_at` 절대 TTL, 예약 직전 공식 probe, 로그아웃 session의 선폐기와
+새 로그인, probe 불확실 시 click 전 중단, click 뒤 불확실 session 폐기, 새 인증 session을 사용한 읽기 전용
+reconciliation을 적용합니다. Oracle 재배포 뒤 실제 KORAIL 자연 예매에서 이 흐름이 끝까지 동작하는지는 아직
+운영 확인 전입니다. 이를 확인하려고 인위적으로 예약 실패나 중복 로그인을 만들지 않습니다.
+
 예약·공식 확인 sidecar 호출은 임시 UUIDv4 `request_id`로 main과 sidecar 로그를 연결합니다. 이 값은
 인증·Redis key·metric label이나 watch/candidate/attempt 식별자로 사용하지 않습니다. main worker의
 `reservation_confirmation_classified`·`reservation_confirmation_persisted` 기록은 attempt ID, provider, purpose,
@@ -821,7 +865,8 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 - 알림을 눌러도 PWA가 열리지 않으면 설치된 PWA와 브라우저를 완전히 종료한 경우와 이미 실행 중인 경우를 각각 시험하고, 서비스 워커가 최신 버전인지 확인합니다.
 - 앱을 보고 있는 동안 `실시간 알림`이 갱신되지 않으면 네트워크 연결과 `/events` SSE 또는 대기 목록 갱신이 정상인지 확인합니다. Push 내용 자체를 현재 좌석 상태로 사용하지 않습니다.
 - `실시간 알림`의 X로 닫은 과거 카드가 재접속 뒤 다시 나타나면 같은 브라우저 origin인지, 사이트 데이터가 삭제됐거나 localStorage가 차단되지 않았는지 확인합니다. 닫기 ledger는 기기 간 동기화하지 않으며 같은 subject의 더 최신 revision은 정상적으로 다시 표시합니다.
-- KORAIL 예매 카드가 `자동 예매 요청 시작`이나 `철도사 응답·공식 결과 대기`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed`·`watch.reservation_result` outbox, 같은 시각의 `GET /watches` 최신 attempt를 함께 확인합니다. 최신 attempt가 아직 `PENDING`이면 worker·maintenance 경로를 점검하고, 이미 `finished_at`과 `NOT_AVAILABLE`·`FAILED`·`UNKNOWN`을 가진다면 canonical 목록 갱신이 같은 watch의 진행 카드를 결과 카드로 교체해야 합니다. cursor 없는 신규 `/events`는 현재 outbox tail에서 시작해야 하므로 과거 outbox 행 수에 비례해 최신 event가 늦어지면 구버전 API 이미지가 섞였는지 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다. Pydoll의 `Page load timeout ... LOAD_EVENT_FIRED` 뒤 `KORAIL direct navigation load signal timed out; validating current DOM`이 남으면 로드 완료 신호만 늦은 상태를 현재 DOM·정확 열차 검증으로 이어간 것입니다. 후속 진행 또는 결과 이벤트를 함께 확인하세요.
+- KORAIL 예매 카드가 `자동 예매 요청 시작`이나 `철도사 응답·공식 결과 대기`에서 멈추면 main API의 `/events` 연결과 `watch.reservation_progressed`·`watch.reservation_result` outbox, 같은 시각의 `GET /watches` 최신 attempt를 함께 확인합니다. 최신 attempt가 아직 `PENDING`이면 worker·maintenance 경로를 점검하고, 이미 `finished_at`과 `NOT_AVAILABLE`·`FAILED`·`UNKNOWN`을 가진다면 canonical 목록 갱신이 같은 watch의 진행 카드를 결과 카드로 교체해야 합니다. cursor 없는 신규 `/events`는 현재 outbox tail에서 시작해야 하므로 과거 outbox 행 수에 비례해 최신 event가 늦어지면 구버전 API 이미지가 섞였는지 확인합니다. 진행 이벤트는 `authenticated_session_ready → target_rechecked → seat_selected → reservation_requested`의 누적 prefix여야 하며, 웹의 `객실 등급 선택`에 대응하는 `seat_selected`는 일반실·특실 운임 control 선택이지 호차·좌석번호 선택이 아닙니다. 같은 시도의 중복·역순·미래 시각은 화면에서 거부됩니다. 빠른 단계가 한 SSE poll 안에 함께 전달되는 것은 정상입니다. Pydoll의 `Page load timeout ... LOAD_EVENT_FIRED` 뒤 `KORAIL direct navigation load signal timed out; validating current DOM`이 남으면 로드 완료 신호만 늦은 상태를 현재 DOM·정확 열차 검증으로 이어간 것입니다. 후속 진행 또는 결과 이벤트를 함께 확인하세요.
+- Oracle에서 `source_unavailable:session_keepalive`가 반복되면서 session telemetry만 계속 `READY`이면 예약을 반복하지 않습니다. 먼저 scheduler를 멈추고 rail worker를 drain해 active·reserved·scheduled와 rail queue가 0인지 확인한 뒤 worker를 정상 종료합니다. DB나 volume을 지우지 말고, 배포된 코드가 `last_verified_at` 절대 TTL과 예약 직전 probe를 포함하는지 확인한 뒤에만 재기동합니다. 동일 KORAIL 계정을 쓰는 로컬 환경이 있으면 scheduler·worker뿐 아니라 API provider session manager와 sidecar도 외부 로그인을 만들 수 있으므로, volume을 보존한 채 해당 Compose profile 전체를 먼저 안전하게 멈춥니다.
 - `GET /api/v1/watches`가 `progress_stages cannot occur after finished_at`으로 500을 반환하면 KORAIL sidecar와 main API 사이의 짧은 wall-clock 역행으로 저장된 과거 attempt인지 확인합니다. 현행 코드는 결과 저장과 조회 투영에서 `finished_at`을 모든 진행 시각 이상으로 정규화하고, `0034_progress_terminal_time` 마이그레이션이 기존 행을 보정합니다. 배포 뒤 Alembic head가 `0034_progress_terminal_time`인지, terminal attempt 가운데 진행 시각이 `finished_at`보다 늦은 행이 0건인지 확인합니다. 진행 시각을 삭제하거나 임의로 현재 시각으로 덮어쓰지 않습니다.
 - provider 호출, rail worker 또는 외부 알림 발송이 멈춰도 시작 후 5분이 지난 `PENDING`은 전용 `maintenance-worker`가 다음 30초 주기 안에 `UNKNOWN`과 수동 확인 상태로 닫습니다. 5분 30초가 지나도 진행 카드가 유지되면 scheduler의 `recover-stale-reservation-attempts`, `maintenance-worker`의 `maintenance` 큐 수신 상태, `watch.reservation_result_requires_manual_check` outbox를 확인합니다. 이 복구는 예약 POST를 다시 보내지 않으며, 새로고침 뒤에도 확인된 단계와 수동 확인 카드를 canonical REST에서 복원합니다. 출발시간 경과로 감시가 끝났다면 카드도 감시 재개를 주장하지 않고 종료 상태와 공식 결과 수동 확인을 표시합니다.
 - sidecar의 `/v1/reserve-once/stream` 연결이 terminal frame 전에 끊긴 경우 예약 POST를 재전송하지 않습니다. sidecar는 이미 시작한 예약 task를 종료까지 보존하고, main API는 불확실 결과를 `UNKNOWN`으로 기록해 즉시 재예매를 차단합니다. sidecar의 `reserve-once stream completed` 로그에서 닫힌 outcome/reason과 `reservation confirmation completed`의 purpose/outcome/source를 확인합니다. 최초 공식 확인이 `NOT_FOUND` 또는 `INCONCLUSIVE`이면 최소 30초 뒤 읽기 전용 확인이 예약되어야 합니다. 최초 `NOT_FOUND` 뒤 reconciliation도 `NOT_FOUND`이면 부재 확인을 닫고, 최초 결과가 `INCONCLUSIVE`였다면 첫 `NOT_FOUND` 뒤 30초 후 다시 `NOT_FOUND`여야 닫습니다. 그 뒤 같은 후보에 새 공식 `AVAILABLE`·`LIMITED`가 관측된 경우에만 `confirmed-absent-retry:<attempt_id>` episode가 한 번 생성되며, 같은 episode 또는 그 복구 시도의 재귀 반복은 허용되지 않습니다.

@@ -365,6 +365,9 @@ class PydollKorailBrowserClient:
             discard_if_credential_changed=self._auth_actor.discard_if_credential_changed,
             acquire_session=self._acquire_session,
             ensure_authenticated_session=self._ensure_authenticated_session,
+            probe_reused_authenticated_session=(
+                self._auth_actor.probe_reused_authenticated_session
+            ),
             discard_with_state=self._auth_actor.discard_with_state,
             response_safety_guard=self._assert_response_allowed,
             reservation_identity_guard=self._assert_reservation_identity,
@@ -495,28 +498,49 @@ class PydollKorailBrowserClient:
         self,
         target: ReservationConfirmationTarget,
     ) -> KorailSameSessionDetailEvidence:
-        """Read exact hold evidence while preserving the active auth-session generation."""
+        """Read exact hold evidence only from the target's active auth generation."""
+
+        from .korail_sidecar.browser_contracts import (
+            BrowserProtectionDetected,
+            BrowserRateLimited,
+        )
 
         async with self._session_lock:
             active = self._active_session
             if active is None or active.authenticated_credential_version is None:
-                return KorailSameSessionDetailEvidence(
-                    observed_at=datetime.now(UTC),
-                    credential_version=None,
-                    exact_identity_matched=False,
-                    payment_pending_markers_present=False,
-                )
+                raise BrowserSourceUnavailable("confirmation_session_unavailable")
+            if active.authenticated_credential_version != str(target.credential_version):
+                raise BrowserSourceUnavailable("confirmation_session_unavailable")
             credential_version = (
                 int(active.authenticated_credential_version)
                 if active.authenticated_credential_version.isdigit()
                 else None
             )
-            return await read_korail_same_session_confirmation(
-                session=active.session,
-                target=target,
-                credential_version=credential_version,
-                payment_deadline_parser=_parse_korail_payment_deadline,
-            )
+            try:
+                evidence = await read_korail_same_session_confirmation(
+                    session=active.session,
+                    target=target,
+                    credential_version=credential_version,
+                    payment_deadline_parser=_parse_korail_payment_deadline,
+                )
+            except asyncio.CancelledError:
+                await self._auth_actor.discard_with_state(KorailSessionActorState.STALE)
+                raise
+            except (BrowserProtectionDetected, BrowserRateLimited):
+                await self._auth_actor.discard_with_state(KorailSessionActorState.BLOCKED)
+                raise
+            except BrowserSourceUnavailable:
+                await self._auth_actor.discard_with_state(KorailSessionActorState.STALE)
+                raise
+            except Exception:
+                await self._auth_actor.discard_with_state(KorailSessionActorState.STALE)
+                raise
+
+            if evidence.provider_blocked:
+                await self._auth_actor.discard_with_state(KorailSessionActorState.BLOCKED)
+            elif evidence.auth_required:
+                await self._auth_actor.discard_with_state(KorailSessionActorState.AUTH_REQUIRED)
+            return evidence
 
     async def prewarm_credentials(self, credential: KorailCredentialInput) -> bool:
         """Create or reuse a locally valid authenticated session without booking work."""

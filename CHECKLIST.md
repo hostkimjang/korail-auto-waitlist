@@ -59,6 +59,7 @@
 - [x] 2026년 8월 15일 KORAIL 223편 특실 운영 사례에서 공식 `LIMITED` 관측이 여러 구간 정상 갱신됐지만 최초 click 뒤 progress/terminal 불일치로 `UNKNOWN`, 공식 확인 6회 `INCONCLUSIVE`가 되어 후속 재가용에도 추가 attempt가 없었고 확인 전용 좌석 상관 근거가 없는 과거 행이라 직접 결제완료 대상이 아님을 DB·로그·시간표 snapshot으로 확인
 - [x] KORAIL 예약 terminal·공식 확인의 transient 로그인 경로에서 공통 session 인증 정책을 사용하고, 공식 probe 불확실성 뒤 정확한 인증 header 양성만 허용하며 bounded backoff 읽기 중 추가 예약 동작 금지, 공식 비인증 응답+header 부재의 인증 필요 판정, 보호·호출 제한의 `provider_blocked` 분류와 click 후 source 불가의 `UNKNOWN / provider_unavailable` 원인 구분을 보존
 - [x] KORAIL 예약 actor가 외부 callback 유무와 관계없이 내부 진행 시각·click 사실을 누적하고 source 불가 terminal에 검증된 내부 stage를 보존하며, 예약·공식 확인의 임시 `request_id`로 main·sidecar terminal을 비밀값 없이 연결하고 비인증+invalid body는 validation보다 `401/unauthorized`로 우선 분류
+- [x] 2026년 8월 16일 Oracle KORAIL 67편 사례에서 공식 시간표 12건 조회 성공과 예약 뒤 `session_keepalive`·공식 확인 실패를 분리하고, `last_used_at` 연장·무probe fast path·불확실 session 미폐기의 false `READY` 재사용 결함을 확인한 뒤 scheduler와 `experimental-rail`을 queue 0에서 정상 정지하며 DB·volume을 보존
 - [ ] 실제 KORAIL 자연 재발에서 transient 로그인 경로의 공통 인증 판정과 내부 stage·진행 시각 보존을 확인하되 외부 장애를 인위적으로 반복 유도하지 않음
 - [x] `UNKNOWN`의 최초 공식 확인 뒤 최소 30초 reconciliation에서도 대상 부재를 확인하고 새 공식 `AVAILABLE`·`LIMITED` 관측 뒤 단 한 번만 복구하는 DB episode fence
 - [x] `UNKNOWN` 재확인의 `confirmed_absent`·`exhausted_unresolved` 영속 해소 상태, 세 번째 `INCONCLUSIVE`부터의 정확한 공식 예약 상태 사용자 확인, watch 전체 미해소 `UNKNOWN`·exact 결제 근거의 후보 간 우회 차단, 유일한 원본 attempt의 후보 context와 승인 뒤 새 공식 `AVAILABLE`·`LIMITED`에서만 실행되는 child lineage 1회 수동 복구, 계정 generation·경합·child `UNKNOWN` 재귀 차단, `reservation_requested` 전 인증 실패만의 `auth:` episode와 그 단계 뒤 인증·보호 신호의 `UNKNOWN` 보존·동일 generation read-only 복구·새 reserve 0건, watch 삭제 경합에서도 provider-global 계정 gate 영속, late exact paid의 절대 fence와 보존 상태의 `watch.reservation_reconciled` 전용 갱신·완료 알림 억제, 출발 직전 최종 차단 계약
@@ -118,10 +119,13 @@
 - [x] KORAIL Pydoll read-only 검색 actor canonical owner 이동과 replay-first·direct/UI·취소 안전 cleanup·legacy exact facade 보존
 - [x] KORAIL Pydoll credential-bound 인증 session actor canonical owner 이동과 secret-free fingerprint·TTL/횟수·취소 안전 cleanup·legacy exact facade 보존
 - [x] 활성 철도 계정의 시작 예열과 30초 sanitized telemetry 점검, 동일 generation `READY` 생략·120초 전 bounded 재예열, KORAIL 인증 JSON positive-only probe·최초 로그인 DOM fallback·keepalive fail-closed, 403/429 보호 유지, 60~900초 backoff와 auth revision fence 계약
+- [x] KORAIL 인증 session 재사용 TTL을 `last_verified_at` 절대 기준으로 고정하고 검색·예약·실패의 `last_used_at` 갱신으로 연장하지 않는 계약
+- [x] 재사용 KORAIL session의 예약 직전 공식 probe, 로그아웃 session 선폐기·새 로그인 1회, 불명확 probe의 click 전 중단과 click 뒤 불명확 session 폐기·동일 session 신규 예약 차단·fresh read-only reconciliation 계약
 - [x] 실제 `provider_blocked` 계정의 좌석 관측 provider I/O 차단과 인증 성공 뒤 즉시 감시 재스케줄 계약
 - [x] KORAIL Pydoll 단일 예약 actor canonical owner 이동과 exact identity·bounded expansion·1회 예약·취소/보호 cleanup·legacy exact facade 보존
 - [x] KORAIL Pydoll 로그인 DOM driver canonical owner 이동과 유일 method tab·active panel·공식 session 확인·secret-free stage·legacy exact facade 보존
 - [x] KORAIL Pydoll 예약 DOM driver canonical owner 이동과 동일 열차·좌석·1회 예매·결제 전 중단 안전 계약 보존
+- [x] 내부 `seat_selected`를 물리 좌석 선택이 아닌 일반실·특실 운임 control 선택으로 유지하고 웹 진행 문구를 `객실 등급 선택`으로 정정하며 실제 호차·좌석번호는 KORAIL 자동 배정 공식 결과에서만 표시하는 계약
 - [x] KORAIL Pydoll 더보기의 누적 반복 window 중단·최신 snapshot envelope 보존·page-safety 차단 판정 단일화
 - [x] KORAIL Pydoll Chromium launch·tab/listener·cleanup lifecycle owner 분리와 optional import·취소 중 cleanup 보존
 - [x] KORAIL Pydoll 동일 세션 예약 확인 read-only 정책 owner 분리와 기존 import·pickle 호환 facade 보존
@@ -216,6 +220,7 @@
 - [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
+- [ ] Oracle 재가동 전에 같은 KORAIL 계정을 사용하는 로컬 scheduler·worker를 drain한 뒤 API provider session manager·sidecar를 포함한 Compose profile 전체를 volume 보존 상태로 정지하고 단일 활성 배포를 유지하며, hotfix 배포 뒤 자연 발생 예약에서 예약 직전 probe·필요 시 fresh login·불확실 session 폐기·fresh reconciliation과 공식 자동 배정 좌석 표시를 끝까지 확인
 - [ ] 실제 SRT 혼잡 시간대에 접속 대기 진입→통과→조회 재개 또는 caller timeout→late 종료 로그 순서와 비밀값 미노출 확인
 - [ ] 새 60/90초 timeout과 UUID correlation 배포 뒤 실제 SRT 혼잡 시간대에서 조기 caller 실패 감소, queue→query→late 종료의 동일 `provider_call_id`와 secret-free 로그 확인
 - [x] Playwright v1.55.0 Chromium seccomp 프로필과 최소 `SYS_CHROOT` capability를 KORAIL adapter에만 적용하고 `pwuser`·읽기 전용 루트·`cap_drop: ALL`·`no-new-privileges`를 보존한 재배포 확인

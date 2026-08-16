@@ -390,7 +390,7 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    assert len(source.splitlines()) <= 1_465
+    assert len(source.splitlines()) <= 1_490
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

@@ -3546,7 +3546,7 @@ async def test_keepalive_holds_the_same_lock_as_reservation() -> None:
     result = await reservation
 
     assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
-    assert session.auth_probe_calls == 1
+    assert session.auth_probe_calls == 2
     assert session.auth_calls == 1
     assert session.reserve_calls == 1
     await client.close()
@@ -4132,7 +4132,9 @@ async def test_client_preserves_uncertain_reservation_click_result() -> None:
         )
     )
     client = PydollKorailBrowserClient(
-        session_factory=lambda *_args: ReservationFixtureContext(session)
+        session_factory=lambda *_args: ReservationFixtureContext(session),
+        session_reuse_ttl_seconds=300,
+        session_reuse_max_searches=20,
     )
 
     result = await client.reserve_once(reservation_request())
@@ -4142,6 +4144,9 @@ async def test_client_preserves_uncertain_reservation_click_result() -> None:
     assert result.seat_clicked is True
     assert result.reservation_clicked is True
     assert result.session_ready_at is not None
+    assert client.session_snapshot().state is KorailSessionActorState.STALE
+    assert client._active_session is None
+    assert session.closed == 1
 
 
 @pytest.mark.asyncio

@@ -349,17 +349,22 @@ async def test_blocked_read_only_search_does_not_block_same_session_confirmation
 
 
 @pytest.mark.asyncio
-async def test_pydoll_confirmation_without_active_session_is_inconclusive() -> None:
+async def test_pydoll_confirmation_without_active_session_is_source_unavailable() -> None:
+    def unexpected_session_factory(*_args: object) -> ReadOnlyDetailSession:
+        raise AssertionError("confirmation unexpectedly created a browser context")
+
     client = PydollKorailBrowserClient(
-        session_factory=lambda *_: ReadOnlyDetailSession(exact_detail_snapshot()),
+        session_factory=unexpected_session_factory,
         session_reuse_ttl_seconds=60,
         session_reuse_max_searches=5,
     )
 
-    evidence = await client.read_reservation_detail(confirmation_target())
+    with pytest.raises(BrowserSourceUnavailable) as captured:
+        await client.read_reservation_detail(confirmation_target())
 
-    assert evidence.credential_version is None
-    assert evidence.auth_required is False
+    assert captured.value.stage == "confirmation_session_unavailable"
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.COLD
 
 
 @pytest.mark.asyncio
@@ -402,8 +407,14 @@ async def test_pydoll_confirmation_classifies_login_and_protection_without_actio
 
     assert login.auth_required is True
     assert blocked.provider_blocked is True
-    assert login_session.events == ["snapshot", "login_check", "auth_header"]
-    assert blocked_session.events == ["snapshot"]
+    assert login_session.events == ["snapshot", "login_check", "auth_header", "close"]
+    assert blocked_session.events == ["snapshot", "close"]
+    assert login_client._active_session is None
+    assert blocked_client._active_session is None
+    assert (
+        login_client.session_snapshot().state is pydoll_module.KorailSessionActorState.AUTH_REQUIRED
+    )
+    assert blocked_client.session_snapshot().state is pydoll_module.KorailSessionActorState.BLOCKED
 
 
 @pytest.mark.asyncio
@@ -463,7 +474,15 @@ async def test_pydoll_confirmation_preserves_uncertainty_when_header_is_absent()
         await client.read_reservation_detail(confirmation_target())
 
     assert captured.value is uncertainty
-    assert session.events == ["snapshot", "login_check", "auth_header", "reservation_list"]
+    assert session.events == [
+        "snapshot",
+        "login_check",
+        "auth_header",
+        "reservation_list",
+        "close",
+    ]
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
 
 
 def reservation_list_snapshot(
@@ -1045,7 +1064,14 @@ async def test_payment_follow_up_issued_probe_survives_detail_snapshot_failure(
         with pytest.raises(BrowserSourceUnavailable) as captured:
             await client.read_reservation_detail(target)
         assert captured.value.stage == "confirmation_detail_snapshot"
-        assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+        assert session.events == [
+            "snapshot",
+            "issued_ticket_list",
+            "reservation_list",
+            "close",
+        ]
+        assert client._active_session is None
+        assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
         return
 
     result = normalize_korail_same_session_detail(
@@ -1053,7 +1079,25 @@ async def test_payment_follow_up_issued_probe_survives_detail_snapshot_failure(
         await client.read_reservation_detail(target),
     )
     assert result.outcome is expected
-    assert session.events[:2] == ["snapshot", "issued_ticket_list"]
+    if expected is ReservationConfirmationOutcome.AUTH_REQUIRED:
+        assert session.events == [
+            "snapshot",
+            "issued_ticket_list",
+            "login_check",
+            "auth_header",
+            "close",
+        ]
+        assert client._active_session is None
+        assert (
+            client.session_snapshot().state is pydoll_module.KorailSessionActorState.AUTH_REQUIRED
+        )
+    elif expected is ReservationConfirmationOutcome.PROVIDER_BLOCKED:
+        assert session.events == ["snapshot", "issued_ticket_list", "close"]
+        assert client._active_session is None
+        assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.BLOCKED
+    else:
+        assert session.events == ["snapshot", "issued_ticket_list"]
+        assert client._active_session is not None
 
 
 @pytest.mark.asyncio
@@ -1188,11 +1232,13 @@ async def test_confirmation_reader_propagates_explicit_provider_failures(
     assert (
         session.events
         == {
-            "detail": ["snapshot"],
-            "reservation_list": ["snapshot", "reservation_list"],
-            "issued_ticket_list": ["snapshot", "issued_ticket_list"],
+            "detail": ["snapshot", "close"],
+            "reservation_list": ["snapshot", "reservation_list", "close"],
+            "issued_ticket_list": ["snapshot", "issued_ticket_list", "close"],
         }[surface]
     )
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.BLOCKED
 
 
 @pytest.mark.asyncio
@@ -1288,7 +1334,9 @@ async def test_confirmation_reader_reraises_source_error_without_conclusive_list
         await client.read_reservation_detail(confirmation_target())
 
     assert captured.value is source_error
-    assert session.events == ["snapshot", "reservation_list"]
+    assert session.events == ["snapshot", "reservation_list", "close"]
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
 
 
 @pytest.mark.asyncio
@@ -1304,7 +1352,9 @@ async def test_confirmation_reader_wraps_generic_list_failure_with_closed_stage(
 
     assert captured.value.stage == "confirmation_reservation_list"
     assert secret not in str(captured.value)
-    assert session.events == ["snapshot", "reservation_list"]
+    assert session.events == ["snapshot", "reservation_list", "close"]
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
 
 
 @pytest.mark.asyncio
@@ -1354,7 +1404,9 @@ async def test_payment_follow_up_reraises_issued_source_error_without_conclusive
         await client.read_reservation_detail(target)
 
     assert captured.value is source_error
-    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list"]
+    assert session.events == ["snapshot", "issued_ticket_list", "reservation_list", "close"]
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
 
 
 @pytest.mark.asyncio

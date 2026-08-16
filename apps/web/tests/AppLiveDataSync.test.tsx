@@ -520,7 +520,7 @@ describe("App live data synchronization", () => {
       .toContain("21:09:46이전 단계 후 1.1초");
     expect(screen.getByText("철도사 응답·공식 결과 대기").closest("li")?.className)
       .toContain("toast-step-active");
-    expect(screen.queryByText("좌석 선택")).toBeNull();
+    expect(screen.queryByText("객실 등급 선택")).toBeNull();
     expect(screen.queryByLabelText("예매 작업 시간")).toBeNull();
 
     act(() => {
@@ -558,7 +558,7 @@ describe("App live data synchronization", () => {
       .toContain("22:01:18이전 단계 후 4.6초");
     expect(screen.getByText("검색 결과·열차 재확인").closest("li")?.textContent)
       .toContain("22:01:19이전 단계 후 1.1초");
-    expect(screen.getByText("좌석 선택").closest("li")?.textContent)
+    expect(screen.getByText("객실 등급 선택").closest("li")?.textContent)
       .toContain("22:01:19이전 단계 후 0.1초");
     expect(screen.getByText("예약 요청").closest("li")?.textContent)
       .toContain("22:01:19이전 단계 후 0.0초");

@@ -240,6 +240,16 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
     def reuse_enabled(self) -> bool:
         return self._session_reuse_ttl_seconds > 0 and self._session_reuse_max_searches > 1
 
+    def _active_reuse_until(
+        self,
+        active: ActivePydollAuthenticationSession[AuthSession],
+    ) -> float | None:
+        if active.authenticated_credential_version is not None:
+            if self._last_verified_at is None:
+                return None
+            return self._last_verified_at + self._session_reuse_ttl_seconds
+        return active.last_used_at + self._session_reuse_ttl_seconds
+
     async def discard_if_credential_changed(self, credential: KorailCredentialInput) -> None:
         active = self._active_session
         fingerprint = self._fingerprint(credential)
@@ -277,8 +287,10 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
 
         now = self._monotonic()
         active = self._active_session
+        reuse_until = self._active_reuse_until(active) if active is not None else None
         if active is not None and (
-            now - active.last_used_at >= self._session_reuse_ttl_seconds
+            reuse_until is None
+            or now >= reuse_until
             or active.searches_started >= self._session_reuse_max_searches
         ):
             if active.authenticated_credential_version is not None:
@@ -368,6 +380,51 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         self._state = KorailSessionActorState.READY
         return True
 
+    async def probe_reused_authenticated_session(
+        self,
+        session: AuthSession,
+        credential: KorailCredentialInput,
+    ) -> bool:
+        """Require fresh official evidence before a reused generation can reserve."""
+
+        active = self._active_session
+        fingerprint = self._fingerprint(credential)
+        if (
+            active is None
+            or active.session is not session
+            or active.authenticated_credential_version != credential.version
+            or active.authenticated_credential_fingerprint != fingerprint
+        ):
+            await self.discard_with_state(KorailSessionActorState.STALE)
+            return False
+
+        self._state = KorailSessionActorState.AUTHENTICATING
+        try:
+            authenticated = await session.probe_authenticated_session()
+        except asyncio.CancelledError:
+            await self.discard_with_state(KorailSessionActorState.STALE)
+            raise
+        except (BrowserProtectionDetected, BrowserRateLimited):
+            await self.discard_with_state(KorailSessionActorState.BLOCKED)
+            raise
+        except BrowserSourceUnavailable:
+            await self.discard_with_state(KorailSessionActorState.STALE)
+            raise
+        except Exception as error:
+            await self.discard_with_state(KorailSessionActorState.STALE)
+            raise BrowserSourceUnavailable("session_keepalive") from error
+
+        if not authenticated:
+            await self.discard_with_state(KorailSessionActorState.STALE)
+            return False
+
+        verified_at = self._monotonic()
+        active.last_used_at = verified_at
+        self._last_verified_at = verified_at
+        self._last_used_at = verified_at
+        self._state = KorailSessionActorState.READY
+        return True
+
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
         async with self._lock:
             return await self._verify_credentials_locked(credential)
@@ -419,38 +476,16 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
                 active is not None
                 and active.authenticated_credential_version == credential.version
                 and active.authenticated_credential_fingerprint == fingerprint
-                and now - active.last_used_at < self._session_reuse_ttl_seconds
+                and self._last_verified_at is not None
+                and now - self._last_verified_at < self._session_reuse_ttl_seconds
                 and active.searches_started < self._session_reuse_max_searches
                 and self._state is KorailSessionActorState.READY
             ):
-                try:
-                    authenticated = await active.session.probe_authenticated_session()
-                except asyncio.CancelledError:
-                    await self.discard_active_session()
-                    self._state = KorailSessionActorState.STALE
-                    raise
-                except (BrowserProtectionDetected, BrowserRateLimited):
-                    await self.discard_active_session()
-                    self._state = KorailSessionActorState.BLOCKED
-                    raise
-                except BrowserSourceUnavailable:
-                    await self.discard_active_session()
-                    self._state = KorailSessionActorState.STALE
-                    raise
-                except Exception as error:
-                    await self.discard_active_session()
-                    self._state = KorailSessionActorState.STALE
-                    raise BrowserSourceUnavailable("session_keepalive") from error
-
-                if authenticated:
-                    verified_at = self._monotonic()
-                    active.last_used_at = verified_at
-                    self._last_verified_at = verified_at
-                    self._last_used_at = verified_at
+                if await self.probe_reused_authenticated_session(
+                    active.session,
+                    credential,
+                ):
                     return True
-
-                self._state = KorailSessionActorState.STALE
-                await self.discard_active_session()
 
             return await self._verify_credentials_locked(credential)
 
@@ -461,9 +496,10 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         local_reuse_until = None
         locally_reusable = False
         if active is not None and active.authenticated_credential_version is not None:
-            local_reuse_until = active.last_used_at + self._session_reuse_ttl_seconds
+            local_reuse_until = self._active_reuse_until(active)
             locally_reusable = (
                 self.reuse_enabled
+                and local_reuse_until is not None
                 and now < local_reuse_until
                 and active.searches_started < self._session_reuse_max_searches
                 and state is KorailSessionActorState.READY

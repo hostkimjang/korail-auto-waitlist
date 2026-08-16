@@ -179,7 +179,7 @@ const entryReasonLabels: Record<NonNullable<OperationsEntry["reasonCode"]>, stri
   target_ambiguous: "검색 결과에서 대상 열차를 하나로 구분하지 못했습니다.",
   seat_not_available: "예매 시점에 선택 가능한 좌석이 없었습니다.",
   reservation_control_unavailable: "철도사 예매 화면의 예약 기능을 사용할 수 없었습니다.",
-  seat_selection_lost: "예약 화면에서 선택한 좌석 상태가 예약 요청까지 유지되지 않았습니다.",
+  seat_selection_lost: "예약 화면에서 선택한 객실 등급이 예약 요청까지 유지되지 않았습니다.",
   delay_consent_required: "철도사 운행 지연 안내에 사용자 동의가 필요합니다.",
   existing_reservation_action_required: "철도사 기존 예약 안내에서 진행할 예약 선택이 필요합니다.",
   provider_notice_action_required: "철도사 안내창에 사용자 확인이 필요합니다.",

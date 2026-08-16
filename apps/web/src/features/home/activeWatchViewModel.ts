@@ -132,7 +132,7 @@ const attemptReasonLabels: Record<ReservationResultReasonCode, string> = {
   target_ambiguous: "대상 열차 구분 불가",
   seat_not_available: "선택 가능 좌석 없음",
   reservation_control_unavailable: "예매 기능 사용 불가",
-  seat_selection_lost: "좌석 선택 상태 유지 실패",
+  seat_selection_lost: "객실 등급 선택 상태 유지 실패",
   delay_consent_required: "운행 지연 동의 필요",
   existing_reservation_action_required: "기존 예약 안내 확인 필요",
   provider_notice_action_required: "철도사 안내창 확인 필요",

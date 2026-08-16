@@ -322,11 +322,12 @@ KORAIL 예약은 기존 단일 JSON 명령과 호환되는 별도의 인증된 N
 Pydoll 예약 actor는 내부 진행 callback을 항상 감싸 `target_rechecked`, `seat_selected`,
 `reservation_requested`의 시각과 click 사실을 자체 누적합니다. 내부 `BrowserSourceUnavailable`이 발생해도
 검증된 `error.stage`를 바깥 `reserve_once`로 덮어쓰지 않으며, terminal은 이미 발행한 진행 event와
-모순되지 않아야 합니다. transient `/ticket/login`의 예약 terminal과 공식 확인은 같은 session 인증 정책을
-사용합니다. 공식 probe 불확실성은 로그아웃 근거가 아니며, 정확한 인증 header가 양성일 때만 복구합니다.
-둘 다 아직 불명확한 동안에는 예약 버튼을 새로 누르지 않고 bounded 읽기만 계속합니다. 공식 probe는
-0.25초, 0.5초, 이후 최대 1초 간격으로 제한하고 그 사이에는 로컬 header만 확인해 일시적인 오류가 provider
-호출 폭주나 추가 예약 동작으로 번지지 않게 합니다. 끝까지 불명확하면 원래 source stage를 보존합니다.
+모순되지 않아야 합니다. 재사용한 인증 lease는 예약 driver에 들어가기 전에 공식 session probe를 반드시
+통과합니다. 명확한 로그아웃이면 기존 session을 닫고 fresh login으로 교체하며, probe가 불명확하면 예약
+control을 누르기 전에 session을 폐기하고 원래 source stage를 보존합니다. 예약 동작이 시작된 뒤 transient
+`/ticket/login` terminal과 공식 확인은 같은 인증 판정 정책을 사용하되, 공식 양성 응답이나 정확한 인증 header
+어느 쪽도 양성이 아니면 예약 버튼을 새로 누르지 않습니다. 객실 등급 또는 예약 click 뒤 결과가 불명확하면
+비공개 상관 근거를 제한적으로 수집한 뒤 session을 폐기하고, fresh login 뒤 bounded 읽기 전용 확인만 이어갑니다.
 공식 확인도 상세·발권·예약 목록의 정확한 양성 또는 완전한 부재 근거가 없으면 typed source 오류를 일반
 `INCONCLUSIVE`로 삼키지 않으며, 보호·호출 제한은 즉시 전파합니다. 공식 비인증 응답과 header 부재가 함께
 확인된 경우만 인증 필요로 닫습니다. main과 sidecar의 예약·공식 확인 로그는 호출별 임시 UUIDv4
@@ -677,7 +678,9 @@ owner로 복원되며, credential과 reservation request의 secret-free repr 계
 Pydoll의 credential-bound 인증 session lifecycle은 `korail_sidecar/pydoll/auth_actor.py`가 canonical
 owner입니다. 단일 auth lock 아래 credential version과 원문을 보관하지 않는 fingerprint를 함께 비교하고,
 인증 상태를 `COLD`·`AUTHENTICATING`·`READY`·`STALE`·`AUTH_REQUIRED`·`BLOCKED`로 명시합니다. persistent
-session은 마지막 사용 시각 기준 TTL과 검색 시작 횟수 상한을 모두 지키며, 만료·자격증명 변경·취소·보호 응답
+session은 마지막 공식 인증 확인 시각 `last_verified_at`에서 시작하는 절대 TTL과 검색 시작 횟수 상한을 모두
+지킵니다. 검색·예약 시각을 기록하는 `last_used_at`은 telemetry일 뿐 TTL을 연장하지 않습니다. 만료·자격증명
+변경·취소·보호 응답
 경로에서는 active pointer를 먼저 비운 뒤 주입된 cancellation-safe cleanup으로 폐기합니다. browser와 reservation
 actor만 이 owner를 직접 사용하고 역으로 조립 모듈을 참조하지 않습니다. top-level
 `korail_pydoll_auth_actor.py`는 기존 공개 30개·private 0개, legacy `__all__` 부재와 구형 pickle global 9개 및
@@ -685,7 +688,8 @@ runtime Callable alias 3개를 같은 객체로 복원하는 definition-free com
 browser·reservation actor import 순서와 optional Pydoll backend의 지연 import 계약도 유지합니다.
 
 API의 provider session manager는 시작할 때 활성 계정을 예열하고 이후 30초마다 비밀값 없는 session telemetry를
-확인합니다. 같은 credential generation의 `READY` session이 재사용 가능하고 만료까지 120초보다 많이 남았으면
+확인합니다. 같은 credential generation의 `READY` session이 마지막 공식 인증 확인 기준으로 재사용 가능하고
+만료까지 120초보다 많이 남았으면
 외부 요청을 생략합니다. `COLD`·`STALE`, generation 불일치, sidecar 재시작으로 session이 사라진 경우 또는 남은
 재사용 시간이 120초 이하인 경우에만 bounded prewarm을 시작합니다. KORAIL prewarm은 같은 auth lock 안에서 기존
 session을 공식 same-origin 확인 요청으로 한 번 검증하고, 성공하면 `last_verified`·`last_used`를 갱신합니다. 검증에
@@ -703,8 +707,14 @@ owner입니다. public direct URL 계산은 auth lock 밖에서 끝내고, crede
 non-persistent context 종료까지는 같은 auth lock 안에서 직렬화합니다. 사전 form identity는 출발/도착역·날짜·
 출발 시·1명 승객을 모두 확인하고, 결과 snapshot은 열차 번호·선택적 종류·경로·출도착 시각이 정확히 하나인
 경우에만 더보기를 생략합니다. 확정할 수 없으면 bounded expansion 뒤 DOM 예약을 한 번만 호출하며, 좌석 또는
-예약 click 이후 불확실한 결과를 재시도하지 않습니다. 취소는 session을 `STALE`, 보호·rate-limit은 `BLOCKED`로
-폐기하고 원취소 또는 정적 결과를 전달합니다. top-level `korail_pydoll_reservation_actor.py`는 기존 공개 37개·
+예약 click 이후 불확실한 결과를 재시도하지 않습니다. 이미 인증된 lease를 재사용할 때도 예약 화면에 들어가기
+직전 공식 same-origin probe를 수행합니다. 명확한 로그아웃이면 기존 session을 닫고 새 로그인을 최대 한 번만
+수행하며, probe 결과가 불명확하면 객실 등급 control을 누르기 전에 session을 폐기하고 중단합니다. 객실 등급
+또는 예약 click 뒤 source 불가·일반 오류·취소로 결과를 확정하지 못하면 비공개 상관 근거 수집을 제한적으로
+시도한 뒤 active session을 폐기하여 같은 session으로 새 예약을 시작하지 못하게 합니다. 최초 공식 확인이
+불명확하면 새로 검증한 session의 bounded read-only reconciliation만 이어갑니다. 취소는 session을 `STALE`,
+보호·rate-limit은 `BLOCKED`로 폐기하고 원취소 또는 정적 결과를 전달합니다. top-level
+`korail_pydoll_reservation_actor.py`는 기존 공개 37개·
 private 0개, 좁은 `__all__` 8개와 구형 pickle global 12개를 같은 객체로 복원하는 definition-free compatibility
 facade입니다. browser만 canonical owner를 직접 사용하고 optional Pydoll backend의 지연 import도 유지합니다.
 
@@ -1038,7 +1048,10 @@ fail-closed로 거절합니다. 정확한 열차 row·좌석 control·로그인 
 browser composition shell은 canonical driver를 직접 조립하고, top-level `korail_pydoll_reservation_driver.py`는
 기존 공개 34개·private 4개와 pickle global을 같은 객체로 보존하는 definition-free compatibility facade입니다.
 `korail_reservation_controls.py`도 기존 import 경로를 위한 exact alias facade만 유지합니다. driver의 실제
-예매 동작은 좌석 선택과 예매 요청 두 곳뿐입니다. `korail_sidecar/pydoll/reservation_dialog_policy.py`가
+예매 동작은 요청한 객실 등급의 운임 control 선택과 예매 요청 두 곳뿐입니다. 내부 event 이름
+`seat_selected`는 호차·좌석번호 선택이 아니라 일반실·특실 control 선택을 뜻하며, 웹에는 `객실 등급 선택`으로
+표시합니다. 실제 호차·좌석번호는 KORAIL이 자동 배정하고 공식 예약 결과에서 확인된 값만 별도 근거로
+사용합니다. `korail_sidecar/pydoll/reservation_dialog_policy.py`가
 공식 예약 대화상자의 닫힌 분류와 허용 동작을 소유합니다. 정확한 `이용안내/확인`과 예약 결과의
 `안내메세지/확인`은 기본 허용 목록으로 닫고, 개인 운영 인스턴스에서 전역 동의를 명시적으로 켠 경우에만
 공식 구조의 다른 단일 확인과 예매 버튼을 누른 뒤 나타난 정확한 `이용안내`·지연승낙의 `네`를

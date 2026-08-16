@@ -207,6 +207,9 @@ class PydollReservationActor[Session: PydollReservationSession]:
         discard_if_credential_changed: DiscardIfCredentialChanged,
         acquire_session: AcquireReservationSession[Session],
         ensure_authenticated_session: EnsureAuthenticatedSession[Session],
+        probe_reused_authenticated_session: Callable[
+            [Session, KorailCredentialInput], Awaitable[bool]
+        ],
         discard_with_state: DiscardWithState,
         response_safety_guard: ResponseSafetyGuard,
         reservation_identity_guard: ReservationIdentityGuard[Session],
@@ -219,6 +222,7 @@ class PydollReservationActor[Session: PydollReservationSession]:
         self._discard_if_credential_changed = discard_if_credential_changed
         self._acquire_session = acquire_session
         self._ensure_authenticated_session = ensure_authenticated_session
+        self._probe_reused_authenticated_session = probe_reused_authenticated_session
         self._discard_with_state = discard_with_state
         self._response_safety_guard = response_safety_guard
         self._reservation_identity_guard = reservation_identity_guard
@@ -280,11 +284,29 @@ class PydollReservationActor[Session: PydollReservationSession]:
                 except Exception:  # noqa: BLE001 -- correlation evidence is optional and fail-closed.
                     return ()
 
+            async def correlate_then_discard(
+                state: KorailSessionActorState,
+            ) -> tuple[_KorailReservedSeat, ...]:
+                try:
+                    return await uncertain_result_correlation_seats()
+                finally:
+                    await self._discard_with_state(state)
+
             try:
                 lease = await self._acquire_session(
                     credential_version=request.credential.version,
                 )
                 session = lease.session
+                if lease.authenticated:
+                    stage = "reservation_session_probe"
+                    if not await self._probe_reused_authenticated_session(
+                        session,
+                        request.credential,
+                    ):
+                        lease = await self._acquire_session(
+                            credential_version=request.credential.version,
+                        )
+                        session = lease.session
                 warm_direct_navigation = direct_url is not None and lease.authenticated
                 if not warm_direct_navigation:
                     stage = "load_page"
@@ -336,16 +358,7 @@ class PydollReservationActor[Session: PydollReservationSession]:
                 result = await session.reserve_once(request, on_progress=track_progress)
                 seat_clicked = seat_clicked or result.seat_clicked
                 reservation_clicked = reservation_clicked or result.reservation_clicked
-                if result.outcome in {
-                    KorailReservationOutcome.AUTH_REQUIRED,
-                    KorailReservationOutcome.PROVIDER_BLOCKED,
-                }:
-                    await self._discard_with_state(
-                        KorailSessionActorState.AUTH_REQUIRED
-                        if result.outcome is KorailReservationOutcome.AUTH_REQUIRED
-                        else KorailSessionActorState.BLOCKED,
-                    )
-                return replace(
+                merged_result = replace(
                     result,
                     seat_clicked=seat_clicked,
                     reservation_clicked=reservation_clicked,
@@ -356,11 +369,31 @@ class PydollReservationActor[Session: PydollReservationSession]:
                         result.reservation_requested_at or reservation_requested_at
                     ),
                 )
+                if result.outcome in {
+                    KorailReservationOutcome.AUTH_REQUIRED,
+                    KorailReservationOutcome.PROVIDER_BLOCKED,
+                }:
+                    await self._discard_with_state(
+                        KorailSessionActorState.AUTH_REQUIRED
+                        if result.outcome is KorailReservationOutcome.AUTH_REQUIRED
+                        else KorailSessionActorState.BLOCKED,
+                    )
+                elif result.outcome is not KorailReservationOutcome.PAYMENT_REQUIRED and (
+                    (
+                        result.outcome is KorailReservationOutcome.FAILED
+                        and merged_result.seat_clicked
+                    )
+                    or merged_result.reservation_clicked
+                    or merged_result.reservation_requested_at is not None
+                    or result.reason.startswith("reservation_result_unknown")
+                ):
+                    await self._discard_with_state(KorailSessionActorState.STALE)
+                return merged_result
             except asyncio.CancelledError:
                 await self._discard_with_state(KorailSessionActorState.STALE)
                 raise
             except (BrowserProtectionDetected, BrowserRateLimited):
-                await self._discard_with_state(KorailSessionActorState.BLOCKED)
+                correlation_seats = await correlate_then_discard(KorailSessionActorState.BLOCKED)
                 return KorailReservationResult(
                     outcome=KorailReservationOutcome.PROVIDER_BLOCKED,
                     reason="provider_access_restricted",
@@ -370,7 +403,7 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     target_rechecked_at=target_rechecked_at,
                     seat_selected_at=seat_selected_at,
                     reservation_requested_at=reservation_requested_at,
-                    confirmation_correlation_seats=(await uncertain_result_correlation_seats()),
+                    confirmation_correlation_seats=correlation_seats,
                 )
             except BrowserSourceUnavailable as error:
                 # An uncertain result after the reservation button is never retried.
@@ -380,6 +413,10 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error.stage) is not None
                     else stage
                 )
+                if seat_clicked or reservation_clicked or reservation_requested_at is not None:
+                    correlation_seats = await correlate_then_discard(KorailSessionActorState.STALE)
+                else:
+                    correlation_seats = await uncertain_result_correlation_seats()
                 return KorailReservationResult(
                     outcome=KorailReservationOutcome.FAILED,
                     reason=f"source_unavailable:{source_stage}",
@@ -389,9 +426,13 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     target_rechecked_at=target_rechecked_at,
                     seat_selected_at=seat_selected_at,
                     reservation_requested_at=reservation_requested_at,
-                    confirmation_correlation_seats=(await uncertain_result_correlation_seats()),
+                    confirmation_correlation_seats=correlation_seats,
                 )
             except Exception:  # noqa: BLE001 -- browser backend errors are intentionally opaque.
+                if seat_clicked or reservation_clicked or reservation_requested_at is not None:
+                    correlation_seats = await correlate_then_discard(KorailSessionActorState.STALE)
+                else:
+                    correlation_seats = await uncertain_result_correlation_seats()
                 return KorailReservationResult(
                     outcome=KorailReservationOutcome.FAILED,
                     reason=f"browser_error:{stage}",
@@ -401,7 +442,7 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     target_rechecked_at=target_rechecked_at,
                     seat_selected_at=seat_selected_at,
                     reservation_requested_at=reservation_requested_at,
-                    confirmation_correlation_seats=(await uncertain_result_correlation_seats()),
+                    confirmation_correlation_seats=correlation_seats,
                 )
             finally:
                 if lease is not None and not lease.persistent:

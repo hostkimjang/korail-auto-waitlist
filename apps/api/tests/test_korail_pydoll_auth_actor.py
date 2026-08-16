@@ -167,6 +167,49 @@ async def test_prewarm_probes_the_official_session_before_extending_local_reuse(
 
 
 @pytest.mark.asyncio
+async def test_unverified_use_cannot_extend_an_authenticated_generation_past_its_ttl() -> None:
+    now = [10.0]
+    contexts: list[_AuthContext] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        context = _AuthContext(_AuthSession())
+        contexts.append(context)
+        return context
+
+    actor = PydollAuthenticationSessionActor[_AuthSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=factory,
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=10,
+        monotonic=lambda: now[0],
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+    )
+
+    assert await actor.verify_credentials(_credential()) is True
+    first_session = contexts[0].session
+    for used_at in (50.0, 69.0):
+        now[0] = used_at
+        lease = await actor.acquire_session(credential_version=_credential().version)
+        assert lease.session is first_session
+        assert await actor.ensure_authenticated_session(lease.session, _credential()) is True
+
+    snapshot = actor.snapshot()
+    assert snapshot.last_verified_at_monotonic == 10.0
+    assert snapshot.last_used_at_monotonic == 69.0
+    assert snapshot.local_reuse_until_monotonic == 70.0
+
+    now[0] = 71.0
+    replacement = await actor.acquire_session(credential_version=_credential().version)
+
+    assert replacement.session is not first_session
+    assert first_session.closed == 1
+    await actor.close_locked()
+
+
+@pytest.mark.asyncio
 async def test_prewarm_reauthenticates_once_when_the_official_session_is_gone() -> None:
     sessions = [_AuthSession(), _AuthSession()]
     contexts: list[_AuthContext] = []

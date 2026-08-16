@@ -33,7 +33,7 @@ const resultReasonDescriptions: Record<ReservationResultReasonCode, string> = {
   target_ambiguous: "검색 결과에서 대상 열차를 하나로 구분하지 못했습니다.",
   seat_not_available: "예매 시점에 선택 가능한 좌석이 없었습니다.",
   reservation_control_unavailable: "철도사 예매 화면의 예약 기능을 사용할 수 없었습니다.",
-  seat_selection_lost: "예약 화면에서 선택한 좌석 상태가 예약 요청까지 유지되지 않았습니다.",
+  seat_selection_lost: "예약 화면에서 선택한 객실 등급이 예약 요청까지 유지되지 않았습니다.",
   delay_consent_required: "철도사 지연 안내창에서 운행 지연 동의가 필요합니다.",
   existing_reservation_action_required: "철도사 기존 예약 안내창에서 진행할 예약을 선택해야 합니다.",
   provider_notice_action_required: "철도사 안내창에서 사용자 확인이 필요합니다.",
@@ -190,7 +190,7 @@ type ReservationTerminalStage =
 const progressStageLabels: Record<ReservationProgressStageName, string> = {
   authenticated_session_ready: "로그인 세션 확인",
   target_rechecked: "검색 결과·열차 재확인",
-  seat_selected: "좌석 선택",
+  seat_selected: "객실 등급 선택",
   reservation_requested: "예약 요청",
 };
 
@@ -268,7 +268,7 @@ function detailedResultSteps(
     "검색 결과·열차 재확인",
     terminal === "not_available" && !hasSeatSelection ? "failed" : "completed",
   );
-  appendProgress("seat_selected", "좌석 선택");
+  appendProgress("seat_selected", "객실 등급 선택");
   appendProgress("reservation_requested", "예약 요청");
 
   const resultAt = transition.finishedAt ?? transition.revisionAt;

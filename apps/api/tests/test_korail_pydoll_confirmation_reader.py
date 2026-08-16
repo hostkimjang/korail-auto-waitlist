@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import base64
 import json
 import pickle
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -19,10 +21,16 @@ import rail_waitlist.korail_pydoll_browser as browser_module
 from rail_waitlist import korail_pydoll_confirmation_reader as legacy_reader
 from rail_waitlist.domain import Provider, SeatClass
 from rail_waitlist.korail_pydoll_browser import (
+    KorailCredentialInput,
     PydollKorailBrowserClient,
     PydollPageSnapshot,
 )
 from rail_waitlist.korail_reservation_confirmation import KorailSameSessionDetailEvidence
+from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserProtectionDetected,
+    BrowserRateLimited,
+    BrowserSourceUnavailable,
+)
 from rail_waitlist.korail_sidecar.pydoll import confirmation_reader as owner
 from rail_waitlist.korail_sidecar.pydoll.confirmation_reader import (
     KorailConfirmationSession,
@@ -137,6 +145,7 @@ def _exact_detail_snapshot() -> PydollPageSnapshot:
 @dataclass
 class _ConfirmationSession:
     snapshot: PydollPageSnapshot
+    closed: int = 0
 
     async def _snapshot(self) -> PydollPageSnapshot:
         return self.snapshot
@@ -146,6 +155,15 @@ class _ConfirmationSession:
 
     async def _has_authenticated_header(self) -> bool:
         return False
+
+    async def open(self) -> PydollPageSnapshot:
+        return self.snapshot
+
+    async def ensure_authenticated(self, _credential: KorailCredentialInput) -> bool:
+        return True
+
+    async def probe_authenticated_session(self) -> bool:
+        return True
 
 
 class _SessionContext(AbstractAsyncContextManager[_ConfirmationSession]):
@@ -161,7 +179,37 @@ class _SessionContext(AbstractAsyncContextManager[_ConfirmationSession]):
         exc_value: BaseException | None,
         traceback: object,
     ) -> None:
-        return None
+        self.session.closed += 1
+
+
+def _client_with_active_confirmation_session(
+    session: _ConfirmationSession,
+    *,
+    session_factory: Callable[..., _SessionContext] | None = None,
+) -> PydollKorailBrowserClient:
+    context = _SessionContext(session)
+    client = PydollKorailBrowserClient(
+        session_factory=(
+            session_factory
+            if session_factory is not None
+            else lambda *_args: _SessionContext(session)
+        ),
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+    )
+    client._active_session = browser_module._ActivePydollSession(
+        context=context,
+        session=session,
+        created_at=0,
+        last_used_at=0,
+        authenticated_credential_version="7",
+    )
+    client._session_actor_state = browser_module.KorailSessionActorState.READY
+    client._session_actor_generation = "7"
+    client._session_actor_last_verified_at = 0.0
+    client._session_actor_last_used_at = 0.0
+    return client
 
 
 @pytest.mark.asyncio
@@ -305,7 +353,7 @@ def test_browser_is_the_only_direct_canonical_confirmation_reader_consumer() -> 
 
 
 @pytest.mark.asyncio
-async def test_browser_confirmation_facade_delegates_with_active_generation(
+async def test_browser_confirmation_allows_exact_generation_after_booking_reuse_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _ConfirmationSession(_exact_detail_snapshot())
@@ -313,14 +361,20 @@ async def test_browser_confirmation_facade_delegates_with_active_generation(
         session_factory=lambda *_: _SessionContext(session),
         session_reuse_ttl_seconds=60,
         session_reuse_max_searches=5,
+        monotonic=lambda: 120.0,
     )
     client._active_session = browser_module._ActivePydollSession(
         context=_SessionContext(session),
         session=session,
         created_at=0,
         last_used_at=0,
+        searches_started=5,
         authenticated_credential_version="7",
     )
+    client._session_actor_state = browser_module.KorailSessionActorState.READY
+    client._session_actor_generation = "7"
+    client._session_actor_last_verified_at = 0.0
+    client._session_actor_last_used_at = 0.0
     expected = KorailSameSessionDetailEvidence(
         observed_at=datetime(2026, 8, 3, tzinfo=UTC),
         credential_version=7,
@@ -337,4 +391,208 @@ async def test_browser_confirmation_facade_delegates_with_active_generation(
         credential_version=7,
         payment_deadline_parser=browser_module._parse_korail_payment_deadline,
     )
+    assert client._active_session is not None
+    assert session.closed == 0
     assert not client._session_lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_browser_confirmation_rejects_a_different_credential_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _ConfirmationSession(_exact_detail_snapshot())
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_: _SessionContext(session),
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+    )
+    client._active_session = browser_module._ActivePydollSession(
+        context=_SessionContext(session),
+        session=session,
+        created_at=0,
+        last_used_at=0,
+        authenticated_credential_version="7",
+    )
+    reader = AsyncMock()
+    monkeypatch.setattr(browser_module, "read_korail_same_session_confirmation", reader)
+
+    with pytest.raises(BrowserSourceUnavailable) as unavailable:
+        await client.read_reservation_detail(replace(_target(), credential_version=8))
+
+    assert unavailable.value.stage == "confirmation_session_unavailable"
+    reader.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_requires_then_recovers_with_a_fresh_authenticated_generation() -> None:
+    session = _ConfirmationSession(_exact_detail_snapshot())
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_: _SessionContext(session),
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as unavailable:
+        await client.read_reservation_detail(_target())
+    assert unavailable.value.stage == "confirmation_session_unavailable"
+
+    assert await client.verify_credentials(
+        KorailCredentialInput(
+            login_id="fixture-account",
+            password="fixture-password",
+            version="7",
+        )
+    )
+
+    evidence = await client.read_reservation_detail(_target())
+
+    assert evidence.exact_identity_matched is True
+    assert evidence.payment_pending_markers_present is True
+    await client.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        BrowserSourceUnavailable("confirmation_reservation_list"),
+        RuntimeError("opaque confirmation failure"),
+    ],
+    ids=["source-unavailable", "opaque"],
+)
+@pytest.mark.asyncio
+async def test_browser_confirmation_failure_retires_stale_context_before_rethrow(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    stale = _ConfirmationSession(_exact_detail_snapshot())
+    client = _client_with_active_confirmation_session(stale)
+    monkeypatch.setattr(
+        browser_module,
+        "read_korail_same_session_confirmation",
+        AsyncMock(side_effect=error),
+    )
+
+    with pytest.raises(type(error)) as raised:
+        await client.read_reservation_detail(_target())
+
+    assert raised.value is error
+    assert client._active_session is None
+    assert client.session_snapshot().state is browser_module.KorailSessionActorState.STALE
+    assert stale.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_confirmation_cancellation_retires_stale_context_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale = _ConfirmationSession(_exact_detail_snapshot())
+    client = _client_with_active_confirmation_session(stale)
+    monkeypatch.setattr(
+        browser_module,
+        "read_korail_same_session_confirmation",
+        AsyncMock(side_effect=asyncio.CancelledError()),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await client.read_reservation_detail(_target())
+
+    assert client._active_session is None
+    assert client.session_snapshot().state is browser_module.KorailSessionActorState.STALE
+    assert stale.closed == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [BrowserProtectionDetected(), BrowserRateLimited()],
+    ids=["protection", "rate-limit"],
+)
+@pytest.mark.asyncio
+async def test_browser_confirmation_access_restriction_retires_blocked_context(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    stale = _ConfirmationSession(_exact_detail_snapshot())
+    client = _client_with_active_confirmation_session(stale)
+    monkeypatch.setattr(
+        browser_module,
+        "read_korail_same_session_confirmation",
+        AsyncMock(side_effect=error),
+    )
+
+    with pytest.raises(type(error)) as raised:
+        await client.read_reservation_detail(_target())
+
+    assert raised.value is error
+    assert client._active_session is None
+    assert client.session_snapshot().state is browser_module.KorailSessionActorState.BLOCKED
+    assert stale.closed == 1
+
+
+@pytest.mark.parametrize(
+    ("evidence_flag", "expected_state"),
+    [
+        ("auth_required", browser_module.KorailSessionActorState.AUTH_REQUIRED),
+        ("provider_blocked", browser_module.KorailSessionActorState.BLOCKED),
+    ],
+)
+@pytest.mark.asyncio
+async def test_browser_confirmation_terminal_evidence_retires_context(
+    monkeypatch: pytest.MonkeyPatch,
+    evidence_flag: str,
+    expected_state: browser_module.KorailSessionActorState,
+) -> None:
+    stale = _ConfirmationSession(_exact_detail_snapshot())
+    client = _client_with_active_confirmation_session(stale)
+    evidence = replace(
+        KorailSameSessionDetailEvidence(
+            observed_at=datetime(2026, 8, 3, tzinfo=UTC),
+            credential_version=7,
+            exact_identity_matched=False,
+            payment_pending_markers_present=False,
+        ),
+        auth_required=evidence_flag == "auth_required",
+        provider_blocked=evidence_flag == "provider_blocked",
+    )
+    monkeypatch.setattr(
+        browser_module,
+        "read_korail_same_session_confirmation",
+        AsyncMock(return_value=evidence),
+    )
+
+    assert await client.read_reservation_detail(_target()) is evidence
+    assert client._active_session is None
+    assert client.session_snapshot().state is expected_state
+    assert stale.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_confirmation_failure_never_reuses_retired_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale = _ConfirmationSession(_exact_detail_snapshot())
+    fresh = _ConfirmationSession(_exact_detail_snapshot())
+    client = _client_with_active_confirmation_session(
+        stale,
+        session_factory=lambda *_args: _SessionContext(fresh),
+    )
+    reader = AsyncMock(side_effect=BrowserSourceUnavailable("confirmation_detail_snapshot"))
+    monkeypatch.setattr(browser_module, "read_korail_same_session_confirmation", reader)
+
+    with pytest.raises(BrowserSourceUnavailable):
+        await client.read_reservation_detail(_target())
+
+    assert await client.verify_credentials(
+        KorailCredentialInput(
+            login_id="fixture-account",
+            password="fixture-password",
+            version="7",
+        )
+    )
+    assert client._active_session is not None
+    assert client._active_session.session is fresh
+    assert stale.closed == 1
+    assert fresh.closed == 0
+    await client.close()
+    assert fresh.closed == 1

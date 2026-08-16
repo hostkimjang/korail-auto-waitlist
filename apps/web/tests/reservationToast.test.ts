@@ -224,6 +224,19 @@ describe("reservation recovery toast", () => {
     expect(toast.description).not.toMatch(/결제 (실패|완료)/);
   });
 
+  it("describes a lost room-class selection without implying a physical seat choice", () => {
+    const toast = buildReservationRecoveryToast(transition, result({
+      outcome: "failed",
+      manualCheckRequired: false,
+      resultReasonCode: "seat_selection_lost",
+    }));
+
+    expect(toast.description).toContain(
+      "예약 화면에서 선택한 객실 등급이 예약 요청까지 유지되지 않았습니다.",
+    );
+    expect(toast.description).not.toContain("선택한 좌석 상태");
+  });
+
   it.each([
     ["not_found", "공식 예약 내역에서 대상 예약을 찾지 못했습니다."],
     ["inconclusive", "공식 예약 내역 확인으로 결과를 확정하지 못했습니다."],

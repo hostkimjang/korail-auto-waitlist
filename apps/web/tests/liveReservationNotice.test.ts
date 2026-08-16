@@ -191,7 +191,7 @@ describe("live reservation notices", () => {
       ["검색 결과·열차 재확인", "completed"],
       ["철도사 응답·공식 결과 대기", "active"],
     ]);
-    expect(notice?.steps?.some((step) => step.label === "좌석 선택")).toBe(false);
+    expect(notice?.steps?.some((step) => step.label === "객실 등급 선택")).toBe(false);
   });
 
   it("accepts null seat detection without inventing its step or queue duration", () => {
@@ -360,7 +360,7 @@ describe("live reservation notices", () => {
       ["자동 예매 요청 시작", undefined],
       ["로그인 세션 확인", 4_605],
       ["검색 결과·열차 재확인", 1_145],
-      ["좌석 선택", 124],
+      ["객실 등급 선택", 124],
       ["예약 요청", 24],
       ["공식 결과 확인", 1_819],
       ["공식 결제 필요", undefined],

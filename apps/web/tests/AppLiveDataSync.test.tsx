@@ -523,6 +523,7 @@ describe("App live data synchronization", () => {
     expect(screen.queryByText("객실 등급 선택")).toBeNull();
     expect(screen.queryByLabelText("예매 작업 시간")).toBeNull();
 
+    const canonicalReadsBeforeResult = liveApi.fetchWatches.mock.calls.length;
     act(() => {
       onEvent?.({
         id: "result-observed-246",
@@ -568,7 +569,9 @@ describe("App live data synchronization", () => {
       .toContain("시작 22:01:13전체 7.7초");
     expect(screen.getByText("공식 결제 필요").closest("li")?.textContent)
       .toContain("22:01:21");
-    await waitFor(() => expect(liveApi.fetchWatches).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(liveApi.fetchWatches.mock.calls.length).toBeGreaterThan(canonicalReadsBeforeResult);
+    });
     expect(screen.getByText("예약 요청")).toBeTruthy();
   });
 

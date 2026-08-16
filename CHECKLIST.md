@@ -165,6 +165,7 @@
 - [x] 알림 채널 편집기의 지연 초점 이동이 빠른 입력을 중단하던 CI 경쟁 조건 수정 및 회귀 검증
 - [x] 격리 fullstack E2E가 등록 근거와 최신 관측의 fresh·만료 전이를 분리하도록 시간 경쟁 제거
 - [x] GitHub Actions의 핵심 검증과 실험 Chromium 검증 분리 후 원격 실행 확인
+- [x] GitHub Actions에서 Web(Node)과 API(Python)의 Playwright 버전에 맞는 Chromium을 각각 설치
 
 상세한 공개 전 점검은 [공개 릴리스 체크리스트](docs/PUBLIC_RELEASE_CHECKLIST.md)에서 관리합니다.
 

@@ -65,6 +65,8 @@ jobs:
         working-directory: apps/web
       - run: npx playwright install --with-deps chromium
         working-directory: apps/web
+      - run: uv run --python 3.12 --frozen --extra browser playwright install chromium
+        working-directory: apps/api
       - run: bash -n scripts/*.sh
       - run: bash scripts/ops.sh config
       - run: make verify-ops

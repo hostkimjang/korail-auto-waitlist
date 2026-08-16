@@ -74,6 +74,7 @@ verify_browser_adapter() {
 
 verify_linux_operations() {
     bash "${script_dir}/test-ops.sh"
+    bash "${script_dir}/test-backup-restore.sh"
 }
 
 configure_browser_adapter() {

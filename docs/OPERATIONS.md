@@ -737,6 +737,19 @@ attempt의 비공개 좌석 상관 근거, watch 전체 row lock과 결제 근�
 
 Linux 운영 스크립트는 `/backups/*.dump.age` 경로와 복호화 가능 여부를 먼저 읽기 전용으로 확인하고, 다른 백업·복원이 실행 중이면 서비스를 멈추기 전에 거절합니다. 사전검사가 통과하면 proxy·scheduler·worker·API를 단계적으로 중지하고 복원과 migration 성공 뒤 원래 실행 중이던 컨테이너만 다시 시작합니다. 중지 단계가 실패하면 기존 서비스를 복구하고, 데이터 복원이나 migration이 실패하면 추가 쓰기를 막기 위해 maintenance 상태를 유지합니다.
 
+`make verify-ops`와 `bash ./scripts/ops.sh verify`는 production과 같은
+`rail-waitlist-backup:local` Alpine 이미지를 만든 뒤, 일회용 PostgreSQL 16과 age 키·암호문을 사용해 실제
+backup→데이터 변경→restore round-trip을 수행합니다. 복원 임시 파일은 BusyBox `mktemp`도 허용하도록 무작위
+자리표시자 `XXXXXX`가 템플릿 끝에 있는 경로를 사용합니다. 이 자동 검증은 이미지와 스크립트의 복원 가능성을
+확인하지만 운영 볼륨·운영 키·호스트 파일시스템까지 검증하지 않으므로, 아래 별도 인스턴스 확인을 대체하지
+않습니다.
+
+`pg_restore --clean`은 dump에 포함된 객체만 제거합니다. 백업보다 나중에 추가되고 dump에는 없는 table 같은
+객체는 남을 수 있으므로, 이전 schema의 백업을 복원할 때는 빈 일회용 데이터베이스에서 먼저 검증하고 운영
+복구 절차도 대상 데이터베이스·schema를 새로 만드는 경계를 사용해야 합니다. 현재 Windows PowerShell 복원
+진입점은 Linux의 복호화·경로·동시 실행 사전검사, 단계적 drain, 실패 시 자동 재시작 계약과 아직 같지 않으므로
+이 항목이 체크리스트에서 완료되기 전에는 운영 복원에 Linux Bash 진입점을 사용합니다.
+
 복원은 기존 데이터를 바꿀 수 있습니다. 운영 인스턴스에 적용하기 전에 별도 테스트 인스턴스에서 실제 복원을 확인하세요.
 
 ## KORAIL 브라우저 진단

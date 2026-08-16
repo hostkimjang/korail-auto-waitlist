@@ -88,6 +88,9 @@
 - [x] OCI ARM64 네이티브 환경의 KORAIL Chromium 이미지 빌드와 외부 요청 없는 151개 fixture 검증
 - [x] OCI ARM64 첫 전체 배포의 전체 이미지 빌드·migration 성공과 seccomp 사용자 네임스페이스 거부에 따른 adapter readiness 실패 확인
 - [x] Linux Bash 운영 진입점, 무파괴 stop·복구·profile·복원 계약 테스트와 WSL2 Ubuntu 전체 프로필 재빌드·재생성·health 확인
+- [x] production Alpine backup 이미지에서 BusyBox 호환 복원 임시 파일 생성과 일회용 PostgreSQL 16·age 암호화 backup/restore 실제 round-trip 자동 검증
+- [ ] 이전 schema 백업을 복원할 때 dump에 없는 더 최신 객체가 남지 않도록 빈 데이터베이스·schema 재생성 경계와 회귀 검증 추가
+- [ ] Windows PowerShell 복원 경로를 Linux와 같은 복호화·경로·동시 실행 사전검사, 단계적 drain, 실패 시 자동 재시작 계약으로 정렬
 - [ ] OCI 운영 서버의 제한적 `umask`에서도 Git 갱신 파일을 비루트 컨테이너가 읽도록 배포 전 tracked 권한 자동 정규화
 - [x] API 검증 진입점의 Python 3.12·고정 lock·test/browser 의존성 고정과 Make·Bash·PowerShell 품질 gate 일치
 - [x] Windows PowerShell 5.1 호환 필수 비밀값 생성 절차에서 다섯 값의 이름·고유성·48바이트 길이 검증

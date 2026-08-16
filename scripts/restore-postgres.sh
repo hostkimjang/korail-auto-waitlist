@@ -25,7 +25,7 @@ fi
 
 export PGPASSWORD
 umask 077
-temporary="$(mktemp /tmp/rail-restore.XXXXXX.dump)"
+temporary="$(mktemp /tmp/rail-restore.dump.XXXXXX)"
 identity_file="$(mktemp /tmp/rail-age-identity.XXXXXX)"
 trap 'rm -f "$temporary" "$identity_file"' EXIT INT TERM
 printf '%s\n' "$BACKUP_AGE_IDENTITY" > "$identity_file"

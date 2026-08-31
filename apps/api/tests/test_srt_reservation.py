@@ -204,7 +204,7 @@ async def test_exact_available_train_is_reserved_once_and_returns_real_deadline(
     assert client.seat_types == [SeatType.GENERAL_ONLY, SeatType.SPECIAL_ONLY]
 
 
-async def test_unverified_srt_seat_metadata_fails_closed_without_losing_payment_hold() -> None:
+async def test_unverified_srt_seat_metadata_is_unknown_after_reservation_request() -> None:
     class ResultClient(FakeClient):
         def reserve(self, _train, *, passengers, special_seat, window_seat=None):
             self.reserve_calls += 1
@@ -215,7 +215,9 @@ async def test_unverified_srt_seat_metadata_fails_closed_without_losing_payment_
 
     result = await executor.reserve_once(request(), Credentials())
 
-    assert result.outcome is ReservationOutcome.PAYMENT_REQUIRED
+    assert result.outcome is ReservationOutcome.UNKNOWN
+    assert result.result_reason_code is ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID
+    assert [progress.stage for progress in result.progress_stages] == ["reservation_requested"]
     assert result.reserved_seats == ()
 
 

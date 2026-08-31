@@ -114,6 +114,20 @@ def _matches_unknown_result_correlation(
     return len(record_seats) == target.passenger_count and record_seats == target_seats
 
 
+def _matches_payment_hold_seats(
+    record: SrtReservationRecord,
+    target: ReservationConfirmationTarget,
+) -> bool:
+    if (
+        len(record.seats) != target.passenger_count
+        or len(target.reserved_seats) != target.passenger_count
+    ):
+        return False
+    record_seats = {(seat.car_number, seat.seat_number) for seat in record.seats}
+    target_seats = {(seat.car_number, seat.seat_number) for seat in target.reserved_seats}
+    return len(record_seats) == target.passenger_count and record_seats == target_seats
+
+
 def normalize_srt_reservation_records(
     target: ReservationConfirmationTarget,
     evidence: SrtReservationListEvidence,
@@ -182,6 +196,25 @@ def normalize_srt_reservation_records(
                 ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
                 if len(matched_record.seats) != target.passenger_count
                 else ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+            ),
+            source=source,
+            observed_at=evidence.observed_at,
+        )
+    if (
+        target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        and not _matches_payment_hold_seats(matched_record, target)
+    ):
+        has_complete_seat_identity = (
+            len(matched_record.seats) == target.passenger_count
+            and len(target.reserved_seats) == target.passenger_count
+        )
+        return ReservationConfirmationResult(
+            provider=target.provider,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=(
+                ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+                if has_complete_seat_identity
+                else ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
             ),
             source=source,
             observed_at=evidence.observed_at,

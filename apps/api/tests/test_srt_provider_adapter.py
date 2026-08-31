@@ -608,6 +608,57 @@ async def test_client_drain_retries_unknown_status_failures(failure: str) -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_mode", ["pending", "unknown", "transport_error"])
+async def test_client_read_only_drain_deadline_fences_all_later_requests(
+    status_mode: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    request_id = "5790e635307c4549a7728d01455bf92c"
+    instance_id = "768e0ce66bce4cc2af9ef152ea25d831"
+    request_paths: list[str] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        request_paths.append(request.url.path)
+        if request.url.path == "/v1/read-only-call-register":
+            return httpx.Response(200, json={"accepted": True, "instance_id": instance_id})
+        if request.url.path == "/v1/observe":
+            return httpx.Response(200, json={"observations": []})
+        if request.url.path == "/v1/read-only-call-status":
+            if status_mode == "transport_error":
+                raise httpx.ConnectError("persistent status failure", request=request)
+            return httpx.Response(
+                200,
+                json={"state": status_mode, "instance_id": instance_id},
+            )
+        raise AssertionError(f"unexpected request path: {request.url.path}")
+
+    client = SrtProviderAdapterClient(
+        SRT_PROVIDER_ADAPTER_ORIGIN,
+        10,
+        TOKEN,
+        transport=httpx.MockTransport(respond),
+        read_only_drain_timeout_seconds=0.03,
+    )
+    with bind_request_id(request_id):
+        await client.observe(observation_request(), origin="수서", destination="부산")
+
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(SrtProviderAdapterUnavailable, match="fenced after read-only drain"),
+    ):
+        await asyncio.wait_for(client.drain_pending_calls(), timeout=0.5)
+
+    credentials = ProviderCredentials("1234567890", "private-password", 7)
+    with pytest.raises(SrtProviderAdapterUnavailable, match="fenced after read-only drain"):
+        await client.reserve_once(reservation_request(), credentials)
+    with pytest.raises(SrtProviderAdapterUnavailable, match="fenced after read-only drain"):
+        await client.aclose()
+
+    assert "/v1/reserve-once" not in request_paths
+    assert "event=provider_sidecar_drain_deadline_exceeded" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_outer_read_timeout_still_drains_the_pre_registered_call() -> None:
     request_id = "5790e635307c4549a7728d01455bf92c"
     instance_id = "768e0ce66bce4cc2af9ef152ea25d831"

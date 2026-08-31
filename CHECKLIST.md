@@ -68,6 +68,10 @@
 - [x] KORAIL 공식 안내 조치를 `delay_consent_required`·`existing_reservation_action_required`·`provider_notice_action_required`로 분리해 provider-neutral attempt/API에 보존하고, 유형별 사용자 안내와 알 수 없는 코드의 수동 확인 fail-closed 처리
 - [x] 예매 진행 카드의 확인된 단계만 실시간 표시, progressed 이벤트의 전체 대기 재조회 생략, 활성 spinner 반복과 reduced-motion 정지
 - [x] provider·알림 worker 중단과 독립된 전용 maintenance stale recovery, 표준 수동 확인 result, 새로고침·동일 상태 갱신의 누적 단계·실제 후보·만료 상태 복원, terminal 이후 늦은 progress 차단
+- [x] 단일 `rail` provider 작업이 멈춰도 30초마다 `maintenance` 큐에서 실행되는 DB 전용 watch 만료 sweep과 기존 rail due sweep 시작 단계의 만료 fast path를 함께 유지하는 구현·로컬 회귀 검증
+- [x] SRT 단발 예약 직후 승객 수만큼의 완전한 호차·좌석 식별이 없으면 `PAYMENT_REQUIRED` 소유권을 주장하지 않고 `UNKNOWN / provider_response_invalid`로 닫는 fail-closed 구현·로컬 회귀 검증
+- [x] SRT `PAYMENT_FOLLOW_UP`에서 저장 좌석 전체 집합과 공식 기록 좌석 전체 집합이 정확히 일치할 때만 paid·unpaid 양성 결과를 허용하고 누락·추가·불일치를 `INCONCLUSIVE`로 강등하는 구현·로컬 회귀 검증
+- [x] 결제기한 없는 `PAYMENT_REQUIRED`에 기한을 합성하지 않고 최대 6회 bounded read-only 재확인을 수행하며 과거 count 3 행을 남은 횟수부터 재개하는 구현·로컬 회귀 검증
 - [x] iOS·iPadOS 홈 화면 PWA의 사용자 행동 안에서 시작하는 Web Push 권한 요청 계약
 - [x] 일반·마스커블·Apple Touch·브라우저 탭 16·32px favicon·알림 배지 아이콘 자산 분리
 - [x] 예매 단계와 결제·예약 확인 단계를 구분한 KORAIL·SRT 고정 HTTPS 새 창 인계
@@ -82,6 +86,7 @@
 - [x] notification worker의 `httpx`·`httpcore` 원시 URL 로그를 파일·container console에서 차단하고 애플리케이션 소유의 닫힌 전달 결과 로그만 유지
 - [ ] 2026년 8월 9~14일 notification 로그에 노출됐을 수 있는 Telegram·Discord·일반 webhook 자격정보 회전과 로컬·Docker·외부 수집기·백업 사본 정리
 - [x] SRT sidecar 읽기 호출의 인증 사전 등록·tri-state terminal 확인, status 장애 fail-closed 재시도와 취소 중 execution lease 조기 해제 방지 회귀
+- [x] SRT read-only call-status polling을 300초 deadline으로 제한하고 미확정이면 secret-free 사건 기록·client 전체 요청 fence·task 실패로 닫아 단일 rail worker의 무기한 점유를 막는 구현·로컬 회귀 검증
 - [x] 2026년 8월 13일 KORAIL 정기점검 중 `source_unavailable` 관측을 좌석 발견으로 오인하지 않고 01:30~02:17 KST 신규 예약 시도 0건으로 닫은 fail-closed 운영 확인
 - [x] KORAIL `rejectservice_job.html`·서비스 중단 HTML을 내부 전용 상태로 분류하고 Pydoll·Playwright·HTTP replay, 서로 다른 queued query·이전 좌석 cache와 API Redis hold까지 provider-wide cooldown으로 차단하는 fixture·경쟁조건 회귀 및 experimental profile 재배포
 - [ ] KORAIL 점검 종료와 기존 cooldown 해제 뒤 읽기 조회 1회에서 fresh `official_provider` 관측·성공 lifecycle·신규 예약 시도 0건 확인
@@ -223,6 +228,9 @@
 - [ ] 별도 인스턴스에서 암호화 백업 복원 확인
 - [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
+- [ ] Oracle에 maintenance 만료 sweep·SRT 좌석 상관·결제기한 없는 재확인 변경을 전체 profile로 재배포하고 migration·장기 서비스 health·rail/maintenance 큐 소비를 확인
+- [ ] Oracle의 기존 8월 29일 과거 대기가 maintenance sweep으로 만료되고 새 KORAIL·SRT 관측의 `next_check_at`이 다시 전진하며 `운행·예매 상태 관측 지연`이 해소되는지 확인
+- [ ] Oracle에서 결제기한 없는 기존 SRT `PAYMENT_REQUIRED` count 3 행이 4~6회 읽기 전용 확인으로 재개되고, 정확한 전체 좌석 상관 없이는 paid·unpaid로 잘못 확정되지 않는지 확인
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
 - [ ] Oracle 재가동 전에 같은 KORAIL 계정을 사용하는 로컬 scheduler·worker를 drain한 뒤 API provider session manager·sidecar를 포함한 Compose profile 전체를 volume 보존 상태로 정지하고 단일 활성 배포를 유지하며, hotfix 배포 뒤 자연 발생 예약에서 예약 직전 probe·필요 시 fresh login·불확실 session 폐기·fresh reconciliation과 공식 자동 배정 좌석 표시를 끝까지 확인
 - [x] 2026년 8월 17일 Oracle 00:56 KORAIL 70편과 로컬 01:00 KORAIL 107편에서 `session_keepalive`가 예약 control 전 0.5초 안에 실패하고 progress·click이 없음을 분리 확인했으며, 중간의 로컬 fresh 예매 성공과 Oracle 재로그인 뒤 로컬 session 무효화로 동일 계정 이중 실행 충돌을 확인하고 로컬 전체 Compose profile을 queue 0·volume 보존 상태로 정지

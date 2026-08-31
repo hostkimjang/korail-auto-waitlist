@@ -417,6 +417,48 @@ worker와 API에서 raw sidecar HTTP를 만들지 말고 canonical `SrtProviderA
 같은 process의 실제 SRT 조회를 직렬화하지만 DB fencing 연장과 동일하지 않습니다. 또한 이 terminal 계약은
 accountless 읽기 3개 endpoint만 다루며 로그인·예약·예약 확인 thread에는 적용되지 않습니다.
 
+`rail` worker는 동시 실행 수 1로 좌석 관측·즉시 처리·예약 재확인을 함께 처리합니다. 한 SRT 호출의 terminal
+확인이나 call-status polling이 길어지면 worker health의 `pong`은 유지되면서 다음 작업이 최대 300초까지 밀릴 수
+있습니다. client는 이 deadline을 넘긴 미확정 호출을 성공으로 정리하지 않고
+`event=provider_sidecar_drain_deadline_exceeded`를 남긴 뒤 자신을 fail-closed fence해 이후 모든 provider 요청을
+거절합니다. task는 실패로 닫히며 다음 task는 새 client를 사용합니다.
+반면 운행이 끝난 대기의 DB 전용 만료 sweep은 30초마다 `maintenance` 큐에서도 독립 실행됩니다. 기존 `rail`
+due sweep의 시작 단계에 있는 만료 fast path도 제거하지 않았습니다. 따라서 과거 대기가 계속 활성 상태라면
+provider 장애만으로 단정하지 말고 maintenance worker와 큐, scheduler 발행까지 함께 확인합니다.
+
+다음 명령은 task 인자, 계정 ID, token과 provider 응답 원문을 출력하지 않는 1차 진단입니다.
+
+```bash
+bash ./scripts/ops.sh status
+bash ./scripts/ops.sh drain-status
+docker compose -f compose.yml exec -T redis redis-cli LLEN rail
+docker compose -f compose.yml exec -T redis redis-cli LLEN maintenance
+docker stats --no-stream
+docker compose -f compose.yml logs --since=12h --no-color scheduler worker maintenance-worker srt-provider-adapter \
+  | grep -E 'process_due_watches|expire_elapsed_watches|provider_(query_started|query_completed|call_timed_out|call_finished_after_timeout|sidecar_drain_status_unavailable|sidecar_drain_deadline_exceeded)' \
+  | tail -n 300
+```
+
+`drain-status`에서 `process_due_watches`가 계속 active이고
+`event=provider_sidecar_drain_status_unavailable` 뒤 terminal 또는 sidecar instance 교체 근거가 없으면 SRT
+lifecycle 정리 대기를 우선 의심합니다. 50ms 간격 status poll이 여러 pending call에 겹치면 sidecar 요청량과 CPU가
+짧은 시간 증가할 수 있지만, 300초 deadline 뒤에는 `provider_sidecar_drain_deadline_exceeded`와 client fence로
+끝나야 합니다. 이 event 뒤에도 같은 Celery task가 계속 active이면 worker의 task 종료 로그와 process 상태를
+추가로 확인합니다. `rail` 길이가 늘면서 active 작업이 없으면 worker의 queue binding·Redis
+연결을 확인합니다. due task는 짧은 만료 시간을 가지므로 `rail` 길이가 0이라는 사실만으로 정상 처리를 증명하지
+않습니다. `maintenance`가 쌓이면 만료 sweep도 독립적으로 진행되지 않는 상태입니다. scheduler 로그에 두 task의
+발행 기록이 없으면 worker보다 beat를 먼저 확인합니다. CPU가 높고 동일 call의 상태를 terminal로 닫지 못한 채
+polling이 계속되면 조회를 추가 호출하지 말고 sidecar readiness와 lifecycle 경계를 복구합니다.
+
+복구 전에는 위 snapshot과 구조화 로그를 보존하고 `/readyz`와 단일 replica 여부를 확인합니다. lifecycle status가
+불가한 상태에서 worker만 반복 강제 종료하거나 Redis·DB·volume을 지우지 않습니다. sidecar를 교체해야 한다면
+기존 요청의 결과를 성공으로 추정하지 않고 새 instance가 ready가 된 뒤, 아직 deadline 안인 client가 instance
+변경을 관측해 과거 pending call을 닫고 worker task가 종료되는지 확인합니다. deadline으로 이미 fence된 client를
+재사용하거나 수동으로 해제하지 말고, 실패한 task가 닫힌 뒤 새 task의 새 client가 정상 lifecycle을 확인하게
+합니다. 그 다음에도 rail 소비가 돌아오지 않을 때만 운영
+스크립트의 단계적 drain·전체 profile 재생성 절차를 사용합니다. 복구 뒤에는 maintenance queue가 비고 과거
+대기가 만료되며 새 관측의 `next_check_at`이 전진하는지까지 확인해야 합니다.
+
 KORAIL은 SRT와 같은 공식 접속 대기를 기다려 통과하는 흐름이 아닙니다. 실제 cache-miss 조회는
 `event=provider_query_started`와 `event=provider_query_completed`로 경계를 확인합니다. NetFunnel 등
 보호 표면이 감지되면 `outcome=provider_access_restricted`로 조회를 중단하고 provider-wide cooldown을

@@ -103,6 +103,10 @@ Celery 작업은 역할별 큐로 나뉩니다.
 - 선택적인 철도사 연동 작업
 
 좌석 확인과 알림 전송을 분리해 느린 외부 알림이 좌석 확인을 막지 않도록 합니다. 같은 운영사에 대한 동시 실행은 제한합니다.
+운행이 끝난 대기의 만료 처리는 provider I/O가 없는 DB 전용 작업으로도 30초마다 `maintenance` 큐에서
+실행합니다. 따라서 단일 `rail` worker가 운영사 호출이나 sidecar lifecycle 정리에 오래 머물러도 만료 가능한
+과거 대기가 그 작업과 함께 멈추지 않습니다. 기존 `rail` due sweep의 시작 단계에서도 같은 만료 처리를 계속
+실행해 정상 경로의 즉시 정리와 새 독립 복구 경로를 함께 유지합니다.
 
 동기 Celery task shell이 만든 작업별 event loop 안에서 비동기 작업과 DB engine 정리를 끝내는 순서는
 `worker_task_runtime.py`가 소유합니다. owner는 DB·Celery를 직접 import하지 않고 작업 awaitable과
@@ -110,8 +114,8 @@ Celery 작업은 역할별 큐로 나뉩니다.
 기존 `_run_isolated` wrapper는 호출 시점의 `engine.dispose`를 주입하고, `asyncio.run`·공개 Celery task 이름·
 성공/실패 metric은 계속 composition shell에 남습니다. 작업과 정리가 모두 실패할 때 정리 예외가 최종 예외가
 되는 기존 Python `finally` 우선순위도 구조 이동에서 바꾸지 않았습니다.
-`worker.py`는 local top-level 함수 27개와 dependency 조립 closure 3개, Celery task 4개만 남은 frozen
-composition root입니다. 직접 SQL·transaction·FastAPI route·provider adapter method·credential/secret 처리는
+`worker.py`는 application/runtime owner와 역할별 Celery task를 연결하는 얇은 composition root입니다. 직접
+SQL·transaction·FastAPI route·provider adapter method·credential/secret 처리는
 소유하지 않으며 canonical application/runtime과 task별 engine cleanup을 조립합니다. 새 정책·UoW를 이 root에
 추가하지 않고 기능 owner와 typed dependency bundle로 둡니다.
 
@@ -372,6 +376,11 @@ iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push
 - 좌석 관측이 출발 전에 시작됐더라도 느린 공식 응답이 돌아오는 동안 실제·추정·예정 출발시각을 지날 수 있습니다. provider 예약 attempt를 claim하기 직전의 잠긴 watch·candidate 경계에서 현재 시각과 최신 출발 근거를 다시 검사하고, 그 검사 시점에 이미 출발한 후보는 attempt를 만들거나 provider를 호출하지 않습니다.
 - 예약 결과는 공식 예약 내역에서 다시 확인할 수 있도록 안내합니다.
 - 결제 단계 전에 멈춥니다.
+
+운영사가 결제기한을 제공하지 않은 `PAYMENT_REQUIRED`도 가짜 기한을 합성하지 않고 같은 최대 6회의 bounded
+read-only reconciliation을 적용합니다. 과거 3회 한도에서 멈춘 기한 없는 행은 네 번째 확인부터 재개하며,
+여섯 번째 뒤에는 추가 확인을 예약하지 않습니다. 미래 기한이 있는 행의 기한 전 확인과 post-deadline final
+read 계약은 그대로 유지합니다.
 
 예약 진단은 provider 내부 구현을 그대로 노출하지 않는 닫힌 projection입니다. DB attempt와 공개 REST의
 `candidates[].latest_reservation_attempt`, SSE `watch.reservation_result`·`watch.reservation_reconciled`는
@@ -942,6 +951,12 @@ SRT sidecar의 session actor 상태·snapshot, Pydantic wire 계약, 내부 HTTP
 top-level `srt_provider_adapter_contract.py`, `srt_provider_adapter.py`도 기존 import·wildcard·pickle 경로를
 같은 canonical 객체로 유지하는 호환 경계입니다.
 
+main-side SRT client는 사전 등록한 read-only call의 terminal 또는 sidecar instance 변경을 50ms 간격으로
+확인하되 전체 drain을 300초로 제한합니다. 그 안에 종료를 증명하지 못하면 pending call을 성공으로 지우지 않고
+client 전체를 fence해 이후 관측·예약·확인 요청을 모두 거절하며, secret-free deadline 사건을 남기고 현재 task를
+실패로 닫습니다. 다음 Celery task만 새 client로 다시 시작할 수 있어 한 client의 call-status polling이 단일
+`rail` worker를 무기한 점유하지 않습니다.
+
 SRT sidecar 서비스에서는 `srt_sidecar/application.py`가 typed provider port와 session/login 조립을,
 `srt_sidecar/runtime.py`가 환경값·Redis cooldown·live source 조립을, `srt_sidecar/http.py`가 인증·검증
 redaction·lifespan·9개 FastAPI route를 소유합니다. `srt_sidecar/read_only_lifecycle.py`는 읽기 호출의 사전 등록,
@@ -952,7 +967,10 @@ handler 실행, provider terminal, bounded tombstone 상태를 소유합니다. 
 SRT의 인증 세션 actor와 로그인 단발 검증·열차 재확인·단발 예약·읽기 전용 예약 확인 구현은
 `srt_sidecar/reservation.py`가 canonical owner입니다. credential fingerprint와 generation, process-local
 lock, 마지막 사용 시점 기준 session reuse, 조회 중 인증 만료 시 새 client로 검색만 한 번 재시도하고 예약
-요청 자체는 반복하지 않는 fail-closed 계약을 함께 소유합니다. top-level `srt_reservation.py`는 기존 공개
+요청 자체는 반복하지 않는 fail-closed 계약을 함께 소유합니다. 단발 예약 반환 직후에는 요청 승객 수만큼의
+중복 없는 호차·좌석번호를 모두 확인한 경우에만 `PAYMENT_REQUIRED`를 반환합니다. 같은 여정의 기존 예약과
+이번 호출의 결과를 구분할 완전한 좌석 식별이 없으면 결제보류 소유권을 주장하지 않고
+`UNKNOWN / provider_response_invalid`로 보존해 읽기 전용 확인으로 넘깁니다. top-level `srt_reservation.py`는 기존 공개
 49개 이름과 구형 pickle global을 같은 객체로 유지하며 default executor도 canonical owner의 process singleton을
 공유합니다. 호환 facade의 dependency attribute 재할당은 canonical actor에 주입되지 않습니다.
 
@@ -960,8 +978,9 @@ SRT의 예약 결과·읽기 전용 예약 목록 정규화는 같은 bounded co
 `reservations/provider_confirmation/srt.py`가 canonical owner입니다. 이미 반환된 예약 결과는 추가 provider
 호출 없이 같은 normalizer를 사용하고, `PAYMENT_FOLLOW_UP` 공식 목록 확인은 provider 차단·인증 필요·credential
 generation 불일치 뒤 열차·날짜·시각·역·좌석 등급·승객 수가 정확히 일치하는 미결제 1건만 결제 필요로 확정합니다.
-결제 필요 상태의 후속 확인에서만 같은 exact identity의 유일한 record가 `paid=true`이면 결제 완료로
-확정합니다. 최초 예약 직후 확인에서는 과거 결제 record를 현재 시도의 완료 근거로 사용하지 않으며, 중복
+결제 필요 상태의 `PAYMENT_FOLLOW_UP`은 저장된 승객별 좌석 전체 집합과 공식 record의 좌석 전체 집합이
+승객 수·호차·좌석번호까지 정확히 같을 때만 `paid=true`를 결제 완료로, 사용 가능한 unpaid를 결제 필요 유지로
+확정합니다. 일부 좌석 누락·추가·중복·불일치는 두 양성 결과 모두 `INCONCLUSIVE`로 강등합니다. 최초 예약 직후 확인에서는 과거 결제 record를 현재 시도의 완료 근거로 사용하지 않으며, 중복
 exact record도 결과를 추정하지 않고 `INCONCLUSIVE`로 닫습니다. 모든 SRT `UNKNOWN` 공식 확인은
 `UNKNOWN_RESULT_FOLLOW_UP`을 사용합니다. 신뢰 가능한 비공개 상관 좌석이 없으면 공식 목록을 읽더라도
 `NOT_FOUND`·`INCONCLUSIVE`만 예약 상태 근거로 수용하고, provider normalizer가 반환한 paid·unpaid 양성 결과는

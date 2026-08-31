@@ -63,6 +63,7 @@ def srt_record(
     paid: bool = False,
     seat_class: SeatClass | None = SeatClass.STANDARD,
     passenger_count: int | None = 1,
+    seats: tuple[ReservationConfirmationSeat, ...] = (),
 ) -> SrtReservationRecord:
     return SrtReservationRecord(
         train_number=train_number,
@@ -75,6 +76,7 @@ def srt_record(
         paid=paid,
         seat_class=seat_class,
         passenger_count=passenger_count,
+        seats=seats,
     )
 
 
@@ -142,15 +144,62 @@ def test_srt_ambiguous_matches_fail_closed(
 
 
 def test_srt_exact_paid_record_confirms_payment_completion() -> None:
+    reserved_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
     result = normalize_srt_reservation_records(
-        target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP),
-        evidence(records=(srt_record(paid=True),)),
+        replace(
+            target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP),
+            reserved_seats=(reserved_seat,),
+        ),
+        evidence(records=(srt_record(paid=True, seats=(reserved_seat,)),)),
     )
 
     assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
     assert result.payment_deadline is None
     assert result.official_handoff_url is None
     assert not result.permits_automatic_reservation_retry
+
+
+@pytest.mark.parametrize("paid", [False, True])
+def test_srt_payment_follow_up_requires_the_exact_reserved_seat(paid: bool) -> None:
+    reserved_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
+    different_seat = ReservationConfirmationSeat(car_number="5", seat_number="1B")
+    payment_target = replace(
+        target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP),
+        reserved_seats=(reserved_seat,),
+    )
+
+    missing = normalize_srt_reservation_records(
+        payment_target,
+        evidence(records=(srt_record(paid=paid),)),
+    )
+    different = normalize_srt_reservation_records(
+        payment_target,
+        evidence(records=(srt_record(paid=paid, seats=(different_seat,)),)),
+    )
+
+    assert missing.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        missing.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT
+    )
+    assert different.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        different.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+    )
+
+
+def test_srt_exact_unpaid_payment_follow_up_keeps_the_payment_hold() -> None:
+    reserved_seat = ReservationConfirmationSeat(car_number="4", seat_number="8A")
+    result = normalize_srt_reservation_records(
+        replace(
+            target(purpose=ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP),
+            reserved_seats=(reserved_seat,),
+        ),
+        evidence(records=(srt_record(seats=(reserved_seat,)),)),
+    )
+
+    assert result.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
 
 
 def test_unknown_result_follow_up_allows_empty_or_full_private_seat_identity() -> None:

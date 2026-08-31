@@ -17,6 +17,7 @@ TOP_LEVEL_DEFINITIONS: dict[str, type[ast.AST]] = {
     "_run_isolated": ast.AsyncFunctionDef,
     "_watch_expiry_dependencies": ast.FunctionDef,
     "_expire_elapsed_watches": ast.AsyncFunctionDef,
+    "_expire_elapsed_watches_independently": ast.AsyncFunctionDef,
     "_recover_stale_reservation_attempts": ast.AsyncFunctionDef,
     "_recover_stale_reservation_attempts_independently": ast.AsyncFunctionDef,
     "_provider_circuit_is_closed": ast.AsyncFunctionDef,
@@ -37,6 +38,7 @@ TOP_LEVEL_DEFINITIONS: dict[str, type[ast.AST]] = {
     "_reconciliation_dependencies": ast.FunctionDef,
     "_reconcile_reservation_attempt": ast.AsyncFunctionDef,
     "process_due_watches": ast.FunctionDef,
+    "expire_watches_maintenance": ast.FunctionDef,
     "recover_abandoned_reservations": ast.FunctionDef,
     "process_watch_now": ast.FunctionDef,
     "reconcile_reservation_attempt": ast.FunctionDef,
@@ -52,6 +54,7 @@ NESTED_DEFINITIONS = {
 CELERY_TASKS = {
     "deliver_outbox": "rail_waitlist.worker.deliver_outbox",
     "process_due_watches": "rail_waitlist.worker.process_due_watches",
+    "expire_watches_maintenance": "rail_waitlist.worker.expire_elapsed_watches",
     "recover_abandoned_reservations": "rail_waitlist.worker.recover_stale_reservation_attempts",
     "process_watch_now": "rail_waitlist.worker.process_watch_now",
     "reconcile_reservation_attempt": "rail_waitlist.worker.reconcile_reservation_attempt",

@@ -358,11 +358,10 @@ async def apply_reservation_reconciliation(
         payment_deadline.tzinfo is None or payment_deadline.utcoffset() is None
     ):
         payment_deadline = payment_deadline.replace(tzinfo=UTC)
-    known_future_payment_hold = (
+    known_active_payment_hold = (
         attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
         and watch.status is WatchStatus.PAYMENT_REQUIRED
-        and payment_deadline is not None
-        and payment_deadline > reconciled_at
+        and (payment_deadline is None or payment_deadline > reconciled_at)
     )
     legacy_expired_hold_cleanup_read = (
         attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED
@@ -392,6 +391,11 @@ async def apply_reservation_reconciliation(
         confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
         and confirmation.payment_deadline is not None
         and confirmation.payment_deadline > reconciled_at
+    )
+    confirmed_hold_without_deadline = (
+        confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+        and confirmation.payment_deadline is None
+        and payment_deadline is None
     )
     reconciliation_attempt_limit = (
         UNKNOWN_RECONCILIATION_MAX_ATTEMPTS
@@ -434,6 +438,7 @@ async def apply_reservation_reconciliation(
         attempt.reconciliation_resolution = None
     terminal_confirmation = (
         confirmed_hold_has_usable_deadline
+        or confirmed_hold_without_deadline
         or confirmed_absent_unknown
         or confirmed_paid
         or confirmation.outcome
@@ -466,8 +471,8 @@ async def apply_reservation_reconciliation(
             if reconciliation_anchor is None:
                 raise RuntimeError("reconciliation must persist a reconciliation timestamp")
             attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
-    elif confirmed_hold_has_usable_deadline or (
-        known_future_payment_hold
+    elif confirmed_hold_has_usable_deadline or confirmed_hold_without_deadline or (
+        known_active_payment_hold
         and confirmation.outcome
         in {
             ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
@@ -489,11 +494,11 @@ async def apply_reservation_reconciliation(
                 if confirmed_hold_has_usable_deadline
                 else payment_deadline
             )
-            if effective_payment_deadline is None:
-                raise RuntimeError("active payment hold requires a payment deadline")
-            attempt.next_reconcile_at = min(
-                reconciliation_anchor + retry_interval,
-                effective_payment_deadline,
+            next_reconcile_at = reconciliation_anchor + retry_interval
+            attempt.next_reconcile_at = (
+                min(next_reconcile_at, effective_payment_deadline)
+                if effective_payment_deadline is not None
+                else next_reconcile_at
             )
     elif (
         not terminal_confirmation

@@ -724,9 +724,17 @@ class SrtReservationExecutor:
                     observed_at=observed_at,
                     progress_stages=reservation_progress,
                 )
-            reserved_seats = returned_seats
-            if len(reserved_seats) != request.passenger_count:
-                reserved_seats = ()
+            if len(returned_seats) != request.passenger_count:
+                # A same-itinerary reservation can already exist in the official
+                # account. Without one complete private seat identity per passenger,
+                # the reserve response cannot prove that this call created the hold.
+                return ReservationResult(
+                    outcome=ReservationOutcome.UNKNOWN,
+                    result_reason_code=_ReservationResultReasonCode.PROVIDER_RESPONSE_INVALID,
+                    source=SRT_RESERVATION_SOURCE,
+                    observed_at=observed_at,
+                    progress_stages=reservation_progress,
+                )
             deadline = _payment_deadline(reservation)
             if deadline is not None and deadline <= observed_at:
                 deadline = None
@@ -738,7 +746,7 @@ class SrtReservationExecutor:
                 payment_deadline=deadline,
                 official_handoff_url=_cast(_AnyHttpUrl, SRT_RESERVATION_HANDOFF_URL),
                 progress_stages=reservation_progress,
-                reserved_seats=reserved_seats,
+                reserved_seats=returned_seats,
             )
 
 

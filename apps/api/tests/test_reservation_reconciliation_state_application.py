@@ -739,6 +739,7 @@ async def test_positive_confirmation_without_deadline_remains_payment_actionable
     assert watch.status is WatchStatus.PAYMENT_REQUIRED
     assert watch.payment_deadline is None
     assert watch.official_booking_url == handoff_url
+    assert attempt.next_reconcile_at == NOW + timedelta(seconds=30)
     assert transitions == [
         (
             WatchStatus.PAYMENT_REQUIRED,

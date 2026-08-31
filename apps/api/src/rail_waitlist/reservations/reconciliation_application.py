@@ -271,8 +271,10 @@ def _reservation_reconciliation_due_clause(now: datetime):
                     ),
                 ),
             ),
-            Watch.payment_deadline.is_not(None),
-            Watch.payment_deadline > now,
+            or_(
+                Watch.payment_deadline.is_(None),
+                Watch.payment_deadline > now,
+            ),
         ),
         and_(
             ReservationAttempt.outcome == ReservationOutcome.UNKNOWN,
@@ -402,8 +404,10 @@ def _reservation_reconciliation_is_due(
                 and _as_utc(attempt.last_reconciled_at) + retry_interval <= now
             )
         )
-        and watch.payment_deadline is not None
-        and _as_utc(watch.payment_deadline) > now
+        and (
+            watch.payment_deadline is None
+            or _as_utc(watch.payment_deadline) > now
+        )
     )
     if bounded_payment_confirmation_due:
         return True

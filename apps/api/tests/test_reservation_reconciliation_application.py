@@ -651,6 +651,87 @@ async def test_known_payment_hold_remains_follow_up_after_inconclusive_read(app)
         assert attempt.next_reconcile_at == attempt.last_reconciled_at + timedelta(minutes=2)
 
 
+async def test_payment_hold_without_deadline_resumes_legacy_count_three_and_stops_at_six(
+    app,
+) -> None:
+    session_factory = app.state.test_session_factory
+    attempt_id = await _seed_due_payment_hold(session_factory)
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        watch = await session.scalar(
+            select(Watch).join(WatchCandidate).where(WatchCandidate.id == attempt.candidate_id)
+        )
+        assert watch is not None
+        watch.payment_deadline = None
+        attempt.payment_deadline = None
+        attempt.reconciliation_attempt_count = 3
+        attempt.next_reconcile_at = None
+        attempt.last_reconciled_at = NOW - timedelta(minutes=2, seconds=1)
+        attempt.confirmation_observed_at = attempt.last_reconciled_at
+        await session.commit()
+
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            source="test-payment-follow-up-without-deadline",
+            observed_at=NOW,
+        ),
+    )
+    dependencies = _dependencies(
+        session_factory,
+        adapter,
+        RecordingLeaseService(events),
+        events,
+        apply_reconciliation=apply_reservation_reconciliation,
+    )
+
+    expected_intervals = {
+        4: timedelta(minutes=5),
+        5: timedelta(minutes=10),
+        6: None,
+    }
+    for completed_count, expected_interval in expected_intervals.items():
+        assert (
+            await reconcile_reservation_attempt(
+                attempt_id,
+                dependencies=dependencies,
+                adapter=adapter,
+            )
+            == 1
+        )
+        async with session_factory() as session:
+            attempt = await session.get(ReservationAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt.reconciliation_attempt_count == completed_count
+            assert attempt.next_reconcile_at == (
+                attempt.last_reconciled_at + expected_interval
+                if expected_interval is not None
+                else None
+            )
+            if expected_interval is not None:
+                attempt.next_reconcile_at = NOW - timedelta(seconds=1)
+                await session.commit()
+
+    assert (
+        await reconcile_reservation_attempt(
+            attempt_id,
+            dependencies=dependencies,
+            adapter=adapter,
+        )
+        == 0
+    )
+    assert len(adapter.targets) == 3
+    assert all(
+        target.purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+        for target in adapter.targets
+    )
+
+
 async def test_elapsed_payment_hold_final_read_remains_payment_follow_up(app) -> None:
     session_factory = app.state.test_session_factory
     attempt_id = await _seed_due_payment_hold(session_factory)

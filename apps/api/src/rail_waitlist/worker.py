@@ -164,6 +164,11 @@ async def _expire_elapsed_watches(session: AsyncSession, now: datetime) -> int:
     )
 
 
+async def _expire_elapsed_watches_independently() -> int:
+    async with SessionFactory() as session:
+        return await _expire_elapsed_watches(session, datetime.now(timezone.utc))
+
+
 async def _recover_stale_reservation_attempts(session: AsyncSession, now: datetime) -> int:
     return await recover_stale_reservation_attempts(
         session,
@@ -448,6 +453,20 @@ def process_due_watches() -> int:
         WORKER_RUNS.labels("process_due_watches", "failed").inc()
         raise
     WORKER_RUNS.labels("process_due_watches", "succeeded").inc()
+    return result
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="rail_waitlist.worker.expire_elapsed_watches"
+)
+def expire_watches_maintenance() -> int:
+    """Expire elapsed watches even while the single rail worker is occupied."""
+    try:
+        result = asyncio.run(_run_isolated(_expire_elapsed_watches_independently()))
+    except Exception:
+        WORKER_RUNS.labels("expire_elapsed_watches", "failed").inc()
+        raise
+    WORKER_RUNS.labels("expire_elapsed_watches", "succeeded").inc()
     return result
 
 

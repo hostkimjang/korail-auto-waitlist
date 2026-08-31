@@ -69,6 +69,7 @@ _TRACKED_READ_ONLY_PATHS = frozenset(
     {"/v1/observe", "/v1/timetable-overlay", "/v1/timetable-search"}
 )
 _READ_ONLY_STATUS_POLL_SECONDS = 0.05
+_READ_ONLY_DRAIN_TIMEOUT_SECONDS = 300.0
 
 
 class SrtProviderAdapterUnavailable(RuntimeError):
@@ -101,10 +102,13 @@ class SrtProviderAdapterClient:
         token: str | None,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        read_only_drain_timeout_seconds: float = _READ_ONLY_DRAIN_TIMEOUT_SECONDS,
     ) -> None:
         base_url = validate_srt_provider_adapter_url(base_url)
         if token is None or len(token.encode("utf-8")) < 32:
             raise ValueError("SRT provider adapter token must be at least 32 UTF-8 bytes")
+        if read_only_drain_timeout_seconds <= 0:
+            raise ValueError("read-only drain timeout must be positive")
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(timeout_seconds),
@@ -118,6 +122,8 @@ class SrtProviderAdapterClient:
         )
         self._pending_read_only_calls: dict[str, str | None] = {}
         self._read_only_cleanup_task: asyncio.Task[None] | None = None
+        self._read_only_drain_timeout_seconds = read_only_drain_timeout_seconds
+        self._read_only_lifecycle_fenced = False
 
     async def session_status(self) -> SrtSessionStatus:
         return await self._request("GET", "/v1/session-status", None, SrtSessionStatus)
@@ -276,6 +282,7 @@ class SrtProviderAdapterClient:
         return result.result.to_domain()
 
     async def drain_pending_calls(self) -> None:
+        self._raise_if_read_only_lifecycle_fenced()
         cleanup_task = self._ensure_read_only_cleanup_task()
         pending_cancellation: asyncio.CancelledError | None = None
         while cleanup_task is not None and not cleanup_task.done():
@@ -288,6 +295,7 @@ class SrtProviderAdapterClient:
                     pending_cancellation = error
         if cleanup_task is not None:
             cleanup_task.result()
+        self._raise_if_read_only_lifecycle_fenced()
         if pending_cancellation is not None:
             raise pending_cancellation
 
@@ -307,6 +315,7 @@ class SrtProviderAdapterClient:
         payload: object | None,
         response_model: type[_ResponseModelT],
     ) -> _ResponseModelT:
+        self._raise_if_read_only_lifecycle_fenced()
         request_id = current_request_id() or new_log_id()
         operation = _OPERATION_BY_PATH[path]
         request_headers = {REQUEST_ID_HEADER: request_id}
@@ -468,7 +477,7 @@ class SrtProviderAdapterClient:
             ) from error
 
     def _ensure_read_only_cleanup_task(self) -> asyncio.Task[None] | None:
-        if not self._pending_read_only_calls:
+        if self._read_only_lifecycle_fenced or not self._pending_read_only_calls:
             return None
         task = self._read_only_cleanup_task
         if task is None or task.done():
@@ -477,13 +486,23 @@ class SrtProviderAdapterClient:
         return task
 
     async def _poll_read_only_calls_until_terminal(self) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._read_only_drain_timeout_seconds
         reported_failures: set[str] = set()
         while self._pending_read_only_calls:
             for call_id, registered_instance_id in tuple(self._pending_read_only_calls.items()):
                 if registered_instance_id is None:
                     continue
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    self._fence_read_only_lifecycle()
+                    return
                 try:
-                    status = await self._read_only_call_status(call_id)
+                    async with asyncio.timeout(remaining):
+                        status = await self._read_only_call_status(call_id)
+                except TimeoutError:
+                    self._fence_read_only_lifecycle()
+                    return
                 except Exception:  # noqa: BLE001 - every unverified state must fail closed.
                     if call_id not in reported_failures:
                         reported_failures.add(call_id)
@@ -498,4 +517,26 @@ class SrtProviderAdapterClient:
                 if status.instance_id != registered_instance_id or status.state == "terminal":
                     self._pending_read_only_calls.pop(call_id, None)
             if self._pending_read_only_calls:
-                await asyncio.sleep(_READ_ONLY_STATUS_POLL_SECONDS)
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    self._fence_read_only_lifecycle()
+                    return
+                await asyncio.sleep(min(_READ_ONLY_STATUS_POLL_SECONDS, remaining))
+
+    def _fence_read_only_lifecycle(self) -> None:
+        if self._read_only_lifecycle_fenced:
+            return
+        self._read_only_lifecycle_fenced = True
+        _LOGGER.error(
+            "Provider sidecar read-only drain deadline exceeded "
+            "event=provider_sidecar_drain_deadline_exceeded provider=SRT "
+            "pending_call_count=%s timeout_seconds=%s",
+            len(self._pending_read_only_calls),
+            self._read_only_drain_timeout_seconds,
+        )
+
+    def _raise_if_read_only_lifecycle_fenced(self) -> None:
+        if self._read_only_lifecycle_fenced:
+            raise SrtProviderAdapterUnavailable(
+                "SRT provider adapter client is fenced after read-only drain deadline"
+            )

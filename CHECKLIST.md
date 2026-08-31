@@ -228,9 +228,9 @@
 - [ ] 별도 인스턴스에서 암호화 백업 복원 확인
 - [ ] iOS PWA 설치와 알림 확인
 - [ ] 운영사별 실험 기능의 장시간 안정성 확인
-- [ ] Oracle에 maintenance 만료 sweep·SRT 좌석 상관·결제기한 없는 재확인 변경을 전체 profile로 재배포하고 migration·장기 서비스 health·rail/maintenance 큐 소비를 확인
-- [ ] Oracle의 기존 8월 29일 과거 대기가 maintenance sweep으로 만료되고 새 KORAIL·SRT 관측의 `next_check_at`이 다시 전진하며 `운행·예매 상태 관측 지연`이 해소되는지 확인
-- [ ] Oracle에서 결제기한 없는 기존 SRT `PAYMENT_REQUIRED` count 3 행이 4~6회 읽기 전용 확인으로 재개되고, 정확한 전체 좌석 상관 없이는 paid·unpaid로 잘못 확정되지 않는지 확인
+- [x] 2026년 8월 31일 Oracle에 maintenance 만료 sweep·SRT 좌석 상관·결제기한 없는 재확인 변경을 전체 profile로 재배포하고 migration·장기 서비스 12개의 `healthy`, `maintenance` 큐 0건과 31만여 건까지 누적됐던 `rail` 큐의 정상 주기 작업 수준 회복을 확인
+- [x] 2026년 8월 31일 Oracle의 기존 8월 29일 SRT 대기 9건이 maintenance sweep으로 모두 만료되고, KORAIL 활성 대기 11건의 공식 관측·`next_check_at`이 다시 전진하며 `운행·예매 상태 관측 지연`이 해소됨을 확인
+- [ ] Oracle에서 결제기한 없는 활성 SRT `PAYMENT_REQUIRED`가 4~6회 읽기 전용 확인으로 재개되고, 정확한 전체 좌석 상관 없이는 paid·unpaid로 잘못 확정되지 않는지 확인. 기존 count 3 표본은 배포 직후 과거 watch 만료가 먼저 적용되어 활성 운영 표본으로 검증할 수 없었음
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
 - [ ] Oracle 재가동 전에 같은 KORAIL 계정을 사용하는 로컬 scheduler·worker를 drain한 뒤 API provider session manager·sidecar를 포함한 Compose profile 전체를 volume 보존 상태로 정지하고 단일 활성 배포를 유지하며, hotfix 배포 뒤 자연 발생 예약에서 예약 직전 probe·필요 시 fresh login·불확실 session 폐기·fresh reconciliation과 공식 자동 배정 좌석 표시를 끝까지 확인
 - [x] 2026년 8월 17일 Oracle 00:56 KORAIL 70편과 로컬 01:00 KORAIL 107편에서 `session_keepalive`가 예약 control 전 0.5초 안에 실패하고 progress·click이 없음을 분리 확인했으며, 중간의 로컬 fresh 예매 성공과 Oracle 재로그인 뒤 로컬 session 무효화로 동일 계정 이중 실행 충돌을 확인하고 로컬 전체 Compose profile을 queue 0·volume 보존 상태로 정지

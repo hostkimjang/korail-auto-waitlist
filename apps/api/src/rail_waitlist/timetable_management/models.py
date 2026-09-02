@@ -155,7 +155,7 @@ class StationCatalogCache(Base):
     )
 
     cache_key: Mapped[str] = mapped_column(String(40), primary_key=True)
-    schema_version: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    schema_version: Mapped[int] = mapped_column(Integer, default=4, server_default="4")
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     station_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

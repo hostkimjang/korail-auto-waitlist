@@ -23,7 +23,7 @@ def test_migration_0035_backfills_closed_reservation_result_reasons(
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
+    assert ScriptDirectory.from_config(config).get_current_head() == "0041_station_cache_v4"
 
     command.upgrade(config, "0034_progress_terminal_time")
     outcomes = (

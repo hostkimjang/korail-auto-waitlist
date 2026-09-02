@@ -13,11 +13,15 @@ from ..config import OFFICIAL_KORAIL_STATION_DATA_URL as OFFICIAL_KORAIL_STATION
 from ..provider_registry.korail_search_contracts import (
     KorailStationIdentity as KorailStationIdentity,
 )
+from ..timetable_management.station_names import (
+    KORAIL_STATION_NAME_ALIASES,
+    normalize_korail_station_name,
+)
 
 MIN_STATION_COUNT = 250
 MAX_STATION_COUNT = 400
 STATION_REQUEST_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-_STATION_ALIASES = {"김천(구미)": "김천구미", "여수엑스포": "여수expo", "신경주": "경주"}
+_STATION_ALIASES = KORAIL_STATION_NAME_ALIASES
 
 
 class KorailStationIdentityUnavailable(RuntimeError):
@@ -25,9 +29,7 @@ class KorailStationIdentityUnavailable(RuntimeError):
 
 
 def _normalize_station_name(value: str) -> str:
-    normalized = "".join(unicodedata.normalize("NFKC", value).split()).casefold()
-    normalized = normalized.removesuffix("역")
-    return _STATION_ALIASES.get(normalized, normalized)
+    return normalize_korail_station_name(value)
 
 
 @dataclass(frozen=True)

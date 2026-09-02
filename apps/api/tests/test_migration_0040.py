@@ -123,7 +123,7 @@ def test_migration_0040_fences_only_legacy_external_provider_failures(
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
+    assert ScriptDirectory.from_config(config).get_current_head() == "0041_station_cache_v4"
 
     command.upgrade(config, "0039_confirmation_corr_seats")
     now = datetime.now(UTC).replace(microsecond=0).isoformat()

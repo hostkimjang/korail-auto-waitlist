@@ -25,6 +25,8 @@ def station_payload() -> dict[str, object]:
         {"stn_cd": "0551", "stn_nm": "수서"},
         {"stn_cd": "0010", "stn_nm": "대전"},
         {"stn_cd": "0020", "stn_nm": "부산"},
+        {"stn_cd": "0509", "stn_nm": "울산(통도사)"},
+        {"stn_cd": "0519", "stn_nm": "진부(오대산)"},
     ]
     stations.extend(
         {"stn_cd": f"{index:04d}", "stn_nm": f"테스트{index}"} for index in range(1000, 1246)
@@ -37,6 +39,8 @@ def test_station_identity_parser_preserves_exact_official_code_name_pairs() -> N
 
     assert catalog.resolve("서울역") == KorailStationIdentity(code="0001", name="서울")
     assert catalog.by_code["0010"].name == "대전"
+    assert catalog.resolve("울산") == KorailStationIdentity(code="0509", name="울산(통도사)")
+    assert catalog.resolve("진부역") == KorailStationIdentity(code="0519", name="진부(오대산)")
 
 
 def test_station_identity_parser_rejects_non_four_digit_codes() -> None:

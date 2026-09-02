@@ -15,6 +15,7 @@ from ..provider_adapters.tago import TagoClient
 from ..provider_contracts import ProviderUnavailable
 from .models import StationCatalogCache
 from .schemas import StationCatalog, StationItem
+from .station_catalog_supplements import apply_reviewed_tago_station_supplements
 from .station_visibility import (
     KORAIL_STATION_DATA_URL,
     KorailStationVisibility,
@@ -23,7 +24,7 @@ from .station_visibility import (
 )
 
 CANONICAL_CACHE_KEY = "tago_station_catalog_all"
-STATION_CATALOG_SCHEMA_VERSION = 2
+STATION_CATALOG_SCHEMA_VERSION = 4
 STATION_CATALOG_TTL = timedelta(hours=24)
 REFRESH_LEASE = timedelta(seconds=75)
 COLLECTION_TIMEOUT_SECONDS = 60.0
@@ -329,7 +330,11 @@ class StationCatalogService:
                 visibility_roster = await self.station_visibility.load_roster()
             if not catalog.stations:
                 raise ValueError("empty station catalog")
-            display_stations = filter_station_items(catalog.stations, visibility_roster)
+            identity_stations = apply_reviewed_tago_station_supplements(
+                catalog.stations,
+                visibility_roster.station_codes,
+            )
+            display_stations = filter_station_items(identity_stations, visibility_roster)
             completed_at = datetime.now(UTC)
             retrieved_at = min(
                 catalog.retrieved_at.astimezone(UTC),
@@ -337,7 +342,7 @@ class StationCatalogService:
             )
             saved = await self.repository.save_success(
                 owner,
-                catalog.stations,
+                identity_stations,
                 display_stations,
                 visibility_roster,
                 retrieved_at,

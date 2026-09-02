@@ -1142,7 +1142,24 @@ retry 필수라는 기존 상태 조합과 OpenAPI component를 유지합니다.
 KORAIL 공개 역 목록을 검증해 TAGO 역과 discoverability 교집합을 만드는 정책은
 `timetable_management/station_visibility.py`가 canonical owner입니다. 이 목록은 운영사 소속·특정 날짜 운행·
 정차 근거가 아니며, 공식 URL·bounded roster·sentinel·alias·통근역 제외가 모두 유효할 때만 표시 목록으로
-사용합니다.
+사용합니다. 검증된 roster는 정규화한 이름별 KORAIL 역 코드도 보존합니다. 두 원천의 이름 등가는
+`timetable_management/station_names.py`의 공개 근거가 있는 명시적
+mapping만 사용합니다. 현재 TAGO `울산`·`진부` identity에는 KORAIL 표시명 `울산(통도사)`·`진부(오대산)`을
+투영하되 TAGO `node_id`와 원본 identity 목록은 바꾸지 않습니다. 괄호를 일반적으로 제거하지 않아
+`판교(경기)`와 `판교(충남)` 같은 서로 다른 역을 합치지 않습니다. 표시명 정책이 바뀌면 station catalog
+schema version을 올려 fresh 여부와 무관하게 이전 display snapshot을 무효화합니다.
+
+TAGO 도시별 역 목록에서만 빠졌지만 시간표 operation에서 현재 조회 identity로 작동하는 역의 제한된 보정은
+`timetable_management/station_catalog_supplements.py`가 소유합니다. 2026-09-02 실조회와 현재 공식 자료로
+확인한 값은 `평택지제=NATH30536 ↔ KORAIL 0553`, `군위=NAT023073 ↔ KORAIL 0548`입니다. application은
+TAGO 원본 수집 뒤 현재 KORAIL 이름·코드가 모두 일치할 때 이 identity를 합치고, 그 결과를 visibility 필터,
+DB cache, `TagoClient` 검증 cache에 동일하게 사용합니다. 상류가 같은 이름의 다른 ID, 같은 ID의 다른 이름,
+변경된 KORAIL 코드를 반환하면 추측하지 않고 갱신을 실패시켜 마지막 정상 snapshot을 유지합니다. cache schema
+v4와 migration `0041_station_cache_v4`는 보정 전 v2/v3 snapshot을 stale로 남겨 재수집하게 하며 기존 payload의
+version을 데이터 migration으로 올리지 않습니다. KORAIL 4자리 역 코드는 TAGO node ID로 변환하지 않습니다.
+웹의
+`features/new-wait/stationSearch.ts`는 같은 명시적 대응의 현재·이전 이름을 검색 alias로 유지하되, 선택값과
+API 요청에는 서버가 반환한 현재 표시명과 TAGO `node_id`를 그대로 사용합니다.
 SRT sidecar의 strict 열차 행을 `TimetableItem`으로 투영하는 순수 정책은
 `timetable_management/srt_live_timetable.py`가 canonical owner입니다. 일반실 운임만 관측된 값으로 유지하고,
 일반실·특실 좌석 상태 5종과 provenance·공식 URL·fail-closed action을 기존 계약 그대로 조립합니다.

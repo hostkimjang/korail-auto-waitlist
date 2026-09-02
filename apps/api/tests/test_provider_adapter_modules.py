@@ -138,6 +138,12 @@ def test_provider_facade_reexports_timetable_objects_by_identity() -> None:
     assert official_unknown_seat_classes is owner_official_unknown_seat_classes
 
 
+def test_timetable_station_validation_accepts_reviewed_official_display_names() -> None:
+    assert normalize_station_name("울산") == normalize_station_name("울산(통도사)")
+    assert normalize_station_name("진부") == normalize_station_name("진부(오대산)")
+    assert normalize_station_name("판교(경기)") != normalize_station_name("판교(충남)")
+
+
 def test_provider_facade_reexports_mock_objects_by_identity() -> None:
     assert MockProviderAdapter is OwnerMockProviderAdapter
     assert mock_seat_classes is owner_mock_seat_classes

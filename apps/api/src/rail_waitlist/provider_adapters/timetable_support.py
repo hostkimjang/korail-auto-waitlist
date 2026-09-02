@@ -11,6 +11,7 @@ from ..timetable_management.schemas import (
     SeatAvailabilityProvenance,
     SeatClassAvailability,
 )
+from ..timetable_management.station_names import normalize_korail_station_name
 
 
 def official_unknown_seat_classes(
@@ -35,8 +36,7 @@ def official_unknown_seat_classes(
 
 
 def normalize_station_name(value: str) -> str:
-    normalized = value.strip().replace(" ", "")
-    return normalized[:-1] if normalized.endswith("역") else normalized
+    return normalize_korail_station_name(value)
 
 
 def normalize_departure_window(

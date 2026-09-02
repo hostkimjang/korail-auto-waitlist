@@ -64,6 +64,36 @@ Linux의 `bash ./scripts/ops.sh down`은 모든 Compose 프로필을 대상으�
 
 - 공공 시간표: `TAGO_SERVICE_KEY`
 
+### 역 카탈로그 전수 점검
+
+KORAIL 공개 역 안내와 TAGO 전체 도시·역 목록의 현재 차이를 읽기 전용으로 확인할 수 있습니다. 이 명령은
+역 목록과 공개 metadata만 출력하며 `TAGO_SERVICE_KEY` 값은 출력하지 않습니다.
+
+Linux Bash:
+
+```bash
+cd apps/api
+.venv/bin/python scripts/audit_station_catalog.py
+```
+
+Windows PowerShell:
+
+```powershell
+cd apps/api
+./.venv/Scripts/python.exe scripts/audit_station_catalog.py
+```
+
+출력의 `실조회 검증 보정 identity`에는 TAGO 역 목록에서 빠졌지만 시간표 operation과 KORAIL 현재 역
+이름·코드를 함께 확인한 `평택지제=NATH30536/0553`, `군위=NAT023073/0548`의 활성 여부가 표시됩니다.
+종료 코드 `0`은 검토된 이름 대응·identity 보정과 알려진 미해결 목록 안에서 일치한다는 뜻입니다. `1`은 KORAIL
+목록에 새로 나타났지만 TAGO `node_id`와 대응하지 못한 역이 있다는 뜻이므로, 이름 차이인지 TAGO 갱신
+지연인지 실제 노출 범위 변경인지 확인합니다. `2`는 API 키 누락이나 점검 자체의 실행 실패입니다. 점검은
+KORAIL-only·TAGO-only 이름을 모두 보여 주지만 TAGO-only 역을 자동으로 선택 목록에 추가하지 않습니다.
+불일치 한 건 때문에 정상 스냅샷을 삭제하지 말고 검토 후 명시적 정책과 회귀 테스트를 함께 갱신합니다.
+보정값을 바꾸거나 추가할 때는 KORAIL 공개 역 이름·4자리 코드와 공식 최신 시간표의 실제 정차를 확인하고,
+TAGO 시간표 API의 양방향 대표 구간에서 응답 역명과 열차 행을 확인해야 합니다. KORAIL 코드를 TAGO
+`depPlaceId`·`arrPlaceId`로 복사하거나, 옛 역의 ID를 개명 alias로 추정하지 않습니다.
+
 선택 기능에 필요한 값:
 
 - Web Push: `WEBPUSH_VAPID_PRIVATE_KEY`, `WEBPUSH_VAPID_PUBLIC_KEY`, `WEBPUSH_VAPID_SUBJECT`

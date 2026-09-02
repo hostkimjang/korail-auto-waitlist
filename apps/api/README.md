@@ -95,19 +95,34 @@ KORAIL·SRT의 `seat_monitoring=false`를 유지합니다. 승인된 관측 adap
 작업별 `reserve_once_before_payment` 정책까지 모두 충족할 때만 true가 됩니다. 이 경로의 예약 호출은
 후보별 DB 고유 fence 아래 한 번만 실행하고 결제 전에 멈추며 자동 결제는 제공하지 않습니다. timeout·취소·만료처럼 결과가 불명확하면 같은 예약 요청을 재호출하지 않고 공식 예약 내역의 수동 확인으로 전환합니다.
 
-`GET /api/v1/stations?provider=korail|srt`는 TAGO 도시·역 목록의 원본 `node_id`, 역명, 도시와
-[KORAIL 공개 역 안내](https://www.korail.com/public/st_info/station_data.json)의 역명 교집합만 반환합니다.
+`GET /api/v1/stations?provider=korail|srt`는 TAGO 도시·역 목록의 조회 identity와
+[KORAIL 공개 역 안내](https://www.korail.com/public/st_info/station_data.json)의 현재 역을 대조해 반환합니다.
+두 원천의 이름이 다른 경우에는 공개 자료로 확인한 명시적 등가만 연결합니다. 기존 개명·표기 대응인
+`김천(구미)`/`김천구미`, `여수엑스포`/`여수EXPO`, `신경주`/`경주`와 함께
+`울산`/`울산(통도사)`, `진부`/`진부(오대산)`을 같은 역으로 연결합니다. API에는 KORAIL의 현재 표시명과
+TAGO `node_id`를 함께 반환합니다. 괄호를 일괄 제거하는 추측 매칭은 `판교(경기)`와 `판교(충남)`처럼
+실제로 다른 역을 합칠 수 있어 사용하지 않습니다. 웹 역 검색은 현재 표시명과 검토된 이전 이름을 모두
+검색어로 받아 개명 뒤에도 기존 검색 습관을 보존합니다.
+TAGO의 도시별 역 목록에는 없지만 같은 TAGO 시간표 API에서 현재 `depPlaceId`·`arrPlaceId`로 작동하는 것이
+실조회로 확인된 `평택지제=NATH30536`, `군위=NAT023073`은 검토된 보정 identity로 추가합니다. 각각 KORAIL
+역 코드 `0553`, `0548`도 현재 공개 역 안내와 정확히 일치할 때만 활성화합니다. 공식 목록에서 역이 사라지면
+보정을 사용하지 않고, 같은 이름의 다른 TAGO ID나 같은 ID의 다른 이름 또는 KORAIL 코드 변경이 나타나면
+자동 선택하지 않고 갱신을 실패 처리합니다. KORAIL 4자리 역 코드는 TAGO node ID 대신 사용하지 않습니다.
 응답은 `catalog_scope=intercity_station_guide_intersection`,
 `provider_membership=not_verified_by_source`이며, 이 필터는 화면에서 역을 찾기 위한 기준이지
 운영사 소속이나 선택 날짜의 실제 운행 증거가 아닙니다.
 
-migration `0007`의 PostgreSQL 스냅샷은 원본 TAGO identity 목록과 화면용 교집합을 함께 저장합니다.
-원본 identity는 시간표 요청의 node ID·역명 검증을 hydrate하고 API 응답에는 교집합만 사용합니다.
+migration `0007`의 PostgreSQL 스냅샷은 TAGO 원본과 검토된 보정을 합친 조회 identity 목록, 화면용
+교집합을 함께 저장합니다. 조회 identity는 시간표 요청의 node ID·역명 검증을 hydrate하고 API 응답에는
+화면용 교집합만 사용합니다.
 신선한 스냅샷으로 재시작하면 상류 호출이 없고, 24시간이 지난 스냅샷은 즉시 반환하면서 DB lease를
 획득한 한 replica가 갱신합니다. lease owner와 유효 시간으로 늦은 쓰기를 fencing하며, 갱신 실패·빈
 응답·손상 응답은 마지막 정상 스냅샷을 덮지 않습니다. 정상 스냅샷이 없거나 화면용 교집합을 만들지
 못하면 원본 목록으로 되돌아가지 않고 `503`으로 닫습니다. 화면 목록에서는 광운대·노량진·신도림·
 서빙고·왕십리·옥수를 제외하고 KORAIL 역 안내의 서울·수서·대전·부산 sentinel을 검증합니다.
+이름 등가와 검토된 identity 보정 정책도 애플리케이션 스냅샷 schema의 일부입니다. schema version 4와
+migration `0041`의 새 행 기본값은 이전 누락 snapshot을 무효화해 다음 요청에서 두 원천을 다시 수집합니다.
+기존 행의 version은 억지로 올리지 않아 보정 전 payload를 새 정책으로 잘못 재사용하지 않습니다.
 
 `GET /api/v1/timetables`의 KORAIL·SRT 요청에는 `origin_node_id`와 `destination_node_id`가 모두
 필수입니다. 역명과 ID 쌍을 공식 카탈로그로 검증한 뒤에만 TAGO를 조회하며, 누락·동일 ID·이름 불일치는

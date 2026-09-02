@@ -14,6 +14,7 @@ from rail_waitlist.providers import ProviderUnavailable, TagoClient
 from rail_waitlist.timetable_management import catalog_application
 from rail_waitlist.timetable_management.catalog_application import (
     CANONICAL_CACHE_KEY,
+    STATION_CATALOG_SCHEMA_VERSION,
     StationCatalogRepository,
     StationCatalogService,
 )
@@ -48,6 +49,12 @@ def visibility_roster(stations: list[StationItem]) -> StationVisibilityRoster:
         retrieved_at=datetime.now(UTC),
         etag='"test-roster"',
         last_modified="Wed, 29 Jul 2026 00:00:00 GMT",
+        canonical_names={
+            normalize_visibility_station_name(item.name): item.name for item in stations
+        },
+        station_codes={
+            normalize_visibility_station_name(item.name): item.node_id for item in stations
+        },
     )
 
 
@@ -247,6 +254,75 @@ async def test_fresh_snapshot_survives_restart_and_hydrates_l1_without_http(db_e
     assert catalog.retrieved_at == hydrated.retrieved_at
     assert http_calls == 0
     assert visibility.load_count == 0
+
+
+async def test_previous_visibility_schema_refreshes_aliases_before_serving(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    repository = StationCatalogRepository(factory)
+    now = datetime.now(UTC)
+    await seed_snapshot(
+        repository,
+        retrieved_at=now - timedelta(minutes=1),
+        refresh_after=now + timedelta(hours=23),
+        stations=[station("NAT011668", "대전")],
+    )
+    async with factory() as session:
+        await session.execute(
+            update(StationCatalogCache)
+            .where(StationCatalogCache.cache_key == CANONICAL_CACHE_KEY)
+            .values(schema_version=STATION_CATALOG_SCHEMA_VERSION - 1)
+        )
+        await session.commit()
+
+    raw = [station("NAT011668", "대전"), station("NATH13717", "울산")]
+    official = [station("0010", "대전"), station("0509", "울산(통도사)")]
+    tago = FakeTagoClient(upstream_catalog(raw, now))
+    service = StationCatalogService(factory, tago, FakeStationVisibility(official))
+
+    catalog = await service.get_catalog(Provider.KORAIL)
+    snapshot = await repository.load_snapshot()
+    async with factory() as session:
+        row = await session.get(StationCatalogCache, CANONICAL_CACHE_KEY)
+    await service.close()
+
+    assert [(item.node_id, item.name) for item in catalog.stations] == [
+        ("NAT011668", "대전"),
+        ("NATH13717", "울산(통도사)"),
+    ]
+    assert snapshot is not None
+    assert [item.name for item in snapshot.identity_stations] == ["대전", "울산"]
+    assert [item.name for item in snapshot.display_stations] == ["대전", "울산(통도사)"]
+    assert row is not None
+    assert row.schema_version == STATION_CATALOG_SCHEMA_VERSION
+    assert tago.fetch_count == 1
+
+
+async def test_refresh_adds_live_verified_tago_catalog_omissions(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    raw = [station("NAT011668", "대전")]
+    official = [
+        station("0010", "대전"),
+        station("0553", "평택지제"),
+        station("0548", "군위"),
+    ]
+    tago = FakeTagoClient(upstream_catalog(raw, now))
+    service = StationCatalogService(factory, tago, FakeStationVisibility(official))
+
+    catalog = await service.get_catalog(Provider.KORAIL)
+    snapshot = await service.repository.load_snapshot()
+    await service.close()
+
+    expected = [
+        ("NAT023073", "군위"),
+        ("NAT011668", "대전"),
+        ("NATH30536", "평택지제"),
+    ]
+    assert [(item.node_id, item.name) for item in catalog.stations] == expected
+    assert snapshot is not None
+    assert [(item.node_id, item.name) for item in snapshot.identity_stations] == expected
+    assert [(item.node_id, item.name) for item in snapshot.display_stations] == expected
+    assert tago.fetch_count == 1
 
 
 async def test_stale_snapshot_returns_immediately_then_refreshes(db_engine):

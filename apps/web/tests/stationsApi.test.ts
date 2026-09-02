@@ -56,6 +56,37 @@ describe("station catalog API boundary", () => {
     expect(result.providerMembershipVerified).toBe(false);
   });
 
+  it("preserves reviewed KORAIL display names with their TAGO node identities", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(catalog("korail", [
+      {
+        node_id: "NATH13717",
+        name: "울산(통도사)",
+        city_code: "26",
+        city_name: "울산광역시",
+      },
+      {
+        node_id: "NATH30536",
+        name: "평택지제",
+        city_code: "31",
+        city_name: "경기도",
+      },
+      {
+        node_id: "NAT023073",
+        name: "군위",
+        city_code: "22",
+        city_name: "대구광역시",
+      },
+    ]))));
+
+    const result = await fetchStations("KORAIL");
+
+    expect(result.stations).toMatchObject([
+      { nodeId: "NAT023073", name: "군위", cityName: "대구광역시" },
+      { nodeId: "NATH13717", name: "울산(통도사)", cityName: "울산광역시" },
+      { nodeId: "NATH30536", name: "평택지제", cityName: "경기도" },
+    ]);
+  });
+
   it("rejects malformed metadata and station DTOs instead of inventing identities", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
       ...catalog("korail", [

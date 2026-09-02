@@ -74,7 +74,7 @@ def test_migration_0036_backfills_only_inconclusive_confirmation_diagnostics(
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
+    assert ScriptDirectory.from_config(config).get_current_head() == "0041_station_cache_v4"
 
     command.upgrade(config, "0035_reservation_result_reason")
     started_at = datetime(2030, 8, 1, tzinfo=UTC).isoformat()

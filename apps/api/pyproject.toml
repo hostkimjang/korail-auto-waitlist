@@ -92,6 +92,8 @@ files = [
   "src/rail_waitlist/timetable_management/korail_browser_projection.py",
   "src/rail_waitlist/timetable_management/models.py",
   "src/rail_waitlist/timetable_management/schemas.py",
+  "src/rail_waitlist/timetable_management/station_catalog_supplements.py",
+  "src/rail_waitlist/timetable_management/station_names.py",
   "src/rail_waitlist/timetable_management/srt_live_timetable.py",
   "src/rail_waitlist/timetable_management/station_visibility.py",
   "src/rail_waitlist/timetable_management/tago_timetable_projection.py",

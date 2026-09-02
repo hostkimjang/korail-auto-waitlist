@@ -2,26 +2,27 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import MappingProxyType
 
 import httpx
 
 from ..config import OFFICIAL_KORAIL_STATION_DATA_URL
 from ..provider_contracts import ProviderUnavailable
 from .schemas import StationItem
+from .station_names import (
+    KORAIL_STATION_NAME_ALIASES,
+    normalize_korail_station_name,
+)
 
 KORAIL_STATION_DATA_URL = OFFICIAL_KORAIL_STATION_DATA_URL
 MIN_KORAIL_ROSTER_COUNT = 250
 MAX_KORAIL_ROSTER_COUNT = 400
 REQUEST_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
-# These are name equivalences published or renamed by KORAIL, not fuzzy matching rules.
-STATION_NAME_ALIASES: Mapping[str, str] = {
-    "김천(구미)": "김천구미",
-    "여수엑스포": "여수expo",
-    "신경주": "경주",
-}
+# Compatibility export. The pure equivalence policy has one canonical owner.
+STATION_NAME_ALIASES: Mapping[str, str] = KORAIL_STATION_NAME_ALIASES
 
 # KORAIL's station-information asset also contains a small number of Seoul commuter stops.
 # They are deliberately not exposed as intercity journey discovery entries.
@@ -37,6 +38,9 @@ class StationVisibilityRoster:
     retrieved_at: datetime
     etag: str | None
     last_modified: str | None
+    canonical_names: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    station_codes: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    source_count: int | None = None
 
 
 class StationVisibilityUnavailable(ProviderUnavailable):
@@ -44,24 +48,45 @@ class StationVisibilityUnavailable(ProviderUnavailable):
 
 
 def normalize_visibility_station_name(value: str) -> str:
-    normalized = "".join(unicodedata.normalize("NFKC", value).split()).casefold()
-    normalized = normalized.removesuffix("역")
-    return STATION_NAME_ALIASES.get(normalized, normalized)
+    return normalize_korail_station_name(value)
+
+
+def index_unique_station_items_by_name(
+    stations: Sequence[StationItem],
+) -> dict[str, StationItem]:
+    """Index TAGO identities only when every reviewed name resolves unambiguously."""
+
+    indexed: dict[str, StationItem] = {}
+    for station in stations:
+        normalized_name = normalize_visibility_station_name(station.name)
+        existing = indexed.get(normalized_name)
+        if existing is not None:
+            raise StationVisibilityUnavailable(
+                "TAGO station catalog has conflicting normalized station names"
+            )
+        indexed[normalized_name] = station
+    return indexed
 
 
 def filter_station_items(
     stations: Sequence[StationItem], roster: StationVisibilityRoster
 ) -> list[StationItem]:
-    """Return original TAGO objects whose names are discoverable in the KORAIL roster."""
+    """Return discoverable TAGO identities with the current KORAIL display names."""
 
     if not stations:
         raise StationVisibilityUnavailable("TAGO station catalog is empty")
+    index_unique_station_items_by_name(stations)
 
     visible: list[StationItem] = []
     for station in stations:
         normalized_name = normalize_visibility_station_name(station.name)
         if normalized_name in roster.names and normalized_name not in NON_INTERCITY_STATION_NAMES:
-            visible.append(station)
+            canonical_name = roster.canonical_names.get(normalized_name, station.name)
+            visible.append(
+                station
+                if station.name == canonical_name
+                else station.model_copy(update={"name": canonical_name})
+            )
     if not visible:
         raise StationVisibilityUnavailable("station visibility intersection is empty")
     return visible
@@ -146,6 +171,8 @@ def _parse_roster(
 
     station_codes: set[str] = set()
     names: set[str] = set()
+    canonical_names: dict[str, str] = {}
+    station_codes_by_name: dict[str, str] = {}
     for item in raw_items:
         if not isinstance(item, dict):
             raise StationVisibilityUnavailable("KORAIL station visibility item is invalid")
@@ -165,14 +192,22 @@ def _parse_roster(
             raise StationVisibilityUnavailable("KORAIL station visibility item is duplicated")
         station_codes.add(code.strip())
         names.add(normalized_name)
+        canonical_names[normalized_name] = unicodedata.normalize("NFKC", name.strip())
+        station_codes_by_name[normalized_name] = code.strip()
 
     if not REQUIRED_STATION_NAMES.issubset(names):
         raise StationVisibilityUnavailable("KORAIL station visibility sentinels are missing")
 
     names.difference_update(NON_INTERCITY_STATION_NAMES)
+    for excluded_name in NON_INTERCITY_STATION_NAMES:
+        canonical_names.pop(excluded_name, None)
+        station_codes_by_name.pop(excluded_name, None)
     return StationVisibilityRoster(
         names=frozenset(names),
         retrieved_at=retrieved_at,
         etag=etag,
         last_modified=last_modified,
+        canonical_names=MappingProxyType(canonical_names),
+        station_codes=MappingProxyType(station_codes_by_name),
+        source_count=len(raw_items),
     )

@@ -58,6 +58,24 @@ function stationCatalog(provider: string | null = "korail") {
       { node_id: "N-SEOUL", name: "서울", city_code: "11", city_name: "서울" },
       { node_id: "N-SUSEO", name: "수서", city_code: "11", city_name: "서울" },
       { node_id: "N-DAEJEON", name: "대전", city_code: "30", city_name: "대전" },
+      {
+        node_id: "NATH13717",
+        name: "울산(통도사)",
+        city_code: "26",
+        city_name: "울산광역시",
+      },
+      {
+        node_id: "NATH30536",
+        name: "평택지제",
+        city_code: "31",
+        city_name: "경기도",
+      },
+      {
+        node_id: "NAT023073",
+        name: "군위",
+        city_code: "22",
+        city_name: "대구광역시",
+      },
       { node_id: "N-BUSAN", name: "부산", city_code: "26", city_name: "부산" },
     ],
   };
@@ -149,7 +167,8 @@ async function selectStation(user: TestUser, label: string, name: string): Promi
   await user.clear(input);
   await user.type(input, name);
   const listbox = screen.getByRole("listbox", { name: `${label} 검색 가능한 역` });
-  await user.click(within(listbox).getByRole("option", { name: new RegExp(`^${name}`) }));
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await user.click(within(listbox).getByRole("option", { name: new RegExp(`^${escapedName}`) }));
 }
 
 afterEach(() => {
@@ -199,6 +218,40 @@ describe("NewWaitPage behavior", () => {
     expect(alert.textContent).not.toContain("TAGO");
     expect(screen.getByRole("heading", { name: "공식 시간표에서 관심 열차를 고르세요" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "등록 완료" })).toBeNull();
+  });
+
+  it.each([
+    ["울산(통도사)", "NATH13717"],
+    ["평택지제", "NATH30536"],
+    ["군위", "NAT023073"],
+  ])("queries Daejeon to %s with the preserved TAGO node identity", async (
+    destination,
+    destinationNodeId,
+  ) => {
+    const user = userEvent.setup();
+    const timetableRequests: URL[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {
+      const parsed = requestUrl(url);
+      if (parsed.pathname.endsWith("/stations")) {
+        return response(stationCatalog(parsed.searchParams.get("provider")));
+      }
+      if (parsed.pathname.endsWith("/timetables")) timetableRequests.push(parsed);
+      return response([]);
+    }));
+    render(<OwnedNewWait demo={false} onComplete={vi.fn()} onCancel={vi.fn()} />);
+
+    await selectStation(user, "출발역", "대전");
+    await selectStation(user, "도착역", destination);
+    await user.click(screen.getByRole("button", { name: /다음/ }));
+    await user.click(screen.getByRole("button", { name: /다음/ }));
+
+    await waitFor(() => expect(timetableRequests).toHaveLength(1));
+    expect(timetableRequests[0]?.searchParams.get("origin")).toBe("대전");
+    expect(timetableRequests[0]?.searchParams.get("destination")).toBe(destination);
+    expect(timetableRequests[0]?.searchParams.get("origin_node_id")).toBe("N-DAEJEON");
+    expect(timetableRequests[0]?.searchParams.get("destination_node_id")).toBe(
+      destinationNodeId,
+    );
   });
 
   it("keeps Seoul selected and queries the SRT live route when SRT is the only provider", async () => {

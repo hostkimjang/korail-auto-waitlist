@@ -19,7 +19,7 @@ def test_migration_0029_allows_one_second_ui_refresh(tmp_path, monkeypatch) -> N
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_current_head() == ("0040_legacy_failed_unknown")
+    assert ScriptDirectory.from_config(config).get_current_head() == "0041_station_cache_v4"
 
     command.upgrade(config, "head")
     with sqlite3.connect(database_path) as connection:

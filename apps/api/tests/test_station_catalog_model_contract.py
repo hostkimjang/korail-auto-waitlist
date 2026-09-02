@@ -49,8 +49,8 @@ def test_station_catalog_cache_preserves_mapper_columns_and_metadata() -> None:
         ("updated_at", "DATETIME", False, False, True, False),
     ]
     assert tuple(column.name for column in table.primary_key.columns) == ("cache_key",)
-    assert table.c.schema_version.default.arg == 2
-    assert str(table.c.schema_version.server_default.arg) == "2"
+    assert table.c.schema_version.default.arg == 4
+    assert str(table.c.schema_version.server_default.arg) == "4"
     assert table.c.station_count.default.arg == 0
     assert str(table.c.station_count.server_default.arg) == "0"
     assert table.c.payload.type.none_as_null is True

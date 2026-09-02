@@ -9627,6 +9627,18 @@ def test_korail_search_bootstrap_owner_has_an_exact_definition_and_import_bounda
             "KorailStationIdentity",
             "KorailStationIdentity",
         ),
+        (
+            "timetable_management.station_names",
+            2,
+            "KORAIL_STATION_NAME_ALIASES",
+            None,
+        ),
+        (
+            "timetable_management.station_names",
+            2,
+            "normalize_korail_station_name",
+            None,
+        ),
     }
     assert definitions == {
         "KorailStationIdentityUnavailable",

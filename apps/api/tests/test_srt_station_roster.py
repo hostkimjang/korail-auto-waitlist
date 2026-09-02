@@ -78,12 +78,17 @@ def test_roster_normalizes_only_explicit_public_client_aliases() -> None:
             "김천(구미)": "0507",
             "경주": "0508",
             "여수EXPO": "0053",
+            "울산(통도사)": "0509",
+            "진부(오대산)": "0519",
         }
     )
 
     assert roster.provider_name("김천구미") == "김천(구미)"
     assert roster.provider_name("신경주") == "경주"
     assert roster.provider_name("여수엑스포역") == "여수EXPO"
+    assert roster.provider_name("울산") == "울산(통도사)"
+    assert roster.station_code("울산") == "0509"
+    assert roster.provider_name("진부역") == "진부(오대산)"
     assert normalize_srt_station_name(" 대전역 ") == "대전"
 
 

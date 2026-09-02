@@ -34,6 +34,8 @@ def roster_rows(
             "김천구미",
             "여수EXPO",
             "경주",
+            "울산(통도사)",
+            "진부(오대산)",
             "광운대",
             "노량진",
             "신도림",
@@ -52,6 +54,8 @@ def test_filter_preserves_station_items_node_ids_and_order_with_explicit_aliases
         station("김천(구미)", "TAGO-GIMCHEON-GUMI"),
         station("여수엑스포역", "TAGO-YEOSU"),
         station("신경주", "TAGO-GYEONGJU"),
+        station("울산", "TAGO-ULSAN"),
+        station("진부", "TAGO-JINBU"),
         station("광운대", "TAGO-GWANGUNDAE"),
         station("노량진", "TAGO-NORYANGJIN"),
         station("신도림", "TAGO-SINDORIM"),
@@ -69,14 +73,69 @@ def test_filter_preserves_station_items_node_ids_and_order_with_explicit_aliases
 
     result = filter_station_items(items, roster)
 
-    assert result == items[:4]
+    assert result == items[:6]
     assert [item.node_id for item in result] == [
         "TAGO-SEOUL",
         "TAGO-GIMCHEON-GUMI",
         "TAGO-YEOSU",
         "TAGO-GYEONGJU",
+        "TAGO-ULSAN",
+        "TAGO-JINBU",
     ]
-    assert all(actual is expected for actual, expected in zip(result, items[:4], strict=True))
+    assert all(actual is expected for actual, expected in zip(result, items[:6], strict=True))
+
+
+@pytest.mark.parametrize(
+    ("tago_name", "korail_name"),
+    [
+        ("김천(구미)", "김천구미"),
+        ("여수엑스포역", "여수EXPO"),
+        ("신경주", "경주"),
+        ("울산", "울산(통도사)"),
+        (" 진부역 ", "진부(오대산)"),
+    ],
+)
+def test_only_reviewed_station_name_equivalences_share_one_normalized_key(
+    tago_name: str,
+    korail_name: str,
+) -> None:
+    assert normalize_visibility_station_name(tago_name) == normalize_visibility_station_name(
+        korail_name
+    )
+
+
+async def test_live_roster_names_replace_tago_aliases_without_changing_node_identity():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"stns": {"stn": roster_rows()}})
+
+    raw = [station("울산", "NATH13717"), station("진부", "NATN10787")]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        displayed = await KorailStationVisibility(http_client).filter_stations(raw)
+
+    assert [(item.node_id, item.name) for item in displayed] == [
+        ("NATH13717", "울산(통도사)"),
+        ("NATN10787", "진부(오대산)"),
+    ]
+    assert all(displayed_item is not raw_item for displayed_item, raw_item in zip(displayed, raw))
+
+
+def test_filter_rejects_alias_and_canonical_name_collision_fail_closed():
+    roster = StationVisibilityRoster(
+        names=frozenset({normalize_visibility_station_name("울산(통도사)")}),
+        retrieved_at=datetime.now(UTC),
+        etag=None,
+        last_modified=None,
+        canonical_names={normalize_visibility_station_name("울산(통도사)"): "울산(통도사)"},
+    )
+
+    with pytest.raises(
+        StationVisibilityUnavailable,
+        match="conflicting normalized station names",
+    ):
+        filter_station_items(
+            [station("울산", "NATH13717"), station("울산(통도사)", "OTHER-NODE")],
+            roster,
+        )
 
 
 async def test_load_roster_uses_exact_https_url_does_not_follow_redirects():
@@ -111,6 +170,10 @@ async def test_load_roster_validates_schema_sentinels_and_metadata():
     assert roster.retrieved_at.tzinfo is UTC
     assert roster.etag == '"station-v1"'
     assert roster.last_modified == "Wed, 29 Jul 2026 00:00:00 GMT"
+    assert roster.canonical_names["울산(통도사)"] == "울산(통도사)"
+    assert roster.canonical_names["진부(오대산)"] == "진부(오대산)"
+    assert roster.station_codes["울산(통도사)"] == "0008"
+    assert roster.station_codes["진부(오대산)"] == "0009"
 
 
 @pytest.mark.parametrize("count", [MIN_KORAIL_ROSTER_COUNT, MAX_KORAIL_ROSTER_COUNT])
@@ -159,6 +222,7 @@ def test_request_timeout_contract_is_preserved():
         {"stns": {"stn": roster_rows() + [{"stn_cd": "9999", "stn_nm": "서울"}]}},
         {"stns": {"stn": roster_rows() + [{"stn_cd": " 0001 ", "stn_nm": "새이름"}]}},
         {"stns": {"stn": roster_rows() + [{"stn_cd": "9998", "stn_nm": " 서울역 "}]}},
+        {"stns": {"stn": roster_rows() + [{"stn_cd": "9997", "stn_nm": "울산"}]}},
         {
             "stns": {
                 "stn": [

@@ -11,6 +11,7 @@
 - [x] 모바일 상단 종 버튼의 canonical 실시간 알림센터 열기·닫기, 건수 배지·빈 상태·접근성 상태 계약
 - [x] 단일 관리자 등록·로그인·세션 관리
 - [x] KTX·SRT 여정 검색과 좌석 등급 표시
+- [x] KORAIL 표시명·역 코드와 TAGO 조회 identity 전수 대조, `울산(통도사)`·`진부(오대산)` 이름 대응, 역 목록에서만 빠진 `평택지제=NATH30536/0553`·`군위=NAT023073/0548` 실조회 보정, 충돌 거절과 cache v4 무효화 회귀
 - [x] KORAIL 순수 입석을 `입석만 가능`으로 보존하고 입석+좌석·매진과 구분하며, 공식 인계·취소 좌석 감시는 허용하되 좌석 발견·자동 예매에서는 제외하는 전체 계약
 - [x] SRT 역 query-code roster의 정규화 충돌 거절과 시간표 fallback·예약 미호출 fail-closed 처리
 - [x] TAGO 응답 envelope·pagination·row 타입 검증과 malformed page 미캐시·fail-closed 처리
@@ -188,6 +189,7 @@
 
 ## 운영 환경에서 확인할 항목
 
+- [ ] TAGO 조회 identity를 확인하지 못한 인천공항T1·T2의 여정 노출 범위를 공식 운행 자료로 재검토
 - [ ] 공개 또는 Tailscale HTTPS 환경에서 로그인·로그아웃 확인
 - [x] Android PWA 설치와 Web Push 알림창 수신 확인
 - [x] Android 16/API 36 에뮬레이터에서 다른 앱 사용 중 서비스 워커 알림 클릭으로 기존 설치형 PWA 전면 복귀 확인

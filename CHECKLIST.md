@@ -234,7 +234,9 @@
 - [x] 2026년 8월 31일 Oracle의 기존 8월 29일 SRT 대기 9건이 maintenance sweep으로 모두 만료되고, KORAIL 활성 대기 11건의 공식 관측·`next_check_at`이 다시 전진하며 `운행·예매 상태 관측 지연`이 해소됨을 확인
 - [x] 2026년 9월 17일 Oracle 좌석 관측 오류율 93.6%(오류 33,437건 / 전체 35,733건)의 원인을 KORAIL HTTP replay lease 재생 불가로 분리 확인. 전체 브라우저 조회는 `train_count=97`로 성공하지만 직후 replay가 `stage=http_replay`로 실패해 30초 backoff 동안 약 28건이 오류 관측이 되며, 마지막 정상 replay는 9월 12일 01:45(UTC)
 - [x] 2026년 9월 17일 로컬 브라우저 어댑터 이미지에서 계정 로그인 없이 같은 실패를 재현하고, 캡처한 `/web_s/<무작위 경로>?_qzj=<일회성 토큰>` 요청을 브라우저 밖에서 재생하면 HTTP 500과 KORAIL 오류 페이지가 오는 것을 확인
-- [ ] Oracle 재배포 뒤 replay 실패가 `event=cold_reinit source=http_replay`와 브라우저 조회로 회복되고, 연속 3회 뒤 `event=capture_suspended`가 열리며 좌석 관측 오류율이 실제 운영 표본에서 내려가는지 확인
+- [x] 2026년 9월 17일 Oracle에 replay fallback 변경을 `experimental-rail` 프로필 전체로 재빌드·재생성하고 migration 정상 종료와 장기 서비스 12개 `healthy`를 확인. 배포 직후 replay 실패는 `event=cold_reinit source=http_replay reason=source_unavailable`로 회복되고 연속 3회 뒤 `event=capture_suspended`가 열렸으며, 최근 10분 좌석 관측 352건이 모두 정상이고 오류 0건, 어댑터 조회 23건 전부 `outcome=success`
+- [x] 2026년 9월 17일 로컬 Compose `experimental-rail` 프로필을 같은 커밋으로 재빌드·재생성하고 장기 서비스 12개 `healthy`를 확인. sidecar `/v1/seat-snapshot` 연속 호출이 모두 200과 31편을 돌려주고, lease 생성 뒤 다음 호출이 `cold_reinit`으로 회복해 `outcome=success`로 끝나는 것을 확인
+- [ ] Oracle 재배포 뒤 좌석 관측 오류율 24시간 지표가 실제 운영 표본에서 정상 범위로 내려가는지 확인. 배포 직후 표본만으로는 24시간 누적 93.6% 지표가 아직 회복되지 않았음
 - [ ] 브라우저 전용 관측으로 전환된 상태에서 같은 route·날짜 활성 대기가 coordinator 단일 실행을 공유해 `next_check_at`이 계속 전진하고, 관측 주기 지연이 알림 적시성을 해치지 않는지 실제 운영 표본에서 확인
 - [ ] Oracle에서 결제기한 없는 활성 SRT `PAYMENT_REQUIRED`가 4~6회 읽기 전용 확인으로 재개되고, 정확한 전체 좌석 상관 없이는 paid·unpaid로 잘못 확정되지 않는지 확인. 기존 count 3 표본은 배포 직후 과거 watch 만료가 먼저 적용되어 활성 운영 표본으로 검증할 수 없었음
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인

@@ -489,11 +489,20 @@ polling이 계속되면 조회를 추가 호출하지 말고 sidecar readiness�
 스크립트의 단계적 drain·전체 profile 재생성 절차를 사용합니다. 복구 뒤에는 maintenance queue가 비고 과거
 대기가 만료되며 새 관측의 `next_check_at`이 전진하는지까지 확인해야 합니다.
 
-KORAIL은 SRT와 같은 공식 접속 대기를 기다려 통과하는 흐름이 아닙니다. 실제 cache-miss 조회는
-`event=provider_query_started`와 `event=provider_query_completed`로 경계를 확인합니다. NetFunnel 등
-보호 표면이 감지되면 `outcome=provider_access_restricted`로 조회를 중단하고 provider-wide cooldown을
-적용하며, 보호 화면을 우회하거나 같은 요청에서 계속 진행하지 않습니다. 두 sidecar의 이 구조화 로그는
-서비스별 파일과 Docker stdout/stderr에 함께 남습니다.
+KORAIL은 SRT처럼 대기열 token을 주고받는 흐름이 아니지만, 접속이 몰리면 결과 화면 위에
+`서비스 연결대기 중입니다` 안내를 띄우고 잠시 뒤 자동으로 연결합니다. 이 안내는 보호조치나 점검이
+아니므로 cooldown을 열지 않고 기다립니다. 실제 cache-miss 조회는 `event=provider_query_started`와
+`event=provider_query_completed`로 경계를 확인합니다. NetFunnel 등 보호 표면이 감지되면
+`outcome=provider_access_restricted`로 조회를 중단하고 provider-wide cooldown을 적용하며, 보호 화면을
+우회하거나 같은 요청에서 계속 진행하지 않습니다. 두 sidecar의 이 구조화 로그는 서비스별 파일과
+Docker stdout/stderr에 함께 남습니다.
+
+KORAIL 결과 목록은 `더보기`를 눌러 한 번에 열 줄씩 늘어납니다. 접속 대기 안내가 떠 있는 동안에는
+클릭이 먹지 않거나 응답이 늦어지므로, 짧은 성장 대기로 끊지 않고 조회 예산까지 기다립니다. 그래도
+목록을 끝까지 펼치지 못하면 `event=result_expansion_stopped reason=<repeated_window|stalled|blocked|
+action_limit> actions=<n> rows=<n>`을 남깁니다. 이 경고가 보이면 그 조회의 열차 목록이 잘렸을 수
+있으므로, 같은 구간·시간대를 다시 조회해 열차 수가 늘어나는지 확인합니다. 접속 대기가 조회 예산 안에
+끝나지 않으면 `event=official_connection_wait_timeout`을 함께 남깁니다.
 
 2026년 9월 17일 Oracle 운영 서버에서 24시간 좌석 관측 오류율 93.6%(오류 33,437건 / 전체 35,733건)를
 확인했고, 원인은 공식 출처 장애가 아니라 KORAIL HTTP replay lease의 재생 불가였습니다. 전체 브라우저

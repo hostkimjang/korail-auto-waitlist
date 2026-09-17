@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -275,6 +276,100 @@ async def test_result_growth_evaluates_snapshot_read_at_deadline(
     assert progressed is True
     assert snapshot.rows == (first, second)
     sleep.assert_awaited_once_with(0.25)
+
+
+@pytest.mark.asyncio
+async def test_result_growth_keeps_waiting_through_the_official_connection_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        30_000,
+        True,
+    )
+    first = PydollTrainRow("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)", ())
+    second = PydollTrainRow("KTX 2", "2", "서울 → 대전(07:00 ~ 08:00)", ())
+    waiting = PydollPageSnapshot(
+        body_text="서비스 연결대기 중입니다 현재 사용자가 많아 대기 중이며",
+        rows=(first,),
+    )
+    grown = PydollPageSnapshot(body_text="조회 결과", rows=(first, second))
+    snapshot_reader = AsyncMock(side_effect=[waiting, waiting, grown])
+    clock = {"now": 0.0}
+
+    def advance_clock(_delay: float) -> None:
+        clock["now"] += 12.0
+
+    session._search_driver._monotonic = Mock(side_effect=lambda: clock["now"])
+    session._search_driver._sleep = AsyncMock(side_effect=advance_clock)
+    monkeypatch.setattr(session, "_snapshot", snapshot_reader)
+
+    snapshot, progressed = await session._wait_for_result_growth(
+        {("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)")}
+    )
+
+    assert progressed is True
+    assert snapshot.rows == (first, second)
+
+
+@pytest.mark.asyncio
+async def test_result_growth_stops_at_the_growth_budget_without_a_connection_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        30_000,
+        True,
+    )
+    first = PydollTrainRow("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)", ())
+    second = PydollTrainRow("KTX 2", "2", "서울 → 대전(07:00 ~ 08:00)", ())
+    idle = PydollPageSnapshot(body_text="조회 결과", rows=(first,))
+    grown = PydollPageSnapshot(body_text="조회 결과", rows=(first, second))
+    snapshot_reader = AsyncMock(side_effect=[idle, idle, grown])
+    clock = {"now": 0.0}
+
+    def advance_clock(_delay: float) -> None:
+        clock["now"] += 12.0
+
+    session._search_driver._monotonic = Mock(side_effect=lambda: clock["now"])
+    session._search_driver._sleep = AsyncMock(side_effect=advance_clock)
+    monkeypatch.setattr(session, "_snapshot", snapshot_reader)
+
+    snapshot, progressed = await session._wait_for_result_growth(
+        {("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)")}
+    )
+
+    assert progressed is False
+    assert snapshot.rows == (first,)
+
+
+@pytest.mark.asyncio
+async def test_expand_results_reports_a_truncated_result_list(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="rail_waitlist.korail_pydoll_browser")
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+    )
+    first = PydollTrainRow("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)", ())
+    initial = PydollPageSnapshot(body_text="조회 결과", rows=(first,))
+    stalled = PydollPageSnapshot(body_text="조회 결과", rows=(first,))
+    more = _ClickControl()
+    monkeypatch.setattr(session, "_find_exact_visible", AsyncMock(return_value=more))
+    monkeypatch.setattr(
+        session,
+        "_wait_for_result_growth",
+        AsyncMock(return_value=(stalled, False)),
+    )
+
+    result = await session.expand_results(initial, 19)
+
+    assert result.rows == (first,)
+    # 대기 안내에 가려 더보기 클릭이 먹히지 않으면 같은 목록이 그대로 돌아옵니다.
+    assert "event=result_expansion_stopped reason=repeated_window actions=1 rows=1" in caplog.text
 
 
 @pytest.mark.asyncio

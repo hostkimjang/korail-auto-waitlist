@@ -811,6 +811,11 @@ owner를 직접 import해 기존 private 함수 4개의 exact alias와 session �
 `korail_pydoll_search_driver.py`는 기존 공개 29개·private 0개의 wildcard·pickle global을 같은 객체로 보존하는
 definition-free compatibility facade입니다.
 
+이 driver는 더보기 뒤 목록이 늘어나기를 기다릴 때 KORAIL의 `서비스 연결대기` 안내를 따로 인식합니다.
+보호조치가 아니라 기다리면 풀리는 줄서기이므로 짧은 성장 예산 대신 전체 조회 예산까지 기다리고, 목록
+끝이 아닌 이유로 확장이 끝나면 잘린 정황을 `event=result_expansion_stopped`으로 남깁니다. 호출자는
+확장 결과를 완전한 목록처럼 사용하므로, 이 경고 없이는 잘린 결과와 정상 결과를 구분할 수 없습니다.
+
 시간 picker candidate의 현재 5개 window·서명, soft ARIA/DOM disabled, 정확한 24시간 catalog·5+5 인접
 window·선택 완료와 control log 상태를 판정하는 동기 순수 정책은
 `korail_sidecar/pydoll/search_hour_policy.py`가 소유합니다. owner는 `search_driver`의 candidate/control

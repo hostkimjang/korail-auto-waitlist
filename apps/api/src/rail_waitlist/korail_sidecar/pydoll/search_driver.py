@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
@@ -23,6 +24,17 @@ from .page_contracts import (
 from .search_snapshot_policy import (
     advance_search_expansion,
     begin_search_expansion,
+)
+
+logger = logging.getLogger("rail_waitlist.korail_pydoll_browser")
+
+# 결과가 한 번 더 늘어나기를 기다리는 기본 예산입니다. 목록 끝에서는 더 기다려도
+# 늘어나지 않으므로 전체 조회 예산보다 짧게 잡습니다.
+_RESULT_GROWTH_TIMEOUT_SECONDS = 10.0
+# KORAIL 공식 접속 대기 안내입니다. 보호조치나 점검이 아니라 줄을 서 있는 상태이므로
+# 차단으로 분류하지 않고 기다려야 합니다.
+_OFFICIAL_CONNECTION_WAIT = re.compile(
+    r"서비스\s*연결\s*대기|사용자가\s*많아\s*대기|잠시\s*기다리시면\s*자동으로\s*연결"
 )
 
 __all__ = (
@@ -525,12 +537,13 @@ class PydollSearchDomDriver:
             deduplicate_snapshot=self._deduplicate_snapshot,
             row_identity=self._train_row_identity,
         )
-        for _ in range(max(0, max_actions)):
+        for action in range(max(0, max_actions)):
             if self._snapshot_requires_expansion_stop(state.accumulated):
                 break
             try:
                 more = await self._port._find_exact_visible("a", "더보기")
             except LookupError:
+                # 더 불러올 목록이 없으면 KORAIL이 버튼 자체를 감춥니다. 정상 종료입니다.
                 break
             await more.click()
             candidate, progressed = await self._port._wait_for_result_growth(
@@ -546,14 +559,35 @@ class PydollSearchDomDriver:
             )
             state = transition.state
             if transition.stop_reason is not None:
+                # 목록을 끝까지 펼치지 못한 채 끝났습니다. 호출자는 이 결과를 완전한
+                # 목록처럼 다루므로 잘린 정황을 반드시 남깁니다.
+                logger.warning(
+                    "KORAIL 결과 목록을 끝까지 펼치지 못했습니다 "
+                    "event=result_expansion_stopped reason=%s actions=%d rows=%d",
+                    transition.stop_reason,
+                    action + 1,
+                    len(state.accumulated.rows),
+                )
                 break
+        else:
+            if max_actions > 0:
+                logger.warning(
+                    "KORAIL 결과 확장 횟수 상한에 도달했습니다 "
+                    "event=result_expansion_stopped reason=action_limit actions=%d rows=%d",
+                    max_actions,
+                    len(state.accumulated.rows),
+                )
         return state.accumulated
 
     async def wait_for_result_growth(
         self,
         previous_rows: set[tuple[str, str, str]],
     ) -> tuple[PydollPageSnapshot, bool]:
-        deadline = self._monotonic() + min(self._timeout_seconds, 10)
+        started_at = self._monotonic()
+        growth_deadline = started_at + min(self._timeout_seconds, _RESULT_GROWTH_TIMEOUT_SECONDS)
+        # 공식 접속 대기 중에는 페이지가 멈춘 것이 아니라 줄을 서 있는 상태입니다. 짧은
+        # 성장 대기로 끊으면 남은 열차를 통째로 잃은 목록이 완전한 결과처럼 반환됩니다.
+        connection_wait_deadline = started_at + self._timeout_seconds
         last = await self._port._snapshot()
         while True:
             if self._snapshot_requires_expansion_stop(last):
@@ -561,7 +595,21 @@ class PydollSearchDomDriver:
             current_rows = {self._train_row_identity(row) for row in last.rows}
             if current_rows - previous_rows:
                 return last, True
+            waiting_for_official_connection = (
+                _OFFICIAL_CONNECTION_WAIT.search(last.body_text) is not None
+            )
+            deadline = (
+                connection_wait_deadline
+                if waiting_for_official_connection
+                else growth_deadline
+            )
             if self._monotonic() >= deadline:
+                if waiting_for_official_connection:
+                    logger.warning(
+                        "KORAIL 공식 접속 대기가 조회 예산 안에 끝나지 않았습니다 "
+                        "event=official_connection_wait_timeout rows=%d",
+                        len(last.rows),
+                    )
                 return last, False
             await self._sleep(0.25)
             last = await self._port._snapshot()

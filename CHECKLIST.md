@@ -237,6 +237,10 @@
 - [x] 2026년 9월 17일 Oracle에 replay fallback 변경을 `experimental-rail` 프로필 전체로 재빌드·재생성하고 migration 정상 종료와 장기 서비스 12개 `healthy`를 확인. 배포 직후 replay 실패는 `event=cold_reinit source=http_replay reason=source_unavailable`로 회복되고 연속 3회 뒤 `event=capture_suspended`가 열렸으며, 최근 10분 좌석 관측 352건이 모두 정상이고 오류 0건, 어댑터 조회 23건 전부 `outcome=success`
 - [x] 2026년 9월 17일 로컬 Compose `experimental-rail` 프로필을 같은 커밋으로 재빌드·재생성하고 장기 서비스 12개 `healthy`를 확인. sidecar `/v1/seat-snapshot` 연속 호출이 모두 200과 31편을 돌려주고, lease 생성 뒤 다음 호출이 `cold_reinit`으로 회복해 `outcome=success`로 끝나는 것을 확인
 - [ ] Oracle 재배포 뒤 좌석 관측 오류율 24시간 지표가 실제 운영 표본에서 정상 범위로 내려가는지 확인. 배포 직후 표본만으로는 24시간 누적 93.6% 지표가 아직 회복되지 않았음
+- [x] 2026년 9월 17일 KORAIL 접속 대기 중 `더보기` 확장이 10초 성장 예산에서 끊겨 잘린 열차 목록이 완전한 결과처럼 반환되던 경로를 확인하고, 접속 대기 중에는 조회 예산까지 기다리도록 바꾼 뒤 잘린 정황을 `event=result_expansion_stopped`로 남기도록 수정
+- [x] 2026년 9월 17일 정상 상태의 실제 KORAIL 조회에서 대전→서울 09:00~18:00이 8회 확장으로 85행을 모두 불러오고 `더보기`가 사라진 뒤 창 안 42편으로 정리되어, 화면의 42편이 잘린 값이 아님을 확인
+- [ ] 실제 혼잡 시간대의 `서비스 연결대기` 상황에서 결과 확장이 끝까지 진행되고 `event=result_expansion_stopped`가 남지 않는지 운영 표본으로 확인
+- [ ] 잘린 열차 목록을 화면에서도 알 수 있도록 API 응답에 목록 완전성을 싣고 `일부 열차를 불러오지 못했습니다` 안내를 표시하는 후속 작업
 - [ ] 브라우저 전용 관측으로 전환된 상태에서 같은 route·날짜 활성 대기가 coordinator 단일 실행을 공유해 `next_check_at`이 계속 전진하고, 관측 주기 지연이 알림 적시성을 해치지 않는지 실제 운영 표본에서 확인
 - [ ] Oracle에서 결제기한 없는 활성 SRT `PAYMENT_REQUIRED`가 4~6회 읽기 전용 확인으로 재개되고, 정확한 전체 좌석 상관 없이는 paid·unpaid로 잘못 확정되지 않는지 확인. 기존 count 3 표본은 배포 직후 과거 watch 만료가 먼저 적용되어 활성 운영 표본으로 검증할 수 없었음
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인

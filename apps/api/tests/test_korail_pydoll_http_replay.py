@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -17,6 +18,7 @@ from rail_waitlist.korail_browser_automation import (
 from rail_waitlist.korail_http_replay import (
     HttpReplayProtectionDetected,
     HttpReplayProviderUnavailable,
+    HttpReplaySourceUnavailable,
     KorailHttpReplayPlan,
 )
 from rail_waitlist.korail_pydoll_http_replay import (
@@ -95,6 +97,8 @@ def _manager(
     factory,
     monotonic=lambda: 0.0,
     route_cache_size: int = 4,
+    capture_suspension_threshold: int = 3,
+    capture_suspension_seconds: float = 900.0,
 ) -> PydollHttpReplayManager:
     return PydollHttpReplayManager(
         timeout_seconds=25,
@@ -104,6 +108,8 @@ def _manager(
         monotonic=monotonic,
         client_factory=factory,
         cleanup=_cleanup,
+        capture_suspension_threshold=capture_suspension_threshold,
+        capture_suspension_seconds=capture_suspension_seconds,
     )
 
 
@@ -188,6 +194,64 @@ async def test_manager_maps_provider_outage_without_falling_back_to_browser() ->
     assert raised.value.trigger == "maintenance_page"
     assert raised.value.stage == "http_replay"
     assert manager.active_leases == {}
+
+
+@pytest.mark.asyncio
+async def test_manager_recovers_through_a_browser_search_when_a_lease_stops_replaying(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="rail_waitlist.korail_pydoll_http_replay")
+    request = _request()
+    replay = _ReplayClient(_result(request), HttpReplaySourceUnavailable())
+    manager = _manager(factory=lambda *_args, **_kwargs: replay)
+    session = _CaptureSession()
+    assert await manager.begin_capture(session) is True
+    assert await manager.install_capture(
+        session=session,
+        request=request,
+        created_at=0,
+        searches_started=1,
+    )
+
+    assert await manager.try_search(request) is None
+
+    assert manager.active_leases == {}
+    assert replay.closed == 1
+    assert "event=cold_reinit source=http_replay reason=source_unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_manager_stops_capturing_leases_after_repeated_replay_failures() -> None:
+    request = _request()
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    manager = _manager(
+        factory=lambda *_args, **_kwargs: _ReplayClient(
+            _result(request), HttpReplaySourceUnavailable()
+        ),
+        monotonic=monotonic,
+        capture_suspension_threshold=2,
+        capture_suspension_seconds=300,
+    )
+
+    for _ in range(2):
+        session = _CaptureSession()
+        assert await manager.begin_capture(session) is True
+        assert await manager.install_capture(
+            session=session,
+            request=request,
+            created_at=now,
+            searches_started=1,
+        )
+        assert await manager.try_search(request) is None
+
+    assert await manager.begin_capture(_CaptureSession()) is False
+
+    now = 300.0
+    assert await manager.begin_capture(_CaptureSession()) is True
 
 
 @pytest.mark.asyncio

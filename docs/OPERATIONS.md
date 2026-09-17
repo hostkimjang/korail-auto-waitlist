@@ -495,6 +495,30 @@ KORAIL은 SRT와 같은 공식 접속 대기를 기다려 통과하는 흐름이
 적용하며, 보호 화면을 우회하거나 같은 요청에서 계속 진행하지 않습니다. 두 sidecar의 이 구조화 로그는
 서비스별 파일과 Docker stdout/stderr에 함께 남습니다.
 
+2026년 9월 17일 Oracle 운영 서버에서 24시간 좌석 관측 오류율 93.6%(오류 33,437건 / 전체 35,733건)를
+확인했고, 원인은 공식 출처 장애가 아니라 KORAIL HTTP replay lease의 재생 불가였습니다. 전체 브라우저
+조회는 약 21초에 `train_count=97`로 정상 성공하고 `event=lease_created captured_requests=1`까지 남지만,
+그 lease를 쓰는 바로 다음 호출이 0.4~0.6초 만에 `outcome=source_unavailable stage=http_replay`로 끝나면서
+exact query에 30초 backoff이 열립니다. 그 30초 동안 예정된 관측 약 28건이 모두
+`event=provider_query_skipped reason=query_backoff`로 오류 관측이 되어, 약 52초 주기마다 성공 1건과 오류
+29건이 쌓이는 구조였습니다. 마지막 정상 replay는 2026년 9월 12일 01:45(UTC)의 `lease_search_index=100`이고,
+그 뒤 재초기화된 lease에서는 `event=search_succeeded`가 한 건도 없습니다.
+
+로컬 브라우저 어댑터 이미지에서 계정 로그인 없이 같은 흐름을 재현해 원인을 확정했습니다. 캡처한 공식
+business 요청을 브라우저 밖 HTTP client로 재생하면 KORAIL이 HTTP 500과 `코레일 승차권예매` 오류 페이지를
+돌려줍니다. 요청 경로가 페이지마다 달라지는 `/web_s/<무작위 경로>?_qzj=<일회성 토큰>` 형태여서 캡처한
+URL은 그 URL을 만든 브라우저 페이지 밖에서 더 이상 유효하지 않습니다. 공식 출처와 브라우저 조회 경로는
+정상이고 replay 재료만 재생할 수 없는 상태였습니다.
+
+이에 replay 실패를 질의 실패로 승격하지 않습니다. session invalid와 함께 invalid capture·invalid response·
+lease invalid·일반 source unavailable도 `event=cold_reinit source=http_replay reason=<reason> stage=<stage>`를
+남기고 lease만 폐기한 뒤 같은 호출에서 브라우저 검색으로 관측을 끝냅니다. 이 fallback이 연속 3회
+반복되면 `event=capture_suspended reason=repeated_replay_failure`로 900초 동안 capture를 멈추고 그 뒤
+`event=capture_resumed`에서 다시 시도하므로, 재생할 수 없는 lease를 반복해서 만들지 않습니다. 보호·
+rate-limit·점검 판정은 종전대로 조회를 중단하고 cooldown을 엽니다. 관측 1건의 비용은 replay 약 1초에서
+브라우저 약 21초로 늘어나며, 같은 route·날짜의 활성 대기는 coordinator의 단일 실행으로 한 번의 조회를
+공유합니다.
+
 2026년 8월 13일 SRT sidecar 파일 로그 표본에서는 기존 8초 caller timeout 88건이 모두 실제 provider의
 late success로 끝났고, timeout 뒤 완료까지 중앙값 2.455초·최대 11.621초였습니다. 한 대표 흐름도 공식 queue
 통과 뒤 전체 8.485초에 성공해 caller보다 약 0.485초 늦었습니다. 이는 외부 30초 HTTP 실패가 아니라 내부
@@ -946,6 +970,7 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 ### 운행·예매 상태 관측 안내가 보임
 
 - `관측 오류 · 재시도 예정`은 같은 후보의 최신 공식 관측이 오류로 끝난 상태입니다. provider·rail worker 로그와 다음 관측 목표를 함께 확인합니다.
+- 특정 route에서 `관측 오류 · 재시도 예정`이 계속 쌓이면 sidecar 로그의 `stage=http_replay`와 `event=cold_reinit source=http_replay`를 먼저 봅니다. `reason=source_unavailable`이 반복되면 공식 출처 장애가 아니라 캡처한 replay 재료가 더 이상 재생되지 않는 경우이며, `event=capture_suspended` 뒤에는 브라우저 조회만으로 관측이 이어져야 합니다. 브라우저 조회까지 실패할 때만 공식 출처 장애로 다룹니다.
 - 활성 감시의 `관측 일시 대기`는 API가 공개한 `cooldown_until`까지 운영사 호출을 미룬 상태입니다. 일시정지·결제·완료·만료 뒤 남은 과거 cooldown은 표시하지 않습니다. 조회 대기 중 수동 반복 호출로 우회하지 않습니다.
 - `관측 지연 · 응답 대기 중`은 활성 작업이 유휴 상태인데 브라우저 화면 시각 기준으로 `next_check_at`이 30초 넘게 지난 경우입니다. 이는 장애 확정이 아닌 지연 진단 신호입니다. 마지막 성공이 매진이어도 독립적으로 표시되므로 기기 시각, scheduler, rail worker 큐, provider별 단일 실행과 sidecar health를 확인합니다.
 - 정상 성공 관측, 현재 처리 중인 요청, 다음 목표 30초 이내에는 과거 운행 projection의 현재형 문구와 만료 chip을 숨깁니다. 홈의 `최근 확인 HH:mm:ss`와 `다음 좌석 관측 목표 HH:mm:ss`를 비교해 실제 갱신 여부를 확인합니다.

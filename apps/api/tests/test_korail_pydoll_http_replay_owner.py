@@ -23,7 +23,6 @@ PUBLIC_SYMBOLS = {
     "BrowserRateLimited",
     "BrowserSeatSearchRequest",
     "BrowserSeatSearchResult",
-    "BrowserSourceUnavailable",
     "Callable",
     "Cleanup",
     "DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE",

@@ -11792,7 +11792,6 @@ def test_production_and_scripts_do_not_reenter_legacy_pydoll_http_replay_manager
         "BrowserRateLimited",
         "BrowserSeatSearchRequest",
         "BrowserSeatSearchResult",
-        "BrowserSourceUnavailable",
         "Callable",
         "Cleanup",
         "DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE",

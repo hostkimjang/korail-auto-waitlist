@@ -27,7 +27,6 @@ BrowserProtectionDetected = _owner.BrowserProtectionDetected
 BrowserRateLimited = _owner.BrowserRateLimited
 BrowserSeatSearchRequest = _owner.BrowserSeatSearchRequest
 BrowserSeatSearchResult = _owner.BrowserSeatSearchResult
-BrowserSourceUnavailable = _owner.BrowserSourceUnavailable
 normalize_replay_protection_trigger = _owner.normalize_replay_protection_trigger
 logger = _owner.logger
 DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE = _owner.DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE

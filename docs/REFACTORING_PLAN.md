@@ -4323,7 +4323,7 @@ FastAPI route는 인증·transport 검증·오류 변환, Celery task는 실행�
   browser/tab lifecycle과 인증 session state를 모르며, read-only search actor가 capture Protocol과 client
   factory를 주입합니다. browser shell은 route-cache 상수, search actor는 manager/factory를 canonical owner에서
   직접 가져오고 production consumer는 이 두 곳뿐입니다.
-- 호환·안전 경계: top-level `korail_pydoll_http_replay.py`는 기존 공개 32개와 private 2개를 같은 객체로
+- 호환·안전 경계: top-level `korail_pydoll_http_replay.py`는 기존 공개 31개와 private 2개를 같은 객체로
   노출하는 40줄 assignment-only facade가 됐습니다. Protocol 3개·manager·private lease dataclass의 canonical
   `__module__`, wildcard 표면, 구형 pickle global과 canonical·legacy·browser·search actor 우선 import 순서를
   보존했습니다. 운영 로그 집계를 바꾸지 않도록 canonical logger도 기존

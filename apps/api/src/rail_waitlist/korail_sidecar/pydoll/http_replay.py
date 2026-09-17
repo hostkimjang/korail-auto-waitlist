@@ -21,7 +21,6 @@ from ..browser_contracts import (
     BrowserRateLimited,
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
-    BrowserSourceUnavailable,
 )
 from ..browser_protection import normalize_replay_protection_trigger
 from ..browser_service_availability import BrowserProviderUnavailable
@@ -40,6 +39,8 @@ from ..http_replay import (
 logger = logging.getLogger("rail_waitlist.korail_pydoll_http_replay")
 
 DEFAULT_HTTP_REPLAY_ROUTE_CACHE_SIZE = 4
+_DEFAULT_CAPTURE_SUSPENSION_THRESHOLD = 3
+_DEFAULT_CAPTURE_SUSPENSION_SECONDS = 900.0
 _RouteKey = tuple[str, str]
 Cleanup = Callable[[Awaitable[object]], Awaitable[None]]
 
@@ -101,7 +102,13 @@ class PydollHttpReplayManager:
         client_factory: KorailHttpReplayClientFactory,
         cleanup: Cleanup,
         event_logger: logging.Logger | None = None,
+        capture_suspension_threshold: int = _DEFAULT_CAPTURE_SUSPENSION_THRESHOLD,
+        capture_suspension_seconds: float = _DEFAULT_CAPTURE_SUSPENSION_SECONDS,
     ) -> None:
+        if capture_suspension_threshold < 1:
+            raise ValueError("capture_suspension_threshold must be at least 1")
+        if capture_suspension_seconds < 0:
+            raise ValueError("capture_suspension_seconds must be non-negative")
         self._timeout_seconds = timeout_seconds
         self._reuse_ttl_seconds = reuse_ttl_seconds
         self._reuse_max_searches = reuse_max_searches
@@ -111,6 +118,10 @@ class PydollHttpReplayManager:
         self._cleanup = cleanup
         self._logger = event_logger or logger
         self._active_leases: OrderedDict[_RouteKey, _ActiveHttpReplayLease] = OrderedDict()
+        self._capture_suspension_threshold = capture_suspension_threshold
+        self._capture_suspension_seconds = capture_suspension_seconds
+        self._consecutive_replay_failures = 0
+        self._capture_suspended_until: float | None = None
 
     @property
     def active_leases(self) -> Mapping[_RouteKey, object]:
@@ -144,6 +155,7 @@ class PydollHttpReplayManager:
         lease.searches_started += 1
         try:
             result = await lease.client.search(request)
+            self._consecutive_replay_failures = 0
             self._logger.info(
                 "KORAIL HTTP replay event=search_succeeded lease_search_index=%d",
                 lease.searches_started,
@@ -166,15 +178,29 @@ class PydollHttpReplayManager:
             )
             await self.discard(route_key)
             return None
-        except (HttpReplayInvalidCapture, HttpReplayInvalidResponse, HttpReplayLeaseInvalid):
+        except (
+            HttpReplayInvalidCapture,
+            HttpReplayInvalidResponse,
+            HttpReplayLeaseInvalid,
+            HttpReplaySourceUnavailable,
+        ) as error:
+            # A lease can rot while the official source stays healthy: KORAIL binds the
+            # captured business URL to the browser page that produced it. Retire the lease
+            # and let the caller observe through a fresh browser search, so a dead replay
+            # never turns a reachable source into a reported observation failure.
+            self._logger.info(
+                "KORAIL HTTP replay event=cold_reinit source=http_replay reason=%s stage=%s",
+                error.reason,
+                getattr(error, "stage", "unspecified"),
+            )
             await self.discard(route_key)
-            raise BrowserSourceUnavailable("http_replay") from None
-        except HttpReplaySourceUnavailable:
-            await self.discard(route_key)
-            raise BrowserSourceUnavailable("http_replay") from None
+            self._note_replay_failure()
+            return None
 
     async def begin_capture(self, session: KorailHttpReplayCaptureSession) -> bool:
         if not self._reuse_enabled:
+            return False
+        if self._capture_suspended():
             return False
         begin = getattr(session, "begin_http_replay_capture", None)
         if begin is None:
@@ -318,3 +344,28 @@ class PydollHttpReplayManager:
     @property
     def _reuse_enabled(self) -> bool:
         return self._reuse_ttl_seconds > 0 and self._reuse_max_searches > 1
+
+    def _note_replay_failure(self) -> None:
+        """Stop re-capturing leases once replay is proven unusable for this deployment."""
+
+        self._consecutive_replay_failures += 1
+        if self._consecutive_replay_failures < self._capture_suspension_threshold:
+            return
+        self._consecutive_replay_failures = 0
+        self._capture_suspended_until = self._monotonic() + self._capture_suspension_seconds
+        self._logger.warning(
+            "KORAIL HTTP replay event=capture_suspended reason=repeated_replay_failure "
+            "threshold=%d seconds=%g",
+            self._capture_suspension_threshold,
+            self._capture_suspension_seconds,
+        )
+
+    def _capture_suspended(self) -> bool:
+        deadline = self._capture_suspended_until
+        if deadline is None:
+            return False
+        if self._monotonic() < deadline:
+            return True
+        self._capture_suspended_until = None
+        self._logger.info("KORAIL HTTP replay event=capture_resumed")
+        return False

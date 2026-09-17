@@ -753,12 +753,16 @@ global은 canonical owner로 복원됩니다.
 Pydoll 검색이 읽기 전용 browser session에서 캡처한 HTTP replay plan을 route별로 임대·재사용·폐기하는
 process-local manager는 `korail_sidecar/pydoll/http_replay.py`가 canonical owner입니다. 이 owner는 exact
 출발·도착 route key, TTL·최대 검색 횟수, bounded LRU, capture/install/finalize 순서와 replay client cleanup만
-소유하며 browser/tab lifecycle이나 인증 session state를 참조하지 않습니다. 보호·rate-limit·session invalid·
-invalid capture/response를 기존 typed browser 결과로 fail-closed 변환합니다. 점검 redirect·HTML은 전용 typed
-browser outage로 바꾸고 route lease를 폐기한 뒤 UI browser fallback을 하지 않습니다. 전체 폐기에서는 모든
-client close를 시도한 뒤 첫 cleanup 오류를 전달합니다. browser composition shell과
+소유하며 browser/tab lifecycle이나 인증 session state를 참조하지 않습니다. 보호·rate-limit은 기존 typed
+browser 결과로 fail-closed 변환합니다. session invalid와 invalid capture·invalid response·lease invalid·일반
+source unavailable은 공식 출처가 아니라 임대한 replay 재료만 못 쓰게 된 상태로 보고, route lease를 폐기한 뒤
+`None`을 돌려 caller가 같은 호출에서 cold browser 검색으로 관측을 끝내게 합니다. KORAIL이 캡처한 business
+URL을 그 URL을 만든 브라우저 페이지에 묶어두면 replay는 재생 자체가 불가능해지므로, 이 fallback이 연속
+기준 횟수만큼 반복되면 capture를 정해진 시간 동안 중단해 재생할 수 없는 lease를 다시 만들지 않습니다.
+점검 redirect·HTML은 전용 typed browser outage로 바꾸고 route lease를 폐기한 뒤 UI browser fallback을 하지
+않습니다. 전체 폐기에서는 모든 client close를 시도한 뒤 첫 cleanup 오류를 전달합니다. browser composition shell과
 `korail_sidecar/pydoll/search_actor.py`는 canonical owner를 직접 사용합니다. top-level
-`korail_pydoll_http_replay.py`는 기존 공개 32개와 private 2개 심볼을 같은 객체로
+`korail_pydoll_http_replay.py`는 기존 공개 31개와 private 2개 심볼을 같은 객체로
 노출하는 assignment-only compatibility facade이며, 기존 import·wildcard·pickle global과
 `rail_waitlist.korail_pydoll_http_replay` 로그 분류명을 유지합니다.
 

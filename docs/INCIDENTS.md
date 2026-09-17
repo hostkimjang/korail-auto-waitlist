@@ -115,6 +115,19 @@ KORAIL이 요청 URL을 다시 재생 가능한 형태로 되돌리면 `capture_
   확인했습니다. sidecar `/v1/seat-snapshot` 연속 호출이 모두 200과 31편을 반환하고, lease 생성 뒤 다음
   호출이 `cold_reinit`으로 회복해 성공으로 끝나는 것을 확인했습니다.
 
+### 검증 중 관찰한 동일 계정 이중 실행
+
+로컬 검증을 위해 `experimental-rail` 프로필을 올리자 로컬 어댑터가 KORAIL 로그인 프리웜을 수행했고,
+Oracle과 로컬이 같은 계정의 세션을 번갈아 무효화했습니다. 양쪽 어댑터에
+`login prewarm completed outcome=auth_required`가 반복되고, Oracle의 예약 확정이
+`stage=confirmation_session_unavailable`로 실패했습니다. 좌석 조회는 로그인이 필요 없어 관측은 계속
+정상이었고 오류는 전환 시점의 1분 구간에만 몰렸습니다.
+
+이는 기존 운영 지침대로 같은 철도사 계정에서는 단일 활성 배포만 유지해야 한다는 것을 다시 확인해
+준 사례입니다. 로컬 검증을 마친 뒤 로컬의 `experimental-rail`·`korail-browser-adapter`·
+`srt-provider-adapter`를 정지·제거해 Oracle을 단일 활성 배포로 되돌렸습니다. 로컬에서 좌석·시간표
+기능을 다시 확인해야 할 때는 Oracle 쪽 로그인·예약 경로와 겹치지 않는 시점에만 잠시 올립니다.
+
 ### 재발을 알아채는 방법
 
 sidecar 로그에서 다음 순서를 봅니다.

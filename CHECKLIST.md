@@ -155,6 +155,7 @@
 - [x] 철도 provider login verify/prewarm·session telemetry를 feature owner로 이동하고 sanitized 결과·legacy pickle 호환 보존
 - [x] 철도 provider session prewarm·generation fence·재사용 session 복구 UoW를 feature runtime owner로 이동하고 legacy pickle 호환 보존
 - [x] 로그인 session keepalive가 불확실할 때 같은 호출에서 즉시 재로그인하고, KORAIL 전용 재사용 창 비례 갱신 임계값·원인별 backoff 분리·revision당 bounded 복구로 만료 뒤 재확인 지연 제거
+- [x] 재사용된 browser session이 이전 조회의 submit latch 때문에 HTTP replay capture를 영구히 거부하던 문제를 search actor의 `reset_search_state` 선행 초기화로 수정하고 회귀 테스트 추가
 - [ ] SRT 갱신 창도 앞당길지 결정. SRT는 재사용 기한이 `last_used_at` 기준이고 재사용 prewarm이 `last_verified_at`을 갱신하지 않아 telemetry 역산이 매 주기 예열을 유발하므로, sidecar session 계약에 재사용 창 길이를 명시적 필드로 노출하는 선행 작업이 필요함
 - [x] `worker.py`를 직접 SQL·provider I/O·비밀값 정책 없는 Celery composition root로 동결하고 strict typing 고정
 - [x] 중앙 `schemas.py` 76개 alias·`models.py` 24개 alias metadata registry를 exact compatibility hub로 동결

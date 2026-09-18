@@ -3,6 +3,58 @@
 운영 환경에서 실제로 발생한 장애와 그 해결 과정을 남깁니다. 재발했을 때 같은 진단을 다시 반복하지
 않도록 증상, 근본 원인, 조치, 검증 근거, 남은 과제를 함께 적습니다. 최신 기록을 위에 둡니다.
 
+## 2026년 9월 18일 · 재사용 세션이 HTTP replay capture를 영구히 거부해 관측이 느려지던 문제
+
+### 요약
+
+활성 대기 112건 대부분에 `운행·예매 상태 관측 지연 · 응답 대기 중`이 표시됐습니다. 대기 수가 늘어서가 아니라,
+HTTP replay 고속 경로가 한 번도 설치되지 못해 모든 좌석 관측이 15~19초짜리 브라우저 조회로만 처리된 결과였습니다.
+
+### 증상과 측정값
+
+| 항목 | 값 |
+| --- | --- |
+| 활성 대기 | 112건 |
+| 노선·날짜 관측 그룹 | 3개 (대전→서울 9/20 80건, 수서→대전 9/19 16건, 대전→서울 9/19 16건) |
+| 조회 1건 소요 | 15,365 ~ 18,831 ms |
+| 실효 처리율 | 약 18초에 1건 |
+| `next_check_at` 지연 | 50~100초 60건, 100~150초 35건, 150~200초 17건 |
+| `capture_unavailable stage=capture_start reason=invalid_capture` | 185회 |
+| `capture_suspended reason=repeated_replay_failure` | 5회 |
+
+`query_backoff`와 `provider_query_skipped`는 0건이라 cooldown이 아니라 포화 상태였고, 조회 결과는 모두
+`outcome=success`였습니다. 대기를 줄여도 KORAIL 호출은 3종류 그대로이므로 지연은 해소되지 않습니다.
+
+### 근본 원인
+
+`_PydollSession`은 공식 업무 조회 1회를 보장하려고 submit latch를 둡니다. `open()`은 이 latch를 지우지만
+`navigate_fresh()`는 지우지 않고, `navigate()`가 다시 latch를 세웁니다. 그래서 직접 URL 경로로 한 번 조회한
+session이 재사용되면 다음 조회의 `begin_http_replay_capture`가 항상 `invalid_capture`로 거부됩니다.
+
+capture가 거부되면 lease가 설치되지 않고, lease가 없으면 search actor가 session을 폐기하지 않아 같은 session이
+계속 재사용됩니다. 즉 한 번 실패하면 그 session의 수명(최대 100회 조회) 동안 replay가 되살아날 수 없는
+자기강화 구조였습니다.
+
+### 조치
+
+재사용된 lease로 새 조회를 시작할 때 search actor가 `reset_search_state()`로 이전 조회의 latch를 먼저 지웁니다.
+모든 조회 경로가 그 직후 탭을 교체하므로 "페이지당 공식 조회 1회" 보장은 그대로 유지됩니다. 세션 protocol에
+`reset_search_state`를 추가하면서 browser composition shell의 줄 수 상한을 1,490에서 1,492로 올렸고, 나머지
+표면 계약(정의 목록, 공개 84개·비공개 30개 이름 수)은 그대로입니다.
+
+### 검증
+
+재사용 session에서 두 번째 capture가 열리는지 확인하는 회귀 테스트를 추가했습니다. 수정을 임시로 끄면 이 테스트가
+`['started', 'rejected'] != ['started', 'started']`로 실패하고 운영과 동일한
+`capture_unavailable stage=capture_start reason=invalid_capture` 경고를 남기는 것까지 확인했습니다.
+
+### 남은 과제
+
+- 배포 뒤 실제 운영 표본에서 replay lease가 설치되어 관측 1건 비용이 브라우저 약 18초에서 replay 약 1초로
+  내려가는지, `관측 지연` 안내가 사라지는지 확인이 필요합니다.
+- 브라우저 전용 관측으로 되돌아가는 구간에서는 2초 목표와 30초 임계값이 여전히 달성 불가능합니다. replay 복구
+  효과를 확인한 뒤 지연 표시 기준을 조정할지 결정해야 합니다.
+
 ## 2026년 9월 17일 · 로그인 세션 만료 뒤 재로그인이 15분 간격으로 늦어지던 문제
 
 ### 요약

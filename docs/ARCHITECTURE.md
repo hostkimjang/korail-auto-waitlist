@@ -771,6 +771,11 @@ source unavailable은 공식 출처가 아니라 임대한 replay 재료만 못 
 `None`을 돌려 caller가 같은 호출에서 cold browser 검색으로 관측을 끝내게 합니다. KORAIL이 캡처한 business
 URL을 그 URL을 만든 브라우저 페이지에 묶어두면 replay는 재생 자체가 불가능해지므로, 이 fallback이 연속
 기준 횟수만큼 반복되면 capture를 정해진 시간 동안 중단해 재생할 수 없는 lease를 다시 만들지 않습니다.
+capture window는 페이지의 조회 latch와 묶여 있습니다. `begin_http_replay_capture`는 이미 공식 업무 조회를
+끝낸 페이지를 거부하므로, 재사용된 session으로 새 조회를 시작할 때는 search actor가 먼저
+`reset_search_state`로 이전 조회의 latch를 지웁니다. 이 초기화가 없으면 session이 한 번이라도 조회를 마치고
+살아남는 순간부터 capture가 계속 거부되어 replay가 다시 설치되지 않고, 모든 관측이 브라우저 조회로만
+처리됩니다.
 점검 redirect·HTML은 전용 typed browser outage로 바꾸고 route lease를 폐기한 뒤 UI browser fallback을 하지
 않습니다. 전체 폐기에서는 모든 client close를 시도한 뒤 첫 cleanup 오류를 전달합니다. browser composition shell과
 `korail_sidecar/pydoll/search_actor.py`는 canonical owner를 직접 사용합니다. top-level

@@ -15,6 +15,7 @@ from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavaila
 from rail_waitlist.korail_sidecar.browser_service_availability import (
     BrowserProviderUnavailable,
 )
+from rail_waitlist.korail_sidecar.http_replay import HttpReplayInvalidCapture
 from rail_waitlist.korail_sidecar.pydoll.search_actor import (
     KorailPydollReadOnlySearchSession,
     PydollReadOnlySearchActor,
@@ -83,6 +84,9 @@ class _ReadOnlySession:
     async def current_passenger(self) -> str:
         return "총 1명"
 
+    def reset_search_state(self) -> None:
+        return None
+
     async def begin_http_replay_capture(self) -> None:
         raise AssertionError("reuse is disabled")
 
@@ -134,6 +138,60 @@ class _SessionContext:
 
 async def _cleanup(awaitable: Awaitable[object]) -> None:
     await awaitable
+
+
+@dataclass
+class _LatchedCaptureSession(_ReadOnlySession):
+    """Model the real page contract: a finished lookup latches the page against capture."""
+
+    submitted: bool = False
+    capture_calls: list[str] = field(default_factory=list)
+
+    async def begin_http_replay_capture(self) -> None:
+        if self.submitted:
+            self.capture_calls.append("rejected")
+            raise HttpReplayInvalidCapture()
+        self.capture_calls.append("started")
+
+    async def export_http_replay_plan(self, **_kwargs: object) -> object:
+        # Keep the session persistent by refusing the export, so the next search has to
+        # reuse this page instead of getting a fresh one.
+        raise HttpReplayInvalidCapture()
+
+    async def submit_once(self) -> None:
+        self.submitted = True
+        self.events.append("submit")
+
+    def reset_search_state(self) -> None:
+        self.submitted = False
+
+
+@pytest.mark.asyncio
+async def test_reused_search_session_can_still_open_a_replay_capture_window() -> None:
+    session = _LatchedCaptureSession(snapshot=_snapshot())
+    actor = PydollReadOnlySearchActor(
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_: _SessionContext(session),
+        session_reuse_ttl_seconds=600,
+        session_reuse_max_searches=10,
+        station_identity_resolver=None,
+        monotonic=lambda: 0,
+        cleanup=_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        http_replay_client_factory=lambda *_args, **_kwargs: object(),
+        http_replay_route_cache_size=4,
+        event_logger=logging.getLogger(__name__),
+    )
+
+    await actor.search(_request())
+    await actor.search(_request())
+
+    # Without clearing the previous lookup's latch the second capture is rejected, and the
+    # replay fast path can never be reinstalled for the lifetime of the reused session.
+    assert session.capture_calls == ["started", "started"]
+    assert actor.active_session is not None
 
 
 @pytest.mark.asyncio

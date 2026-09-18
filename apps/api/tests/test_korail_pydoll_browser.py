@@ -262,6 +262,9 @@ class FixtureSession:
     async def current_passenger(self) -> str:
         return "총 1명"
 
+    def reset_search_state(self) -> None:
+        self._submitted = False
+
     async def submit_once(self) -> None:
         if self._submitted:
             raise AssertionError("duplicate submit")

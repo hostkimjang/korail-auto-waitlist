@@ -52,6 +52,7 @@ MODULE_ASSIGNMENTS = {
 METHOD_INVENTORIES = {
     "PydollBrowserSession": (
         "open",
+        "reset_search_state",
         "navigate",
         "navigate_fresh",
         "choose_station",
@@ -124,7 +125,7 @@ METHOD_INVENTORIES = {
         "_search_query",
         "_search_execute_script",
         "_mark_search_submitted",
-        "_reset_login_search_state",
+        "reset_search_state",
         "__aenter__",
         "__aexit__",
         "open",
@@ -390,7 +391,10 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    assert len(source.splitlines()) <= 1_490
+    # Raised by two lines for the `reset_search_state` session protocol member that lets a
+    # reused page open a new HTTP replay capture window. The surface contracts below still
+    # pin the exact module definitions and public/private name counts.
+    assert len(source.splitlines()) <= 1_492
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

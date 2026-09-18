@@ -202,6 +202,8 @@ _sanitized_class_tokens = _live_dom_owner.sanitized_class_tokens
 class PydollBrowserSession(Protocol):
     async def open(self) -> PydollPageSnapshot: ...
 
+    def reset_search_state(self) -> None: ...
+
     async def navigate(self, url: str) -> PydollPageSnapshot: ...
 
     async def navigate_fresh(self, url: str) -> PydollPageSnapshot: ...
@@ -717,7 +719,7 @@ class _PydollSession:
             ),
             has_exact_visible=lambda selector, text: self._has_exact_visible(selector, text),
             wait_for_exact_text=lambda selector, text: self._wait_for_exact_text(selector, text),
-            reset_search_state=self._reset_login_search_state,
+            reset_search_state=self.reset_search_state,
             response_safety_guard=lambda snapshot, stage: assert_pydoll_response_allowed(
                 snapshot,
                 stage,
@@ -833,7 +835,7 @@ class _PydollSession:
     def _mark_search_submitted(self) -> None:
         self._submitted = True
 
-    def _reset_login_search_state(self) -> None:
+    def reset_search_state(self) -> None:
         self._submitted = False
         self._network_responses.clear()
 

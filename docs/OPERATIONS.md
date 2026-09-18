@@ -546,6 +546,14 @@ rate-limit·점검 판정은 종전대로 조회를 중단하고 cooldown을 엽
 브라우저 약 21초로 늘어나며, 같은 route·날짜의 활성 대기는 coordinator의 단일 실행으로 한 번의 조회를
 공유합니다.
 
+2026년 9월 18일 Oracle 표본에서는 이 비용 차이가 그대로 관측 지연으로 나타났습니다. 활성 대기 112건이
+노선·날짜 기준 3개 그룹뿐인데도 조회 1건이 15~19초 걸려 그룹당 재관측 간격이 50초를 넘었고, 30초 임계값을
+쓰는 `관측 지연` 안내가 거의 모든 카드에 떴습니다. 원인은 대기 수가 아니라 replay가 전혀 설치되지 않는
+상태였습니다. 재사용된 browser session이 이전 조회의 submit latch를 그대로 들고 있어
+`begin_http_replay_capture`가 매번 거부됐고, 로그에는 `event=capture_unavailable stage=capture_start
+reason=invalid_capture`만 쌓였습니다. 이후 search actor가 재사용 session의 latch를 먼저 지우도록 고쳤습니다.
+같은 증상이 보이면 대기 수를 줄이기 전에 `capture_unavailable stage=capture_start` 누적 횟수부터 확인하세요.
+
 2026년 8월 13일 SRT sidecar 파일 로그 표본에서는 기존 8초 caller timeout 88건이 모두 실제 provider의
 late success로 끝났고, timeout 뒤 완료까지 중앙값 2.455초·최대 11.621초였습니다. 한 대표 흐름도 공식 queue
 통과 뒤 전체 8.485초에 성공해 caller보다 약 0.485초 늦었습니다. 이는 외부 30초 HTTP 실패가 아니라 내부

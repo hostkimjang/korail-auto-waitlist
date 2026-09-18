@@ -111,6 +111,8 @@ class KorailPydollReadOnlySearchSession(Protocol):
 
     async def current_passenger(self) -> str: ...
 
+    def reset_search_state(self) -> None: ...
+
     async def begin_http_replay_capture(self) -> None: ...
 
     async def export_http_replay_plan(
@@ -241,6 +243,13 @@ class PydollReadOnlySearchActor:
                 try:
                     lease = await self._acquire_session()
                     session = lease.session
+                    if lease.reused:
+                        # A reused page still carries the previous lookup's submit latch,
+                        # and `begin_http_replay_capture` refuses to capture a page that
+                        # already performed its lookup. Without this the replay fast path
+                        # is never reinstalled once a session survives one search, so every
+                        # observation falls back to a full browser query.
+                        session.reset_search_state()
                     if direct_url is None:
                         stage = "load_page"
                         self._response_safety_guard(await session.open(), stage)

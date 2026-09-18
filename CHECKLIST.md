@@ -158,6 +158,8 @@
 - [x] 재사용된 browser session이 이전 조회의 submit latch 때문에 HTTP replay capture를 영구히 거부하던 문제를 search actor의 `reset_search_state` 선행 초기화로 수정하고 회귀 테스트 추가
 - [x] replay `source_unavailable`에 URL·쿠키·본문 없는 운영 진단 분류(`detail`)를 추가하고 `cold_reinit` 로그에 노출
 - [x] 브라우저 전용 관측의 실측 비용을 반영해 `관측 지연` 안내 유예를 30초에서 300초로 조정
+- [x] 공식 페이지에 도달하지 못한 `official_read_unavailable` 확인이 제한된 재확인 횟수를 소비하지 않도록 수정하고 회귀 테스트 추가
+- [x] 운영사 응답에 감시 좌석 등급이 없는 경우를 `provider_result_incomplete`로 분리해 공식 출처 장애와 구분하고 화면 문구를 `목록 불완전`으로 표시
 - [ ] 활성 그룹 수와 최근 조회 비용에서 관측 목표(`next_check_at`)를 계산해 달성 가능한 값으로 만들기. 현재는 관리자 설정 주기를 그대로 써서 목표 자체가 달성 불가능하고, 지연 유예 상수로만 보정하고 있음
 - [ ] SRT 갱신 창도 앞당길지 결정. SRT는 재사용 기한이 `last_used_at` 기준이고 재사용 prewarm이 `last_verified_at`을 갱신하지 않아 telemetry 역산이 매 주기 예열을 유발하므로, sidecar session 계약에 재사용 창 길이를 명시적 필드로 노출하는 선행 작업이 필요함
 - [x] `worker.py`를 직접 SQL·provider I/O·비밀값 정책 없는 Celery composition root로 동결하고 strict typing 고정

@@ -21,6 +21,7 @@ from .attempt_policy import automatic_reservation_retry_fence_reason
 from .domain import reservation_attempt_manual_check_required
 from .exact_paid_application import apply_exact_paid_resolution
 from .provider_confirmation.contracts import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
     ReservationConfirmationSeat,
@@ -402,6 +403,16 @@ async def apply_reservation_reconciliation(
         if attempt.outcome is ReservationOutcome.UNKNOWN
         else PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS
     )
+    # A read that never reached the official page carries no evidence about the hold. It
+    # happens when this deployment has no authenticated session at that instant, for
+    # example right after an uncertain reservation retires the session. Spending one of
+    # the bounded attempts on it would close a live hold as unresolved without the
+    # provider ever being asked, so keep the budget for real official answers.
+    official_read_never_happened = (
+        confirmation.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+        and confirmation.diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+    )
     if post_deadline_final_read:
         if confirmed_hold_has_usable_deadline:
             attempt.post_deadline_reconciled_at = None
@@ -409,7 +420,7 @@ async def apply_reservation_reconciliation(
             attempt.post_deadline_reconciled_at = reconciled_at
             if legacy_expired_hold_cleanup_read:
                 attempt.reconciliation_attempt_count += 1
-    else:
+    elif not official_read_never_happened:
         attempt.reconciliation_attempt_count += 1
         if attempt.reconciliation_attempt_count > reconciliation_attempt_limit:
             raise RuntimeError("reservation reconciliation attempt limit exceeded")

@@ -894,7 +894,9 @@ async def test_missing_matching_seat_class_is_persisted_as_fail_closed_error(app
         observation = await session.scalar(select(SeatObservation))
         assert observation is not None
         assert observation.status is SeatObservationStatus.ERROR
-        assert observation.error_category == "provider_unavailable"
+        # The provider answered; only the watched seat class is missing from the result.
+        # That is an incomplete official list, not a provider outage.
+        assert observation.error_category == "provider_result_incomplete"
 
 
 async def test_actionable_result_delegates_one_episode_bound_winner(app) -> None:

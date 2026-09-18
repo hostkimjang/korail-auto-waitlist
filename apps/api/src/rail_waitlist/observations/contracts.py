@@ -12,6 +12,7 @@ ObservationErrorCategory = Literal[
     "timeout",
     "schema_mismatch",
     "provider_unavailable",
+    "provider_result_incomplete",
     "partial_failure",
     "unknown",
 ]

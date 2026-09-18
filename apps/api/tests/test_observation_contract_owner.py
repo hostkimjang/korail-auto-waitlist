@@ -134,7 +134,9 @@ def test_observation_models_have_the_canonical_owner_and_unchanged_field_contrac
         ),
         (
             canonical.SeatObservationResult,
-            "23ff628c55a4fd371af033d64a7cf3f0a6f122688ffc6f71e18bfa61ff830113",
+            # Adds the provider_result_incomplete error category so an incomplete official
+            # list is no longer reported as a provider outage.
+            "090d490f98495a671b5f329d8926094ea60c0b489ccc602b290ce9b9167fc950",
         ),
     ],
 )

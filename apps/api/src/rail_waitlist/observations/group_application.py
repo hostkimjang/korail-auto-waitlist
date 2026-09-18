@@ -1017,7 +1017,22 @@ async def process_watch_group_observation(
                     None,
                 )
                 if result is None:
-                    raise RuntimeError("provider returned no matching seat class")
+                    # The provider answered, so this is not an outage. The watched seat
+                    # class is missing from an otherwise successful result, which happens
+                    # while the official list is still incomplete, for example right after
+                    # a session turnover. Keep it distinct so the screen does not report a
+                    # provider outage and the seat state stays fail-closed.
+                    observed_at = dependencies.now()
+                    result = SeatObservationResult(
+                        seat_class=target.seat_class,
+                        status=SeatObservationStatus.ERROR,
+                        source=(
+                            "mock" if target.provider is Provider.MOCK else "authorized-provider"
+                        ),
+                        observed_at=observed_at,
+                        fresh_until=observed_at,
+                        error_category="provider_result_incomplete",
+                    )
             except dependencies.provider_call_errors:
                 observed_at = dependencies.now()
                 result = SeatObservationResult(

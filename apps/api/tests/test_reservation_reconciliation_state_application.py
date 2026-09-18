@@ -18,6 +18,7 @@ from rail_waitlist.domain import (
 from rail_waitlist.models import ReservationAttempt, Watch, WatchCandidate
 from rail_waitlist.provider_account_management.schemas import RailProviderAuthStatus
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
@@ -305,6 +306,56 @@ async def test_unknown_inconclusive_state_preserves_extended_bounded_schedule(
         if starting_count == UNKNOWN_RECONCILIATION_MAX_ATTEMPTS - 1
         else None
     )
+
+
+async def test_unreached_official_read_does_not_spend_a_bounded_attempt() -> None:
+    attempt = make_attempt(reconciliation_count=2)
+    confirmation = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        diagnostic_code=ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE,
+        source="srt.owner-test",
+        observed_at=NOW,
+    )
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        make_watch(),
+        make_candidate(),
+        attempt,
+        confirmation,
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], []),
+    )
+
+    # The official page was never reached, so the hold must keep its remaining evidence
+    # budget instead of being closed as unresolved without the provider being asked.
+    assert attempt.reconciliation_attempt_count == 2
+    assert attempt.last_reconciled_at == NOW
+    assert attempt.reconciliation_resolution is None
+
+
+async def test_insufficient_official_evidence_still_spends_a_bounded_attempt() -> None:
+    attempt = make_attempt(reconciliation_count=2)
+    confirmation = ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        diagnostic_code=ReservationConfirmationDiagnosticCode.OFFICIAL_EVIDENCE_INSUFFICIENT,
+        source="srt.owner-test",
+        observed_at=NOW,
+    )
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        make_watch(),
+        make_candidate(),
+        attempt,
+        confirmation,
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], []),
+    )
+
+    assert attempt.reconciliation_attempt_count == 3
 
 
 async def test_unknown_requires_two_official_absence_reads_before_terminal_fence() -> None:

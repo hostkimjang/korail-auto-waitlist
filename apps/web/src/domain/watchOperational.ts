@@ -78,6 +78,7 @@ const observationErrorCategories: ReadonlySet<string> = new Set([
   "timeout",
   "schema_mismatch",
   "provider_unavailable",
+  "provider_result_incomplete",
   "partial_failure",
   "unknown",
 ]);
@@ -118,7 +119,7 @@ function awareTimestamp(value: unknown): string | null {
 
 type LatestObservationSignal =
   | { kind: "success"; status: string; observedAt: string }
-  | { kind: "error"; status: "error"; observedAt: string }
+  | { kind: "error"; status: "error"; observedAt: string; errorCategory: string | null }
   | { kind: "uncertain"; status: "unknown" | "stale"; observedAt: string }
   | { kind: "invalid"; observedAt: string | null };
 
@@ -149,7 +150,7 @@ function latestObservationSignal(
   ) return { kind: "invalid", observedAt };
   if (status === "error") {
     return validErrorCategory
-      ? { kind: "error", status, observedAt }
+      ? { kind: "error", status, observedAt, errorCategory: errorCategory as string }
       : { kind: "invalid", observedAt };
   }
   if (uncertainObservationStatuses.has(status)) {
@@ -313,7 +314,14 @@ export function mapOperationalCandidate(
         );
       }
       if (latestIsCurrent && latestSignal?.kind === "error") {
-        return healthMeta("운행·예매 상태 관측 오류 · 재시도 예정");
+        // An incomplete official list is not a provider outage. The seat state stays
+        // fail-closed either way, but the wording must not send the operator hunting for
+        // an outage that did not happen.
+        return healthMeta(
+          latestSignal.errorCategory === "provider_result_incomplete"
+            ? "운행·예매 상태 목록 불완전 · 재시도 예정"
+            : "운행·예매 상태 관측 오류 · 재시도 예정",
+        );
       }
       if (latestIsCurrent && latestSignal?.kind === "uncertain") {
         return healthMeta(latestSignal.status === "stale"

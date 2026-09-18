@@ -140,6 +140,21 @@ describe("mapOperationalCandidate", () => {
     expect(mapped?.label).toBe("운행·예매 상태 관측 오류 · 재시도 예정");
   });
 
+  it("separates an incomplete official list from a provider outage", () => {
+    const mapped = mapOperationalCandidate({
+      ...expiredOperationalCandidate,
+      latest_observation: {
+        status: "error",
+        source: "authorized-test-source",
+        observed_at: "2026-08-02T13:31:30Z",
+        fresh_until: "2026-08-02T13:31:30Z",
+        error_category: "provider_result_incomplete",
+      },
+    }, new Date("2026-08-02T13:32:00Z"), healthyWatchContext);
+
+    expect(mapped?.label).toBe("운행·예매 상태 목록 불완전 · 재시도 예정");
+  });
+
   it("shows a canonical error before any operational projection exists", () => {
     const mapped = mapOperationalCandidate({
       operational_status: null,

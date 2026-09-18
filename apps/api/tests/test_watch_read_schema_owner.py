@@ -320,15 +320,15 @@ def test_watch_read_normalizes_only_legacy_inconclusive_diagnostics() -> None:
         ),
         (
             canonical.WatchCandidateRead,
-            "7f355d778fdd0ba7ec41ad88bf4c24635ec1ed3913b0513bc52eea646321ca87",
+            "5fef4b98623d66138d9dc63625d0ad2725b596a4c86704c99f50f13a04a5750b",
         ),
         (
             canonical.WatchCandidateLatestObservationRead,
-            "7bec2c9b52d4ddc527fc2f3794333e3a274f298c16828af9066391c8f25d9d91",
+            "093cfbcf0148bc88c0e54ddd2a6322fd95f8ba3219e664188096f35dabaa4dc7",
         ),
         (
             canonical.WatchRead,
-            "7228b3ca7bf8a7c822e1e0e2646fcff1803a1e17505d9db1e6ebd0e601674a48",
+            "ccab4af535751e39a6d8cd946e8180db6b417007f6c2ba5e6bcf05ab82350c16",
         ),
     ],
 )

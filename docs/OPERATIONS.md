@@ -554,6 +554,17 @@ rate-limit·점검 판정은 종전대로 조회를 중단하고 cooldown을 엽
 reason=invalid_capture`만 쌓였습니다. 이후 search actor가 재사용 session의 latch를 먼저 지우도록 고쳤습니다.
 같은 증상이 보이면 대기 수를 줄이기 전에 `capture_unavailable stage=capture_start` 누적 횟수부터 확인하세요.
 
+replay가 설치된 뒤에도 실패하면 `event=cold_reinit source=http_replay reason=... detail=...`의 `detail`로
+원인을 구분합니다. `redirect`는 공식 응답이 다른 경로로 보냈다는 뜻이고, `client_error`·`server_error`·
+`unexpected_status`는 상태 코드 계열, `service_unavailable`은 503, `transport`는 네트워크 실패,
+`oversize_body`는 응답 크기 초과, `page_limit`은 페이지 순회 한도 초과입니다. 이 값은 운영 진단용 분류일 뿐
+URL·쿠키·토큰·응답 본문을 담지 않습니다.
+
+`관측 지연` 안내의 유예는 30초에서 300초로 넓혔습니다. 관측 목표는 관리자가 설정한 주기인데 replay를 쓸 수
+없을 때는 조회 1건에만 16~20초가 들어, 노선·날짜 그룹이 몇 개만 돼도 정상 동작 중인 감시가 목표보다 수십 초
+늦습니다. 2026년 9월 18일 표본에서 그룹 3개·조회 16~20초·정상 지연 50~200초를 확인해 이 값을 정했습니다.
+이 안내는 여전히 거친 정체 감지 신호이며, 그룹 수가 크게 늘면 유예를 다시 조정해야 합니다.
+
 2026년 8월 13일 SRT sidecar 파일 로그 표본에서는 기존 8초 caller timeout 88건이 모두 실제 provider의
 late success로 끝났고, timeout 뒤 완료까지 중앙값 2.455초·최대 11.621초였습니다. 한 대표 흐름도 공식 queue
 통과 뒤 전체 8.485초에 성공해 caller보다 약 0.485초 늦었습니다. 이는 외부 30초 HTTP 실패가 아니라 내부

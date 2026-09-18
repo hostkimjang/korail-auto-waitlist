@@ -88,7 +88,14 @@ const activeObservationWatchStatuses: ReadonlySet<string> = new Set([
   "seat_found",
 ]);
 const observationSourcePattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
-const operationalDelayGraceMilliseconds = 30_000;
+// The observation target is the administrator's configured interval, which can be far
+// shorter than one provider call. When the KORAIL HTTP replay fast path is unavailable a
+// single group query costs 16-20 seconds, so a handful of route/date groups already puts
+// every watch tens of seconds past its target while observation is perfectly healthy.
+// The grace therefore has to clear a saturated browser-only cycle, not the target itself.
+// Measured on 2026-09-18: 3 active groups, 16-20s per query, steady-state lag 50-200s.
+// This stays a coarse stall detector; a genuinely stuck watch never recovers.
+const operationalDelayGraceMilliseconds = 300_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

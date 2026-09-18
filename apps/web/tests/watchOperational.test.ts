@@ -50,7 +50,7 @@ describe("mapOperationalCandidate", () => {
       operational_fresh_until: "2026-08-02T13:31:00Z",
     }, new Date("2026-08-02T13:32:00Z"), {
       ...healthyWatchContext,
-      nextCheckAt: "2026-08-02T13:31:00Z",
+      nextCheckAt: "2026-08-02T13:26:00Z",
     });
 
     expect(mapped).toMatchObject({
@@ -246,7 +246,7 @@ describe("mapOperationalCandidate", () => {
       booking_window_status: null,
     }, new Date("2026-08-02T13:32:00Z"), {
       ...healthyWatchContext,
-      nextCheckAt: "2026-08-02T13:31:29Z",
+      nextCheckAt: "2026-08-02T13:26:59Z",
     });
 
     expect(mapped?.label).toBe("운행·예매 상태 관측 지연 · 응답 대기 중");
@@ -325,17 +325,17 @@ describe("mapOperationalCandidate", () => {
     expect(mapped).toBeNull();
   });
 
-  it("debounces a normal due target but reports a target overdue by more than 30 seconds", () => {
+  it("debounces a saturated browser-only cycle but reports a target overdue past the grace", () => {
     expect(mapOperationalCandidate(
       expiredOperationalCandidate,
       new Date("2026-08-02T13:32:00Z"),
-      { ...healthyWatchContext, nextCheckAt: "2026-08-02T13:31:30Z" },
+      { ...healthyWatchContext, nextCheckAt: "2026-08-02T13:27:00Z" },
     )).toBeNull();
 
     expect(mapOperationalCandidate(
       expiredOperationalCandidate,
       new Date("2026-08-02T13:32:00Z"),
-      { ...healthyWatchContext, nextCheckAt: "2026-08-02T13:31:29Z" },
+      { ...healthyWatchContext, nextCheckAt: "2026-08-02T13:26:59Z" },
     )?.label).toBe("운행·예매 상태 관측 지연 · 응답 대기 중");
   });
 
@@ -351,7 +351,7 @@ describe("mapOperationalCandidate", () => {
       },
     }, new Date("2026-08-02T13:32:00Z"), {
       ...healthyWatchContext,
-      nextCheckAt: "2026-08-02T13:31:00Z",
+      nextCheckAt: "2026-08-02T13:26:00Z",
     });
 
     expect(mapped?.label).toBe("운행·예매 상태 관측 지연 · 응답 대기 중");

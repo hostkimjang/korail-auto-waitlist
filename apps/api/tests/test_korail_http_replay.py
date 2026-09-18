@@ -485,6 +485,43 @@ async def test_http_statuses_are_classified_without_response_content(
 
 
 @pytest.mark.parametrize(
+    "status,location,expected_detail",
+    [
+        (302, "https://evil.example/login", "redirect"),
+        (400, None, "client_error"),
+        (500, None, "server_error"),
+        (503, None, "service_unavailable"),
+    ],
+)
+async def test_source_unavailable_reports_a_sanitized_operator_detail(
+    status: int,
+    location: str | None,
+    expected_detail: str,
+) -> None:
+    headers = {"location": location} if location is not None else {}
+    transport = httpx.MockTransport(lambda _request: httpx.Response(status, headers=headers))
+    async with KorailHttpReplayClient(_plan(), transport=transport) as client:
+        with pytest.raises(HttpReplaySourceUnavailable) as raised:
+            await client.search(_request())
+
+    # The detail is an operator classification only; it must never carry provider material.
+    assert raised.value.detail == expected_detail
+    assert raised.value.reason == "source_unavailable"
+
+
+async def test_transport_failure_is_reported_as_a_transport_detail() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    transport = httpx.MockTransport(handler)
+    async with KorailHttpReplayClient(_plan(), transport=transport) as client:
+        with pytest.raises(HttpReplaySourceUnavailable) as raised:
+            await client.search(_request())
+
+    assert raised.value.detail == "transport"
+
+
+@pytest.mark.parametrize(
     "location,error_type",
     [
         ("/member/login", HttpReplaySessionInvalid),

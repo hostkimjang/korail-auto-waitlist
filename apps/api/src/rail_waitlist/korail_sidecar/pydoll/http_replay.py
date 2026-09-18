@@ -189,9 +189,11 @@ class PydollHttpReplayManager:
             # and let the caller observe through a fresh browser search, so a dead replay
             # never turns a reachable source into a reported observation failure.
             self._logger.info(
-                "KORAIL HTTP replay event=cold_reinit source=http_replay reason=%s stage=%s",
+                "KORAIL HTTP replay event=cold_reinit source=http_replay reason=%s stage=%s "
+                "detail=%s",
                 error.reason,
                 getattr(error, "stage", "unspecified"),
+                getattr(error, "detail", "unspecified"),
             )
             await self.discard(route_key)
             self._note_replay_failure()

@@ -62,6 +62,8 @@
 
 앱 UI는 `src/`에서 구현한다. 같은 로컬 프로토타입을 Sites로 넘길 수 있도록 `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, `tests/sites-worker.test.mjs`를 유지한다. Sites 인계 전 `npm run build`와 `npm run test:sites`를 실행하고, 빌드 결과에 `dist/client/index.html`, `dist/server/index.js`, `dist/.openai/hosting.json`이 남는지 확인한다.
 
+앱 셸의 모든 화면 아래에는 릴리스 버전과 업데이트 날짜를 요일과 함께 보여 주는 푸터를 유지한다. 값은 `src/shared/lib/appRelease.ts`의 `APP_RELEASE` 한 곳에서만 관리하고, 표시는 `src/shared/ui/ReleaseFooter.tsx`가 담당한다. 요일은 저장된 `YYYY-MM-DD`에서 UTC 자정 기준으로 계산하며, 달력에 없는 날짜에는 요일을 붙이지 않는다. 사용자에게 보이는 변경을 배포할 때는 `APP_RELEASE`와 저장소 루트 `CHANGELOG.md` 맨 위 항목을 같은 작업에서 올리고, 두 기록이 어긋나면 `tests/appRelease.test.ts`가 실패한다. 푸터는 앱 셸 `main` 마지막 자식으로 두어 데스크톱에서는 내용 아래, 모바일에서는 하단 내비게이션 위에 오게 하고 업데이트 노트 링크는 44px 행동 영역과 `rel="noopener noreferrer"`를 유지한다.
+
 ## TypeScript와 코드 분리
 
 - 신규·수정 React 컴포넌트는 `.tsx`, JSX가 없는 도메인 타입·API·hook·utility는 `.ts`로 작성한다. 기존 `.jsx`·`.js`에 기능을 계속 쌓지 않고 수정하는 책임부터 TypeScript 모듈로 옮긴다.

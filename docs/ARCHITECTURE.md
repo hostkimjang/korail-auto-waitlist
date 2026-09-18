@@ -1396,3 +1396,5 @@ docs/                           사용자·운영·개발 문서
 ```
 
 웹 코드는 `app → features → api/domain/shared` 방향으로 의존합니다. API는 진입점, 애플리케이션 서비스, 도메인 정책, 외부 구현을 구분합니다. 세부 작성 규칙은 [코드 작성 규칙](CODE_CONVENTIONS.md)을 따릅니다.
+
+화면에 표시하는 릴리스 정보는 `apps/web/src/shared/lib/appRelease.ts` 한 곳에서 관리하고, 앱 셸 푸터인 `shared/ui/ReleaseFooter.tsx`가 버전과 업데이트 날짜를 요일과 함께 보여 줍니다. 요일은 저장된 `YYYY-MM-DD` 값에서 UTC 자정 기준으로 계산하므로 실행 환경의 시간대가 표시를 바꾸지 않고, 달력에 없는 날짜는 요일을 지어내지 않고 날짜 원문만 보여 줍니다. 저장소 루트 `CHANGELOG.md` 맨 위 항목과 값이 다르면 `apps/web/tests/appRelease.test.ts`가 실패하므로 화면 버전과 업데이트 노트는 항상 같은 배포를 가리킵니다.

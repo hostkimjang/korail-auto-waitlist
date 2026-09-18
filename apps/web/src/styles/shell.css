@@ -88,12 +88,15 @@
 
 .main-content {
   min-width: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: #fff;
 }
 
 .page {
   width: min(100%, 1120px);
-  min-height: 100vh;
+  flex: 1 1 auto;
   margin: 0 auto;
   padding: 52px 54px 72px;
 }
@@ -238,4 +241,52 @@
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
+}
+
+.app-footer {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  padding: 16px 54px 40px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.app-footer-release {
+  min-width: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+
+.app-footer-version {
+  color: #33465d;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.app-footer-updated {
+  overflow-wrap: anywhere;
+}
+
+.app-footer-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-inline: 4px;
+  color: var(--teal);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.app-footer-link:hover {
+  text-decoration: underline;
 }

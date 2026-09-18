@@ -9,6 +9,7 @@ import {
 import type { ReactElement, ReactNode } from "react";
 
 import { Brand } from "../shared/ui/Brand";
+import { ReleaseFooter } from "../shared/ui/ReleaseFooter";
 import type { AppView } from "./useAppNavigation";
 
 interface AppNavItem {
@@ -110,6 +111,7 @@ export function AppShell({
           </button>
         </div>
         {children}
+        <ReleaseFooter />
       </main>
       <BottomNav activeView={activeView} onNavigate={onNavigate} />
       {overlay}

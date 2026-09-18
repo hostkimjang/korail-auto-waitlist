@@ -220,6 +220,9 @@ worker, API와 두 sidecar에는 5분의 `stop_grace_period`가 적용됩니다.
 - `http://127.0.0.1/`이 열리는지
 - API의 `/healthz`, `/readyz`가 정상인지
 - 최근 로그에 반복되는 오류가 없는지
+- 브라우저에서 새로고침한 화면 아래 푸터의 릴리스 버전·업데이트 날짜가 [업데이트 노트](../CHANGELOG.md) 맨 위 항목과 같은지
+
+푸터 버전은 웹 이미지를 다시 만든 시점의 값입니다. 재배포 뒤에도 이전 버전이 보이면 먼저 새로고침해 보고, 그래도 같으면 `web` 서비스가 새 이미지로 재생성됐는지 확인합니다. 설치형 PWA는 navigation을 network-first로 처리하므로 온라인 상태에서 다시 열면 새 버전을 받습니다.
 
 Linux의 `experimental` 명령은 `docker compose up --wait --wait-timeout 180`을 사용하므로 성공 종료 시 선택 프로필의 장기 서비스가 실행·healthy 상태입니다. 제한 시간 안에 준비되지 않으면 서비스 상태 표를 출력하고 원래 오류 코드를 반환합니다. 이 판정은 migration·log-init의 성공 종료나 실제 운영사 접근 성공을 대신하지 않으므로 `status`, 일회성 작업의 `exited 0`, 각 sidecar의 `/readyz`와 실제 읽기 조회 결과를 별도로 기록합니다.
 

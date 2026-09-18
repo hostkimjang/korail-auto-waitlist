@@ -48,6 +48,16 @@ API 개발과 전체 실행 방법은 [apps/api/README.md](apps/api/README.md)�
 
 세부 규칙은 [코드 작성 규칙](docs/CODE_CONVENTIONS.md)을 따릅니다.
 
+## 릴리스 버전 올리기
+
+사용자가 화면에서 최신 배포를 받았는지 확인할 수 있도록, 사용자에게 보이는 변경을 배포할 때는 버전을 함께 올립니다.
+
+1. `apps/web/src/shared/lib/appRelease.ts`의 `APP_RELEASE`에서 `version`과 KST 기준 배포 날짜 `releasedOn`을 갱신합니다.
+2. `CHANGELOG.md` 맨 위에 `## 1.1.0 — 2026-09-19 (토)` 형식으로 항목을 추가하고, 무엇이 달라졌는지 사용자 관점으로 적습니다.
+3. `cd apps/web` 후 `npm test`로 두 기록이 일치하는지 확인합니다. 버전·날짜·요일이 어긋나면 `tests/appRelease.test.ts`가 실패합니다.
+
+버전은 `주.부.수` 형식입니다. 사용 방식이나 운영 절차가 달라지면 주, 새 기능과 눈에 띄는 개선은 부, 버그 수정과 안정화는 수를 올립니다. 문서나 내부 정리만 바꾼 변경에는 버전을 올리지 않습니다.
+
 ## 검증
 
 전체 저장소:

@@ -21,6 +21,10 @@
     grid-template-columns: 1fr 280px;
   }
 
+  .app-footer {
+    padding-inline: 32px;
+  }
+
   .watch-management-hero {
     min-height: 270px;
     flex-direction: column;
@@ -95,6 +99,10 @@
     width: 100%;
     min-height: auto;
     padding: 30px 28px 48px;
+  }
+
+  .app-footer {
+    padding: 14px 28px 32px;
   }
 
   .page-header {
@@ -292,6 +300,10 @@
     width: 100%;
     min-height: auto;
     padding: 26px 18px 40px;
+  }
+
+  .app-footer {
+    padding: 14px 18px 28px;
   }
 
   .page-header {
@@ -1185,6 +1197,10 @@
   }
 
   .page {
+    padding-inline: 14px;
+  }
+
+  .app-footer {
     padding-inline: 14px;
   }
 

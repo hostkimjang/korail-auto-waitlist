@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../src/app/AppShell";
 import type { AppView } from "../src/app/useAppNavigation";
+import { APP_RELEASE } from "../src/shared/lib/appRelease";
 
 const navigationItems: ReadonlyArray<{ label: string; view: AppView }> = [
   { label: "홈", view: "home" },
@@ -55,8 +56,12 @@ describe("AppShell", () => {
     expect(Array.from(main.children).map((child) => child.className)).toEqual([
       "mobile-header",
       "page-content",
+      "app-footer",
     ]);
     expect(main.children.item(1)).toBe(screen.getByTestId("page-content"));
+    expect(requiredElement(main.children.item(2), "릴리스 푸터").textContent).toContain(
+      `레일웨잇 v${APP_RELEASE.version}`,
+    );
     expect(shell.children.item(3)).toBe(screen.getByTestId("shell-overlay"));
     expect(screen.getAllByLabelText("레일웨잇")).toHaveLength(2);
   });

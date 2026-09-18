@@ -7,6 +7,7 @@
 - [시작하기](GETTING_STARTED.md): Linux Bash·Windows PowerShell 데모 실행, 설치, 첫 관리자 계정 만들기
 - [사용 안내](USAGE.md): 열차 검색부터 알림, 공식 앱·홈페이지에서의 최종 확인까지의 흐름
 - [안전 원칙과 사용 범위](POLICY_AND_SAFETY.md): 제공하는 기능과 제공하지 않는 기능
+- [업데이트 노트](../CHANGELOG.md): 릴리스별 변경 내용과 화면 푸터에서 현재 버전을 확인하는 방법
 
 ## 직접 운영하는 분
 

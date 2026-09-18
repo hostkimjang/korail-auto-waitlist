@@ -64,6 +64,7 @@ def runtime_snapshot(
     state: ProviderSessionRuntimeState = ProviderSessionRuntimeState.READY,
     credential_generation: str | None = "4",
     remaining_seconds: float | None = 240.0,
+    last_verified_age_seconds: float | None = 3.0,
     locally_reusable: bool = True,
 ) -> ProviderSessionRuntimeSnapshot:
     return ProviderSessionRuntimeSnapshot(
@@ -71,11 +72,58 @@ def runtime_snapshot(
         state=state,
         credential_generation=credential_generation,
         created_age_seconds=12.0,
-        last_verified_age_seconds=3.0,
+        last_verified_age_seconds=last_verified_age_seconds,
         last_used_age_seconds=1.0,
         local_reuse_remaining_seconds=remaining_seconds,
         locally_reusable=locally_reusable,
     )
+
+
+def _cold_snapshot(provider: Provider) -> ProviderSessionRuntimeSnapshot:
+    return runtime_snapshot(
+        provider,
+        state=ProviderSessionRuntimeState.COLD,
+        credential_generation=None,
+        remaining_seconds=None,
+        locally_reusable=False,
+    )
+
+
+async def _seed_account(
+    app,
+    *,
+    auth_status: str,
+    provider: Provider = Provider.KORAIL,
+    credential_version: int = 9,
+    login_id: str = "1234567890",
+    updated_at: datetime | None = None,
+) -> None:
+    async with app.state.test_session_factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=provider,
+                credentials_ciphertext=secret_box.encrypt_dict(
+                    {
+                        "login_method": "membership_number",
+                        "login_id": login_id,
+                        "password": "test-password",
+                    }
+                ),
+                enabled=True,
+                credential_version=credential_version,
+                last_auth_status=auth_status,
+                updated_at=updated_at or (datetime.now(UTC) - timedelta(minutes=1)),
+            )
+        )
+        await session.commit()
+
+
+def _clear_backoff(registry: ProviderRuntimePrewarmRegistry, credential_version: int = 9) -> None:
+    """Let the next tick run immediately without asserting on wall-clock delays."""
+
+    retry = registry.prewarm_retry_state.get(Provider.KORAIL)
+    failure_count = retry[1] if retry is not None else 1
+    registry.prewarm_retry_state[Provider.KORAIL] = (credential_version, failure_count, 0.0)
 
 
 async def test_startup_prewarm_recovers_enabled_auth_required_account_and_watch(app) -> None:
@@ -719,7 +767,137 @@ async def test_failed_later_auth_recovery_is_not_repeated_until_new_revision(app
         (Provider.KORAIL, 9),
         (Provider.KORAIL, 9),
     ]
-    assert len(registry.attempted_auth_revisions) == 1
+    assert len(registry.auth_revision_attempts) == 1
+
+
+async def test_adapter_outage_does_not_consume_the_auth_recovery_budget(app) -> None:
+    await _seed_account(app, auth_status="auth_required")
+
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.FAILED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    for _ in range(6):
+        assert (
+            await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+            == 1
+        )
+        _clear_backoff(registry)
+
+    # A transport failure never reached the credential check, so it must keep retrying
+    # instead of stranding the account until an operator re-saves the credential.
+    _revision, started, verdicts = registry.auth_revision_attempts[Provider.KORAIL]
+    assert (started, verdicts) == (6, 0)
+    assert len(verifier.prewarm_calls) == 6
+
+
+async def test_local_failure_backoff_recovers_faster_than_a_provider_verdict(app) -> None:
+    await _seed_account(app, auth_status="auth_required")
+
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.FAILED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+
+    _generation, failure_count, retry_not_before = registry.prewarm_retry_state[Provider.KORAIL]
+    assert failure_count == 1
+    assert retry_not_before - asyncio.get_running_loop().time() <= (
+        ProviderRuntimePrewarmRegistry.LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS
+    )
+
+
+async def test_auth_required_recovery_stops_after_the_bounded_attempt_budget(app) -> None:
+    await _seed_account(app, auth_status="auth_required")
+
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.AUTH_REQUIRED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    for _ in range(ProviderRuntimePrewarmRegistry.AUTH_RECOVERY_MAX_ATTEMPTS):
+        assert (
+            await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+            == 1
+        )
+        _clear_backoff(registry)
+
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
+    _revision, _started, verdicts = registry.auth_revision_attempts[Provider.KORAIL]
+    assert verdicts == ProviderRuntimePrewarmRegistry.AUTH_RECOVERY_MAX_ATTEMPTS
+    assert len(verifier.prewarm_calls) == ProviderRuntimePrewarmRegistry.AUTH_RECOVERY_MAX_ATTEMPTS
+
+
+async def test_recovered_login_resumes_before_the_budget_is_exhausted(app) -> None:
+    await _seed_account(app, auth_status="auth_required")
+
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.AUTH_REQUIRED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+    _clear_backoff(registry)
+    verifier.outcomes[Provider.KORAIL] = ProviderLoginVerificationOutcome.AUTHENTICATED
+    verifier.snapshots[Provider.KORAIL] = _cold_snapshot(Provider.KORAIL)
+
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+    assert registry.outcome_for(Provider.KORAIL) == "authenticated"
+
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
+        )
+        assert account is not None
+        assert account.last_auth_status == "authenticated"
+
+
+async def test_blocked_revision_keeps_a_single_recovery_attempt(app) -> None:
+    await _seed_account(app, auth_status="provider_blocked")
+
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    # The protection cooldown is observed before the revision's single login attempt.
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
+    assert verifier.prewarm_calls == []
+
+    _clear_backoff(registry)
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+
+    _clear_backoff(registry)
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9)]
 
 
 async def test_authenticated_account_recovers_cold_sidecar_session(app) -> None:
@@ -770,11 +948,14 @@ async def test_authenticated_account_recovers_cold_sidecar_session(app) -> None:
 
 
 @pytest.mark.parametrize(
-    ("remaining_seconds", "expected_attempts"),
-    [(90.0, 1), (240.0, 0)],
+    ("last_verified_age_seconds", "remaining_seconds", "expected_attempts"),
+    # A 1800 second KORAIL reuse window refreshes from 450 seconds before expiry, so a
+    # failed attempt still has room to retry. 600 seconds remaining is still outside it.
+    [(1_710.0, 90.0, 1), (1_560.0, 240.0, 1), (1_200.0, 600.0, 0)],
 )
 async def test_authenticated_ready_session_refreshes_only_inside_window(
     app,
+    last_verified_age_seconds: float,
     remaining_seconds: float,
     expected_attempts: int,
 ) -> None:
@@ -804,6 +985,7 @@ async def test_authenticated_ready_session_refreshes_only_inside_window(
             Provider.KORAIL: runtime_snapshot(
                 Provider.KORAIL,
                 remaining_seconds=remaining_seconds,
+                last_verified_age_seconds=last_verified_age_seconds,
             )
         }
     )
@@ -944,7 +1126,7 @@ def test_keepalive_backoff_is_generation_scoped_exponential_and_capped() -> None
         registry.finish_prewarm(
             Provider.KORAIL,
             4,
-            outcome="failed",
+            outcome="auth_required",
             now=now,
         )
         assert registry.prewarm_retry_state[Provider.KORAIL] == (
@@ -962,6 +1144,82 @@ def test_keepalive_backoff_is_generation_scoped_exponential_and_capped() -> None
         now=now,
     )
     assert registry.prewarm_retry_state[Provider.KORAIL] == (5, 1, now + 900.0)
+
+
+def test_local_failure_backoff_is_short_and_separately_capped() -> None:
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    now = 1_000.0
+
+    # An unreachable adapter never reaches the credential check, so its retry schedule
+    # stays short enough for the session to recover as soon as the adapter is back.
+    for failure_count, expected_delay in enumerate(
+        (5.0, 10.0, 20.0, 40.0, 60.0, 60.0),
+        start=1,
+    ):
+        assert registry.begin_prewarm(Provider.KORAIL, 4, now=now)
+        registry.finish_prewarm(
+            Provider.KORAIL,
+            4,
+            outcome="failed",
+            now=now,
+        )
+        assert registry.prewarm_retry_state[Provider.KORAIL] == (
+            4,
+            failure_count,
+            now + expected_delay,
+        )
+        now += expected_delay
+
+
+def test_session_refresh_threshold_is_korail_scoped() -> None:
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    # A 30 minute KORAIL window starts refreshing 7.5 minutes before expiry so a failed
+    # attempt still leaves room to retry before the session is gone.
+    assert registry.session_refresh_threshold_seconds(Provider.KORAIL, 1_350.0, 450.0) == 450.0
+    assert registry.session_refresh_threshold_seconds(Provider.KORAIL, 0.0, 10_000.0) == 600.0
+    assert registry.session_refresh_threshold_seconds(Provider.KORAIL, None, 450.0) == 120.0
+    # An unusually short configured window must not produce a threshold that refreshes on
+    # every tick.
+    assert registry.session_refresh_threshold_seconds(Provider.KORAIL, 100.0, 100.0) == 100.0
+
+    # SRT anchors its reuse deadline on last_used_at and its reusing prewarm never
+    # refreshes last_verified_at, so the derived window would grow without bound.
+    assert registry.session_refresh_threshold_seconds(Provider.SRT, 1_350.0, 450.0) == 120.0
+    assert registry.session_refresh_threshold_seconds(Provider.SRT, 5_000.0, 240.0) == 120.0
+
+
+async def test_srt_long_lived_session_keeps_the_fixed_refresh_window(app) -> None:
+    """A stale SRT last_verified_at must not turn every tick into a login."""
+
+    await _seed_account(
+        app,
+        auth_status="authenticated",
+        provider=Provider.SRT,
+        credential_version=4,
+        login_id="0987654321",
+        updated_at=datetime.now(UTC),
+    )
+
+    verifier = StubRuntimeVerifier(
+        snapshots={
+            Provider.SRT: runtime_snapshot(
+                Provider.SRT,
+                remaining_seconds=240.0,
+                last_verified_age_seconds=5_000.0,
+            )
+        }
+    )
+
+    assert (
+        await recover_provider_sessions_once(
+            app.state.test_session_factory,
+            verifier,
+            ProviderRuntimePrewarmRegistry(completed=True),
+        )
+        == 0
+    )
+    assert verifier.prewarm_calls == []
 
 
 async def test_maintenance_tick_failure_is_redacted_and_does_not_stop_manager(

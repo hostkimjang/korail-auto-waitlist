@@ -699,15 +699,27 @@ actor만 이 owner를 직접 사용하고 역으로 조립 모듈을 참조하�
 runtime Callable alias 3개를 같은 객체로 복원하는 definition-free compatibility facade입니다. canonical·legacy·
 browser·reservation actor import 순서와 optional Pydoll backend의 지연 import 계약도 유지합니다.
 
-API의 provider session manager는 시작할 때 활성 계정을 예열하고 이후 30초마다 비밀값 없는 session telemetry를
+API의 provider session manager는 시작할 때 활성 계정을 예열하고 이후 10초마다 비밀값 없는 session telemetry를
 확인합니다. 같은 credential generation의 `READY` session이 마지막 공식 인증 확인 기준으로 재사용 가능하고
-만료까지 120초보다 많이 남았으면
-외부 요청을 생략합니다. `COLD`·`STALE`, generation 불일치, sidecar 재시작으로 session이 사라진 경우 또는 남은
-재사용 시간이 120초 이하인 경우에만 bounded prewarm을 시작합니다. KORAIL prewarm은 같은 auth lock 안에서 기존
-session을 공식 same-origin 확인 요청으로 한 번 검증하고, 성공하면 `last_verified`·`last_used`를 갱신합니다. 검증에
-실패한 session은 먼저 폐기한 뒤 새 로그인을 최대 한 번만 수행합니다. 일반 실패는 60초부터 최대 900초까지 지수
-backoff하고 보호 응답은 처음부터 900초를 적용합니다. 저장된 `auth_required`·`provider_blocked` 상태는 같은 DB
-revision에서 한 번만 복구를 시도하며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
+갱신 임계값보다 많이 남았으면 외부 요청을 생략합니다. `COLD`·`STALE`, generation 불일치, sidecar 재시작으로
+session이 사라진 경우 또는 남은 재사용 시간이 임계값 이하인 경우에만 bounded prewarm을 시작합니다.
+KORAIL prewarm은 같은 auth lock 안에서 기존 session을 공식 same-origin 확인 요청으로 한 번 검증하고, 성공하면
+`last_verified`·`last_used`를 갱신합니다. 검증에 실패하거나 응답이 로그인 상태를 확정하지 못한 session은 먼저
+폐기한 뒤 같은 호출 안에서 새 로그인을 한 번 수행합니다. 즉 keepalive 불확실성 때문에 계정이 다음 주기까지
+미인증으로 남지 않습니다. 실패 backoff는 원인에 따라 나뉩니다. 운영사의 자격증명 판정인 `auth_required`는
+60초부터 최대 900초까지, 보호 응답은 처음부터 900초를 적용합니다. 반면 자격증명 확인에 도달하지도 못한
+어댑터·DB 실패는 5초부터 최대 60초까지만 기다려 어댑터가 살아나는 즉시 session이 복구됩니다. 저장된
+`auth_required` 상태는 같은 DB revision에서 운영사 판정 기준 최대 5회까지 복구를 시도하고, `provider_blocked`는
+반복 로그인이 차단을 키우므로 revision당 1회를 유지합니다. 어댑터 장애처럼 운영사에 닿지 못한 실패는 이
+복구 예산을 소비하지 않으며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
+
+갱신 임계값은 provider마다 다릅니다. KORAIL은 재사용 기한이 `last_verified_at` 기준이고 성공한 prewarm이 그
+시각을 항상 갱신하므로, `last_verified_age + local_reuse_remaining`으로 재사용 창을 정확히 역산할 수 있습니다.
+그 창의 25%를 임계값으로 쓰되 최소 120초, 최대 600초, 그리고 창의 50%를 넘지 않도록 제한합니다. 기본 설정인
+1800초 창에서는 만료 450초 전부터 갱신을 시작하므로 한 번 실패해도 만료 전에 다시 시도할 여유가 남습니다.
+SRT는 재사용 기한이 `last_used_at` 기준이고 session을 재사용하는 prewarm이 `last_verified_at`을 갱신하지 않아
+같은 역산이 매 tick 커집니다. 그대로 두면 예열과 DB 쓰기가 주기마다 반복되므로 SRT는 120초 고정 창을
+유지합니다. SRT까지 앞당기려면 sidecar 계약에 재사용 창 길이를 명시적 필드로 노출하는 선행 작업이 필요합니다.
 KORAIL `loginCheck`는 인증된 JSON만 양성 근거로 사용합니다. 403·429는 보호·호출 제한으로 즉시 중단하고,
 200 비JSON·JSON 파싱 실패처럼 상태를 확정할 수 없는 응답은 keepalive에서 재사용 기한을 연장하지 않습니다.
 단, 자격증명을 제출한 새 로그인 흐름에서는 이 불확실 응답만으로 보호를 단정하지 않고
@@ -945,9 +957,11 @@ SRT는 identifier·인증·NetFunnel·provider 오류를 고정된 sanitized out
 잔여 시간을 계산합니다. top-level `provider_login_verification.py`는 기존 public 21개·private 0개 표면과
 class 7개의 구형 pickle lookup을 같은 canonical 객체로 유지하는 one-way compatibility facade입니다.
 enabled account의 row lock·credential generation 재확인, provider I/O 전 transaction rollback, startup
-prewarm과 recoverable revision별 1회 복구, 재사용 가능한 session의 인증 상태 복원과 watch 재개 commit은
+prewarm과 recoverable revision별 bounded 복구, 재사용 가능한 session의 인증 상태 복원과 watch 재개 commit은
 `provider_account_management/runtime.py`가 소유합니다. registry에는 provider별 sanitized outcome과
-credential 없는 revision tuple·완료 여부만 남기며 provider·persistence 오류 본문은 로그에 넣지 않습니다.
+credential 없는 revision tuple·시도 횟수·완료 여부만 남기며 provider·persistence 오류 본문은 로그에 넣지
+않습니다. 시도 횟수는 시작한 시도와 운영사 판정을 분리해 세므로, 어댑터 장애 재시도가 revision의 복구
+예산을 소모하지 않으면서도 첫 즉시 재시도 이후에는 backoff를 따르게 합니다.
 실제 `provider_blocked`가 저장된 동안 관측 worker도 같은 운영사의 좌석 provider I/O를 만들지 않습니다. 로그인
 manager가 보호 backoff 뒤 현재 credential generation을 인증하고 복구 전이를 commit하면 해당 watch를 즉시 다시
 스케줄합니다. 단순 `auth_required`는 로그인 없는 공개 좌석 관측까지 막는 provider-wide 보호 신호로 사용하지

@@ -317,7 +317,7 @@ async def test_prewarm_protection_retires_the_session_and_marks_it_blocked() -> 
 
 
 @pytest.mark.asyncio
-async def test_prewarm_unavailable_probe_retires_the_session_and_remains_fail_closed() -> None:
+async def test_prewarm_unavailable_probe_reauthenticates_in_the_same_call() -> None:
     class UnavailableProbeSession(_AuthSession):
         async def probe_authenticated_session(self) -> bool:
             self.probe_count += 1
@@ -337,14 +337,54 @@ async def test_prewarm_unavailable_probe_retires_the_session_and_remains_fail_cl
     )
     assert await actor.verify_credentials(_credential()) is True
 
-    with pytest.raises(BrowserSourceUnavailable):
-        await actor.prewarm_credentials(_credential())
+    # An inconclusive official probe must not leave the account unauthenticated until the
+    # next maintenance tick. The retired generation is replaced by a fresh login here.
+    assert await actor.prewarm_credentials(_credential()) is True
 
-    assert actor.active_session is None
-    assert actor.state is KorailSessionActorState.STALE
-    assert session.authentication_count == 1
+    assert actor.active_session is not None
+    assert actor.state is KorailSessionActorState.READY
     assert session.probe_count == 1
+    assert session.authentication_count == 2
+    assert session.open_count == 2
     assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_prewarm_unavailable_probe_replaces_the_retired_generation() -> None:
+    sessions: list[_AuthSession] = []
+
+    class UnavailableProbeSession(_AuthSession):
+        async def probe_authenticated_session(self) -> bool:
+            self.probe_count += 1
+            raise BrowserSourceUnavailable("session_keepalive")
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        session = UnavailableProbeSession()
+        sessions.append(session)
+        return _AuthContext(session)
+
+    actor = PydollAuthenticationSessionActor[UnavailableProbeSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 0.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+    )
+    assert await actor.verify_credentials(_credential()) is True
+
+    assert await actor.prewarm_credentials(_credential()) is True
+
+    assert len(sessions) == 2
+    assert sessions[0].probe_count == 1
+    assert sessions[0].closed == 1
+    assert sessions[1].authentication_count == 1
+    assert actor.active_session is not None
+    assert actor.active_session.session is sessions[1]
+    assert actor.state is KorailSessionActorState.READY
 
 
 @pytest.mark.asyncio

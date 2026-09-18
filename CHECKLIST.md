@@ -154,6 +154,8 @@
 - [x] 철도 provider account 암복호화·CRUD·generation CAS·watch 재개 UoW를 feature application owner로 이동하고 legacy import·pickle 호환 보존
 - [x] 철도 provider login verify/prewarm·session telemetry를 feature owner로 이동하고 sanitized 결과·legacy pickle 호환 보존
 - [x] 철도 provider session prewarm·generation fence·재사용 session 복구 UoW를 feature runtime owner로 이동하고 legacy pickle 호환 보존
+- [x] 로그인 session keepalive가 불확실할 때 같은 호출에서 즉시 재로그인하고, KORAIL 전용 재사용 창 비례 갱신 임계값·원인별 backoff 분리·revision당 bounded 복구로 만료 뒤 재확인 지연 제거
+- [ ] SRT 갱신 창도 앞당길지 결정. SRT는 재사용 기한이 `last_used_at` 기준이고 재사용 prewarm이 `last_verified_at`을 갱신하지 않아 telemetry 역산이 매 주기 예열을 유발하므로, sidecar session 계약에 재사용 창 길이를 명시적 필드로 노출하는 선행 작업이 필요함
 - [x] `worker.py`를 직접 SQL·provider I/O·비밀값 정책 없는 Celery composition root로 동결하고 strict typing 고정
 - [x] 중앙 `schemas.py` 76개 alias·`models.py` 24개 alias metadata registry를 exact compatibility hub로 동결
 - [x] test-only SRT fullstack transport fixture를 provider adapter owner로 이동하고 legacy import·pickle 호환 보존
@@ -248,6 +250,8 @@
 - [ ] 브라우저 전용 관측으로 전환된 상태에서 같은 route·날짜 활성 대기가 coordinator 단일 실행을 공유해 `next_check_at`이 계속 전진하고, 관측 주기 지연이 알림 적시성을 해치지 않는지 실제 운영 표본에서 확인
 - [ ] Oracle에서 결제기한 없는 활성 SRT `PAYMENT_REQUIRED`가 4~6회 읽기 전용 확인으로 재개되고, 정확한 전체 좌석 상관 없이는 paid·unpaid로 잘못 확정되지 않는지 확인. 기존 count 3 표본은 배포 직후 과거 watch 만료가 먼저 적용되어 활성 운영 표본으로 검증할 수 없었음
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
+- [ ] 실제 KORAIL 계정에서 로그인 session 만료 순간의 즉시 재로그인과, `korail-browser-adapter`를 정지했다가 다시 올렸을 때 5~60초 backoff로 1분 안에 재인증되는지 확인
+- [ ] 자격증명 거부가 실제로 반복될 때 revision당 5회에서 자동 복구가 멈추고 계정 잠금이나 보호 응답으로 악화되지 않는지 운영 표본에서 확인
 - [ ] Oracle 재가동 전에 같은 KORAIL 계정을 사용하는 로컬 scheduler·worker를 drain한 뒤 API provider session manager·sidecar를 포함한 Compose profile 전체를 volume 보존 상태로 정지하고 단일 활성 배포를 유지하며, hotfix 배포 뒤 자연 발생 예약에서 예약 직전 probe·필요 시 fresh login·불확실 session 폐기·fresh reconciliation과 공식 자동 배정 좌석 표시를 끝까지 확인
 - [x] 2026년 8월 17일 Oracle 00:56 KORAIL 70편과 로컬 01:00 KORAIL 107편에서 `session_keepalive`가 예약 control 전 0.5초 안에 실패하고 progress·click이 없음을 분리 확인했으며, 중간의 로컬 fresh 예매 성공과 Oracle 재로그인 뒤 로컬 session 무효화로 동일 계정 이중 실행 충돌을 확인하고 로컬 전체 Compose profile을 queue 0·volume 보존 상태로 정지
 - [ ] 실제 SRT 혼잡 시간대에 접속 대기 진입→통과→조회 재개 또는 caller timeout→late 종료 로그 순서와 비밀값 미노출 확인

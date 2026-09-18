@@ -24,7 +24,7 @@ from .models import RailProviderAccount
 from .schemas import RailProviderAuthStatus
 
 LOGGER = logging.getLogger(__name__)
-PROVIDER_AUTH_RECOVERY_INTERVAL_SECONDS = 30.0
+PROVIDER_AUTH_RECOVERY_INTERVAL_SECONDS = 10.0
 RECOVERABLE_PROVIDER_AUTH_STATUSES: frozenset[RailProviderAuthStatus] = frozenset(
     {"auth_required", "provider_blocked"}
 )
@@ -54,11 +54,24 @@ class ProviderRuntimePrewarmRegistry:
     """Process-local startup results with no credential or provider payload material."""
 
     SESSION_REFRESH_WINDOW_SECONDS = 120.0
+    KORAIL_SESSION_REFRESH_FRACTION = 0.25
+    SESSION_REFRESH_SAFETY_FRACTION = 0.5
+    SESSION_REFRESH_MAX_SECONDS = 600.0
     PREWARM_INITIAL_BACKOFF_SECONDS = 60.0
     PREWARM_MAX_BACKOFF_SECONDS = 900.0
+    LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS = 5.0
+    LOCAL_FAILURE_MAX_BACKOFF_SECONDS = 60.0
+    AUTH_RECOVERY_MAX_ATTEMPTS = 5
+    # Outcomes that never reached the provider's credential check. They describe this
+    # deployment's own adapter or database, so retrying them quickly cannot lock an
+    # account out and is the only way a stranded session recovers on its own.
+    LOCAL_FAILURE_OUTCOMES = frozenset({"failed", "not_checked"})
 
     outcomes: dict[Provider, RailProviderAuthStatus] = field(default_factory=dict)
-    attempted_auth_revisions: set[tuple[Provider, int, int]] = field(default_factory=set)
+    # provider -> (auth revision, attempts started, provider verdicts observed)
+    auth_revision_attempts: dict[Provider, tuple[tuple[Provider, int, int], int, int]] = field(
+        default_factory=dict
+    )
     prewarm_in_flight: set[Provider] = field(default_factory=set)
     prewarm_retry_state: dict[Provider, tuple[int, int, float]] = field(default_factory=dict)
     completed: bool = False
@@ -66,15 +79,75 @@ class ProviderRuntimePrewarmRegistry:
     def outcome_for(self, provider: Provider) -> RailProviderAuthStatus | None:
         return self.outcomes.get(provider)
 
-    def has_attempted_auth_revision(self, revision: tuple[Provider, int, int]) -> bool:
-        return revision in self.attempted_auth_revisions
+    def _auth_revision_counts(self, revision: tuple[Provider, int, int]) -> tuple[int, int]:
+        recorded = self.auth_revision_attempts.get(revision[0])
+        if recorded is None or recorded[0] != revision:
+            return (0, 0)
+        return (recorded[1], recorded[2])
+
+    def auth_revision_started_count(self, revision: tuple[Provider, int, int]) -> int:
+        """Count attempts begun for this revision, including adapter-side failures."""
+
+        return self._auth_revision_counts(revision)[0]
+
+    def auth_revision_attempt_count(self, revision: tuple[Provider, int, int]) -> int:
+        """Count provider verdicts observed for this revision."""
+
+        return self._auth_revision_counts(revision)[1]
+
+    def max_recovery_attempts(self, auth_status: RailProviderAuthStatus) -> int:
+        """Bound automatic recovery per persisted auth revision by its failure meaning."""
+
+        # A protection verdict keeps its single attempt: logging in repeatedly under
+        # provider protection is what escalates a block. Credential expiry instead needs a
+        # retry budget so one adapter outage cannot strand the account until a human acts.
+        if auth_status == "provider_blocked":
+            return 1
+        return self.AUTH_RECOVERY_MAX_ATTEMPTS
+
+    def consumes_recovery_budget(self, outcome: RailProviderAuthStatus | None) -> bool:
+        """Spend a revision's recovery budget only on a real provider verdict."""
+
+        return outcome is not None and outcome not in self.LOCAL_FAILURE_OUTCOMES
+
+    def session_refresh_threshold_seconds(
+        self,
+        provider: Provider,
+        last_verified_age_seconds: float | None,
+        local_reuse_remaining_seconds: float | None,
+    ) -> float:
+        """Refresh KORAIL early enough that one failed attempt still leaves retry room."""
+
+        # Only KORAIL anchors its reuse deadline on last_verified_at and refreshes that
+        # timestamp on every successful prewarm, so only KORAIL's reuse window can be
+        # derived from telemetry. SRT anchors on last_used_at and its reusing prewarm
+        # leaves last_verified_at untouched, which would inflate the estimate on every
+        # tick until the manager logged in continuously. SRT keeps the fixed window.
+        if provider is not Provider.KORAIL:
+            return self.SESSION_REFRESH_WINDOW_SECONDS
+        if last_verified_age_seconds is None or local_reuse_remaining_seconds is None:
+            return self.SESSION_REFRESH_WINDOW_SECONDS
+        reuse_window_seconds = last_verified_age_seconds + local_reuse_remaining_seconds
+        return min(
+            max(
+                self.SESSION_REFRESH_WINDOW_SECONDS,
+                reuse_window_seconds * self.KORAIL_SESSION_REFRESH_FRACTION,
+            ),
+            self.SESSION_REFRESH_MAX_SECONDS,
+            # A threshold that reaches the window itself would prewarm on every tick even
+            # when an operator configures an unusually short reuse TTL.
+            reuse_window_seconds * self.SESSION_REFRESH_SAFETY_FRACTION,
+        )
 
     def mark_auth_revision_attempted(self, revision: tuple[Provider, int, int]) -> None:
-        provider = revision[0]
-        self.attempted_auth_revisions = {
-            attempted for attempted in self.attempted_auth_revisions if attempted[0] != provider
-        }
-        self.attempted_auth_revisions.add(revision)
+        started, verdicts = self._auth_revision_counts(revision)
+        self.auth_revision_attempts[revision[0]] = (revision, started, verdicts + 1)
+
+    def mark_auth_revision_started(self, revision: tuple[Provider, int, int]) -> None:
+        """Retire the revision's immediate retry so later attempts honour the backoff."""
+
+        started, verdicts = self._auth_revision_counts(revision)
+        self.auth_revision_attempts[revision[0]] = (revision, started + 1, verdicts)
 
     def begin_prewarm(
         self,
@@ -99,6 +172,21 @@ class ProviderRuntimePrewarmRegistry:
         self.prewarm_in_flight.add(provider)
         return True
 
+    def backoff_seconds(self, outcome: RailProviderAuthStatus, failure_count: int) -> float:
+        """Separate a provider's credential verdict from this deployment's own outage."""
+
+        if outcome == "provider_blocked":
+            # Protection responses use the safest interval from the first failure.
+            return self.PREWARM_MAX_BACKOFF_SECONDS
+        if outcome in self.LOCAL_FAILURE_OUTCOMES:
+            initial = self.LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS
+            ceiling = self.LOCAL_FAILURE_MAX_BACKOFF_SECONDS
+        else:
+            initial = self.PREWARM_INITIAL_BACKOFF_SECONDS
+            ceiling = self.PREWARM_MAX_BACKOFF_SECONDS
+        growth = float(2 ** (failure_count - 1))
+        return min(initial * growth, ceiling)
+
     def finish_prewarm(
         self,
         provider: Provider,
@@ -116,22 +204,16 @@ class ProviderRuntimePrewarmRegistry:
             failure_count = (
                 previous[1] + 1 if previous is not None and previous[0] == credential_version else 1
             )
-            backoff_seconds = min(
-                self.PREWARM_INITIAL_BACKOFF_SECONDS * (2 ** (failure_count - 1)),
-                self.PREWARM_MAX_BACKOFF_SECONDS,
-            )
-            if outcome == "provider_blocked":
-                # Protection responses use the safest interval from the first failure.
-                backoff_seconds = self.PREWARM_MAX_BACKOFF_SECONDS
             self.prewarm_retry_state[provider] = (
                 credential_version,
                 failure_count,
-                now + backoff_seconds,
+                now + self.backoff_seconds(outcome, failure_count),
             )
 
     def forget_provider(self, provider: Provider) -> None:
         self.prewarm_in_flight.discard(provider)
         self.prewarm_retry_state.pop(provider, None)
+        self.auth_revision_attempts.pop(provider, None)
 
 
 async def _load_enabled_account_runtime(
@@ -355,10 +437,15 @@ async def recover_provider_sessions_once(
 
         recoverable = account_runtime.auth_status in RECOVERABLE_PROVIDER_AUTH_STATUSES
         revision = account_runtime.recovery_revision
-        new_recovery_revision = recoverable and not registry.has_attempted_auth_revision(revision)
-        if recoverable and not new_recovery_revision:
-            # Still observe the sanitized process state every tick, but preserve the
-            # one-provider-attempt-per-persisted-auth-revision contract.
+        recovery_started = registry.auth_revision_started_count(revision)
+        recovery_verdicts = registry.auth_revision_attempt_count(revision)
+        recovery_attempt = recoverable and recovery_verdicts < registry.max_recovery_attempts(
+            account_runtime.auth_status
+        )
+        if recoverable and not recovery_attempt:
+            # Still observe the sanitized process state every tick, but stop retrying a
+            # revision that has spent its recovery budget. Only a newer persisted auth
+            # revision or credential generation starts a fresh budget.
             try:
                 await verifier.session_snapshot(provider)
             except asyncio.CancelledError:
@@ -370,7 +457,7 @@ async def recover_provider_sessions_once(
                 )
             continue
 
-        if new_recovery_revision:
+        if recovery_attempt:
             restored = await _restore_locally_reusable_session(
                 session_factory,
                 verifier,
@@ -378,6 +465,7 @@ async def recover_provider_sessions_once(
                 account_runtime,
             )
             if restored is not None:
+                registry.mark_auth_revision_started(revision)
                 registry.mark_auth_revision_attempted(revision)
                 attempted += 1
                 continue
@@ -423,7 +511,12 @@ async def recover_provider_sessions_once(
                 and snapshot.credential_generation
                 == str(account_runtime.credentials.credential_version)
                 and snapshot.local_reuse_remaining_seconds is not None
-                and snapshot.local_reuse_remaining_seconds > registry.SESSION_REFRESH_WINDOW_SECONDS
+                and snapshot.local_reuse_remaining_seconds
+                > registry.session_refresh_threshold_seconds(
+                    provider,
+                    snapshot.last_verified_age_seconds,
+                    snapshot.local_reuse_remaining_seconds,
+                )
             ):
                 registry.outcomes[provider] = "authenticated"
                 continue
@@ -431,7 +524,7 @@ async def recover_provider_sessions_once(
         credential_version = account_runtime.credentials.credential_version
         loop = asyncio.get_running_loop()
         now = loop.time()
-        if new_recovery_revision and account_runtime.auth_status == "provider_blocked":
+        if recovery_attempt and account_runtime.auth_status == "provider_blocked":
             retry = registry.prewarm_retry_state.get(provider)
             if retry is None or retry[0] != credential_version:
                 # A protection revision may be persisted by a reservation outside this
@@ -449,14 +542,17 @@ async def recover_provider_sessions_once(
             credential_version,
             now=now,
             bypass_backoff=(
-                new_recovery_revision and account_runtime.auth_status != "provider_blocked"
+                recovery_attempt
+                and recovery_started == 0
+                and account_runtime.auth_status != "provider_blocked"
             ),
         ):
             continue
-        if new_recovery_revision:
-            # Fence only after this tick owns the provider attempt. A blocked revision
-            # remains eligible for its one recovery attempt after the cooldown expires.
-            registry.mark_auth_revision_attempted(revision)
+        if recovery_attempt:
+            # Retire the revision's immediate attempt as soon as this tick owns it, so a
+            # repeated adapter outage falls back to the local-failure backoff instead of
+            # re-entering the bypass on every tick.
+            registry.mark_auth_revision_started(revision)
         outcome: RailProviderAuthStatus | None = None
         try:
             outcome = await _prewarm_account(
@@ -473,6 +569,11 @@ async def recover_provider_sessions_once(
                 outcome=outcome,
                 now=loop.time(),
             )
+            if recovery_attempt and registry.consumes_recovery_budget(outcome):
+                # Spend the budget only once this tick produced a provider verdict. An
+                # adapter outage never reached the credential check, so it must not
+                # exhaust recovery before the adapter is reachable again.
+                registry.mark_auth_revision_attempted(revision)
     return attempted
 
 

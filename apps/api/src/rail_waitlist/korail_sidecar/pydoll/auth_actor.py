@@ -481,11 +481,20 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
                 and active.searches_started < self._session_reuse_max_searches
                 and self._state is KorailSessionActorState.READY
             ):
-                if await self.probe_reused_authenticated_session(
-                    active.session,
-                    credential,
-                ):
-                    return True
+                try:
+                    if await self.probe_reused_authenticated_session(
+                        active.session,
+                        credential,
+                    ):
+                        return True
+                except BrowserSourceUnavailable:
+                    # The official probe could not attest either login state and has
+                    # already retired the generation. Re-authenticate inside this same
+                    # call so an expiring session is replaced immediately instead of
+                    # leaving the account unauthenticated until the next maintenance
+                    # tick. Protection and rate-limit verdicts still propagate, because
+                    # logging in again under provider protection is never safe.
+                    pass
 
             return await self._verify_credentials_locked(credential)
 

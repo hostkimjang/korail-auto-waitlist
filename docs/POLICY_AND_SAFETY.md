@@ -138,7 +138,8 @@ SRT는 재사용 기한 기준 시각이 달라 같은 계산이 매 주기 커�
 - exact 결제 완료 근거는 기존 watch 상태와 무관한 절대 재예약 fence입니다. active pre-reservation의 `SCHEDULED`·`OFFICIAL_WAITLIST`·`SEAT_FOUND`·`RESERVING`은 먼저 `WATCHING`으로 정규화한 뒤 `COMPLETED`로 전이하고, 기존 `WATCHING`·`PAYMENT_REQUIRED`도 실제 `COMPLETED`로 전이합니다. provider I/O 중 `PAUSED`·`AUTH_REQUIRED`·`COOLDOWN`으로 바뀐 경우에는 그 상태를 보존한 채 결제·관측·재시도와 수동 승인을 닫습니다. `watch.payment_completed`는 실제 완료 전이에서만 발행하고, 보존 경합에서는 `confirmed_paid` 재확인 갱신만 발행해 완료 상태나 알림을 가장하지 않습니다.
 - 인증이 필요하거나 보호 응답이 나타나면 중단합니다.
 - 공개 열차 검색의 승차권 예매기간 확대 안내는 확인된 이미지·modal·control 구조가 일치할 때 유일한
-  `창닫기`를 한 번 누릅니다. 이는 공개 안내를 닫는 행동이며 checkbox를 선택하거나 동의·예약 행동을
+  `창닫기`를 한 번 누릅니다. 자동 예매도 목록 확장 여부와 관계없이 좌석 선택 전에 현재 안내를 확인합니다.
+  이는 공개 안내를 닫는 행동이며 checkbox를 선택하거나 동의·예약 행동을
   대신하지 않습니다. 보호 신호가 있는 화면에서는 닫지 않고, 다른 안내·복수 버튼·불명확한 닫기 결과는
   조회 실패로 끝냅니다. 로그에는 안내 원문 대신 고정 유형과 처리 결과만 남깁니다.
 - KORAIL 공식 팝업은 모든 팝업을 같은 실패로 취급하지 않습니다. 정확한 `이용안내/확인`과 예약 결과의

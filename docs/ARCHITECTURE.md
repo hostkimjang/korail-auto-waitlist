@@ -744,7 +744,9 @@ Pydoll의 인증된 단일 예약 시도 orchestration은 `korail_sidecar/pydoll
 owner입니다. public direct URL 계산은 auth lock 밖에서 끝내고, credential 변경 폐기부터 lease·인증·검색·예약·
 non-persistent context 종료까지는 같은 auth lock 안에서 직렬화합니다. 사전 form identity는 출발/도착역·날짜·
 출발 시·1명 승객을 모두 확인하고, 결과 snapshot은 열차 번호·선택적 종류·경로·출도착 시각이 정확히 하나인
-경우에만 더보기를 생략합니다. 확정할 수 없으면 bounded expansion 뒤 DOM 예약을 한 번만 호출하며, 좌석 또는
+경우에만 더보기를 생략합니다. 목록 확장 여부와 관계없이 좌석 선택 직전 `dismiss_search_notice`로 현재
+공개 안내를 관측합니다. 확인된 예매기간 확대 안내를 한 번 닫으면 최신 snapshot의 보호 신호를 다시 검증하고,
+예매 driver가 열차·객실을 다시 확인합니다. 확정할 수 없으면 bounded expansion 뒤 DOM 예약을 한 번만 호출하며, 좌석 또는
 예약 click 이후 불확실한 결과를 재시도하지 않습니다. 이미 인증된 lease를 재사용할 때도 예약 화면에 들어가기
 직전 공식 same-origin probe를 수행합니다. 명확한 로그아웃이거나 source 불가로 판정할 수 없는 응답이면 기존
 session을 먼저 닫고 새 session에서 로그인을 최대 한 번만 수행합니다. 새 인증도 끝내 확인되지 않으면 객실 등급

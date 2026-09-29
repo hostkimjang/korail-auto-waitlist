@@ -19,6 +19,27 @@ def script_result(state: object) -> dict[str, object]:
     return {"result": {"result": {"value": state}}}
 
 
+async def test_reservation_notice_preparation_observes_live_modal_and_refreshes_rows(monkeypatch):
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    initial = PydollPageSnapshot("조회 결과", ())
+    clean = PydollPageSnapshot("안내가 사라진 조회 결과", ())
+    close = SimpleNamespace(click=AsyncMock())
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(
+            side_effect=[script_result("booking_window_expansion"), script_result("absent")]
+        )
+    )
+    monkeypatch.setattr(session, "_visible_elements", AsyncMock(return_value=[close]))
+    fresh_snapshot = AsyncMock(return_value=clean)
+    monkeypatch.setattr(session, "_snapshot", fresh_snapshot)
+
+    result = await session.dismiss_search_notice(initial)
+
+    assert result is clean
+    close.click.assert_awaited_once()
+    fresh_snapshot.assert_awaited_once()
+
+
 async def test_verified_notice_closes_once_before_expanding_and_refreshes_snapshot(
     monkeypatch, caplog
 ):

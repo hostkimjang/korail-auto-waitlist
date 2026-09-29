@@ -78,6 +78,8 @@ class PydollReservationSession(_PydollAuthenticationSession, Protocol):
 
     async def wait_for_result(self) -> PydollPageSnapshot: ...
 
+    async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot: ...
+
     async def expand_results(
         self,
         snapshot: PydollPageSnapshot,
@@ -365,6 +367,11 @@ class PydollReservationActor[Session: PydollReservationSession]:
                         self._max_more_result_actions,
                     )
                     self._response_safety_guard(snapshot, stage)
+                # A unique initial target skips More, but the same public notice
+                # can still cover its seat control. Observe it before any seat click.
+                stage = "search_notice"
+                snapshot = await session.dismiss_search_notice(snapshot)
+                self._response_safety_guard(snapshot, stage)
                 stage = "reserve_once"
                 result = await session.reserve_once(request, on_progress=track_progress)
                 seat_clicked = seat_clicked or result.seat_clicked

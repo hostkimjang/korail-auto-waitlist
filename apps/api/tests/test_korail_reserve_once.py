@@ -3373,6 +3373,9 @@ class ReservationFixtureSession:
     async def wait_for_result(self) -> PydollPageSnapshot:
         return PydollPageSnapshot("결과", ())
 
+    async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot:
+        return snapshot
+
     async def expand_results(
         self, snapshot: PydollPageSnapshot, max_actions: int
     ) -> PydollPageSnapshot:

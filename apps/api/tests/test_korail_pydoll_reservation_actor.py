@@ -4,6 +4,7 @@ import ast
 import asyncio
 from datetime import UTC, date, datetime, time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -62,6 +63,9 @@ class _ReservationSession:
     async def wait_for_result(self) -> PydollPageSnapshot:
         self.events.append("wait")
         return PydollPageSnapshot("result", ())
+
+    async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot:
+        return snapshot
 
     async def expand_results(
         self,
@@ -316,7 +320,7 @@ async def test_reservation_uses_facade_callbacks_captured_at_construction(
 
     assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
     assert result.session_ready_at is not None
-    assert safety_stages == ["load_page", "wait_result"]
+    assert safety_stages == ["load_page", "wait_result", "search_notice"]
     assert identity_stages == ["pre_submit_identity_check"]
     assert session.events == [
         "open",
@@ -329,6 +333,79 @@ async def test_reservation_uses_facade_callbacks_captured_at_construction(
         "reserve",
     ]
     assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_unique_initial_target_dismisses_notice_before_seat_selection(monkeypatch):
+    class NoticeSession(_ReservationSession):
+        async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot:
+            self.events.append("notice_closed")
+            return snapshot
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient, "_assert_reservation_identity", staticmethod(AsyncMock())
+    )
+    monkeypatch.setattr(browser_module, "_snapshot_has_unique_reservation_target", lambda *_: True)
+    session = NoticeSession()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _ReservationContext(session),  # type: ignore[arg-type]
+    )
+
+    result = await client.reserve_once(_request())
+
+    assert result.outcome is KorailReservationOutcome.PAYMENT_REQUIRED
+    assert "expand" not in session.events
+    assert session.events[-2:] == ["notice_closed", "reserve"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_expansion", [False, True])
+async def test_unrecognized_search_notice_stops_before_any_seat_click(monkeypatch, after_expansion):
+    class UnknownNoticeSession(_ReservationSession):
+        async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot:
+            raise BrowserSourceUnavailable("search_notice_unrecognized")
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient, "_assert_reservation_identity", staticmethod(AsyncMock())
+    )
+    monkeypatch.setattr(
+        browser_module, "_snapshot_has_unique_reservation_target", lambda *_: not after_expansion
+    )
+    session = UnknownNoticeSession()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _ReservationContext(session),  # type: ignore[arg-type]
+    )
+
+    result = await client.reserve_once(_request())
+
+    assert result.outcome is KorailReservationOutcome.FAILED
+    assert result.reason == "source_unavailable:search_notice_unrecognized"
+    assert result.seat_clicked is False
+    assert result.reservation_clicked is False
+    assert "reserve" not in session.events
+    assert ("expand" in session.events) is after_expansion
+
+
+@pytest.mark.asyncio
+async def test_protection_in_snapshot_after_notice_close_stops_before_seat_click(monkeypatch):
+    class ProtectionAfterNoticeSession(_ReservationSession):
+        async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot:
+            return PydollPageSnapshot("CODE -8003", ())
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient, "_assert_reservation_identity", staticmethod(AsyncMock())
+    )
+    session = ProtectionAfterNoticeSession()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _ReservationContext(session),  # type: ignore[arg-type]
+    )
+
+    result = await client.reserve_once(_request())
+
+    assert result.outcome is KorailReservationOutcome.PROVIDER_BLOCKED
+    assert result.seat_clicked is False
+    assert result.reservation_clicked is False
+    assert "reserve" not in session.events
 
 
 @pytest.mark.asyncio

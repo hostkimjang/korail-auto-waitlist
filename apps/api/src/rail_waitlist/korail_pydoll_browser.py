@@ -236,6 +236,8 @@ class PydollBrowserSession(Protocol):
 
     async def wait_for_result(self) -> PydollPageSnapshot: ...
 
+    async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot: ...
+
     async def expand_results(
         self,
         snapshot: PydollPageSnapshot,
@@ -1092,6 +1094,9 @@ class _PydollSession:
 
     async def wait_for_result(self) -> PydollPageSnapshot:
         return await self._search_driver.wait_for_result()
+
+    async def dismiss_search_notice(self, snapshot: PydollPageSnapshot) -> PydollPageSnapshot:
+        return await self._search_driver.dismiss_search_notice(snapshot, observe_current=True)
 
     async def expand_results(
         self,

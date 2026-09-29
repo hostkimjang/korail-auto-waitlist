@@ -25,6 +25,11 @@ from rail_waitlist.korail_sidecar.contracts import (
     KorailReservationConfirmationRequest,
     KorailReserveOnceRequest,
 )
+from rail_waitlist.korail_sidecar.search_progress import (
+    IDLE_SEARCH_PROGRESS,
+    OfficialQueueProgress,
+    SearchProgress,
+)
 from rail_waitlist.provider_call_context import (
     REQUEST_ID_HEADER,
     REQUEST_TIMEOUT_MS_HEADER,
@@ -85,6 +90,7 @@ class FakeHttpClient:
         *,
         json: object,
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> FakeResponse:
         self.requests.append(("POST", path, json))
         self.request_headers.append(headers)
@@ -190,6 +196,31 @@ def transport_with(client: FakeHttpClient) -> owner.HttpBrowserAdapterTransport:
     return transport
 
 
+@pytest.mark.asyncio
+async def test_search_progress_reads_only_valid_elapsed_time_from_existing_search() -> None:
+    client = FakeHttpClient(
+        FakeResponse(
+            200,
+            {"state": "official_queue", "queue": {"elapsed_wait_seconds": 73}},
+        )
+    )
+    transport = transport_with(client)
+    request = search_request()
+
+    assert await transport.search_progress(request) == SearchProgress(
+        state="official_queue", queue=OfficialQueueProgress(elapsed_wait_seconds=73)
+    )
+    assert client.requests == [("POST", "/v1/search-progress", request.model_dump(mode="json"))]
+
+    for payload in (
+        {"state": "official_queue", "queue": {"elapsed_wait_seconds": -1}},
+        {"state": "official_queue", "queue": {"elapsed_wait_seconds": True}},
+        {"state": "searching", "queue": {"elapsed_wait_seconds": 5}},
+    ):
+        client.response = FakeResponse(200, payload)
+        assert await transport.search_progress(request) == IDLE_SEARCH_PROGRESS
+
+
 def test_transport_leaf_has_exact_legacy_aliases_and_import_boundary() -> None:
     for symbol in MOVED_SYMBOLS:
         canonical = getattr(owner, symbol)
@@ -250,10 +281,11 @@ def test_transport_leaf_has_exact_legacy_aliases_and_import_boundary() -> None:
         ("urllib.parse", 0),
         ("pydantic", 0),
         ("browser_contracts", 1),
+        ("contracts", 1),
+        ("search_progress", 1),
+        ("provider_call_context", 2),
         ("reservations.contracts", 2),
         ("timetable_management.schemas", 2),
-        ("provider_call_context", 2),
-        ("contracts", 1),
     }
 
 

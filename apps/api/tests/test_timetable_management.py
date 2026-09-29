@@ -5,10 +5,84 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from rail_waitlist.domain import Provider
 from rail_waitlist.timetable_management import http as timetable_http
 
 KOREA = ZoneInfo("Asia/Seoul")
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_reason"),
+    [
+        ("source_unavailable", "source_unavailable"),
+        ("provider_access_restricted", "provider_access_restricted"),
+        ("source_not_configured", "source_not_configured"),
+        ("passenger_count_not_supported", "passenger_count_not_supported"),
+        ("unrecognized failure", "source_unavailable"),
+    ],
+)
+async def test_tago_fallback_preserves_live_failure_without_seat_actions(
+    app, client, monkeypatch, failure, expected_reason
+):
+    from rail_waitlist.korail_browser_seat_source import KorailBrowserTimetableUnavailable
+    from rail_waitlist.provider_adapters.timetable_support import official_unknown_seat_classes
+    from rail_waitlist.timetable_management import application
+    from rail_waitlist.timetable_management.schemas import TimetableItem
+
+    class FailedLiveSource:
+        async def search_timetable(self, **kwargs):
+            raise KorailBrowserTimetableUnavailable(failure)
+
+    class FallbackAdapter:
+        async def timetable(self, **kwargs):
+            return [
+                TimetableItem(
+                    provider=Provider.KORAIL,
+                    train_number="30",
+                    train_type="KTX",
+                    origin="대전",
+                    destination="서울",
+                    departure_at=datetime(2026, 10, 1, 12, tzinfo=KOREA),
+                    arrival_at=datetime(2026, 10, 1, 13, 4, tzinfo=KOREA),
+                    timetable_source="TAGO",
+                    timetable_retrieved_at=datetime(2026, 9, 30, 4, tzinfo=KOREA),
+                    seat_classes=official_unknown_seat_classes(
+                        "https://www.korail.com/ticket/main", reason="source_not_configured"
+                    ),
+                    official_booking_url="https://www.korail.com/ticket/main",
+                )
+            ]
+
+    monkeypatch.setattr(app.state, "korail_browser_seat_source", FailedLiveSource())
+    monkeypatch.setattr(application, "get_timetable_provider", lambda provider: FallbackAdapter())
+    response = await client.get(
+        "/api/v1/timetables",
+        params={
+            "provider": "korail",
+            "origin": "대전",
+            "destination": "서울",
+            "departure_from": "2026-10-01T12:00:00+09:00",
+            "departure_to": "2026-10-01T18:00:00+09:00",
+        },
+    )
+
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["train_number"] == "30"
+    assert row["timetable_source"] == "TAGO"
+    for seat in row["seat_classes"]:
+        assert seat["status"] == "unknown"
+        assert seat["provenance"] == {
+            "kind": "not_observed",
+            "source": None,
+            "observed_at": None,
+            "fresh_until": None,
+            "reason": expected_reason,
+        }
+        assert seat["actions"] == []
+        assert seat["registration_evidence_id"] is None
 
 
 def test_timetable_routes_are_owned_only_by_feature_router(app) -> None:

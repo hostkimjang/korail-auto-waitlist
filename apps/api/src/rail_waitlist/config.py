@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     korail_browser_adapter_url: str = "http://korail-browser-adapter:8001"
     korail_browser_adapter_token: str | None = None
     korail_browser_adapter_cache_ttl_seconds: int = Field(default=1, ge=1, le=300)
-    korail_browser_adapter_timeout_seconds: float = Field(default=90, ge=30, le=180)
+    korail_browser_adapter_timeout_seconds: float = Field(default=600, ge=30, le=600)
     webpush_vapid_private_key: str | None = None
     webpush_vapid_public_key: str | None = None
     webpush_vapid_subject: str = "mailto:admin@localhost"

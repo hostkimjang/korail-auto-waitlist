@@ -9,14 +9,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_admin
 from ..database import get_session
 from ..domain import Provider
+from ..korail_sidecar.search_progress import IDLE_SEARCH_PROGRESS, SearchProgress
 from ..provider_contracts import ProviderUnavailable, RouteValidationError
 from ..timetable_snapshot_cache import TimetableSnapshotKey
 from .application import UnsupportedTimetableProvider, load_timetable_items
-from .contracts import TimetableApplication, TimetableSnapshotCachePort
+from .contracts import KorailTimetableSource, TimetableApplication, TimetableSnapshotCachePort
 from .schemas import SeatStatusRefreshRequest, TimetableItem
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_admin)])
 Session = Annotated[AsyncSession, Depends(get_session)]
+
+
+@router.get("/timetable-progress", response_model=SearchProgress, response_model_exclude_none=True)
+async def timetable_progress(
+    request: Request,
+    response: Response,
+    provider: Provider,
+    origin: Annotated[str, Query(min_length=1, max_length=40)],
+    destination: Annotated[str, Query(min_length=1, max_length=40)],
+    departure_from: datetime,
+    departure_to: datetime,
+    passenger_count: Annotated[int, Query(ge=1, le=9)] = 1,
+) -> SearchProgress:
+    response.headers["Cache-Control"] = "no-store"
+    if provider != Provider.KORAIL:
+        return IDLE_SEARCH_PROGRESS
+    source: KorailTimetableSource = request.app.state.korail_browser_seat_source
+    return await source.search_progress(
+        origin=origin,
+        destination=destination,
+        departure_from=departure_from,
+        departure_to=departure_to,
+        passenger_count=passenger_count,
+    )
 
 
 def _timetable_snapshot_cache(request: Request) -> TimetableSnapshotCachePort:

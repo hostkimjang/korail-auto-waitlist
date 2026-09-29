@@ -65,9 +65,10 @@ from .contracts import (
 )
 from .runtime import KorailBrowserEngine
 from .search_coordinator import KorailBrowserAutomation
+from .search_progress import SearchProgress
 
 NO_STORE_HEADERS = {"Cache-Control": "no-store"}
-MAX_SEAT_SNAPSHOT_TIMEOUT_MS = 170_000
+MAX_SEAT_SNAPSHOT_TIMEOUT_MS = 590_000
 
 
 class _ReservationClient(Protocol):
@@ -430,6 +431,23 @@ def create_adapter_app(
             ),
             locally_reusable=snapshot.locally_reusable,
         )
+
+    @app.post(
+        "/v1/search-progress",
+        response_model=SearchProgress,
+        response_model_exclude_none=True,
+    )
+    async def search_progress(
+        search: BrowserSeatSearchRequest,
+        response: Response,
+        authorization: str | None = Header(default=None),
+    ) -> SearchProgress:
+        response.headers.update(NO_STORE_HEADERS)
+        expected = f"Bearer {app.state.token}"
+        if authorization is None or not hmac.compare_digest(authorization, expected):
+            raise HTTPException(401, "unauthorized", headers=NO_STORE_HEADERS)
+        automation_owner = cast(KorailBrowserAutomation, app.state.automation)
+        return await automation_owner.search_progress(search)
 
     @app.post("/v1/seat-snapshot", response_model=BrowserSeatSearchResult)
     async def seat_snapshot(

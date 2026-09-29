@@ -155,6 +155,14 @@ KORAIL Chromium과 SRT 연동 모듈은 `experimental-rail` 프로필에서 실�
 4. 한 운영사가 실패해도 다른 운영사의 정상 결과는 유지합니다.
 5. 좌석 상태를 뒷받침할 근거가 없으면 시간표만 표시하고 좌석 관련 작업은 제공하지 않습니다.
 
+KORAIL 검색에서 확인된 승차권 예매기간 확대 안내는 `korail_sidecar/pydoll/search_notice.py`가 구조와
+단일 닫기 행동을 소유합니다. 검색 driver는 공개 검색 폼과 결과 목록 확장 전에 이 안내를 한 번 닫고
+최신 snapshot을 읽습니다. 재사용 브라우저에서 결과보다 늦게 뜨는 안내도 처리하도록 각 `더보기` 클릭
+직전에 현재 modal을 다시 관측합니다. 이미지 대체 텍스트·modal·control 구조가 계약과 다르거나 보호 신호가 있으면
+임의의 안내를 닫지 않습니다. 안내 미분류·닫기 결과 불명은 목록 조회 실패로 끝납니다.
+시간표 application은 공식 조회 실패 뒤 TAGO의 미관측 좌석에 닫힌 실패 사유를 전달합니다. 실제
+설정 누락·제공원 실패·보호 응답을 구분하고, 이후 검증된 공식 근거의 overlay와 등록 제한은 유지합니다.
+
 ### 대기 등록
 
 1. 사용자가 열차와 좌석 등급을 선택합니다.
@@ -595,10 +603,10 @@ owner입니다. 동일 query singleflight·짧은 결과 cache, browser 전체 �
 cooldown, 명시적 점검 페이지의 기본 300초 전역 cooldown, 일반 source failure의 query별 30~300초 backoff와
 취소 중 bounded drain·client close 순서를 한 aggregate로 소유합니다. 이 owner는 Playwright·Pydoll·DOM·HTTP를
 모르고 `BrowserClient` protocol만 사용합니다.
-읽기 검색의 기본 전체 budget은 80초이며 browser gate 대기를 포함합니다. 각 caller waiter와 실제 browser
+백그라운드 좌석 관측의 전체 budget은 80초, 사용자 시간표 조회는 최대 580초이며 browser gate 대기를 포함합니다. 각 caller waiter와 실제 browser
 작업을 분리해 추적하고, 마지막 waiter가 사라졌거나 deadline이 지난 queued 작업은 browser I/O 전에
 폐기합니다. 이미 시작한 읽기 검색에는 sidecar 5초·main 1초 이내의 취소 정리 여유를 두어 정상적인 정리가
-기본 90초 HTTP timeout보다 먼저 끝나게 합니다. 외부 browser 작업이 취소에 응답하지 않더라도 caller는 정해진
+각 호출의 HTTP timeout보다 먼저 끝나게 합니다. 외부 browser 작업이 취소에 응답하지 않더라도 caller는 정해진
 deadline에서 종료하되, 실제 작업은 기존 inflight owner와 shutdown drain이 terminal까지 계속 소유하고 deadline
 뒤의 늦은 성공은 cache로 채택하지 않습니다. deadline·caller 취소는 provider 장애 근거가 아니므로 query
 backoff나 provider-wide cooldown을 열지 않습니다.
@@ -610,8 +618,14 @@ cooldown을 엽니다. 점검 페이지는 `provider_unavailable`로 즉시 중�
 실제 browser 호출 직전에 전역 cooldown을 다시 확인합니다. sidecar HTTP는 이 typed 오류에만 기존 호환 503
 `source_unavailable` body와 bounded `Retry-After`를 함께 보냅니다. cache hit와 동일-query singleflight 참여자는
 별도 INFO 시작 로그를 만들지 않습니다.
+진행 상태 조회는 같은 query의 기존 작업을 읽으며 KORAIL 요청을 새로 시작하지 않습니다. 공식 접속 대기가
+확인되면 상태와 앱에서 측정한 대기 시작 후 경과 시간을 화면에 표시합니다. 이 시간은 공식 화면이 제공하는
+예상 대기 시간이나 순번이 아닙니다. 2026년 9월 23일 Oracle의 실제 공식 대기 화면을 180초 동안 21회
+관측했을 때 순번·대기 인원·예상 시간·진행률 숫자는 없었습니다. 현재 계약에는 공식 수치 표시를 포함하지
+않으며, 좌석 상태·시간표 결과와도 별도로 취급합니다. 대기열 token·쿠키·응답 원문은 진행 상태 응답이나
+로그에 넣지 않습니다.
 main query runtime이 만든 남은 deadline은 내부 `X-Rail-Timeout-Ms`로 sidecar에 전달하고 sidecar는 자체
-80초 상한과 더 짧은 값을 사용합니다. 따라서 main gate에서 오래 기다린 요청이 sidecar에서 새 80초 budget을
+590초 상한과 더 짧은 값을 사용합니다. 따라서 main gate에서 오래 기다린 요청이 sidecar에서 새 budget을
 다시 얻지 않습니다. 이 헤더는 인증된 내부 읽기 요청에서만 제한된 양의 정수로 해석하며 로그에 원문을 남기지
 않습니다.
 두 engine과 sidecar HTTP·runtime·시간표 projection이 공유하는 공식 검색 form URL과 격리 fullstack fixture URL은
@@ -829,9 +843,10 @@ owner를 직접 import해 기존 private 함수 4개의 exact alias와 session �
 definition-free compatibility facade입니다.
 
 이 driver는 더보기 뒤 목록이 늘어나기를 기다릴 때 KORAIL의 `서비스 연결대기` 안내를 따로 인식합니다.
-보호조치가 아니라 기다리면 풀리는 줄서기이므로 짧은 성장 예산 대신 전체 조회 예산까지 기다리고, 목록
-끝이 아닌 이유로 확장이 끝나면 잘린 정황을 `event=result_expansion_stopped`으로 남깁니다. 호출자는
-확장 결과를 완전한 목록처럼 사용하므로, 이 경고 없이는 잘린 결과와 정상 결과를 구분할 수 없습니다.
+보호조치가 아니라 기다리면 풀리는 줄서기이므로 안내가 한 번 보이면 최대 480초까지 기다리되 전체 조회
+deadline을 넘기지 않습니다. 일반 결과 성장 대기는 20초입니다. `더보기`가 사라져 목록 끝을 확인하기 전에
+확장이 멈추면 `event=result_expansion_stopped`를 남기고 부분 목록을 공식 조회 성공으로 반환하지 않습니다.
+API는 이 실패에 TAGO 시간표 fallback을 적용하며, 그 결과의 좌석은 공식 관측으로 표시하지 않습니다.
 
 시간 picker candidate의 현재 5개 window·서명, soft ARIA/DOM disabled, 정확한 24시간 catalog·5+5 인접
 window·선택 완료와 control log 상태를 판정하는 동기 순수 정책은

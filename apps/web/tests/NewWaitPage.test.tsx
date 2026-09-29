@@ -177,6 +177,40 @@ afterEach(() => {
 });
 
 describe("NewWaitPage behavior", () => {
+  it("shows the observed official queue progress in the train selection area", async () => {
+    const user = userEvent.setup();
+    let finishTimetable: (result: Response) => void = () => undefined;
+    const pendingTimetable = new Promise<Response>((resolve) => { finishTimetable = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {
+      const parsed = requestUrl(url);
+      if (parsed.pathname.endsWith("/stations")) {
+        return response(stationCatalog(parsed.searchParams.get("provider")));
+      }
+      if (parsed.pathname.endsWith("/timetable-progress")) {
+        return response({
+          state: "official_queue",
+          queue: { elapsed_wait_seconds: 185 },
+        });
+      }
+      if (parsed.pathname.endsWith("/timetables")) return pendingTimetable;
+      return response([]);
+    }));
+    render(<OwnedNewWait demo={false} onComplete={vi.fn()} onCancel={vi.fn()} />);
+
+    await selectStation(user, "출발역", "서울");
+    await selectStation(user, "도착역", "부산");
+    await user.click(screen.getByRole("button", { name: /다음/ }));
+    await user.click(screen.getByRole("button", { name: /다음/ }));
+
+    await waitFor(() => {
+      const status = screen.getByText("앱에서 대기 감지 후").closest("[role='status']");
+      expect(status?.textContent).toContain("앱에서 대기 감지 후3분 5초 경과");
+    });
+
+    await act(async () => { finishTimetable(response([])); });
+    await waitFor(() => expect(screen.queryByText("앱에서 대기 감지 후")).toBeNull());
+  });
+
   it("shows midnight boundaries while keeping the evening service-date sentinel selectable", async () => {
     const user = userEvent.setup();
     render(<OwnedNewWait demo onComplete={vi.fn()} onCancel={vi.fn()} />);

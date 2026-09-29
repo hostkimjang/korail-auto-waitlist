@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchTimetables,
+  fetchTimetableProgress,
   filterTimetables,
   mapTimetable,
   refreshSeatStatus,
@@ -59,6 +60,27 @@ afterEach(() => {
 });
 
 describe("timetable API boundary", () => {
+  it("accepts zero and positive app-observed queue elapsed seconds", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      state: "official_queue",
+      queue: { elapsed_wait_seconds: 0 },
+    })));
+
+    expect(await fetchTimetableProgress(FORM)).toEqual({
+      state: "official_queue",
+      queue: { elapsedWaitSeconds: 0 },
+    });
+  });
+
+  it("keeps queue detection but hides malformed or unsupported queue measurements", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      state: "official_queue",
+      queue: { position: 1234, estimated_wait_seconds: 185, elapsed_wait_seconds: -1 },
+    })));
+
+    expect(await fetchTimetableProgress(FORM)).toEqual({ state: "official_queue" });
+  });
+
   it("queries every selected provider with exact route, range, passenger, and station identities", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => {
       const provider = new URL(String(input), "https://railwait.local").searchParams.get("provider");

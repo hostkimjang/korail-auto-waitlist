@@ -249,7 +249,7 @@ def test_experimental_server_browser_requires_a_distinct_internal_token():
 def test_browser_transport_timeout_allows_the_sidecar_to_finish_first():
     settings = Settings(_env_file=None)
 
-    assert settings.korail_browser_adapter_timeout_seconds == 90
+    assert settings.korail_browser_adapter_timeout_seconds == 600
 
 
 def test_insecure_auth_cookie_allows_only_loopback_origins():

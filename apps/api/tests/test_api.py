@@ -1124,6 +1124,86 @@ async def test_timetable_returns_safe_503_when_live_and_tago_are_unavailable(
     assert response.json() == {"detail": "official timetable sources are unavailable"}
 
 
+async def test_timetable_returns_503_when_live_fails_and_tago_has_no_trains(
+    app, client, monkeypatch
+):
+    from rail_waitlist.korail_browser_seat_source import KorailBrowserTimetableUnavailable
+    from rail_waitlist.timetable_management import application as timetable_application
+
+    class UnavailableLiveSource:
+        async def search_timetable(self, **kwargs):
+            raise KorailBrowserTimetableUnavailable("source_unavailable")
+
+    class EmptyTagoAdapter:
+        async def timetable(self, **kwargs):
+            return []
+
+    previous = app.state.korail_browser_seat_source
+    app.state.korail_browser_seat_source = UnavailableLiveSource()
+    monkeypatch.setattr(
+        timetable_application, "get_timetable_provider", lambda provider: EmptyTagoAdapter()
+    )
+    try:
+        response = await client.get(
+            "/api/v1/timetables",
+            params={
+                "provider": "korail",
+                "origin": "서울",
+                "destination": "부산",
+                "departure_from": "2026-08-01T08:00:00+09:00",
+                "departure_to": "2026-08-01T12:00:00+09:00",
+                "origin_node_id": "N1",
+                "destination_node_id": "N3",
+            },
+        )
+    finally:
+        app.state.korail_browser_seat_source = previous
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "official timetable sources are unavailable"}
+
+
+async def test_timetable_progress_reports_observed_official_queue_without_search(app, client):
+    calls = 0
+
+    class ProgressSource:
+        async def search_progress(self, **kwargs):
+            from rail_waitlist.korail_sidecar.search_progress import (
+                OfficialQueueProgress,
+                SearchProgress,
+            )
+
+            nonlocal calls
+            calls += 1
+            return SearchProgress(
+                state="official_queue",
+                queue=OfficialQueueProgress(elapsed_wait_seconds=73),
+            )
+
+    previous = app.state.korail_browser_seat_source
+    app.state.korail_browser_seat_source = ProgressSource()
+    try:
+        response = await client.get(
+            "/api/v1/timetable-progress",
+            params={
+                "provider": "korail",
+                "origin": "서울",
+                "destination": "부산",
+                "departure_from": "2026-08-01T08:00:00+09:00",
+                "departure_to": "2026-08-01T12:00:00+09:00",
+            },
+        )
+    finally:
+        app.state.korail_browser_seat_source = previous
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "state": "official_queue",
+        "queue": {"elapsed_wait_seconds": 73},
+    }
+    assert calls == 1
+
+
 async def test_srt_timetable_does_not_expose_route_outside_server_source_roster(
     app, client, monkeypatch
 ):

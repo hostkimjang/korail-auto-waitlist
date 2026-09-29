@@ -81,17 +81,16 @@ def test_search_timeout_setting_accepts_only_the_internal_budget_range(monkeypat
         pass
 
     browser_client = FakeClient()
-    monkeypatch.setenv("KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", "79.5")
+    for valid in ("79.5", "590"):
+        monkeypatch.setenv("KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", valid)
+        automation = runtime.build_automation(browser_client=browser_client)
+        assert automation._search_timeout_seconds == float(valid)
 
-    automation = runtime.build_automation(browser_client=browser_client)
-
-    assert automation._search_timeout_seconds == 79.5
-
-    for invalid in ("29.9", "170.1"):
+    for invalid in ("29.9", "590.1"):
         monkeypatch.setenv("KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", invalid)
         with pytest.raises(
             RuntimeError,
-            match="KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS must be between 30 and 170",
+            match="KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS must be between 30 and 590",
         ):
             runtime.build_automation(browser_client=browser_client)
 

@@ -160,6 +160,7 @@ class KorailBrowserSeatSource:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
         self.protection_cooldown_seconds = protection_cooldown_seconds
+        self._transport_timeout_seconds = timeout_seconds
         safety_margin_seconds = min(5.0, timeout_seconds * 0.1)
         self._query_timeout_seconds = max(
             0.001,
@@ -463,12 +464,14 @@ class KorailBrowserSeatSource:
         remains ``None`` when the official row does not expose it unambiguously.
         """
 
-        if not self.enabled or passenger_count != 1:
-            raise KorailBrowserTimetableUnavailable("KORAIL live timetable is unavailable")
+        if not self.enabled:
+            raise KorailBrowserTimetableUnavailable("source_not_configured")
+        if passenger_count != 1:
+            raise KorailBrowserTimetableUnavailable("passenger_count_not_supported")
         local_from = departure_from.astimezone(KOREA)
         local_to = departure_to.astimezone(KOREA)
         if local_from.date() != local_to.date() or local_to <= local_from:
-            raise KorailBrowserTimetableUnavailable("KORAIL live timetable is unavailable")
+            raise KorailBrowserTimetableUnavailable("source_unavailable")
         browser_departure_from = self._browser_departure_from(local_from, local_to)
         if browser_departure_from is None:
             return []
@@ -481,7 +484,10 @@ class KorailBrowserSeatSource:
             passenger_count=passenger_count,
         )
         try:
-            result = await self._search(request)
+            result = await self._search(
+                request,
+                timeout_seconds=min(580.0, self._transport_timeout_seconds - 5.0),
+            )
         except _ProviderCooldown as error:
             raise KorailBrowserTimetableUnavailable(error.reason) from None
         except _AdapterFailure as error:
@@ -512,13 +518,44 @@ class KorailBrowserSeatSource:
             timezone=KOREA,
         )
 
-    async def _search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+    async def search_progress(
+        self,
+        *,
+        origin: str,
+        destination: str,
+        departure_from: datetime,
+        departure_to: datetime,
+        passenger_count: int,
+    ) -> _client_owner.SearchProgress:
+        if not self.enabled or passenger_count != 1:
+            return _client_owner.IDLE_SEARCH_PROGRESS
+        local_from = departure_from.astimezone(KOREA)
+        local_to = departure_to.astimezone(KOREA)
+        browser_from = self._browser_departure_from(local_from, local_to)
+        if local_from.date() != local_to.date() or local_to <= local_from or browser_from is None:
+            return _client_owner.IDLE_SEARCH_PROGRESS
+        request = BrowserSeatSearchRequest(
+            origin=origin,
+            destination=destination,
+            travel_date=local_from.date(),
+            departure_from=browser_from,
+            departure_to=local_to.time().replace(tzinfo=None),
+            passenger_count=passenger_count,
+        )
+        return await self._transport.search_progress(request)
+
+    async def _search(
+        self,
+        request: BrowserSeatSearchRequest,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> BrowserSeatSearchResult:
         return await self._query_runtime.search(
             request,
             load=lambda key, value: self._load(key, value),
             monotonic=lambda: self._monotonic(),
             cooldown_store=lambda: self._cooldown_store,
-            timeout_seconds=self._query_timeout_seconds,
+            timeout_seconds=timeout_seconds or self._query_timeout_seconds,
         )
 
     async def _load(

@@ -384,6 +384,52 @@ export async function fetchTimetables(
   };
 }
 
+export type TimetableProgress =
+  | { state: "idle" | "searching" }
+  | {
+    state: "official_queue";
+    queue?: {
+      elapsedWaitSeconds: number;
+    };
+  };
+
+function nonnegativeSafeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+export async function fetchTimetableProgress(
+  form: TimetableSearchForm,
+): Promise<TimetableProgress> {
+  const { timeFrom, timeTo } = formTimeRange(form);
+  const params = new URLSearchParams({
+    provider: "korail",
+    origin: String(form.origin ?? ""),
+    destination: String(form.destination ?? ""),
+    departure_from: `${form.date}T${timeFrom}:00+09:00`,
+    departure_to: `${form.date}T${timeTo}:00+09:00`,
+    passenger_count: String(Number(form.passengers ?? form.passenger_count ?? 1)),
+  });
+  const payload: unknown = await request(`/timetable-progress?${params.toString()}`);
+  if (isRecord(payload)) {
+    if (payload.state === "idle" || payload.state === "searching") {
+      return { state: payload.state };
+    }
+    if (payload.state === "official_queue") {
+      const rawQueue = payload.queue;
+      if (!isRecord(rawQueue)) return { state: "official_queue" };
+      const elapsedWaitSeconds = nonnegativeSafeInteger(rawQueue.elapsed_wait_seconds);
+      if (elapsedWaitSeconds === undefined) return { state: "official_queue" };
+      return {
+        state: "official_queue",
+        queue: { elapsedWaitSeconds },
+      };
+    }
+  }
+  return { state: "idle" };
+}
+
 export async function refreshSeatStatus(
   form: TimetableSearchForm,
   providerOverride: RailProvider | string,

@@ -88,6 +88,26 @@ function hookOptions(
 }
 
 describe("useTimetableSearch", () => {
+  it("shows only observed KORAIL queue progress and clears it after lookup", async () => {
+    const pending = deferred<TimetableSearchResult<TestTrain>>();
+    const options = {
+      ...hookOptions(form({ providers: ["KORAIL"] }), vi.fn(() => pending.promise)),
+      loadProgress: vi.fn(async () => ({
+        state: "official_queue" as const,
+        queue: { elapsedWaitSeconds: 360 },
+      })),
+    };
+    const { result } = renderHook(() => useTimetableSearch(options));
+
+    await waitFor(() => expect(result.current.korailProgress).toEqual({
+      state: "official_queue",
+      queue: { elapsedWaitSeconds: 360 },
+    }));
+    expect(options.loadProgress).toHaveBeenCalled();
+    await act(async () => pending.resolve({ trains: [], providerResults: success("KORAIL", 0) }));
+    await waitFor(() => expect(result.current.korailProgress).toEqual({ state: "idle" }));
+  });
+
   it("keeps a successful provider result while retrying only the failed provider", async () => {
     const korail = train("KORAIL", "KTX 101", "13:00");
     const srt = train("SRT", "SRT 303", "14:00");

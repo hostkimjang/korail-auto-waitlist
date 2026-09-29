@@ -278,7 +278,7 @@ async def test_source_resolves_projection_seams_at_call_time(
         enabled=True,
         adapter_url="http://korail-browser:8091",
         cache_ttl_seconds=1,
-        timeout_seconds=1,
+        timeout_seconds=10,
         rate_limit_cooldown_seconds=10,
         protection_cooldown_seconds=10,
         transport=SearchTransport(),

@@ -319,7 +319,7 @@ def test_browser_automation_uses_operational_cache_and_cooldown_defaults(
     assert automation._rate_limit_cooldown_seconds == 300
     assert automation._protection_cooldown_seconds == 60
     assert automation._provider_unavailable_cooldown_seconds == 300
-    assert automation._search_timeout_seconds == 80
+    assert automation._search_timeout_seconds == 590
 
 
 def test_pydoll_engine_readiness_uses_selected_probe_without_network(
@@ -740,6 +740,52 @@ async def test_singleflight_and_cache_run_one_browser_search() -> None:
 
     assert left == right == cached
     assert client.calls == 1
+
+
+async def test_search_progress_tracks_running_query_without_starting_another() -> None:
+    from rail_waitlist.korail_sidecar.search_progress import (
+        IDLE_SEARCH_PROGRESS,
+        OfficialQueueProgress,
+        SearchProgress,
+        publish_search_progress,
+    )
+
+    class QueuedClient(FakeClient):
+        async def search(self, data: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
+            self.calls += 1
+            publish_search_progress("official_queue")
+            await self.gate.wait()
+            return result()
+
+    client = QueuedClient()
+    client.gate.clear()
+    now = 1_000.0
+    automation = KorailBrowserAutomation(client, monotonic=lambda: now)
+    query = request()
+    task = asyncio.create_task(automation.search(query))
+    while client.calls == 0:
+        await asyncio.sleep(0)
+    now += 73
+    assert await automation.search_progress(query) == SearchProgress(
+        state="official_queue",
+        queue=OfficialQueueProgress(elapsed_wait_seconds=73),
+    )
+    assert client.calls == 1
+    client.gate.set()
+    await task
+    assert await automation.search_progress(query) == IDLE_SEARCH_PROGRESS
+
+
+@pytest.mark.parametrize("elapsed", [-1, True, 1.5])
+def test_search_progress_rejects_unverified_elapsed_values(elapsed: object) -> None:
+    from pydantic import ValidationError
+
+    from rail_waitlist.korail_sidecar.search_progress import SearchProgress
+
+    with pytest.raises(ValidationError):
+        SearchProgress.model_validate(
+            {"state": "official_queue", "queue": {"elapsed_wait_seconds": elapsed}}
+        )
 
 
 async def test_singleflight_links_two_request_ids_to_one_provider_call_id(

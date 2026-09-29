@@ -321,8 +321,8 @@ def test_provider_failure_owner_move_does_not_change_openapi() -> None:
     schema = app.openapi()
     encoded = json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
 
-    assert len(schema["paths"]) == 36
-    assert len(schema["components"]["schemas"]) == 77
+    assert len(schema["paths"]) == 37
+    assert len(schema["components"]["schemas"]) == 79
     assert AutomaticReservationRetryFenceReason.__module__ == (
         "rail_waitlist.reservations.retry_fence_contracts"
     )
@@ -346,7 +346,7 @@ def test_provider_failure_owner_move_does_not_change_openapi() -> None:
         ]
     }
     assert "ErrorPolicyResult" not in schema["components"]["schemas"]
-    assert len(encoded) == 90178
+    assert len(encoded) == 92306
     assert hashlib.sha256(encoded).hexdigest() == (
-        "52544f836163807077ed537af99ba68c1ddd2790512a3c7e51f82cacb9fab96f"
+        "0d2f101ee0c8970fc7202805bb5895b3ae17107290fb61a80e7ce6583f490601"
     )

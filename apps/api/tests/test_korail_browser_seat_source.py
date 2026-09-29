@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, date, datetime, time, timedelta
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -165,12 +166,13 @@ def source(
     *,
     cooldown_store: MemoryCooldownStore | None = None,
     now: datetime | None = None,
+    timeout_seconds: float = 35,
 ) -> KorailBrowserSeatSource:
     return KorailBrowserSeatSource(
         enabled=True,
         adapter_url="http://adapter.invalid",
         cache_ttl_seconds=30,
-        timeout_seconds=35,
+        timeout_seconds=timeout_seconds,
         rate_limit_cooldown_seconds=1800,
         protection_cooldown_seconds=300,
         transport=transport,
@@ -205,6 +207,17 @@ async def test_primary_timetable_preserves_separate_official_search_url() -> Non
 
     assert str(result[0].official_booking_url) == "https://www.korail.com/ticket/search/general"
     assert str(result[0].official_search_url) == search_url
+
+
+async def test_primary_timetable_uses_long_budget_but_observation_stays_short() -> None:
+    seat_source = source(FakeTransport(), timeout_seconds=600)
+    search = AsyncMock(return_value=browser_result())
+    seat_source._search = search
+
+    await seat_source.search_timetable(**overlay_arguments())
+
+    assert seat_source._query_timeout_seconds == 80
+    assert search.await_args.kwargs["timeout_seconds"] == 580
 
 
 async def test_exact_browser_snapshot_overlays_status_and_actions() -> None:

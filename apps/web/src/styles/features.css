@@ -1943,9 +1943,49 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
+  padding: 16px;
   color: var(--muted);
   border: 1px dashed #c8d5dc;
   border-radius: 11px;
+}
+
+.timetable-state > svg {
+  flex: none;
+}
+
+.timetable-state-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.timetable-state-copy strong {
+  color: var(--ink);
+}
+
+.official-queue-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 8px 0 0;
+}
+
+.official-queue-details > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.official-queue-details dt,
+.official-queue-details dd {
+  margin: 0;
+}
+
+.official-queue-details dd {
+  color: var(--ink);
+  font-weight: 700;
 }
 
 .train-options .timetable-error {

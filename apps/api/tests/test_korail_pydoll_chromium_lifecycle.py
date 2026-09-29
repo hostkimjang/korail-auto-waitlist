@@ -122,6 +122,32 @@ class _Browser:
             raise self.close_error
 
 
+class _OwnedProcess:
+    def __init__(self) -> None:
+        self.running = True
+
+    def poll(self) -> int | None:
+        return None if self.running else 0
+
+
+class _ProcessManager:
+    def __init__(self, process: _OwnedProcess, events: list[str]) -> None:
+        self._process = process
+        self.events = events
+
+    def stop_process(self) -> None:
+        self.events.append("process:stop")
+        self._process.running = False
+
+
+class _TempDirectoryManager:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def cleanup(self) -> None:
+        self.events.append("temp:cleanup")
+
+
 def _runtime(browser: _Browser, options: _Options | None = None) -> PydollChromiumRuntime:
     selected_options = options or _Options()
     return PydollChromiumRuntime(
@@ -332,6 +358,43 @@ async def test_close_is_single_run_and_finishes_after_repeated_cancellation() ->
     assert lifecycle.phase is PydollChromiumPhase.CLOSED
     assert lifecycle.browser is None
     assert lifecycle.tab is None
+
+
+@pytest.mark.asyncio
+async def test_close_stops_owned_chrome_when_pydoll_exit_leaves_it_running() -> None:
+    events: list[str] = []
+    browser = _Browser(events, _Tab("old", events))
+    process = _OwnedProcess()
+    browser._browser_process_manager = _ProcessManager(process, events)
+    browser._temp_directory_manager = _TempDirectoryManager(events)
+    lifecycle = _lifecycle(browser)
+    await lifecycle.start()
+
+    await lifecycle.close()
+
+    assert process.poll() == 0
+    assert events[-3:] == ["browser:exit", "process:stop", "temp:cleanup"]
+    assert lifecycle.phase is PydollChromiumPhase.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_failed_socket_cleanup_still_stops_owned_chrome_process() -> None:
+    events: list[str] = []
+    browser = _Browser(events, _Tab("old", events))
+    browser.exit_error = RuntimeError("exit")
+    browser.stop_error = RuntimeError("stop")
+    browser.close_error = RuntimeError("close")
+    process = _OwnedProcess()
+    browser._browser_process_manager = _ProcessManager(process, events)
+    lifecycle = _lifecycle(browser)
+    await lifecycle.start()
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await lifecycle.close()
+
+    assert raised.value.stage == "browser_close"
+    assert process.poll() == 0
+    assert events.count("process:stop") == 1
 
 
 @pytest.mark.asyncio

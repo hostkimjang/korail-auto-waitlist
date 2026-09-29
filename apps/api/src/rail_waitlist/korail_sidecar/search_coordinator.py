@@ -26,6 +26,12 @@ from .browser_service_availability import (
     BrowserProviderUnavailable,
     ProviderUnavailableTrigger,
 )
+from .search_progress import (
+    IDLE_SEARCH_PROGRESS,
+    OfficialQueueProgress,
+    SearchProgress,
+    bind_search_progress,
+)
 
 logger = logging.getLogger("rail_waitlist.korail_browser_automation")
 SEARCH_CLEANUP_GRACE_SECONDS = 5.0
@@ -51,10 +57,40 @@ class _InflightSearch:
     deadline: float
     waiters: dict[str, str] = field(default_factory=dict)
     query_started: bool = False
+    progress: SearchProgress = field(default_factory=lambda: SearchProgress(state="searching"))
+    official_queue_entered_at: float | None = None
 
 
 class KorailBrowserAutomation:
     """Serialize browser work and collapse identical user-triggered searches."""
+
+    async def search_progress(self, request: BrowserSeatSearchRequest) -> SearchProgress:
+        """Read process-local progress without starting another provider request."""
+        async with self._state_lock:
+            inflight = self._inflight.get(request.cache_key())
+            if inflight is None or inflight.task.done():
+                return IDLE_SEARCH_PROGRESS
+            if (
+                inflight.progress.state == "official_queue"
+                and inflight.official_queue_entered_at is not None
+            ):
+                return SearchProgress(
+                    state="official_queue",
+                    queue=OfficialQueueProgress(
+                        elapsed_wait_seconds=max(
+                            0, int(self._monotonic() - inflight.official_queue_entered_at)
+                        )
+                    ),
+                )
+            return inflight.progress
+
+    def _observe_search_progress(self, inflight: _InflightSearch, progress: SearchProgress) -> None:
+        if progress.state == "official_queue":
+            if inflight.official_queue_entered_at is None:
+                inflight.official_queue_entered_at = self._monotonic()
+        else:
+            inflight.official_queue_entered_at = None
+        inflight.progress = progress
 
     def __init__(
         self,
@@ -64,7 +100,7 @@ class KorailBrowserAutomation:
         rate_limit_cooldown_seconds: int = 300,
         protection_cooldown_seconds: int = 60,
         provider_unavailable_cooldown_seconds: int = 300,
-        search_timeout_seconds: float = 80,
+        search_timeout_seconds: float = 590,
         shutdown_drain_timeout_seconds: float = 70,
         shutdown_cancel_timeout_seconds: float = 10,
         monotonic: Callable[[], float] = time.monotonic,
@@ -362,6 +398,7 @@ class KorailBrowserAutomation:
                             if inflight is None or not inflight.waiters:
                                 raise asyncio.CancelledError
                             inflight.query_started = True
+                            active_inflight = inflight
                         started_at = self._monotonic()
                         query_started = True
                         logger.info(
@@ -370,7 +407,12 @@ class KorailBrowserAutomation:
                             provider_call_id,
                         )
                         try:
-                            result = await self._client.search(request)
+                            with bind_search_progress(
+                                lambda progress: self._observe_search_progress(
+                                    active_inflight, progress
+                                )
+                            ):
+                                result = await self._client.search(request)
                             if self._monotonic() >= deadline:
                                 raise TimeoutError
                         except BrowserProviderUnavailable as error:

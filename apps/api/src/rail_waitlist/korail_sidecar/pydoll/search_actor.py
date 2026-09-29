@@ -304,6 +304,9 @@ class PydollReadOnlySearchActor:
                             await self._http_replay_manager.finalize_install(request)
                     return result
                 except asyncio.CancelledError:
+                    self._event_logger.warning(
+                        "KORAIL Pydoll event=search_cancelled stage=%s", stage
+                    )
                     if lease is not None and lease.persistent:
                         await self._discard_active_session()
                     raise

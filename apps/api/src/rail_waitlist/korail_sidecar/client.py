@@ -30,6 +30,8 @@ from .contracts import (
     KorailReserveResultFrame,
     KorailSessionStateResult,
 )
+from .search_progress import IDLE_SEARCH_PROGRESS as IDLE_SEARCH_PROGRESS
+from .search_progress import SearchProgress as SearchProgress
 
 ReservationProgressCallback = Callable[[ReservationProgressStage], Awaitable[None]]
 FailureCooldownScope = Literal["query", "provider"]
@@ -39,6 +41,8 @@ _LOGGER = logging.getLogger(__name__)
 
 class BrowserAdapterTransport(Protocol):
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult: ...
+
+    async def search_progress(self, request: BrowserSeatSearchRequest) -> SearchProgress: ...
 
     async def reserve(self, request: KorailReserveOnceRequest) -> KorailReserveOnceResult: ...
 
@@ -214,6 +218,21 @@ class HttpBrowserAdapterTransport:
             terminal_outcome,
         )
 
+    async def search_progress(self, request: BrowserSeatSearchRequest) -> SearchProgress:
+        try:
+            response = await self._client.post(
+                "/v1/search-progress",
+                json=request.model_dump(mode="json"),
+                timeout=5.0,
+            )
+            if response.status_code != 200:
+                return IDLE_SEARCH_PROGRESS
+            payload: object = response.json()
+            return SearchProgress.model_validate(payload)
+        except (httpx.HTTPError, ValueError):
+            pass
+        return IDLE_SEARCH_PROGRESS
+
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
         request_id = current_request_id() or new_log_id()
         _LOGGER.info(
@@ -237,7 +256,7 @@ class HttpBrowserAdapterTransport:
         headers = {REQUEST_ID_HEADER: request_id}
         if remaining_timeout_ms is not None:
             headers[REQUEST_TIMEOUT_MS_HEADER] = str(
-                min(remaining_timeout_ms - SIDECAR_COMPLETION_MARGIN_MS, 170_000)
+                min(remaining_timeout_ms - SIDECAR_COMPLETION_MARGIN_MS, 590_000)
             )
         try:
             response = await self._client.post(

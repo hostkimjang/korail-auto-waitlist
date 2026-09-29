@@ -7985,7 +7985,7 @@ def test_central_schema_hub_only_aliases_timetable_transport_contracts() -> None
             "rail_waitlist/timetable_management/application.py",
             "schemas",
             1,
-            {"TimetableItem"},
+            {"SeatAvailabilityNotObservedReason", "SeatAvailabilityProvenance", "TimetableItem"},
         ),
         (
             "rail_waitlist/timetable_management/contracts.py",
@@ -11554,6 +11554,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/korail_sidecar/pydoll/reservation_driver.py",
         "rail_waitlist/korail_sidecar/pydoll/search_actor.py",
         "rail_waitlist/korail_sidecar/pydoll/search_driver.py",
+        "rail_waitlist/korail_sidecar/pydoll/search_notice.py",
         "rail_waitlist/korail_sidecar/pydoll/search_hour_carousel_input.py",
         "rail_waitlist/korail_sidecar/pydoll/search_hour_carousel_observation.py",
         "rail_waitlist/korail_sidecar/pydoll/search_schedule_commit.py",

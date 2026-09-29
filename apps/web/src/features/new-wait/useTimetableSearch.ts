@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "../../api/client";
+import type { TimetableProgress } from "../../api/timetables";
 import type { RailProvider } from "../../api/providerAccounts";
 import type { NewWaitForm, NewWaitWeekday } from "./newWaitForm";
 import { buildTimetableQueryKey } from "./timetableQueryKey";
@@ -67,6 +68,7 @@ interface UseTimetableSearchOptions<TTrain extends TimetableTrainSnapshot> {
     form: TimetableRequestForm,
     providerOverride?: RailProvider,
   ) => Promise<TimetableSearchResult<TTrain>>;
+  loadProgress?: (form: TimetableRequestForm) => Promise<TimetableProgress>;
   loadSeatStatus: (form: TimetableRequestForm, provider: RailProvider) => Promise<TTrain[]>;
   loadCachedSnapshot: (
     form: TimetableSearchForm,
@@ -80,6 +82,7 @@ interface UseTimetableSearchOptions<TTrain extends TimetableTrainSnapshot> {
 export interface TimetableSearchController<TTrain extends TimetableTrainSnapshot> {
   trains: TTrain[];
   state: TimetableSearchState;
+  korailProgress: TimetableProgress;
   retryProvider: (provider: RailProvider) => Promise<void>;
   refreshProviderSeatStatus: (
     provider: RailProvider,
@@ -146,6 +149,7 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
   demo,
   form,
   loadTimetables,
+  loadProgress,
   loadSeatStatus,
   loadCachedSnapshot,
   loadDemoTimetables,
@@ -153,6 +157,7 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
   mapTimetable,
 }: UseTimetableSearchOptions<TTrain>): TimetableSearchController<TTrain> {
   const [trains, setTrains] = useState<TTrain[]>([]);
+  const [korailProgress, setKorailProgress] = useState<TimetableProgress>({ state: "idle" });
   const [state, setState] = useState<TimetableSearchState>({
     loadingProviders: [],
     providerResults: {},
@@ -237,6 +242,32 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
       current = false;
     };
   }, [active, demo, filterTimetables, loadDemoTimetables, loadTimetables, queryForm, queryKey]);
+
+  const korailLoading = state.loadingProviders.includes("KORAIL");
+  useEffect(() => {
+    if (!active || demo || !korailLoading || !loadProgress) {
+      setKorailProgress({ state: "idle" });
+      return undefined;
+    }
+    let current = true;
+    const requestedQueryKey = queryKey;
+    const requestedForm = requestForm(queryForm);
+    const poll = (): void => {
+      void loadProgress(requestedForm).then((progress) => {
+        if (current && queryKeyRef.current === requestedQueryKey) setKorailProgress(progress);
+      }).catch(() => {
+        // A failed status poll does not erase the last observed official queue state.
+      });
+    };
+    const initial = window.setTimeout(poll, 500);
+    const interval = window.setInterval(poll, 3_000);
+    return () => {
+      current = false;
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+      setKorailProgress({ state: "idle" });
+    };
+  }, [active, demo, korailLoading, loadProgress, queryForm, queryKey]);
 
   const retryProvider = useCallback(async (provider: RailProvider): Promise<void> => {
     const requestedQueryKey = queryKeyRef.current;
@@ -396,6 +427,7 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
   return {
     trains,
     state,
+    korailProgress,
     retryProvider,
     refreshProviderSeatStatus,
     retrySeatStatusProviders,

@@ -13,6 +13,7 @@ from typing import Any, Literal, Protocol, cast
 from ..browser_contracts import BrowserSourceUnavailable
 from ..browser_protection import protection_trigger_from_text
 from ..browser_service_availability import provider_unavailable_trigger_from_page
+from ..search_progress import publish_search_progress
 from .page_contracts import (
     PydollIssuedTicketListSnapshot,
     PydollIssuedTicketSummary,
@@ -21,6 +22,7 @@ from .page_contracts import (
     PydollSeatBox,
     PydollTrainRow,
 )
+from .search_notice import dismiss_booking_window_notice
 from .search_snapshot_policy import (
     advance_search_expansion,
     begin_search_expansion,
@@ -30,7 +32,8 @@ logger = logging.getLogger("rail_waitlist.korail_pydoll_browser")
 
 # 결과가 한 번 더 늘어나기를 기다리는 기본 예산입니다. 목록 끝에서는 더 기다려도
 # 늘어나지 않으므로 전체 조회 예산보다 짧게 잡습니다.
-_RESULT_GROWTH_TIMEOUT_SECONDS = 10.0
+_RESULT_GROWTH_TIMEOUT_SECONDS = 20.0
+_OFFICIAL_CONNECTION_WAIT_TIMEOUT_SECONDS = 480.0
 # KORAIL 공식 접속 대기 안내입니다. 보호조치나 점검이 아니라 줄을 서 있는 상태이므로
 # 차단으로 분류하지 않고 기다려야 합니다.
 _OFFICIAL_CONNECTION_WAIT = re.compile(
@@ -505,9 +508,16 @@ class PydollSearchDomDriver:
         await self._port._click_exact_text("button", "열차 조회")
 
     async def wait_for_result(self) -> PydollPageSnapshot:
-        deadline = self._monotonic() + self._timeout_seconds
+        started_at = self._monotonic()
+        deadline = started_at + self._timeout_seconds
+        official_wait_deadline = started_at + _OFFICIAL_CONNECTION_WAIT_TIMEOUT_SECONDS
+        saw_official_wait = False
         last = await self._port._snapshot()
-        while self._monotonic() < deadline:
+        while True:
+            waiting_for_official_connection = bool(_OFFICIAL_CONNECTION_WAIT.search(last.body_text))
+            if waiting_for_official_connection:
+                saw_official_wait = True
+                publish_search_progress("official_queue")
             trigger = protection_trigger_from_text(last.body_text)
             unavailable_trigger = provider_unavailable_trigger_from_page(
                 last.url,
@@ -517,21 +527,47 @@ class PydollSearchDomDriver:
             if (
                 trigger is not None
                 or unavailable_trigger is not None
-                or last.rows
-                or last.network_responses
+                or (not waiting_for_official_connection and (last.rows or last.network_responses))
             ):
+                if last.rows and not waiting_for_official_connection:
+                    publish_search_progress("searching")
                 return last
             if re.search(r"조회\s*결과(?:가)?\s*(?:없|0건)", last.body_text):
                 raise BrowserSourceUnavailable("wait_result")
+            active_deadline = official_wait_deadline if saw_official_wait else deadline
+            if self._monotonic() >= active_deadline:
+                if saw_official_wait:
+                    logger.warning(
+                        "KORAIL 공식 접속 대기가 끝나지 않았습니다 "
+                        "event=official_connection_wait_timeout rows=0"
+                    )
+                raise BrowserSourceUnavailable("wait_result")
             await self._sleep(0.25)
             last = await self._port._snapshot()
-        raise BrowserSourceUnavailable("wait_result")
+
+    async def dismiss_search_notice(
+        self, snapshot: PydollPageSnapshot, *, observe_current: bool = False
+    ) -> PydollPageSnapshot:
+        if self._snapshot_requires_expansion_stop(snapshot):
+            return snapshot
+        if not observe_current and "창닫기" not in snapshot.body_text:
+            return snapshot
+        closed = await dismiss_booking_window_notice(
+            execute_script=self._execute_script,
+            find_controls=lambda selector: self._port._visible_elements(selector),
+            monotonic=self._monotonic,
+            sleep=self._sleep,
+            timeout_seconds=self._timeout_seconds,
+        )
+        return await self._port._snapshot() if closed else snapshot
 
     async def expand_results(
         self,
         snapshot: PydollPageSnapshot,
         max_actions: int,
     ) -> PydollPageSnapshot:
+        if max_actions > 0:
+            snapshot = await self.dismiss_search_notice(snapshot, observe_current=True)
         state = begin_search_expansion(
             snapshot,
             deduplicate_snapshot=self._deduplicate_snapshot,
@@ -544,7 +580,16 @@ class PydollSearchDomDriver:
                 more = await self._port._find_exact_visible("a", "더보기")
             except LookupError:
                 # 더 불러올 목록이 없으면 KORAIL이 버튼 자체를 감춥니다. 정상 종료입니다.
+                if _OFFICIAL_CONNECTION_WAIT.search(state.accumulated.body_text):
+                    raise BrowserSourceUnavailable("expand_results_incomplete") from None
                 break
+            # A reused page can load the notice after its first train snapshot.
+            # Observe the live dialog immediately before each list-expansion click.
+            current = await self.dismiss_search_notice(state.accumulated, observe_current=True)
+            if self._snapshot_requires_expansion_stop(current):
+                return self._merge_page_snapshots(state.accumulated, current)
+            if current is not state.accumulated:
+                more = await self._port._find_exact_visible("a", "더보기")
             await more.click()
             candidate, progressed = await self._port._wait_for_result_growth(
                 set(state.seen_identities)
@@ -568,6 +613,8 @@ class PydollSearchDomDriver:
                     action + 1,
                     len(state.accumulated.rows),
                 )
+                if transition.stop_reason != "blocked":
+                    raise BrowserSourceUnavailable("expand_results_incomplete")
                 break
         else:
             if max_actions > 0:
@@ -577,6 +624,7 @@ class PydollSearchDomDriver:
                     max_actions,
                     len(state.accumulated.rows),
                 )
+                raise BrowserSourceUnavailable("expand_results_incomplete")
         return state.accumulated
 
     async def wait_for_result_growth(
@@ -587,24 +635,27 @@ class PydollSearchDomDriver:
         growth_deadline = started_at + min(self._timeout_seconds, _RESULT_GROWTH_TIMEOUT_SECONDS)
         # 공식 접속 대기 중에는 페이지가 멈춘 것이 아니라 줄을 서 있는 상태입니다. 짧은
         # 성장 대기로 끊으면 남은 열차를 통째로 잃은 목록이 완전한 결과처럼 반환됩니다.
-        connection_wait_deadline = started_at + self._timeout_seconds
+        connection_wait_deadline = started_at + _OFFICIAL_CONNECTION_WAIT_TIMEOUT_SECONDS
+        saw_official_wait = False
         last = await self._port._snapshot()
         while True:
             if self._snapshot_requires_expansion_stop(last):
                 return last, False
+            waiting_for_official_connection = bool(_OFFICIAL_CONNECTION_WAIT.search(last.body_text))
+            if waiting_for_official_connection:
+                saw_official_wait = True
+                publish_search_progress("official_queue")
             current_rows = {self._train_row_identity(row) for row in last.rows}
-            if current_rows - previous_rows:
+            if current_rows - previous_rows and not waiting_for_official_connection:
+                publish_search_progress("searching")
                 return last, True
-            waiting_for_official_connection = (
-                _OFFICIAL_CONNECTION_WAIT.search(last.body_text) is not None
-            )
             deadline = (
                 connection_wait_deadline
-                if waiting_for_official_connection
+                if saw_official_wait
                 else growth_deadline
             )
             if self._monotonic() >= deadline:
-                if waiting_for_official_connection:
+                if saw_official_wait:
                     logger.warning(
                         "KORAIL 공식 접속 대기가 조회 예산 안에 끝나지 않았습니다 "
                         "event=official_connection_wait_timeout rows=%d",

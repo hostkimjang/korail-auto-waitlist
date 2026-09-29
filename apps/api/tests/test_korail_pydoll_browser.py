@@ -1338,19 +1338,19 @@ async def test_pydoll_result_expansion_stops_after_one_stalled_click(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 5_000, True)
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(return_value={"result": {"result": {"value": "absent"}}})
+    )
     snapshot = _fixture_snapshot()
     more = SimpleNamespace(click=AsyncMock())
     monkeypatch.setattr(session, "_find_exact_visible", AsyncMock(return_value=more))
     growth = AsyncMock(return_value=(snapshot, False))
     monkeypatch.setattr(session, "_wait_for_result_growth", growth)
 
-    result = await session.expand_results(snapshot, 19)
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await session.expand_results(snapshot, 19)
 
-    assert [row.train_number for row in result.rows] == [
-        "무궁화호 1161",
-        "KTX 043",
-        "KTX 047",
-    ]
+    assert raised.value.stage == "expand_results_incomplete"
     more.click.assert_awaited_once_with()
     growth.assert_awaited_once()
 
@@ -1360,6 +1360,9 @@ async def test_pydoll_result_expansion_stops_on_network_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 5_000, True)
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(return_value={"result": {"result": {"value": "absent"}}})
+    )
     snapshot = _fixture_snapshot()
     added = PydollTrainRow("KTX", "999", "서울 → 부산(17:00 ~ 19:30)", ())
     restricted = PydollPageSnapshot(

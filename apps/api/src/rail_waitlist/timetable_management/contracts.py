@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from ..domain import Provider
+from ..korail_sidecar.search_progress import SearchProgress
 from ..provider_adapters.tago import TagoClient
 from ..srt_sidecar.contracts import SrtTimetableTrain
 from ..timetable_snapshot_cache import TimetableSnapshotKey
@@ -22,6 +23,16 @@ class StationCatalogTimetablePort(StationCatalogReader, Protocol):
 
 
 class KorailTimetableSource(Protocol):
+    async def search_progress(
+        self,
+        *,
+        origin: str,
+        destination: str,
+        departure_from: datetime,
+        departure_to: datetime,
+        passenger_count: int,
+    ) -> SearchProgress: ...
+
     async def search_timetable(
         self,
         *,

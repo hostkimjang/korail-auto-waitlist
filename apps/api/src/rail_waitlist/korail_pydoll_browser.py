@@ -865,6 +865,7 @@ class _PydollSession:
         initial_snapshot = await self._snapshot()
         if classify_pydoll_page_block(initial_snapshot) is not None:
             return initial_snapshot
+        await self._search_driver.dismiss_search_notice(initial_snapshot)
         await self._wait_for_exact_text("button", "열차 조회")
         return await self._snapshot()
 

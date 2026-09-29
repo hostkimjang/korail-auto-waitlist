@@ -412,20 +412,41 @@ class PydollChromiumLifecycle:
         self._retired_tabs = still_open
 
     async def _close_browser(self, browser: _PydollBrowser) -> bool:
+        connection_closed = True
         try:
             await browser.__aexit__(None, None, None)
+        except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
+            try:
+                await browser.stop()
+            except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
+                try:
+                    await browser.close()
+                except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
+                    self._event_logger.warning("KORAIL Pydoll browser cleanup failed")
+                    connection_closed = False
+        process_stopped = await self._stop_owned_process_if_running(browser)
+        return connection_closed and process_stopped
+
+    async def _stop_owned_process_if_running(self, browser: _PydollBrowser) -> bool:
+        # Pydoll 2.23.1 __aexit__ skips stop() when CDP ping fails, even if its
+        # owned Chrome process is still alive. Its close() only closes the socket.
+        manager = getattr(browser, "_browser_process_manager", None)
+        process = getattr(manager, "_process", None)
+        poll = getattr(process, "poll", None)
+        stop = getattr(manager, "stop_process", None)
+        if not callable(poll) or not callable(stop) or poll() is not None:
             return True
-        except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-            pass
+        self._event_logger.warning("KORAIL Pydoll event=browser_process_cleanup_fallback")
         try:
-            await browser.stop()
-            return True
+            await finish_owned_cleanup(asyncio.to_thread(stop))
+            if poll() is None:
+                raise RuntimeError("owned browser process survived cleanup")
+            temp_manager = getattr(browser, "_temp_directory_manager", None)
+            cleanup = getattr(temp_manager, "cleanup", None)
+            if callable(cleanup):
+                await finish_owned_cleanup(asyncio.to_thread(cleanup))
         except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-            pass
-        try:
-            await browser.close()
-        except Exception:  # noqa: BLE001 -- optional backend exceptions are not stable.
-            self._event_logger.warning("KORAIL Pydoll browser cleanup failed")
+            self._event_logger.warning("KORAIL Pydoll browser process cleanup failed")
             return False
         return True
 

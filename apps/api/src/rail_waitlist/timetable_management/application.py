@@ -11,12 +11,13 @@ from ..korail_browser_seat_source import KorailBrowserTimetableUnavailable
 from ..official_page_confirmation.application import overlay_official_page_confirmations
 from ..provider_adapters.srt_seat_source import SrtLiveTimetableUnavailable
 from ..provider_adapters.timetable import OfficialTimetableAdapter
+from ..provider_contracts import ProviderUnavailable
 from ..provider_registry.application import get_execution_provider, get_timetable_provider
 from ..srt_sidecar.client import SrtProviderAdapterUnavailable
 from ..timetable_evidence import persist_timetable_seat_evidence
 from ..watch_registration_policy import apply_watch_registration_capability
 from .contracts import TimetableApplication
-from .schemas import TimetableItem
+from .schemas import SeatAvailabilityNotObservedReason, SeatAvailabilityProvenance, TimetableItem
 from .srt_live_timetable import map_srt_live_timetable
 
 LOGGER = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ async def load_timetable_items(
         SrtLiveTimetableUnavailable,
         SrtProviderAdapterUnavailable,
         ValueError,
-    ):
+    ) as error:
         LOGGER.warning(
             "Official live timetable unavailable provider=%s; trying TAGO fallback",
             provider.value,
@@ -83,6 +84,9 @@ async def load_timetable_items(
             origin_node_id=origin_node_id,
             destination_node_id=destination_node_id,
         )
+        if not items:
+            raise ProviderUnavailable("official timetable sources are unavailable")
+        items = _mark_fallback_failure(items, _live_failure_reason(error))
 
     if origin_node_id is not None and destination_node_id is not None:
         items = await overlay_official_page_confirmations(
@@ -117,6 +121,49 @@ async def load_timetable_items(
         )
     await session.commit()
     return items
+
+
+def _live_failure_reason(error: Exception) -> SeatAvailabilityNotObservedReason:
+    reasons: dict[str, SeatAvailabilityNotObservedReason] = {
+        "source_not_configured": "source_not_configured",
+        "source_unavailable": "source_unavailable",
+        "provider_access_restricted": "provider_access_restricted",
+        "passenger_count_not_supported": "passenger_count_not_supported",
+        "unsupported_route": "unsupported_route",
+        "departure_window_elapsed": "departure_window_elapsed",
+        "SRT timetable source is disabled": "source_not_configured",
+        "SRT accountless timetable search supports one passenger": "passenger_count_not_supported",
+        "SRT provider access is restricted": "provider_access_restricted",
+        "unsupported SRT route": "unsupported_route",
+    }
+    return reasons.get(str(error), "source_unavailable")
+
+
+def _mark_fallback_failure(
+    items: list[TimetableItem], reason: SeatAvailabilityNotObservedReason
+) -> list[TimetableItem]:
+    # TAGO supplies schedules, so its generic default must not erase the live
+    # source's failure. Verified evidence is overlaid after this boundary.
+    return [
+        item.model_copy(
+            update={
+                "seat_classes": [
+                    seat.model_copy(
+                        update={
+                            "provenance": SeatAvailabilityProvenance(
+                                kind="not_observed", reason=reason
+                            ),
+                            "actions": [],
+                        }
+                    )
+                    if seat.status == "unknown" and seat.provenance.kind == "not_observed"
+                    else seat
+                    for seat in item.seat_classes
+                ]
+            }
+        )
+        for item in items
+    ]
 
 
 async def _load_live_timetable(

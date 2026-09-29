@@ -247,6 +247,7 @@ def test_sidecar_routes_are_owned_by_the_canonical_http_module() -> None:
         ("/healthz", frozenset({"GET"})),
         ("/readyz", frozenset({"GET"})),
         ("/v1/session-state", frozenset({"GET"})),
+        ("/v1/search-progress", frozenset({"POST"})),
         ("/v1/seat-snapshot", frozenset({"POST"})),
         ("/v1/reserve-once", frozenset({"POST"})),
         ("/v1/reserve-once/stream", frozenset({"POST"})),

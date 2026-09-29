@@ -14,6 +14,7 @@ import type { ProviderAccount, RailProvider } from "../../api/providerAccounts";
 import { fetchStations } from "../../api/stations";
 import {
   fetchTimetables,
+  fetchTimetableProgress,
   filterTimetables,
   mapTimetable,
   refreshSeatStatus,
@@ -38,6 +39,7 @@ import { StationRoutePicker } from "./StationRoutePicker";
 import { StepThreeDateSelector } from "./StepThreeDateSelector";
 import { StepThreeRefreshControl } from "./StepThreeRefreshControl";
 import { StepThreeTimeRange } from "./StepThreeTimeRange";
+import { TimetableLoadingStatus } from "./TimetableLoadingStatus";
 import {
   accessibleTimeBoundary,
   displayTimeBoundary,
@@ -170,6 +172,7 @@ export function NewWaitPage({
   const {
     trains,
     state: timetableState,
+    korailProgress,
     retryProvider: retryTimetableProvider,
     refreshProviderSeatStatus,
     retrySeatStatusProviders,
@@ -180,6 +183,7 @@ export function NewWaitPage({
     demo,
     form,
     loadTimetables: fetchTimetables,
+    loadProgress: fetchTimetableProgress,
     loadSeatStatus: refreshSeatStatus,
     loadCachedSnapshot: fetchCachedTimetableSnapshot,
     loadDemoTimetables: demoTimetablesForForm,
@@ -375,7 +379,10 @@ export function NewWaitPage({
               )}
             </div>
             <div className="train-options">
-              {timetableState.loadingProviders.length > 0 && <div className="timetable-state"><Clock size={24} /><span>{timetableState.loadingProviders.join(" · ")} 공식 시간표를 조회하고 있습니다.</span></div>}
+              <TimetableLoadingStatus
+                loadingProviders={timetableState.loadingProviders}
+                korailProgress={korailProgress}
+              />
               {Object.values(timetableState.providerResults).filter((result): result is TimetableProviderError => result.status === "error").map((result) => <div key={result.provider} className="form-error timetable-error" role="alert"><WarningCircle weight="fill" /><span><strong>{result.provider}</strong> {publicTimetableErrorMessage(result)}</span><button type="button" className="button button-outline compact" disabled={timetableState.loadingProviders.includes(result.provider)} onClick={() => retryTimetableProvider(result.provider)}>이 운영사만 다시 조회</button></div>)}
               {timetableState.loadingProviders.length === 0 && trains.length > 0 && <div className="timetable-result-summary" aria-label="시간표 조회 결과 요약"><strong>{displayTimeRange(form.time, form.timeEnd)}</strong><span>총 {trains.length}개 열차 · KORAIL {visibleProviderCounts.KORAIL ?? 0} · SRT {visibleProviderCounts.SRT ?? 0}</span></div>}
               {timetableState.loadingProviders.length === 0 && trains.length === 0 && Object.values(timetableState.providerResults).some((result) => result.status === "success") && <div className="timetable-state"><Ticket size={24} /><span>선택한 날짜·시간 범위에 맞는 공식 열차가 없습니다.</span></div>}

@@ -155,11 +155,17 @@ KORAIL Chromium과 SRT 연동 모듈은 `experimental-rail` 프로필에서 실�
 4. 한 운영사가 실패해도 다른 운영사의 정상 결과는 유지합니다.
 5. 좌석 상태를 뒷받침할 근거가 없으면 시간표만 표시하고 좌석 관련 작업은 제공하지 않습니다.
 
-KORAIL 검색에서 확인된 승차권 예매기간 확대 안내는 `korail_sidecar/pydoll/search_notice.py`가 구조와
-단일 닫기 행동을 소유합니다. 검색 driver는 공개 검색 폼과 결과 목록 확장 전에 이 안내를 한 번 닫고
+KORAIL 검색의 공개 공지는 `korail_sidecar/pydoll/search_notice.py`가 구조와 닫기 행동을 소유합니다.
+v1.2.3부터 공지 제목·본문·이미지 대체 텍스트에 의존하지 않고 공식 HTTPS 검색 폼
+`/ticket/search/general`과 결과 목록 `/ticket/search/list`의
+`ReactModal__Content[role=dialog][aria-modal=true]`와 `.layerWrap.emer_pop`, `.pop_content`,
+단일 `창닫기/닫기` 버튼을 검증합니다. 검색 driver는 공개 검색 폼과 결과 목록 확장 전에 공지를 닫고
 최신 snapshot을 읽습니다. 재사용 브라우저에서 결과보다 늦게 뜨는 안내도 처리하도록 각 `더보기` 클릭
-직전에 현재 modal을 다시 관측합니다. 이미지 대체 텍스트·modal·control 구조가 계약과 다르거나 보호 신호가 있으면
-임의의 안내를 닫지 않습니다. 안내 미분류·닫기 결과 불명은 목록 조회 실패로 끝납니다.
+직전에 현재 modal을 다시 관측합니다. 겹친 창은 실제 닫기 위치의 hit test로 누를 수 있는 창을 찾고,
+긴 공지는 닫기 버튼까지 스크롤합니다. DOM identity와 콘텐츠 fingerprint를 메모리에서만 사용해 창당
+한 번 닫으며 새 공지가 같은 modal에 교체돼도 구분합니다. 한 호출은 최대 5개·5초이며 체크박스는
+변경하지 않고 공지 본문 링크도 누르지 않습니다. 모든 표시 modal이 공지 구조로 검증돼야 처리하며
+확인·동의·복수 버튼·입력 폼·iframe·구조 미확인·보호 신호·불확실 닫기는 조회 실패로 끝납니다.
 시간표 application은 공식 조회 실패 뒤 TAGO의 미관측 좌석에 닫힌 실패 사유를 전달합니다. 실제
 설정 누락·제공원 실패·보호 응답을 구분하고, 이후 검증된 공식 근거의 overlay와 등록 제한은 유지합니다.
 
@@ -745,7 +751,7 @@ owner입니다. public direct URL 계산은 auth lock 밖에서 끝내고, crede
 non-persistent context 종료까지는 같은 auth lock 안에서 직렬화합니다. 사전 form identity는 출발/도착역·날짜·
 출발 시·1명 승객을 모두 확인하고, 결과 snapshot은 열차 번호·선택적 종류·경로·출도착 시각이 정확히 하나인
 경우에만 더보기를 생략합니다. 목록 확장 여부와 관계없이 좌석 선택 직전 `dismiss_search_notice`로 현재
-공개 안내를 관측합니다. 확인된 예매기간 확대 안내를 한 번 닫으면 최신 snapshot의 보호 신호를 다시 검증하고,
+공개 안내를 관측합니다. 구조가 검증된 공지를 닫으면 최신 snapshot의 보호 신호를 다시 검증하고,
 예매 driver가 열차·객실을 다시 확인합니다. 확정할 수 없으면 bounded expansion 뒤 DOM 예약을 한 번만 호출하며, 좌석 또는
 예약 click 이후 불확실한 결과를 재시도하지 않습니다. 이미 인증된 lease를 재사용할 때도 예약 화면에 들어가기
 직전 공식 same-origin probe를 수행합니다. 명확한 로그아웃이거나 source 불가로 판정할 수 없는 응답이면 기존

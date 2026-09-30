@@ -1032,7 +1032,7 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 시간표와 좌석 정보는 서로 다릅니다. 좌석 상태의 근거가 없거나 감시 기능이 꺼져 있으면 등록 버튼을 열지 않습니다.
 
 v1.2.2부터 자동 예매는 첫 목록에 대상 열차가 있어 더보기를 건너뛰어도 좌석 선택 전에 현재 공개 안내를
-확인합니다. 예매기간 확대 이미지 안내의 정확한 구조와 유일한 `창닫기`가 확인될 때만 한 번 닫고,
+확인합니다. v1.2.3부터 특정 공지 문구 대신 공식 검색 경로·공지창 구조와 유일한 `창닫기/닫기`를 검증하고,
 사라진 뒤 열차·객실을 다시 확인합니다. `phase=pre_request kind=unknown`과
 `reservation_clicked=false`는 예약 요청 전 중단입니다. `seat_clicked=true`만으로 객실 선택 완료나
 예약 성공을 뜻하지 않습니다. 기존 보류 건에 객차·좌석 상관 근거가 없으면 공식 내역 확인이
@@ -1045,10 +1045,14 @@ v1.2.1부터 공식 조회 실패 뒤 TAGO 시간표를 사용해도 실제 실�
 Oracle의 10월 1일 대전→서울 12:00~18:00 조회는 새 공식 `승차권 예매기간 확대` 안내 팝업이
 `더보기` 클릭을 가려 `repeated_window actions=1 rows=10`과 `stage=expand_results_incomplete`로
 실패했습니다. 설정·health·로그인은 정상이었습니다. 이 서명이 반복되면 제한시간을 늘리기 전에 공식
-안내 팝업과 클릭 대상의 겹침을 확인합니다. 현행 읽기 조회는 검증된 안내의 유일한 `창닫기`만 한 번
-처리하고 실제 사라짐을 확인합니다. 닫힌 로그는 `event=search_notice_dismissed
-kind=booking_window_expansion`이며, 미확인 안내는 `search_notice_unrecognized`, 닫기 후 남은 안내는
-`search_notice_persisted`로 실패합니다. checkbox나 동의·선택형 안내를 임의로 처리하지 않습니다.
+안내 팝업과 클릭 대상의 겹침을 확인합니다. 현행 읽기 조회는 공지 내용이 갱신돼도 구조가 검증된 창의
+닫기만 처리합니다. 겹친 공지·이어지는 공지는 최대 5개·5초 동안 순서대로 닫고, 긴 공지는 닫기까지
+스크롤합니다. 닫힌 로그는 `event=search_notice_dismissed kind=public_search_notice count=N`입니다.
+v1.2.1~1.2.2의 유형은 `booking_window_expansion`이었습니다. 미확인 창은
+`search_notice_unrecognized`, 닫기 후 남거나 재등장한 같은 공지는 `search_notice_persisted`,
+처리 상한은 `search_notice_action_limit`, 버튼을 찾은 뒤 창 변경은 `search_notice_changed`,
+클릭 전달 결과 불명은 `search_notice_close_unknown`으로 실패합니다. 공지 원문·링크·fingerprint는
+로그에 남기지 않습니다. checkbox·본문 링크·동의·선택형 안내는 이 경로에서 행동하지 않습니다.
 재사용 브라우저에서는 팝업이 첫 결과 snapshot보다 늦게 나타날 수 있어 `더보기` 클릭 직전에도 현재
 modal을 관측합니다. 첫 조회 성공만으로 복구를 판정하지 말고 같은 조건의 이어지는 조회도 확인하세요.
 자세한 재현과 수정 근거는 [운영 장애 기록](INCIDENTS.md)에 있습니다.

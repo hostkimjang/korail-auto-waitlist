@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,11 +13,24 @@ from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavaila
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapshot, PydollTrainRow
 from rail_waitlist.korail_sidecar.pydoll.search_notice import (
     CLOSE_SELECTOR,
-    dismiss_booking_window_notice,
+    MAX_NOTICE_CLOSE_ACTIONS,
+    OBSERVE_NOTICE_SCRIPT,
+    dismiss_public_search_notices,
 )
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
-def script_result(state: object) -> dict[str, object]:
+
+def script_result(
+    state: object, *, key: str = "1:abc", close_index: int = 0, control_count: int = 1
+) -> dict[str, object]:
+    if state == "public_search_notice":
+        state = {
+            "state": state,
+            "key": key,
+            "close_index": close_index,
+            "control_count": control_count,
+        }
     return {"result": {"result": {"value": state}}}
 
 
@@ -26,7 +41,11 @@ async def test_reservation_notice_preparation_observes_live_modal_and_refreshes_
     close = SimpleNamespace(click=AsyncMock())
     session._tab = SimpleNamespace(
         execute_script=AsyncMock(
-            side_effect=[script_result("booking_window_expansion"), script_result("absent")]
+            side_effect=[
+                script_result("public_search_notice"),
+                script_result("public_search_notice"),
+                script_result("absent"),
+            ]
         )
     )
     monkeypatch.setattr(session, "_visible_elements", AsyncMock(return_value=[close]))
@@ -61,7 +80,8 @@ async def test_verified_notice_closes_once_before_expanding_and_refreshes_snapsh
     more = SimpleNamespace(click=AsyncMock(side_effect=expand))
     script = AsyncMock(
         side_effect=[
-            script_result("booking_window_expansion"),
+            script_result("public_search_notice"),
+            script_result("public_search_notice"),
             script_result("absent"),
             script_result("absent"),
         ]
@@ -83,7 +103,7 @@ async def test_verified_notice_closes_once_before_expanding_and_refreshes_snapsh
     assert clicks == ["notice_closed", "more_clicked"]
     controls.assert_awaited_once_with(CLOSE_SELECTOR)
     snapshot_reader.assert_awaited_once()
-    assert "event=search_notice_dismissed kind=booking_window_expansion" in caplog.text
+    assert "event=search_notice_dismissed kind=public_search_notice count=1" in caplog.text
     assert "안내 창닫기" not in caplog.text
 
 
@@ -107,7 +127,8 @@ async def test_notice_arriving_after_initial_results_closes_before_more_click(mo
         execute_script=AsyncMock(
             side_effect=[
                 script_result("absent"),
-                script_result("booking_window_expansion"),
+                script_result("public_search_notice"),
+                script_result("public_search_notice"),
                 script_result("absent"),
             ]
         )
@@ -132,7 +153,7 @@ async def test_notice_arriving_after_initial_results_closes_before_more_click(mo
 async def test_unrecognized_or_invalid_dialog_is_never_clicked(response):
     controls = AsyncMock()
     with pytest.raises(BrowserSourceUnavailable) as raised:
-        await dismiss_booking_window_notice(
+        await dismiss_public_search_notices(
             execute_script=AsyncMock(return_value=response),
             find_controls=controls,
             monotonic=lambda: 0,
@@ -147,8 +168,8 @@ async def test_unrecognized_or_invalid_dialog_is_never_clicked(response):
 async def test_notice_with_no_unique_close_control_is_never_clicked(count):
     close = SimpleNamespace(click=AsyncMock())
     with pytest.raises(BrowserSourceUnavailable) as raised:
-        await dismiss_booking_window_notice(
-            execute_script=AsyncMock(return_value=script_result("booking_window_expansion")),
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(return_value=script_result("public_search_notice")),
             find_controls=AsyncMock(return_value=[close] * count),
             monotonic=lambda: 0,
             sleep=AsyncMock(),
@@ -160,10 +181,10 @@ async def test_notice_with_no_unique_close_control_is_never_clicked(count):
 
 async def test_persisting_notice_stops_without_repeating_the_close_click():
     close = SimpleNamespace(click=AsyncMock())
-    times = iter([0.0, 6.0])
+    times = iter([0.0, 0.0, 6.0])
     with pytest.raises(BrowserSourceUnavailable) as raised:
-        await dismiss_booking_window_notice(
-            execute_script=AsyncMock(return_value=script_result("booking_window_expansion")),
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(return_value=script_result("public_search_notice")),
             find_controls=AsyncMock(return_value=[close]),
             monotonic=lambda: next(times),
             sleep=AsyncMock(),
@@ -181,3 +202,233 @@ async def test_protected_snapshot_keeps_the_notice_untouched():
 
     assert await session.expand_results(protected, 19) == protected
     script.assert_not_awaited()
+
+
+async def test_changed_notice_is_rejected_after_resolving_close_controls():
+    close = SimpleNamespace(click=AsyncMock())
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(
+                side_effect=[script_result("public_search_notice"), script_result("unrecognized")]
+            ),
+            find_controls=AsyncMock(return_value=[close]),
+            monotonic=lambda: 0,
+            sleep=AsyncMock(),
+            timeout_seconds=5,
+        )
+    close.click.assert_not_awaited()
+    assert raised.value.stage == "search_notice_changed"
+
+
+async def test_uncertain_close_dispatch_is_not_repeated():
+    close = SimpleNamespace(click=AsyncMock(side_effect=RuntimeError("opaque fixture failure")))
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(return_value=script_result("public_search_notice")),
+            find_controls=AsyncMock(return_value=[close]),
+            monotonic=lambda: 0,
+            sleep=AsyncMock(),
+            timeout_seconds=5,
+        )
+    close.click.assert_awaited_once()
+    assert raised.value.stage == "search_notice_close_unknown"
+
+
+async def test_successive_notices_stop_at_the_total_action_limit():
+    close = SimpleNamespace(click=AsyncMock())
+    responses = [script_result("public_search_notice", key="1:abc")]
+    for index in range(1, MAX_NOTICE_CLOSE_ACTIONS + 1):
+        responses.extend(
+            [
+                script_result("public_search_notice", key=f"{index}:abc"),
+                script_result("public_search_notice", key=f"{index + 1}:abc"),
+            ]
+        )
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(side_effect=responses),
+            find_controls=AsyncMock(return_value=[close]),
+            monotonic=lambda: 0,
+            sleep=AsyncMock(),
+            timeout_seconds=5,
+        )
+    assert close.click.await_count == MAX_NOTICE_CLOSE_ACTIONS
+    assert raised.value.stage == "search_notice_action_limit"
+
+
+@pytest.fixture(scope="module")
+async def notice_browser():
+    playwright = pytest.importorskip("playwright.async_api")
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(headless=True)
+        yield browser
+        await browser.close()
+
+
+def notice_markup(content: str, *, close: str = "창닫기", extra: str = "") -> str:
+    return f"""
+    <div class="ReactModal__Content" role="dialog" aria-modal="true"
+      style="position:fixed;inset:10px;background:white;z-index:10">
+      <div class="layerWrap emer_pop">
+        <div class="pop_content" style="min-height:40px">{content}</div>
+        {extra}<button onclick="this.closest('[role=dialog]').remove()">{close}</button>
+      </div>
+    </div>"""
+
+
+async def notice_fixture_page(browser, markup: str, *, path: str = "/ticket/search/general"):
+    page = await browser.new_page()
+    url = f"https://www.korail.com{path}"
+
+    async def route_request(route):
+        if route.request.url == url and route.request.is_navigation_request():
+            await route.fulfill(
+                content_type="text/html; charset=utf-8",
+                body=f"<!doctype html><html><body>{markup}</body></html>",
+            )
+        else:
+            await route.abort()
+
+    await page.route("**/*", route_request)
+    await page.goto(url)
+    return page
+
+
+@pytest.mark.parametrize(
+    ("content", "close", "extra"),
+    [
+        ('<img alt="새로운 겨울 운행 공지">', "창닫기", ""),
+        ('<img alt=""><img alt="추가 공지">', "창닫기", ""),
+        ("<h2>시스템 점검 안내</h2><p>새 공지 내용입니다.</p>", "닫기", ""),
+        ('<a href="https://www.korail.com/notice">공지 자세히 보기</a>', "창닫기", ""),
+        ("<p>새 행사 안내</p>", "창닫기", '<input type="checkbox" checked>오늘 그만 보기'),
+    ],
+)
+@pytest.mark.parametrize("path", ["/ticket/search/general", "/ticket/search/list"])
+async def test_new_public_notice_content_is_closed_using_real_dom(
+    notice_browser, content, close, extra, path
+):
+    page = await notice_fixture_page(
+        notice_browser, notice_markup(content, close=close, extra=extra), path=path
+    )
+    try:
+        before = await page.evaluate(OBSERVE_NOTICE_SCRIPT)
+        assert before["state"] == "public_search_notice"
+        await page.evaluate(
+            """() => {window.checkboxChanges = 0; window.linkClicks = 0;
+            document.addEventListener('change', () => window.checkboxChanges++);
+            document.querySelectorAll('a').forEach(a => a.onclick = () => window.linkClicks++);} """
+        )
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+        assert await page.evaluate("window.checkboxChanges") == 0
+        assert await page.evaluate("window.linkClicks") == 0
+    finally:
+        await page.close()
+
+
+async def dismiss_fixture_notices(page):
+    async def execute(script, *, return_by_value):
+        assert return_by_value
+        return script_result(await page.evaluate(script))
+
+    async def controls(selector):
+        return [
+            control for control in await page.locator(selector).all() if await control.is_visible()
+        ]
+
+    return await dismiss_public_search_notices(
+        execute_script=execute,
+        find_controls=controls,
+        monotonic=time.monotonic,
+        sleep=asyncio.sleep,
+        timeout_seconds=5,
+    )
+
+
+async def test_stacked_public_notices_close_topmost_then_next_using_real_dom(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser, notice_markup("첫 공지") + notice_markup("두 번째 공지")
+    )
+    try:
+        assert (await page.evaluate(OBSERVE_NOTICE_SCRIPT))["close_index"] == 1
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+    finally:
+        await page.close()
+
+
+async def test_new_content_in_same_modal_is_closed_using_real_dom(notice_browser):
+    page = await notice_fixture_page(notice_browser, notice_markup("첫 공지"))
+    try:
+        await page.evaluate(
+            """() => document.querySelector('button').onclick = function() {
+              document.querySelector('.pop_content').innerText = '다음 공지';
+              this.onclick = () => this.closest('[role=dialog]').remove();
+            }"""
+        )
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+    finally:
+        await page.close()
+
+
+async def test_long_notice_scrolls_to_close_without_clicking_its_content(notice_browser):
+    markup = notice_markup('<div style="height:1200px">긴 신규 공지</div>').replace(
+        "background:white;", "background:white;overflow:auto;"
+    )
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+    finally:
+        await page.close()
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        notice_markup("예약 동의", close="네"),
+        notice_markup("동의 확인", close="확인"),
+        notice_markup("기존 예약 선택", extra="<button>새 예약</button>"),
+        notice_markup("입력 필요", extra='<input type="text">'),
+        notice_markup("선택 필요", extra="<select><option>선택</option></select>"),
+        notice_markup("폼 처리", extra="<form></form>"),
+        notice_markup("외부 내용", extra="<iframe></iframe>"),
+        notice_markup("공지", extra='<a href="/ticket/reservation/list">예약 확인</a>'),
+        notice_markup("공지").replace("emer_pop", "reservation_pop"),
+        notice_markup("공지").replace("onclick=", "disabled onclick="),
+        notice_markup("공지") + '<div role="dialog" style="position:fixed;inset:0">인증 확인</div>',
+    ],
+)
+async def test_non_public_or_action_dialog_is_never_closed_using_real_dom(notice_browser, markup):
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "unrecognized"
+        controls = AsyncMock()
+
+        async def execute(script, *, return_by_value):
+            return script_result(await page.evaluate(script))
+
+        with pytest.raises(BrowserSourceUnavailable) as raised:
+            await dismiss_public_search_notices(
+                execute_script=execute,
+                find_controls=controls,
+                monotonic=lambda: 0,
+                sleep=AsyncMock(),
+                timeout_seconds=5,
+            )
+        controls.assert_not_awaited()
+        assert raised.value.stage == "search_notice_unrecognized"
+    finally:
+        await page.close()
+
+
+async def test_notice_on_reservation_page_is_never_closed_using_real_dom(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser, notice_markup("안내"), path="/ticket/reservation/list"
+    )
+    try:
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "unrecognized"
+    finally:
+        await page.close()

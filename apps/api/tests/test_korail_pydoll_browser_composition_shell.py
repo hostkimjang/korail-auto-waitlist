@@ -66,6 +66,7 @@ METHOD_INVENTORIES = {
         "export_http_replay_plan",
         "submit_once",
         "wait_for_result",
+        "dismiss_search_notice",
         "expand_results",
         "reserve_once",
         "confirmation_correlation_seats_from_fresh_state",
@@ -157,6 +158,7 @@ METHOD_INVENTORIES = {
         "export_http_replay_plan",
         "submit_once",
         "wait_for_result",
+        "dismiss_search_notice",
         "expand_results",
         "reserve_once",
         "confirmation_correlation_seats_from_fresh_state",
@@ -391,10 +393,9 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    # Raised by two lines for the `reset_search_state` session protocol member that lets a
-    # reused page open a new HTTP replay capture window. The surface contracts below still
-    # pin the exact module definitions and public/private name counts.
-    assert len(source.splitlines()) <= 1_492
+    # The notice-preparation protocol member and its delegating session method add five
+    # lines. Keep the exact method inventory and implementation-island checks below.
+    assert len(source.splitlines()) <= 1_497
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

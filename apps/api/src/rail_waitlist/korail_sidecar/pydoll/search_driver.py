@@ -22,7 +22,7 @@ from .page_contracts import (
     PydollSeatBox,
     PydollTrainRow,
 )
-from .search_notice import dismiss_booking_window_notice
+from .search_notice import dismiss_public_search_notices
 from .search_snapshot_policy import (
     advance_search_expansion,
     begin_search_expansion,
@@ -550,9 +550,9 @@ class PydollSearchDomDriver:
     ) -> PydollPageSnapshot:
         if self._snapshot_requires_expansion_stop(snapshot):
             return snapshot
-        if not observe_current and "창닫기" not in snapshot.body_text:
+        if not observe_current and "닫기" not in snapshot.body_text:
             return snapshot
-        closed = await dismiss_booking_window_notice(
+        closed = await dismiss_public_search_notices(
             execute_script=self._execute_script,
             find_controls=lambda selector: self._port._visible_elements(selector),
             monotonic=self._monotonic,

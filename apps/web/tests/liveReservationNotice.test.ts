@@ -195,7 +195,7 @@ describe("live reservation notices", () => {
       ["검색 결과·열차 재확인", "completed"],
       ["철도사 응답·공식 결과 대기", "active"],
     ]);
-    expect(notice?.steps?.some((step) => step.label === "객실 등급 선택")).toBe(false);
+    expect(notice?.steps?.some((step) => step.label === "객실 등급 선택 시도")).toBe(false);
   });
 
   it("accepts null seat detection without inventing its step or queue duration", () => {
@@ -364,11 +364,90 @@ describe("live reservation notices", () => {
       ["자동 예매 요청 시작", undefined],
       ["로그인 세션 확인", 4_605],
       ["검색 결과·열차 재확인", 1_145],
-      ["객실 등급 선택", 124],
+      ["객실 등급 선택 시도", 124],
       ["예약 요청", 24],
       ["공식 결과 확인", 1_819],
       ["공식 결제 필요", undefined],
     ]);
+  });
+
+  it("separates a notice interruption from the later official check in an UNKNOWN SSE", () => {
+    const notice = buildLiveReservationNotice({
+      id: "partial-notice-result",
+      event_type: "watch.reservation_result",
+      aggregate_id: watch.id,
+      created_at: "2026-09-30T01:46:52Z",
+      payload: {
+        watch_id: watch.id,
+        candidate_id: "candidate",
+        attempt_started_at: "2026-09-30T01:45:36Z",
+        attempt_finished_at: "2026-09-30T01:46:06Z",
+        outcome: "unknown",
+        manual_check_required: true,
+        retryable: false,
+        result_reason_code: "provider_notice_action_required",
+        confirmation_outcome: "inconclusive",
+        confirmation_observed_at: "2026-09-30T01:46:52Z",
+        reconciliation_attempt_count: 1,
+        progress_stages: [
+          { stage: "authenticated_session_ready", occurred_at: "2026-09-30T01:45:46Z" },
+          { stage: "target_rechecked", occurred_at: "2026-09-30T01:45:47Z" },
+          { stage: "seat_selected", occurred_at: "2026-09-30T01:45:48Z" },
+        ],
+      },
+    }, [watch]);
+
+    expect(notice).toMatchObject({
+      kind: "manual_check",
+      title: "철도사 안내창 확인이 필요합니다",
+    });
+    expect(notice?.steps?.find(({ label }) => label === "안내창 처리 중단"))
+      .toMatchObject({ state: "failed", occurredAt: "2026-09-30T01:46:06Z" });
+    expect(notice?.steps?.find(({ label }) => label === "공식 결과 확인"))
+      .toMatchObject({ state: "failed", occurredAt: "2026-09-30T01:46:52Z" });
+    expect(notice?.steps?.some(({ label }) => label === "예약 요청")).toBe(false);
+    expect(notice?.description).toContain("자동 재예매를 보류합니다");
+  });
+
+  it.each([
+    ["before-attempt", "2026-09-30T01:45:35Z", false],
+    ["after-revision", "2026-09-30T01:46:53Z", false],
+    ["after-finish", "2026-09-30T01:46:20Z", true],
+  ] as const)("bounds a %s official confirmation independently of request progress", (
+    name,
+    observedAt,
+    expectedCheck,
+  ) => {
+    for (const requestAttempted of [false, true]) {
+      const notice = buildLiveReservationNotice({
+        id: `bounded-confirmation-${name}-${requestAttempted}`,
+        event_type: "watch.reservation_result",
+        aggregate_id: watch.id,
+        created_at: "2026-09-30T01:46:52Z",
+        payload: {
+          watch_id: watch.id,
+          candidate_id: "candidate",
+          attempt_started_at: "2026-09-30T01:45:36Z",
+          attempt_finished_at: "2026-09-30T01:46:06Z",
+          outcome: "unknown",
+          manual_check_required: true,
+          result_reason_code: "reservation_request_result_unknown",
+          confirmation_outcome: "inconclusive",
+          confirmation_observed_at: observedAt,
+          progress_stages: requestAttempted ? [
+            { stage: "seat_selected", occurred_at: "2026-09-30T01:45:48Z" },
+            { stage: "reservation_requested", occurred_at: "2026-09-30T01:45:49Z" },
+          ] : [],
+        },
+      }, [watch]);
+      expect(notice?.kind).toBe("manual_check");
+      expect(notice?.steps?.some(({ label }) => label === "공식 결과 확인"))
+        .toBe(expectedCheck);
+      if (expectedCheck) {
+        expect(notice?.steps?.find(({ label }) => label === "공식 결과 확인"))
+          .toMatchObject({ occurredAt: observedAt });
+      }
+    }
   });
 
   it("drops unknown or duplicate provider progress instead of inventing steps", () => {

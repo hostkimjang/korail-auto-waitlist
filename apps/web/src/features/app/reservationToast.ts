@@ -194,7 +194,7 @@ type ReservationTerminalStage =
 const progressStageLabels: Record<ReservationProgressStageName, string> = {
   authenticated_session_ready: "로그인 세션 확인",
   target_rechecked: "검색 결과·열차 재확인",
-  seat_selected: "객실 등급 선택",
+  seat_selected: "객실 등급 선택 시도",
   reservation_requested: "예약 요청",
 };
 
@@ -232,6 +232,7 @@ function detailedResultSteps(
   transition: WatchActionTransition,
   terminal: ReservationTerminalStage,
   terminalObservedAt?: string | null,
+  evidence: ReservationEvidence = {},
 ): ToastProgressStep[] | null {
   if (!transition.reservationProgress?.length) return null;
   const times = stageTimes(transition);
@@ -273,11 +274,11 @@ function detailedResultSteps(
     "검색 결과·열차 재확인",
     terminal === "not_available" && !hasSeatSelection ? "failed" : "completed",
   );
-  appendProgress("seat_selected", "객실 등급 선택");
+  appendProgress("seat_selected", "객실 등급 선택 시도");
   appendProgress("reservation_requested", "예약 요청");
 
   const resultAt = terminal === "confirmed_absent"
-    ? terminalObservedAt ?? undefined
+    ? boundedConfirmationTime(transition, terminalObservedAt) ?? undefined
     : transition.finishedAt ?? transition.revisionAt;
   const resultInstant = resultAt === undefined ? Number.NaN : Date.parse(resultAt);
   const previousInstant = previousAt === undefined ? Number.NaN : Date.parse(previousAt);
@@ -298,6 +299,16 @@ function detailedResultSteps(
     steps.push(failed("로그인 세션 확인", times.current));
   } else if (terminal === "payment_completed") {
     steps.push(completed("좌석 임시 확보", resultTiming));
+  } else if (terminal === "manual_check") {
+    // Attempt completion is not evidence that an official booking check occurred.
+    steps.push(failed(
+      progressByStage.has("reservation_requested")
+        ? "예약 요청 결과 미확인"
+        : unconfirmedRequestStepLabel(evidence),
+      resultTiming,
+    ));
+    const confirmationStep = officialConfirmationStep(transition, evidence);
+    if (confirmationStep !== null) steps.push(confirmationStep);
   } else if (terminal === "confirmed_absent" && resultAt === undefined) {
     return steps;
   } else if (
@@ -359,6 +370,7 @@ function preBookingProviderFailureDescription(
 function uncertainRequestFallbackSteps(
   transition: WatchActionTransition,
   evidence: ReservationEvidence,
+  failureLabel = "예매 결과 불명확",
 ): ToastProgressStep[] {
   const times = stageTimes(transition);
   const steps = [
@@ -366,17 +378,53 @@ function uncertainRequestFallbackSteps(
     ...(transition.startedAt === undefined
       ? []
       : [completed("자동 예매 처리 시작", times.started)]),
-    failed("예매 결과 불명확", times.attempted),
+    failed(failureLabel, times.attempted),
   ];
-  if (evidence.confirmationObservedAt != null) {
-    const timing = { occurredAt: evidence.confirmationObservedAt };
-    steps.push(
-      evidence.confirmationOutcome === "inconclusive"
-        ? failed("공식 결과 확인", timing)
-        : completed("공식 결과 확인", timing),
-    );
-  }
+  const confirmationStep = officialConfirmationStep(transition, evidence);
+  if (confirmationStep !== null) steps.push(confirmationStep);
   return steps;
+}
+
+function boundedConfirmationTime(
+  transition: WatchActionTransition,
+  observedAt: string | null | undefined,
+): string | null {
+  const bounds = [observedAt, transition.startedAt, transition.revisionAt];
+  if (bounds.some((value) => value == null || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(value))) {
+    return null;
+  }
+  const observed = observedAt == null ? Number.NaN : Date.parse(observedAt);
+  const started = transition.startedAt === undefined ? Number.NaN : Date.parse(transition.startedAt);
+  const revised = transition.revisionAt === undefined ? Number.NaN : Date.parse(transition.revisionAt);
+  return Number.isFinite(observed) && Number.isFinite(started) && Number.isFinite(revised)
+    && started <= observed && observed <= revised
+    ? observedAt ?? null
+    : null;
+}
+
+function officialConfirmationStep(
+  transition: WatchActionTransition,
+  evidence: ReservationEvidence,
+): ToastProgressStep | null {
+  const observedAt = boundedConfirmationTime(transition, evidence.confirmationObservedAt);
+  if (observedAt === null || evidence.confirmationOutcome == null) return null;
+  const timing = { occurredAt: observedAt };
+  return evidence.confirmationOutcome === "inconclusive"
+    || evidence.confirmationOutcome === "auth_required"
+    || evidence.confirmationOutcome === "provider_blocked"
+    ? failed("공식 결과 확인", timing)
+    : completed("공식 결과 확인", timing);
+}
+
+function unconfirmedRequestStepLabel(evidence: ReservationEvidence): string {
+  switch (evidence.resultReasonCode) {
+    case "provider_notice_action_required":
+    case "delay_consent_required":
+    case "existing_reservation_action_required":
+      return "안내창 처리 중단";
+    default:
+      return "예약 요청 전달 여부 미확인";
+  }
 }
 
 function lifecycleFields(
@@ -701,8 +749,8 @@ export function buildReservationRecoveryToast(
       title: manualCheckTitle(result),
       description: appendEvidence(summary, result),
       steps: [
-        ...(detailedResultSteps(transition, "manual_check")
-          ?? uncertainRequestFallbackSteps(transition, result)),
+        ...(detailedResultSteps(transition, "manual_check", undefined, result)
+          ?? uncertainRequestFallbackSteps(transition, result, unconfirmedRequestStepLabel(result))),
         active(
           automaticRecheckPending
             ? "공식 결과 자동 재확인 대기"

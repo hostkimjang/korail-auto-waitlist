@@ -619,6 +619,15 @@ v1.2.4부터 Pydoll의 실제 공식 검색 XHR·Fetch에서 확인한 HTTP 500~
 승격하지 않습니다. 운영사 내부 장애나 서버 IP 제한을 확정한 것은 아니며, 실제 복구는 대기 해제 뒤
 한 번의 공식 조회에서 열차·좌석 결과가 돌아오는지 확인합니다. 일반 타임아웃의 조건별 backoff는 그대로입니다.
 
+계정에 저장된 `last_auth_status=authenticated`는 마지막 인증 확인의 기록입니다. 현재 sidecar의
+`session_state`·`locally_reusable`·generation도 함께 확인해야 합니다. 저장된 상태가 인증 완료여도
+현재 세션이 `auth_required`이면 공식 예약 내역에 접근할 수 있다는 뜻이 아닙니다. 공식 확인이
+`official_read_unavailable`로 끝나면 예약 부재로 확정하거나 결과 불명 제약을 직접 해제하지 않습니다.
+실제 예약 재검증은 현재 공식 예약·발권 내역 확인, 기존 대기의 승인된 rearm, 새 공식 좌석 관측,
+단일 child 예약, 공식 미결제 예약 확인 순서로 진행합니다. 서버와 별도 DB를 사용하는 로컬에 새 대기를
+만들어 기존 제약을 건너뛰지 않습니다. 로컬에서 좌석 조회가 성공했다는 사실도 서버의 예약 성공 증거로
+사용하지 않습니다.
+
 2026년 8월 13일 01:30~04:30 KST 점검에서 수정 전 배포본은 공식 페이지 이동을 약 28초 뒤
 `outcome=source_unavailable stage=wait_result`로 닫았습니다. 01:30~02:17 KST의 DB에는 KORAIL
 `ERROR / provider_unavailable` 관측 115건과 신규 예약 시도 0건이 기록되어 좌석 발견이나 예매로 잘못 전이하지

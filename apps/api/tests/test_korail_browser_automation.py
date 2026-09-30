@@ -48,6 +48,7 @@ from rail_waitlist.korail_browser_automation import (
 from rail_waitlist.korail_search_bootstrap import KorailStationIdentityResolver
 from rail_waitlist.korail_sidecar.browser_service_availability import (
     BrowserProviderUnavailable,
+    ProviderUnavailableTrigger,
 )
 from rail_waitlist.korail_sidecar.playwright import search_form
 from rail_waitlist.provider_call_context import bind_request_id
@@ -1265,8 +1266,11 @@ async def test_protection_cooldown_blocks_a_different_query_globally() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_outage_blocks_a_different_query_globally_with_retry_after() -> None:
-    client = FakeClient(failure=BrowserProviderUnavailable("maintenance_page", "wait_result"))
+@pytest.mark.parametrize("trigger", ["maintenance_page", "business_server_error"])
+async def test_provider_outage_blocks_a_different_query_globally_with_retry_after(
+    trigger: ProviderUnavailableTrigger,
+) -> None:
+    client = FakeClient(failure=BrowserProviderUnavailable(trigger, "wait_result"))
     automation = KorailBrowserAutomation(client, provider_unavailable_cooldown_seconds=300)
     next_date = request().model_copy(update={"travel_date": date(2026, 8, 4)})
 
@@ -1282,12 +1286,15 @@ async def test_provider_outage_blocks_a_different_query_globally_with_retry_afte
 
 
 @pytest.mark.asyncio
-async def test_provider_outage_preempts_a_cached_different_query() -> None:
+@pytest.mark.parametrize("trigger", ["maintenance_page", "business_server_error"])
+async def test_provider_outage_preempts_a_cached_different_query(
+    trigger: ProviderUnavailableTrigger,
+) -> None:
     client = FakeClient()
     automation = KorailBrowserAutomation(client, cache_ttl_seconds=60)
     cached_request = request()
     await automation.search(cached_request)
-    client.failure = BrowserProviderUnavailable("maintenance_page", "wait_result")
+    client.failure = BrowserProviderUnavailable(trigger, "wait_result")
     outage_request = request().model_copy(update={"travel_date": date(2026, 8, 4)})
 
     with pytest.raises(BrowserProviderUnavailable):
@@ -1300,7 +1307,10 @@ async def test_provider_outage_preempts_a_cached_different_query() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_outage_stops_a_different_query_already_waiting_for_browser() -> None:
+@pytest.mark.parametrize("trigger", ["maintenance_page", "business_server_error"])
+async def test_provider_outage_stops_a_different_query_already_waiting_for_browser(
+    trigger: ProviderUnavailableTrigger,
+) -> None:
     class BlockingOutageClient:
         def __init__(self) -> None:
             self.calls = 0
@@ -1314,7 +1324,7 @@ async def test_provider_outage_stops_a_different_query_already_waiting_for_brows
             self.calls += 1
             self.started.set()
             await self.release.wait()
-            raise BrowserProviderUnavailable("maintenance_page", "wait_result")
+            raise BrowserProviderUnavailable(trigger, "wait_result")
 
     client = BlockingOutageClient()
     automation = KorailBrowserAutomation(client, provider_unavailable_cooldown_seconds=300)
@@ -1329,6 +1339,34 @@ async def test_provider_outage_stops_a_different_query_already_waiting_for_brows
 
     assert all(isinstance(item, BrowserProviderUnavailable) for item in results)
     assert client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_business_server_error_stops_all_queries_for_configured_300_seconds() -> None:
+    clock = {"now": 0.0}
+    client = FakeClient(
+        failure=BrowserProviderUnavailable("business_server_error", "business_response")
+    )
+    automation = KorailBrowserAutomation(
+        client, provider_unavailable_cooldown_seconds=300, monotonic=lambda: clock["now"]
+    )
+    with pytest.raises(BrowserProviderUnavailable):
+        await automation.search(request())
+    client.failure = None
+    for elapsed_seconds in (1, 30, 60, 299):
+        clock["now"] = float(elapsed_seconds)
+        different_query = request().model_copy(update={"departure_from": time(15)})
+        with pytest.raises(BrowserProviderUnavailable) as held:
+            await automation.search(different_query)
+        assert held.value.trigger == "business_server_error"
+        assert held.value.retry_after_seconds == 300 - elapsed_seconds
+        assert client.calls == 1
+    clock["now"] = 300.0
+
+    result = await automation.search(request())
+
+    assert result.trains
+    assert client.calls == 2
 
 
 def test_sidecar_requires_internal_bearer_token() -> None:
@@ -1375,8 +1413,11 @@ def test_sidecar_logs_one_sanitized_protection_terminal_without_exposing_it(
     assert caplog.text.count("stage=wait_result trigger=marker_code_8003") == 1
 
 
-def test_sidecar_projects_provider_outage_as_compatible_503_with_retry_after() -> None:
-    failure = BrowserProviderUnavailable("maintenance_page", "wait_result")
+@pytest.mark.parametrize("trigger", ["maintenance_page", "business_server_error"])
+def test_sidecar_projects_provider_outage_as_compatible_503_with_retry_after(
+    trigger: ProviderUnavailableTrigger,
+) -> None:
+    failure = BrowserProviderUnavailable(trigger, "wait_result")
     app = create_adapter_app(
         KorailBrowserAutomation(
             FakeClient(failure=failure),

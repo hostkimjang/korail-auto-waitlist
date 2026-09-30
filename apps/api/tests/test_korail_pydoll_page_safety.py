@@ -179,3 +179,60 @@ def test_page_safety_does_not_reverse_depend_on_browser_facade() -> None:
     }
 
     assert "korail_pydoll_browser" not in imported_modules
+
+
+@pytest.mark.parametrize("rows", [(), (VISIBLE_ROW,)])
+@pytest.mark.parametrize("resource_type", ["business_xhr", "business_fetch"])
+def test_business_5xx_rejects_empty_and_partial_lists_without_exposing_content(
+    rows: tuple[PydollTrainRow, ...],
+    resource_type: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger=EVENT_LOGGER.name)
+    snapshot = PydollPageSnapshot(
+        "public-body-fixture",
+        rows,
+        network_responses=((500, resource_type),),
+        url="https://www.korail.com/ticket/search/list?fixture=test",
+    )
+
+    block = classify_pydoll_page_block(snapshot)
+    assert block is not None
+    assert (block.kind, block.trigger) == ("provider_unavailable", "business_server_error")
+    with pytest.raises(BrowserProviderUnavailable) as raised:
+        assert_pydoll_response_allowed(snapshot, "expand_results", event_logger=EVENT_LOGGER)
+
+    assert raised.value.reason == "source_unavailable"
+    assert raised.value.stage == "business_response"
+    assert f"status=500 resource_type={resource_type} rows={len(rows)}" in caplog.text
+    assert "public-body-fixture" not in caplog.text
+    assert "fixture=test" not in caplog.text
+
+
+@pytest.mark.parametrize("resource_type", ["xhr", "fetch", "document", "image", "font"])
+def test_untagged_5xx_does_not_become_business_source_failure(resource_type: str) -> None:
+    snapshot = PydollPageSnapshot("정상", (VISIBLE_ROW,), network_responses=((500, resource_type),))
+
+    assert classify_pydoll_page_block(snapshot) is None
+
+
+@pytest.mark.parametrize(
+    ("body", "url", "network", "expected_kind"),
+    [
+        ("결과", "", ((429, "fetch"),), "rate_limited"),
+        ("결과", "", ((403, "document"),), "protection"),
+        ("captcha", "", (), "protection"),
+        ("점검", "https://www.korail.com/rejectservice_job.html", (), "provider_unavailable"),
+    ],
+)
+def test_protection_and_maintenance_remain_prior_to_business_5xx(
+    body: str, url: str, network: tuple[tuple[int, str], ...], expected_kind: str
+) -> None:
+    snapshot = PydollPageSnapshot(
+        body, (), network_responses=((500, "business_xhr"), *network), url=url
+    )
+
+    block = classify_pydoll_page_block(snapshot)
+
+    assert block is not None
+    assert block.kind == expected_kind

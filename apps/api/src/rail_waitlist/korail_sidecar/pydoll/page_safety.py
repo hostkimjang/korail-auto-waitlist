@@ -70,15 +70,17 @@ def classify_pydoll_page_block(snapshot: PydollPageSnapshot) -> PydollPageBlock 
         return PydollProviderUnavailableBlock(unavailable_trigger)
 
     trigger = protection_trigger_from_text(snapshot.body_text)
-    if trigger is None:
-        return None
-    if trigger not in GENERIC_PROTECTION_TRIGGERS:
-        return PydollProtectionBlock(trigger)
-    if not snapshot.rows or any(
-        protection_trigger_from_text(text) in GENERIC_PROTECTION_TRIGGERS
-        for text in snapshot.protection_texts
-    ):
-        return PydollProtectionBlock(trigger)
+    if trigger is not None:
+        if trigger not in GENERIC_PROTECTION_TRIGGERS:
+            return PydollProtectionBlock(trigger)
+        if not snapshot.rows or any(
+            protection_trigger_from_text(text) in GENERIC_PROTECTION_TRIGGERS
+            for text in snapshot.protection_texts
+        ):
+            return PydollProtectionBlock(trigger)
+    for status, resource_type in snapshot.network_responses:
+        if resource_type in {"business_xhr", "business_fetch"} and 500 <= status <= 599:
+            return PydollProviderUnavailableBlock("business_server_error")
     return None
 
 
@@ -99,7 +101,10 @@ def assert_pydoll_response_allowed(
         _log_provider_unavailable_snapshot(
             snapshot, stage, block.trigger, event_logger=event_logger
         )
-        raise BrowserProviderUnavailable(block.trigger, stage)
+        raise BrowserProviderUnavailable(
+            block.trigger,
+            "business_response" if block.trigger == "business_server_error" else stage,
+        )
     _log_protection_snapshot(snapshot, stage, block.trigger, event_logger=event_logger)
     raise BrowserProtectionDetected(block.trigger, stage)
 
@@ -133,6 +138,22 @@ def _log_provider_unavailable_snapshot(
     *,
     event_logger: logging.Logger,
 ) -> None:
+    if trigger == "business_server_error":
+        status, resource_type = next(
+            (status, resource_type)
+            for status, resource_type in snapshot.network_responses
+            if resource_type in {"business_xhr", "business_fetch"} and 500 <= status <= 599
+        )
+        event_logger.warning(
+            "KORAIL Pydoll business response failed stage=%s trigger=%s "
+            "status=%d resource_type=%s rows=%d",
+            stage,
+            trigger,
+            status,
+            resource_type,
+            len(snapshot.rows),
+        )
+        return
     event_logger.warning(
         "KORAIL Pydoll service unavailable evidence stage=%s trigger=%s rows=%d network_count=%d",
         stage,

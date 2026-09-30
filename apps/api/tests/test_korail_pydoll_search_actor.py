@@ -16,6 +16,7 @@ from rail_waitlist.korail_sidecar.browser_service_availability import (
     BrowserProviderUnavailable,
 )
 from rail_waitlist.korail_sidecar.http_replay import HttpReplayInvalidCapture
+from rail_waitlist.korail_sidecar.pydoll.page_safety import assert_pydoll_response_allowed
 from rail_waitlist.korail_sidecar.pydoll.search_actor import (
     KorailPydollReadOnlySearchSession,
     PydollReadOnlySearchActor,
@@ -56,6 +57,7 @@ class _ReadOnlySession:
     events: list[str] = field(default_factory=list)
     stations: dict[str, str] = field(default_factory=lambda: {"departure": "", "arrival": ""})
     schedule: tuple[date, int] = (date(2026, 8, 3), 14)
+    expanded_snapshot: PydollPageSnapshot | None = None
 
     async def open(self) -> PydollPageSnapshot:
         self.events.append("open")
@@ -106,7 +108,7 @@ class _ReadOnlySession:
         _max_actions: int,
     ) -> PydollPageSnapshot:
         self.events.append("expand")
-        return snapshot
+        return self.expanded_snapshot or snapshot
 
 
 class _SessionContext:
@@ -231,6 +233,53 @@ async def test_search_actor_uses_only_the_read_only_session_protocol() -> None:
         "expand",
         "exit",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_phase", ["wait_result", "expand_results"])
+async def test_warm_business_5xx_does_not_cold_retry_or_resubmit_partial_result(
+    failure_phase: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    event_logger = logging.getLogger(__name__)
+    caplog.set_level(logging.INFO, logger=event_logger.name)
+    session = _LatchedCaptureSession(snapshot=_snapshot())
+    actor = PydollReadOnlySearchActor(
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_: _SessionContext(session),
+        session_reuse_ttl_seconds=600,
+        session_reuse_max_searches=10,
+        station_identity_resolver=None,
+        monotonic=lambda: 0,
+        cleanup=_cleanup,
+        response_safety_guard=lambda snapshot, stage: assert_pydoll_response_allowed(
+            snapshot, stage, event_logger=event_logger
+        ),
+        http_replay_client_factory=lambda *_args, **_kwargs: object(),
+        http_replay_route_cache_size=4,
+        event_logger=event_logger,
+    )
+    await actor.search(_request())
+    failed = PydollPageSnapshot(
+        "일부 열차", _snapshot().rows, network_responses=((500, "business_xhr"),)
+    )
+    if failure_phase == "wait_result":
+        session.snapshot = failed
+    else:
+        session.expanded_snapshot = failed
+
+    with pytest.raises(BrowserProviderUnavailable) as raised:
+        await actor.search(_request())
+
+    assert raised.value.trigger == "business_server_error"
+    assert raised.value.stage == "business_response"
+    assert session.events.count("submit") == 2
+    assert session.events.count("enter") == 1
+    assert session.events.count("exit") == 1
+    assert session.events.count("expand") == (1 if failure_phase == "wait_result" else 2)
+    assert actor.active_session is None
+    assert "source=browser reason=warm_pre_submit_state" not in caplog.text
 
 
 def test_search_actor_does_not_reverse_depend_on_pydoll_browser_facade() -> None:

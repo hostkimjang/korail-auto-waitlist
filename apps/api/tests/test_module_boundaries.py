@@ -11550,6 +11550,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/korail_sidecar/pydoll/http_replay.py",
         "rail_waitlist/korail_sidecar/pydoll/dom_interaction.py",
         "rail_waitlist/korail_sidecar/pydoll/login_driver.py",
+        "rail_waitlist/korail_sidecar/pydoll/network_evidence.py",
         "rail_waitlist/korail_sidecar/pydoll/reservation_actor.py",
         "rail_waitlist/korail_sidecar/pydoll/reservation_driver.py",
         "rail_waitlist/korail_sidecar/pydoll/search_actor.py",
@@ -11582,6 +11583,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/korail_sidecar/pydoll/http_replay.py",
         "rail_waitlist/korail_sidecar/pydoll/reservation_driver.py",
         "rail_waitlist/korail_sidecar/pydoll/search_driver.py",
+        "rail_waitlist/korail_sidecar/pydoll/network_evidence.py",
         "rail_waitlist/korail_sidecar/pydoll/page_safety.py",
         "rail_waitlist/korail_sidecar/playwright/client.py",
     }

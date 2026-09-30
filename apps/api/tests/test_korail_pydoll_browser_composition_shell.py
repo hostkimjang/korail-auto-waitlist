@@ -214,7 +214,6 @@ IMPLEMENTATION_ISLANDS = {
         "read_reservation_list",
         "read_issued_ticket_list",
         "export_http_replay_plan",
-        "_on_response_received",
     },
     "_PydollSessionContext": set(),
 }
@@ -232,6 +231,7 @@ STATIC_OWNER_HOOKS = {
         "wait_for_visible_elements",
     },
     "_live_dom_owner": {"read_control_state", "visible_elements"},
+    "_network_evidence_owner": {"pydoll_network_response_evidence"},
     "_search_hour_carousel_input_owner": {
         "dispatch_mouse_event",
         "navigate_hour_carousel_by_keyboard",
@@ -393,9 +393,9 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    # The notice-preparation protocol member and its delegating session method add five
-    # lines. Keep the exact method inventory and implementation-island checks below.
-    assert len(source.splitlines()) <= 1_497
+    # Network normalization now belongs to the dedicated evidence owner; the callback
+    # delegates without increasing the browser facade's responsibilities.
+    assert len(source.splitlines()) <= 1_489
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

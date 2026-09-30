@@ -105,6 +105,76 @@ async def test_search_driver_returns_maintenance_snapshot_without_waiting_for_ti
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_partial_rows", [False, True])
+async def test_wait_result_returns_business_failure_immediately_even_with_partial_rows(
+    monkeypatch: pytest.MonkeyPatch, with_partial_rows: bool
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 30_000, True)
+    row = PydollTrainRow("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)", ())
+    failed = PydollPageSnapshot(
+        "해당 스케줄에 운행하는 열차가 없습니다.",
+        (row,) if with_partial_rows else (),
+        network_responses=((500, "business_xhr"),),
+    )
+    reader = AsyncMock(return_value=failed)
+    monkeypatch.setattr(session, "_snapshot", reader)
+    session._search_driver._sleep = AsyncMock()
+
+    assert await session.wait_for_result() == failed
+
+    reader.assert_awaited_once_with()
+    session._search_driver._sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "network_failure", [(500, "business_xhr"), (429, "fetch"), (403, "document")]
+)
+async def test_confirmed_network_failure_preempts_official_connection_queue(
+    monkeypatch: pytest.MonkeyPatch, network_failure: tuple[int, str]
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 30_000, True)
+    failed = PydollPageSnapshot(
+        "서비스 연결대기 중입니다", (), network_responses=(network_failure,)
+    )
+    reader = AsyncMock(return_value=failed)
+    monkeypatch.setattr(session, "_snapshot", reader)
+    session._search_driver._sleep = AsyncMock()
+    progress: list[SearchProgress] = []
+
+    with bind_search_progress(progress.append):
+        assert await session.wait_for_result() == failed
+
+    reader.assert_awaited_once_with()
+    session._search_driver._sleep.assert_not_awaited()
+    assert progress == []
+
+
+@pytest.mark.asyncio
+async def test_expand_results_stops_after_one_business_failure_with_partial_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 30_000, True)
+    row = PydollTrainRow("KTX 1", "1", "서울 → 대전(06:00 ~ 07:00)", ())
+    initial = PydollPageSnapshot("조회 결과", (row,))
+    failed = PydollPageSnapshot("조회 결과", (row,), network_responses=((500, "business_xhr"),))
+    more = _ClickControl()
+    finder = AsyncMock(return_value=more)
+    growth = AsyncMock(return_value=(failed, False))
+    monkeypatch.setattr(session, "_find_exact_visible", finder)
+    monkeypatch.setattr(session, "_wait_for_result_growth", growth)
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(return_value={"result": {"result": {"value": "absent"}}})
+    )
+
+    assert await session.expand_results(initial, 19) == failed
+
+    assert more.clicks == 1
+    finder.assert_awaited_once()
+    growth.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_result_wait_reports_actual_queue_and_ignores_rows_behind_overlay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

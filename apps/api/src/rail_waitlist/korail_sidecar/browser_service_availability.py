@@ -8,7 +8,9 @@ from urllib.parse import urlsplit
 
 from .browser_contracts import BrowserSourceUnavailable
 
-ProviderUnavailableTrigger = Literal["maintenance_page", "service_outage_page"]
+ProviderUnavailableTrigger = Literal[
+    "maintenance_page", "service_outage_page", "business_server_error"
+]
 
 _OFFICIAL_HOSTS = frozenset(
     {"korail.com", "www.korail.com", "letskorail.com", "www.letskorail.com"}

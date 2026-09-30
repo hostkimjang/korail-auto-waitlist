@@ -480,6 +480,15 @@ def test_result_projection_survives_wall_clock_rollback_after_progress() -> None
         (
             _wire_result(
                 "failed",
+                reason="source_unavailable:business_response",
+                reservation_clicked=True,
+            ),
+            ReservationOutcome.UNKNOWN,
+            ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+        ),
+        (
+            _wire_result(
+                "failed",
                 reason="reservation_result_unknown",
                 reservation_clicked=True,
             ),

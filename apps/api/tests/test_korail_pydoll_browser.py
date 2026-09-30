@@ -1439,6 +1439,21 @@ def test_pydoll_network_listener_keeps_only_business_failures() -> None:
     assert tuple(session._network_responses) == ((429, "fetch"), (403, "document"))
 
 
+def test_pydoll_network_listener_retains_official_business_500_and_ignores_assets() -> None:
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 5_000, True)
+    for resource_type, url in (
+        ("Image", "https://www.korail.com/web_s/public-fixture"),
+        ("XHR", "https://www.korail.com/images/public-fixture.png"),
+        ("Fetch", "https://third-party.example/web_s/public-fixture"),
+        ("XHR", "https://www.korail.com/web_s/public-fixture?_qzj=test-fixture"),
+    ):
+        session._on_response_received(
+            {"params": {"type": resource_type, "response": {"status": 500, "url": url}}}
+        )
+
+    assert tuple(session._network_responses) == ((500, "business_xhr"),)
+
+
 @pytest.mark.asyncio
 async def test_pydoll_wait_result_returns_immediately_for_network_failure(
     monkeypatch: pytest.MonkeyPatch,

@@ -23,8 +23,10 @@ from .korail_sidecar.browser_page_contracts import (
     OFFICIAL_KORAIL_SEARCH_URL,
 )
 from .korail_sidecar.browser_protection import (
-    is_rate_limit_response,
-    protection_trigger_from_http_response,
+    is_rate_limit_response as is_rate_limit_response,
+)
+from .korail_sidecar.browser_protection import (
+    protection_trigger_from_http_response as protection_trigger_from_http_response,
 )
 from .korail_sidecar.http_replay import (
     HttpReplayInvalidCapture,
@@ -34,6 +36,7 @@ from .korail_sidecar.http_replay import (
 )
 from .korail_sidecar.pydoll import dom_interaction as _dom_interaction_owner
 from .korail_sidecar.pydoll import live_dom as _live_dom_owner
+from .korail_sidecar.pydoll import network_evidence as _network_evidence_owner
 from .korail_sidecar.pydoll import search_hour_carousel_input as _search_hour_carousel_input_owner
 from .korail_sidecar.pydoll import (
     search_hour_carousel_observation as _search_hour_carousel_observation_owner,
@@ -645,6 +648,9 @@ class _PydollSession:
     _has_exact_visible_interaction = staticmethod(_dom_interaction_owner.has_exact_visible)
     _collect_visible_elements = staticmethod(_live_dom_owner.visible_elements)
     _read_control_state = staticmethod(_live_dom_owner.read_control_state)
+    _network_response_evidence = staticmethod(
+        _network_evidence_owner.pydoll_network_response_evidence
+    )
     _swipe_hour_carousel_input = staticmethod(_search_hour_carousel_input_owner.swipe_hour_carousel)
     _navigate_hour_carousel_by_keyboard_input = staticmethod(
         _search_hour_carousel_input_owner.navigate_hour_carousel_by_keyboard
@@ -1420,24 +1426,9 @@ class _PydollSession:
 
     def _on_response_received(self, event: dict[str, Any]) -> None:
         """Retain only sanitized status/resource evidence from the current browser search."""
-        params = event.get("params")
-        if not isinstance(params, dict):
-            return
-        response = params.get("response")
-        if not isinstance(response, dict):
-            return
-        status_value = response.get("status")
-        resource_type = str(params.get("type", "")).strip().lower()
-        if not isinstance(status_value, (bytes, float, int, str)):
-            return
-        try:
-            status = int(status_value)
-        except (TypeError, ValueError):
-            return
-        if is_rate_limit_response(status, resource_type) or (
-            protection_trigger_from_http_response(status, resource_type) == "http_403_main"
-        ):
-            self._network_responses.setdefault((status, resource_type), None)
+        evidence = self._network_response_evidence(event)
+        if evidence is not None:
+            self._network_responses.setdefault(evidence, None)
 
 
 class _PydollSessionContext:
@@ -1491,6 +1482,7 @@ def _has_exact_route_markers(body: str, origin: str, destination: str) -> bool:
 
 del _dom_interaction_owner
 del _live_dom_owner
+del _network_evidence_owner
 del _search_hour_carousel_input_owner
 del _search_hour_carousel_observation_owner
 del _search_hour_policy_owner

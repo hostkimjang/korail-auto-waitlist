@@ -611,6 +611,14 @@ main API는 두 근거가 정확히 맞을 때만 별도 Redis key `korail-brows
 표시합니다. cooldown 중에도 서로 다른 query의 `provider_query_started`가 반복되면 구 이미지 혼재, Redis 연결,
 sidecar/API의 hold 전파 로그를 확인하고 수동 반복 조회로 우회하지 않습니다.
 
+v1.2.4부터 Pydoll의 실제 공식 검색 XHR·Fetch에서 확인한 HTTP 500~599도 같은 조회 대기 정책을
+사용합니다. `KORAIL Pydoll business response failed` 로그에는 HTTP 상태·resource 종류·행 수만 남고,
+상위 조회 로그에는 `outcome=provider_unavailable stage=business_response trigger=business_server_error`가
+기록됩니다. 코레일 결과 화면이 ‘운행 열차 없음’을 표시하더라도 이 네트워크 실패를 실제 열차 부재로
+해석하지 않습니다. 공식 HTTPS 호스트의 `/web_s/` 요청만 해당하며 사진·폰트 등의 500은 검색 장애로
+승격하지 않습니다. 운영사 내부 장애나 서버 IP 제한을 확정한 것은 아니며, 실제 복구는 대기 해제 뒤
+한 번의 공식 조회에서 열차·좌석 결과가 돌아오는지 확인합니다. 일반 타임아웃의 조건별 backoff는 그대로입니다.
+
 2026년 8월 13일 01:30~04:30 KST 점검에서 수정 전 배포본은 공식 페이지 이동을 약 28초 뒤
 `outcome=source_unavailable stage=wait_result`로 닫았습니다. 01:30~02:17 KST의 DB에는 KORAIL
 `ERROR / provider_unavailable` 관측 115건과 신규 예약 시도 0건이 기록되어 좌석 발견이나 예매로 잘못 전이하지

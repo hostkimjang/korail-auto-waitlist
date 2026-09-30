@@ -514,6 +514,8 @@ class PydollSearchDomDriver:
         saw_official_wait = False
         last = await self._port._snapshot()
         while True:
+            if self._snapshot_requires_expansion_stop(last):
+                return last
             waiting_for_official_connection = bool(_OFFICIAL_CONNECTION_WAIT.search(last.body_text))
             if waiting_for_official_connection:
                 saw_official_wait = True
@@ -649,11 +651,7 @@ class PydollSearchDomDriver:
             if current_rows - previous_rows and not waiting_for_official_connection:
                 publish_search_progress("searching")
                 return last, True
-            deadline = (
-                connection_wait_deadline
-                if saw_official_wait
-                else growth_deadline
-            )
+            deadline = connection_wait_deadline if saw_official_wait else growth_deadline
             if self._monotonic() >= deadline:
                 if saw_official_wait:
                     logger.warning(

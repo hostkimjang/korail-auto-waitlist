@@ -446,10 +446,12 @@ async def test_reservation_cancellation_marks_session_stale_and_closes_context_o
     ids=["without_external_callback", "with_external_callback"],
 )
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_stage", ["session_keepalive", "business_response"])
 async def test_reservation_preserves_inner_progress_when_source_becomes_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     *,
     with_external_callback: bool,
+    error_stage: str,
 ) -> None:
     async def identity_guard(
         _session: object,
@@ -463,7 +465,7 @@ async def test_reservation_preserves_inner_progress_when_source_becomes_unavaila
         "_assert_reservation_identity",
         staticmethod(identity_guard),
     )
-    session = _ProgressThenSourceUnavailableSession()
+    session = _ProgressThenSourceUnavailableSession(error_stage=error_stage)
     replacement = _ReservationSession()
     factory = _SequenceReservationFactory(session, replacement)
     client = PydollKorailBrowserClient(
@@ -479,7 +481,7 @@ async def test_reservation_preserves_inner_progress_when_source_becomes_unavaila
         result = await client.reserve_once(_request())
 
     assert result.outcome is KorailReservationOutcome.FAILED
-    assert result.reason == "source_unavailable:session_keepalive"
+    assert result.reason == f"source_unavailable:{error_stage}"
     assert result.seat_clicked is True
     assert result.reservation_clicked is True
     assert result.session_ready_at is not None
@@ -503,6 +505,9 @@ async def test_reservation_preserves_inner_progress_when_source_becomes_unavaila
     assert session.closed == 1
     assert client.session_snapshot().state is KorailSessionActorState.STALE
     assert client._active_session is None
+    assert session.events.count("reserve") == 1
+    assert factory.calls == 1
+    assert replacement.events == []
 
     recovered = await client.reserve_once(_request())
 

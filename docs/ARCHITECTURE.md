@@ -595,7 +595,14 @@ KORAIL browser 검색의 transport-neutral 요청·열차 snapshot·결과·오�
 host의 `rejectservice_job.html` basename은 단독 근거로, 공식 페이지의 `서비스 일시중지`와 `승차권 예약 및
 발매서비스` 문구는 결과 행이 없을 때만 묶음 근거로 인정합니다. 점검 종료시각 문구는 파싱하지 않으며,
 Playwright·Pydoll·HTTP replay가 같은 순수 판정을 사용합니다. 외부 좌석 provenance와 cooldown cause는 기존
-`source_unavailable`을 유지하고 내부에서만 `maintenance_page`와 `service_outage_page`를 구분합니다.
+`source_unavailable`을 유지하고 내부에서 `maintenance_page`, `service_outage_page`,
+`business_server_error`를 구분합니다. 마지막 분류는 Pydoll의 실제 공식 검색 XHR·Fetch에서 확인한
+HTTP 500~599이며 페이지 본문만으로 만드는 점검 판정과 구분합니다. `pydoll/network_evidence.py`는
+공식 HTTPS host와 business 경로·resource·정수 상태 코드를 검증해 상태와 닫힌 종류만 보존합니다.
+네트워크 응답의 URL·본문·인증값은 snapshot이나 로그에 싣지 않고, 이미지·폰트·외부 분석 요청의
+오류는 제외합니다. page safety는 호출 제한·보호·명시적 점검을 먼저 검사한 뒤 이 근거가 있으면 일부
+결과가 남아 있어도 검색을 중단합니다. 기존 callback의 상태 정규화도 이 owner로 이동하며 facade는
+수집 위임만 유지합니다.
 Playwright·Pydoll·sidecar·projection·query runtime consumer는 이 leaf owner들을 직접 사용합니다. Pydoll
 page-safety도 이 leaf를 직접 참조하므로 top-level automation으로 역의존하지 않습니다. 보호 문구는 모든
 browser 경로에서 같은 sanitized trigger로 닫고,
@@ -606,7 +613,7 @@ primary business POST 403은 `http_403_business`로 기록하며 unknown legacy 
 
 KORAIL browser adapter의 engine-neutral 검색 상태는 `korail_sidecar/search_coordinator.py`가 canonical
 owner입니다. 동일 query singleflight·짧은 결과 cache, browser 전체 직렬 gate, rate-limit·보호의 전역
-cooldown, 명시적 점검 페이지의 기본 300초 전역 cooldown, 일반 source failure의 query별 30~300초 backoff와
+cooldown, 명시적 점검 페이지·실제 business 서버 오류의 기본 300초 전역 cooldown, 일반 source failure의 query별 30~300초 backoff와
 취소 중 bounded drain·client close 순서를 한 aggregate로 소유합니다. 이 owner는 Playwright·Pydoll·DOM·HTTP를
 모르고 `BrowserClient` protocol만 사용합니다.
 백그라운드 좌석 관측의 전체 budget은 80초, 사용자 시간표 조회는 최대 580초이며 browser gate 대기를 포함합니다. 각 caller waiter와 실제 browser
@@ -620,7 +627,7 @@ backoff나 provider-wide cooldown을 열지 않습니다.
 snapshot을 행동 가능한 상태로 다시 내보내지 않습니다.
 실제 browser gate를 획득한 cache-miss 작업만 secret-free `provider_query_started`·`provider_query_completed`
 lifecycle을 남깁니다. 보호 표면은 대기열 통과를 시도하지 않고 `provider_access_restricted`로 중단해 전역
-cooldown을 엽니다. 점검 페이지는 `provider_unavailable`로 즉시 중단하며 이미 gate에 기다리던 다른 query도
+cooldown을 엽니다. 점검 페이지와 실제 business 서버 오류는 `provider_unavailable`로 즉시 중단하며 이미 gate에 기다리던 다른 query도
 실제 browser 호출 직전에 전역 cooldown을 다시 확인합니다. sidecar HTTP는 이 typed 오류에만 기존 호환 503
 `source_unavailable` body와 bounded `Retry-After`를 함께 보냅니다. cache hit와 동일-query singleflight 참여자는
 별도 INFO 시작 로그를 만들지 않습니다.

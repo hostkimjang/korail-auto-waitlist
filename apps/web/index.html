@@ -10,9 +10,45 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png" />
     <title>레일웨잇 · 기차 예약 대기</title>
+    <style>
+      #app-bootstrap {
+        box-sizing: border-box;
+        width: calc(100% - 1rem);
+        max-width: 28rem;
+        margin: 3rem auto;
+        padding: clamp(0.75rem, 5vw, 1.5rem);
+        border: 1px solid #ccd6df;
+        border-radius: 1rem;
+        background: #fff;
+        color: #0b2345;
+        font: 1rem/1.7 system-ui, sans-serif;
+        overflow-wrap: anywhere;
+      }
+      #app-bootstrap h1 { margin: 0 0 1rem; font-size: 1.25rem; }
+      #app-bootstrap p { margin: 0 0 1.5rem; }
+      #app-bootstrap a {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        min-height: 44px;
+        padding: 0.5rem clamp(0.25rem, 2vw, 1rem);
+        border-radius: 0.5rem;
+        background: #0b2345;
+        color: #fff;
+        text-decoration: none;
+      }
+      #app-bootstrap a:focus-visible { outline: 3px solid #147d82; outline-offset: 3px; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main id="app-bootstrap" aria-labelledby="app-bootstrap-title">
+        <h1 id="app-bootstrap-title">레일웨잇 화면을 불러오는 중입니다</h1>
+        <p>화면이 열리지 않으면 서버가 중지됐거나 연결이 끊겼을 수 있습니다. 연결을 확인한 뒤 다시 불러와 주세요.</p>
+        <a href="">다시 불러오기</a>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

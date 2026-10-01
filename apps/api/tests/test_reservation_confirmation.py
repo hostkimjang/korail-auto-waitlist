@@ -184,8 +184,7 @@ def test_srt_payment_follow_up_requires_the_exact_reserved_seat(paid: bool) -> N
     )
     assert different.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     assert (
-        different.diagnostic_code
-        is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+        different.diagnostic_code is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
     )
 
 

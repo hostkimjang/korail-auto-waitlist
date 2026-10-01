@@ -26,6 +26,7 @@ from rail_waitlist.korail_sidecar.pydoll.reservation_list_response import (
 LIST = "https://www.korail.com/ticket/reservation/list"
 VIEW = "https://www.korail.com/classes/com.korail.mobile.reservation.ReservationView"
 EMPTY = {"strResult": "SUCC", "h_msg_cd": "", "jrny_infos": {"jrny_info": []}}
+P100_EMPTY = {**EMPTY, "h_msg_cd": "P100", "h_msg_txt": "검색된 데이터가 없습니다."}
 FRAME_TREE = {"result": {"frameTree": {"frame": {"id": "main", "loaderId": "previous"}}}}
 
 
@@ -154,14 +155,16 @@ def stub_events(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("base64_encoded", [False, True])
 @pytest.mark.parametrize("code", [None, ""])
+@pytest.mark.parametrize("message", [None, ""])
 async def test_completed_natural_empty_response_is_closed_metadata_only(
     base64_encoded: bool,
     code: str | None,
+    message: str | None,
 ) -> None:
     owner = armed()
     complete(owner)
     tab = Tab()
-    payload = {**EMPTY, "h_msg_cd": code}
+    payload = {**EMPTY, "h_msg_cd": code, "h_msg_txt": message}
     raw = json.dumps(payload)
     tab.body = {
         "result": {
@@ -176,6 +179,66 @@ async def test_completed_natural_empty_response_is_closed_metadata_only(
     assert tab.commands == [
         {"method": "Network.getResponseBody", "params": {"requestId": "list-read"}}
     ]
+
+
+@pytest.mark.parametrize("base64_encoded", [False, True])
+async def test_observed_p100_exact_success_message_and_empty_rows_are_accepted(
+    base64_encoded: bool,
+) -> None:
+    owner = armed()
+    complete(owner)
+    tab = Tab()
+    raw = json.dumps(P100_EMPTY)
+    tab.body = {
+        "result": {
+            "body": base64.b64encode(raw.encode()).decode() if base64_encoded else raw,
+            "base64Encoded": base64_encoded,
+        }
+    }
+
+    await owner.read_completed_body(tab)
+
+    assert owner.snapshot().state == "empty"
+    assert owner.snapshot().failure is None
+    assert "P100" not in repr(vars(owner))
+    assert "검색된 데이터" not in repr(vars(owner))
+    assert "jrny_infos" not in repr(vars(owner))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "failure"),
+    [
+        ({"strResult": "FAIL"}, "invalid_response"),
+        ({"strResult": "succ"}, "invalid_response"),
+        ({"h_msg_cd": "P058"}, "auth_required"),
+        ({"h_msg_cd": "P101"}, "invalid_response"),
+        ({"h_msg_cd": "P100 "}, "invalid_response"),
+        ({"h_msg_cd": "p100"}, "invalid_response"),
+        ({"h_msg_cd": ""}, "invalid_response"),
+        ({"h_msg_cd": None}, "invalid_response"),
+        ({"h_msg_txt": None}, "invalid_response"),
+        ({"h_msg_txt": ""}, "invalid_response"),
+        ({"h_msg_txt": "검색된 데이터가 없습니다"}, "invalid_response"),
+        ({"h_msg_txt": " 검색된 데이터가 없습니다."}, "invalid_response"),
+        ({"h_msg_txt": "다른 공개 안내"}, "invalid_response"),
+        ({"h_msg_txt": []}, "invalid_response"),
+        ({"jrny_infos": {"jrny_info": [{}]}}, "invalid_response"),
+        ({"jrny_infos": {"jrny_info": None}}, "invalid_response"),
+        ({"jrny_infos": {"jrny_info": {}}}, "invalid_response"),
+    ],
+)
+async def test_p100_contract_mutations_cannot_confirm_absence(
+    mutation: dict[str, object], failure: str
+) -> None:
+    owner = armed()
+    complete(owner)
+    tab = Tab()
+    tab.body = {"result": {"body": json.dumps({**P100_EMPTY, **mutation}), "base64Encoded": False}}
+
+    await owner.read_completed_body(tab)
+
+    assert owner.snapshot().state == "failed"
+    assert owner.snapshot().failure == failure
 
 
 @pytest.mark.parametrize(
@@ -562,9 +625,13 @@ async def test_attachment_cancellation_and_repeated_cleanup_cancellation_are_own
     assert tab.callbacks == {} and not tab.network_events_enabled
 
 
-async def test_natural_response_empty_requires_two_stable_eligible_dom_reads() -> None:
+@pytest.mark.parametrize("payload", [EMPTY, P100_EMPTY])
+async def test_natural_response_empty_requires_two_stable_eligible_dom_reads(
+    payload: dict[str, object],
+) -> None:
     clock = Clock()
     tab = Tab()
+    tab.body = {"result": {"body": json.dumps(payload), "base64Encoded": False}}
     loading = PydollReservationListSnapshot(LIST, page_marker_visible=True, loading_visible=True)
     empty = PydollReservationListSnapshot(LIST, page_marker_visible=True)
     snapshots = AsyncMock(side_effect=[loading, empty, empty])

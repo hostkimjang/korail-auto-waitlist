@@ -25,6 +25,7 @@ from rail_waitlist.reservation_confirmation import (
 API_ROOT = Path(__file__).resolve().parents[1]
 KOREA = ZoneInfo("Asia/Seoul")
 OBSERVED_AT = datetime(2026, 8, 7, 3, 0, tzinfo=UTC)
+PAID_SEAT = ReservationConfirmationSeat(car_number="4", seat_number="8A")
 PUBLIC_SYMBOLS = (
     "SRT_RESERVATION_HANDOFF_URL",
     "SRT_RESERVATION_LIST_SOURCE",
@@ -43,6 +44,7 @@ def _target(
     provider: Provider = Provider.SRT,
     credential_version: int = 7,
     purpose: ReservationConfirmationPurpose = ReservationConfirmationPurpose.INITIAL,
+    reserved_seats: tuple[ReservationConfirmationSeat, ...] = (),
     confirmation_correlation_seats: tuple[ReservationConfirmationSeat, ...] = (),
 ) -> ReservationConfirmationTarget:
     return ReservationConfirmationTarget(
@@ -57,6 +59,7 @@ def _target(
         passenger_count=1,
         credential_version=credential_version,
         purpose=purpose,
+        reserved_seats=reserved_seats,
         confirmation_correlation_seats=confirmation_correlation_seats,
     )
 
@@ -195,7 +198,7 @@ def test_srt_confirmation_rejects_non_srt_target_before_evidence_branches() -> N
             ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS,
         ),
         (
-            _evidence(records=(_record(paid=True),)),
+            _evidence(records=(_record(paid=True, seats=(PAID_SEAT,)),)),
             ReservationConfirmationOutcome.CONFIRMED_PAID,
             None,
         ),
@@ -213,7 +216,12 @@ def test_srt_confirmation_branch_precedence_is_preserved(
         else ReservationConfirmationPurpose.INITIAL
     )
     result = canonical.normalize_srt_reservation_records(
-        _target(purpose=purpose),
+        _target(
+            purpose=purpose,
+            reserved_seats=(PAID_SEAT,)
+            if purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+            else (),
+        ),
         evidence,
     )
     assert result.outcome is expected

@@ -482,14 +482,18 @@ async def apply_reservation_reconciliation(
             if reconciliation_anchor is None:
                 raise RuntimeError("reconciliation must persist a reconciliation timestamp")
             attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
-    elif confirmed_hold_has_usable_deadline or confirmed_hold_without_deadline or (
-        known_active_payment_hold
-        and confirmation.outcome
-        in {
-            ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
-            ReservationConfirmationOutcome.INCONCLUSIVE,
-            ReservationConfirmationOutcome.NOT_FOUND,
-        }
+    elif (
+        confirmed_hold_has_usable_deadline
+        or confirmed_hold_without_deadline
+        or (
+            known_active_payment_hold
+            and confirmation.outcome
+            in {
+                ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+                ReservationConfirmationOutcome.INCONCLUSIVE,
+                ReservationConfirmationOutcome.NOT_FOUND,
+            }
+        )
     ):
         retry_interval = payment_hold_reconciliation_retry_interval(
             attempt.reconciliation_attempt_count

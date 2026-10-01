@@ -374,12 +374,18 @@ class ReservationListResponseObserver:
                 self.fail("auth_required")
                 return
             code = payload.get("h_msg_cd")
-            if payload.get("strResult") != "SUCC" or (code is not None and code != ""):
+            if payload.get("strResult") != "SUCC":
                 self.fail("invalid_response")
                 return
             journeys = _mapping(payload.get("jrny_infos"))
             rows = journeys.get("jrny_info") if journeys is not None else None
             if not isinstance(rows, list):
+                self.fail("invalid_response")
+                return
+            message = payload.get("h_msg_txt")
+            ordinary_success = (code is None or code == "") and (message is None or message == "")
+            explicit_empty = code == "P100" and message == "검색된 데이터가 없습니다." and not rows
+            if not ordinary_success and not explicit_empty:
                 self.fail("invalid_response")
                 return
             self._snapshot = ReservationListResponseSnapshot("empty" if not rows else "nonempty")

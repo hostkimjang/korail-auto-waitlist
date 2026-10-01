@@ -439,9 +439,11 @@
       }
       let selectedDate = null;
       let selectedHour = null;
-      const today = query.has("today")
-        ? new Date(`${query.get("today")}T12:00:00`)
-        : new Date();
+      const kstParts = Object.fromEntries(new Intl.DateTimeFormat("en", {
+        timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+      }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+      const today = new Date(`${query.get("today")
+        || `${kstParts.year}-${kstParts.month}-${kstParts.day}`}T12:00:00`);
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
       const tomorrowDate = [
@@ -449,7 +451,39 @@
         String(tomorrow.getMonth() + 1).padStart(2, "0"),
         String(tomorrow.getDate()).padStart(2, "0"),
       ].join("-");
-      if (!dateDialog.querySelector(`[data-date="${tomorrowDate}"]`)) {
+      if (!scenario) {
+        const calendar = dateDialog.querySelector(".datepk_wrap");
+        let monthOffset = 0;
+        const renderMonths = () => {
+          const panes = [0, 1].map((pane) => {
+            const month = new Date(today.getFullYear(), today.getMonth() + monthOffset + pane, 1);
+            const year = month.getFullYear();
+            const monthNumber = String(month.getMonth() + 1).padStart(2, "0");
+            const days = new Date(year, month.getMonth() + 1, 0).getDate();
+            const cells = Array.from({ length: days }, (_, index) => {
+              const day = index + 1;
+              const serviceDate = `${year}-${monthNumber}-${String(day).padStart(2, "0")}`;
+              return `<td><a href="#" data-date="${serviceDate}">${day}출발일</a></td>`;
+            });
+            const rows = Array.from({ length: Math.ceil(days / 7) }, (_, row) => (
+              `<tr>${cells.slice(row * 7, row * 7 + 7).join("")}</tr>`
+            )).join("");
+            return `<div class="slick-slide slick-active${pane === 0 ? " slick-current" : ""}">`
+              + `<div class="datepicker"><p class="date">${year}. ${monthNumber}.</p>`
+              + `<table><tbody>${rows}</tbody></table></div></div>`;
+          }).join("");
+          calendar.innerHTML = '<button type="button" class="slick-prev" data-month-step="-1">Prev</button>'
+            + panes
+            + '<button type="button" class="slick-next" data-month-step="1">Next</button>';
+        };
+        renderMonths();
+        calendar.addEventListener("click", (event) => {
+          const control = event.target.closest("button[data-month-step]");
+          if (!control) return;
+          monthOffset += Number(control.dataset.monthStep);
+          renderMonths();
+        });
+      } else if (!dateDialog.querySelector(`[data-date="${tomorrowDate}"]`)) {
         const monthLabel = `${tomorrow.getFullYear()}. ${String(tomorrow.getMonth() + 1).padStart(2, "0")}.`;
         const dateCell = `<td><a href="#" data-date="${tomorrowDate}">${tomorrow.getDate()}출발일</a></td>`;
         const existingPicker = Array.from(dateDialog.querySelectorAll(".datepicker"))

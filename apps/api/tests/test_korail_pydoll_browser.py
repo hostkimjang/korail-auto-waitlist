@@ -5,13 +5,14 @@ import logging
 import re
 import threading
 from contextlib import contextmanager
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 from html import unescape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Self
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1585,6 +1586,63 @@ async def test_pydoll_real_browser_uses_visible_fixture_controls(
     assert [(train.train_number, train.standard, train.first) for train in result.trains] == [
         ("9001", "available", "sold_out")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "today_text",
+    ["2026-07-30", "2026-10-01", "2026-09-30", "2026-12-31", None],
+)
+async def test_pydoll_real_browser_selects_fixture_tomorrow_across_month_boundaries(
+    monkeypatch: pytest.MonkeyPatch, today_text: str | None
+) -> None:
+    pytest.importorskip("pydoll.browser")
+    today = (
+        date.fromisoformat(today_text)
+        if today_text is not None
+        else datetime.now(ZoneInfo("Asia/Seoul")).date()
+    )
+    with serve_pydoll_fixture(monkeypatch) as base_url:
+        query = f"?today={today_text}" if today_text is not None else ""
+        client = PydollKorailBrowserClient(
+            page_url=f"{base_url}/korail_browser_page.html{query}",
+            timeout_seconds=15,
+            allow_test_loopback=True,
+        )
+        result = await client.search(
+            BrowserSeatSearchRequest(
+                origin="서울",
+                destination="부산",
+                travel_date=today + timedelta(days=1),
+                departure_from=time(0),
+                departure_to=time(18),
+                passenger_count=1,
+            )
+        )
+
+    assert [(train.train_number, train.standard, train.first) for train in result.trains] == [
+        ("9001", "available", "sold_out")
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("today_text", "travel_date"),
+    [("2026-10-01", date(2026, 12, 2)), ("2026-12-31", date(2026, 11, 30))],
+)
+async def test_pydoll_real_browser_fixture_calendar_uses_official_month_navigation(
+    monkeypatch: pytest.MonkeyPatch, today_text: str, travel_date: date
+) -> None:
+    pytest.importorskip("pydoll.browser")
+    with serve_pydoll_fixture(monkeypatch) as base_url:
+        async with _PydollSession(
+            f"{base_url}/korail_browser_page.html?today={today_text}", 15_000, True
+        ) as session:
+            await session.open()
+            await session.choose_schedule(travel_date, 0)
+
+            assert await session.current_schedule() == (travel_date, 0)
+            assert session._submitted is False
 
 
 @pytest.mark.asyncio

@@ -1594,7 +1594,7 @@ async def test_playwright_uses_visible_fixture_controls_and_reads_result_dom(
         handler,
     ):
         client = PlaywrightKorailBrowserClient(
-            page_url=f"{base_url}/korail_browser_page.html?track_click=1",
+            page_url=f"{base_url}/korail_browser_page.html?today=2026-07-31&track_click=1",
             timeout_seconds=10,
             allow_test_loopback=True,
         )

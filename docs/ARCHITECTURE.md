@@ -340,6 +340,12 @@ Web Push payload의 기본 클릭 목적지는 동일 출처의 PWA입니다. �
 
 종료된 PWA의 콜드 오픈에서는 navigation preload와 network-first 문서 요청으로 현재 배포의 `index.html`을 우선 사용합니다. 네트워크가 실제로 실패할 때만 캐시된 app shell로 복구하며, 같은 출처의 정적 script·style·image·font는 해시 URL별 캐시를 사용할 수 있습니다. Nginx는 `/assets/`의 존재하지 않는 이전 해시를 SPA 문서로 fallback하지 않고 404로 반환하고, `index.html`·`sw.js`는 재검증하도록 해 구 index와 삭제된 bundle이 섞인 흰 화면을 막습니다. 인증 API와 대기 목록 API는 캐시하지 않으므로 화면 뼈대가 보여도 로그인 상태와 최신 데이터는 서버 응답을 기다립니다.
 
+`index.html`의 React root에는 앱 시작 전 연결 안내를 기본 HTML로 넣습니다. 제목을 가진 `main`,
+JavaScript 없이 현재 주소를 다시 여는 링크, 외부 CSS에 의존하지 않는 범위 제한 인라인 스타일을
+사용하며 정상 React 렌더가 이 안내를 교체합니다. 안내는 서버 상태·로그인·좌석 재고를 추정하지 않고
+인증이나 서비스 워커 캐시를 삭제하지 않습니다. 아직 이 HTML을 받지 못한 이전 캐시 문서에는 안내가
+없으므로 네트워크 우선 요청으로 새 HTML을 한 번 받은 뒤에만 이 복구 표시가 적용됩니다.
+
 Web Push 전달 경계는 `official_waitlist`, `seat_found`, `reserving`, `payment_required`, `auth_required`처럼 허용된 중요 `status`에만 `Urgency: high`를 붙입니다. 시험 알림도 별도 모양을 높은 우선순위로 예외 처리하지 않고 실제 중요 상태와 같은 `status: seat_found` envelope를 사용합니다. 알 수 없는 상태나 시험 알림과 닮은 임의 payload는 기본 우선순위를 유지하는 fail-closed 계약입니다. 서비스 워커는 이 중요 상태와 시험 알림에 `vibrate`·`requireInteraction` 힌트를 요청하고, `reserving`도 좌석 발견의 긴급 연속 상태로 처리합니다. 다만 웹은 알림 소리를 직접 지정하지 않으며 Web Push urgency와 Notification API 옵션도 Android 알림 채널의 중요도·소리·진동·화면 위 팝업을 보장하지 않습니다.
 
 Chrome Android의 origin별 사이트 알림 채널은 브라우저가 소유합니다. Web Push `Urgency`는 push service 전달 우선순위이고 Android 채널 중요도에는 전달되지 않으므로, PWA 경계 안에서는 heads-up에 필요한 높은 중요도를 선택하거나 화면 위 팝업을 보장할 수 없습니다. 레일웨잇의 모바일 알림 범위는 별도 네이티브 앱 없이 Web Push와 접속 중 `실시간 알림`으로 한정하며, 최종 표시는 사용자 알림 설정·방해 금지·Focus와 운영체제 정책을 따릅니다.
@@ -810,11 +816,21 @@ global은 canonical owner로 복원됩니다.
 현재 공식 미결제 목록은 정상 빈 배열과 요청 실패를 같은 빈 화면으로 표시할 수 있습니다.
 `korail_sidecar/pydoll/reservation_list_response.py`는 현재 목록 화면이 자연스럽게 보낸 공식 GET의
 완료 응답만 읽는 owner입니다. 현재 main frame·새 문서 loader·목록 경로·단일 요청을 연결한 뒤,
-정상 성공 JSON의 `jrny_infos.jrny_info` 빈 배열만 닫힌 `official_response` 근거로 남깁니다.
+`strResult=SUCC`인 JSON의 `jrny_infos.jrny_info` 빈 배열만 닫힌 `official_response` 근거로 남깁니다.
+빈 목록의 성공 조건은 `h_msg_cd`·`h_msg_txt`가 모두 누락 또는 빈 값인 기존 응답, 또는 정확히
+`h_msg_cd=P100`·`h_msg_txt=검색된 데이터가 없습니다.`인 응답입니다. `P100`이라도 문구가 다르거나
+여정 배열이 비어 있지 않으면 인정하지 않으며, 다른 코드나 실패 결과를 빈 목록으로 바꾸지 않습니다.
 요청 주소·인증 자료·응답 본문은 snapshot에 저장하지 않으며 별도 목록 요청을 만들지 않습니다.
 이 근거도 목록 제목, 로딩 없음, 카드·변형 카드 0개와 연속 두 번 안정된 DOM 확인이 함께 있어야
 목록 조회 완료로 수용합니다. 인증 만료, HTTP 오류, 중복·불완전·이전 문서 응답은 빈 목록이 아닙니다.
 이는 목록 완료 판독의 보완이며, 기존 UNKNOWN의 좌석 상관 조건이나 예약 재제출 fence를 바꾸지 않습니다.
+
+계정 저장과 동일 세대의 세션 재인증은 별도 계약입니다. 관리자 계정 PUT는 입력이 기존 값과 같아도
+성공한 저장마다 `credential_version`을 하나 증가시킵니다. 기존 세대를 유지하는 재인증은 정상
+provider session manager가 저장된 자격증명을 내부에서 사용하고 같은 세대의 인증 메타데이터만
+갱신하는 경로입니다. 관리자 응답은 마스킹된 계정과 세션 상태만 보여 주며 비밀번호 조회나 세대 유지
+수동 재검증 API를 제공하지 않습니다. 사용자 직접 로그인한 별도 브라우저를 저장 계정의 세션으로
+추정하거나 세대를 바꾼 UNKNOWN을 과거 시도의 공식 확인·재승인에 연결하지 않습니다.
 
 Pydoll 검색이 읽기 전용 browser session에서 캡처한 HTTP replay plan을 route별로 임대·재사용·폐기하는
 process-local manager는 `korail_sidecar/pydoll/http_replay.py`가 canonical owner입니다. 이 owner는 exact

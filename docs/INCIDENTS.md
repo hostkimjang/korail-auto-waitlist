@@ -272,6 +272,70 @@ bounded public-label helper의 SHA-256은
 확인했습니다. 빈 폼의 라벨 관측은 완료했지만 가상 키보드 입력으로 인증한 결과는 아직 없으며
 운영 코드에도 적용하지 않았습니다.
 
+### 빈 입력칸의 초점과 키보드 토글 후속 비교
+
+빈 폼 focus helper의 실제 실행은 종료 코드 0으로 완료됐습니다. 최초에는
+`document.hasFocus=false`·두 입력칸 active=false였지만 두 중심점 hit는 true였습니다.
+원래 Pydoll의 아이디·비밀번호 클릭 뒤에는 각각 문서 초점과 해당 입력칸 active가 true였고,
+소유 탭 `bring_to_front` 한 번 뒤의 클릭도 같았습니다. 이 표본에서는 일반 클릭·초점이
+정상이며, 앞선 single-focus의 제출 전 입력 불일치를 단순한 클릭 실패로 확정하지 않습니다.
+
+public-modes 점검과 토글 전에 소유 탭을 전경화한 별도 점검은 모두 토글 한 번 뒤 3초 동안
+checked=false·키패드 표시=false·입력칸 blank=true로 끝났습니다. 종료 코드는 1이며 사유는
+`public_keyboard_ready_timeout`입니다. 모드 전환 버튼까지 진행하지 못했고 전경화만으로
+토글 표시가 복구되지 않았습니다. 두 표본은 ignored `output/public-keyboard-modes-result-20261001.jsonl`과
+`output/public-keyboard-modes-foreground-result-20261001.jsonl`에 남겼습니다.
+
+viewport 중심으로 일반 클릭한 후속 표본에서도 라벨의 대상 유일성·`label.control` 연결·좌표
+유효성·화면 범위·두 중심점 hit가 모두 true였습니다. 화면 중심은 (817, 624), Pydoll 중심과의
+delta 및 scroll X/Y는 모두 0이었으나 같은 3초 준비 시간 초과로 종료됐습니다.
+`output/public-keyboard-modes-viewport-result-20261001.jsonl`의 이 표본은 좌표 오차 가설을
+지지하지 않습니다. 세 빈 키패드 실패는 공식 POST가 없는 UI 준비 실패이며 로그인 HTTP 실패가
+아닙니다. 이번 빈 폼 진단 모두 자격증명 읽기·문자 입력·로그인·조회·예약·공식 POST는 0회이고
+소유 lifecycle `CLOSED`·프로세스 종료를 확인했습니다. 토글 실패와 자동 입력 차이의 원인은
+여전히 미확정이며 운영 코드 변경이나 인증 복구로 기록하지 않습니다.
+
+초기 대기만 10초로 늘린 settled 표본도 토글 준비 시간 초과·공식 POST 0회로 끝났습니다.
+그 뒤 같은 viewport 좌표·일반 눌림/뗌·0.1초를 유지하고 각 클릭 직전에 `Input.mouseMoved`
+한 번만 추가한 pointer 표본은 종료 코드 0이었습니다. checked=true·키패드 표시=true·빈 폼을
+유지한 채 소문자·대문자·특수문자 모드의 공개 접근성 라벨 세 단계를 관측했습니다.
+ignored `output/public-keyboard-modes-pointer-result-20261001.jsonl`에서 공식 POST·자격증명 읽기와
+입력·로그인·조회·예약 0회, 소유 lifecycle `CLOSED`·프로세스 종료를 확인했습니다. 일반 UI
+포인터 이동의 차이를 확인한 빈 폼 표본이며 자동 로그인 복구나 실패 원인 확정의 근거는 아닙니다.
+동일 포인터 입력을 쓴 후속 return 빈 폼 표본은 최초 토글 준비 시간 초과·공식 POST 0회로
+끝났고 소유 종료를 확인했습니다. 따라서 위 성공은 한 표본이며 표시 동작의 재현 안정성은 미확정입니다.
+
+원래 로그인 입력·초기화·탭 선택을 유지하고 클릭 직전 포인터 이동만 추가한 후속 로그인 표본은
+아이디·비밀번호의 저장값 일치가 모두 false, 마우스 입력 모드는 false였습니다.
+`login_input_mismatch` 가드가 실제 제출 전에 차단했고 제출 snapshot은 미관측, 공식 POST·
+조회·예약은 0회였습니다. ignored `output/pointer-login-probe-result-20261001.jsonl`과 실행 결과에서
+종료 코드 1·소유 lifecycle `CLOSED`·프로세스 종료를 확인했습니다. 빈 키패드 표시 성공과 별개로
+이 방식은 자동 로그인을 복구하지 못했으며 HTTP 실패나 입력 불일치의 원인 확정으로 기록하지 않습니다.
+
+후속 입력 대상 점검에서는 두 입력칸 모두 초기화·입력 직후 현재 패널의 정확한 입력 요소와
+실제 Pydoll 요소가 일치했고 연결·표시·문서 초점은 true, disabled·readonly는 false였습니다.
+입력 완료 뒤 해당 요소가 active인데도 두 칸 모두 blank=true·기대 길이 일치=false·저장값
+일치=false였습니다. `output/pointer-input-target-result-20261001.jsonl`에서 제출 전 차단·공식 POST
+0회·소유 종료를 확인했고 실행 종료 코드는 1이었습니다. 이 표본의 입력 불일치를 대상 참조나
+초점 불일치로 설명할 근거는 없으며 키 이벤트 전달과 값 반영이 달라진 원인은 아직 미확정입니다.
+
+실제 계정 없이 빈 회원번호 칸에 공개 상수를 한 번 입력한 후속 표본은 종료 코드 0이었습니다.
+키 명령 관측·전체 응답 정상은 true, 오류·응답 불명은 false였고 숫자 오류 코드는 없었습니다.
+현재 입력 요소의 유일성·참조 일치·연결·표시·초점·active는 true, disabled·readonly는 false였으며
+blank=false·공개 상수 일치=true·비밀번호 blank=true였습니다.
+`output/public-key-event-delivery-result-20261001.jsonl`에서 공식 POST·계정 읽기·비밀번호 입력·
+로그인·조회·예약 0회와 소유 종료를 확인했습니다. 따라서 원래 Pydoll 타이핑이 전반적으로
+실패한다고 설명할 근거는 없지만 실제 계정 입력이나 인증 복구를 확인한 결과는 아닙니다.
+
+진단 뒤 서버 전체 서비스를 복원했습니다. `config --quiet`·전체 `up -d --force-recreate`는
+종료 코드 0, 장기 서비스 12개 healthy, migration·log-init 종료 0, API·adapter 관련 소스
+각각 14개 hash 일치, readyz·웹·현재 JS HTTP 200·v1.2.9를 확인했습니다. 로컬 실행 서비스는
+0개이며 읽기 전용 점검의 기존 재제출 차단·UNKNOWN은 각각 4건, 새 예약·pending은 0건입니다.
+복원 뒤 자연 발생 공식 업무 HTTP 500은 11:58:01.393470498 UTC, 로그인 실패 HTTP 500은
+11:58:05.528323730 UTC·20:58:05.528323 KST에 관측됐습니다. 다음 자격증명 요청 하한은
+21:03:05.528323 KST이며 실패 뒤 최소 300초를 유지합니다. 전체 서비스 복원·health 성공과
+실제 인증·조회·예약 복구는 구분하며, 실패 로그 시각을 실제 제출 시작 시각으로 해석하지 않습니다.
+
 ### 로그인 뒤에도 남은 실제 열차 조회 실패
 
 앞서 미결제 내역을 읽었던 일반 Chrome의 같은 로그인 세션에서 공식 메인 화면의 조건을

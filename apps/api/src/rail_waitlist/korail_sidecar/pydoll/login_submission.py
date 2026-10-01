@@ -94,12 +94,14 @@ def _http_status(value: object) -> int | None:
 
 
 class PydollLoginSubmission:
-    """Correlate the normal UI's unique official POST inside a submit window.
+    """Correlate bounded official POSTs from one normal UI submit window.
 
     The driver owns callback attachment and must arm immediately before its
     ordinary submit click. This observer never sends or modifies a request.
     Protection owners inspect 429/403 before interpreting a failed snapshot.
     """
+
+    MAX_REQUESTS = 8
 
     def __init__(
         self,
@@ -113,13 +115,19 @@ class PydollLoginSubmission:
         self._monotonic = monotonic
         self._deadline: float | None = None
         self._active = False
-        self._request_id: str | None = None
+        self._requests: dict[str, LoginSubmissionSnapshot] = {}
+        self._group_revision = 0
         self._snapshot = LoginSubmissionSnapshot("missing")
+
+    @property
+    def group_revision(self) -> int:
+        """Internal membership token; never include it in snapshots or diagnostics."""
+        return self._group_revision
 
     def arm(self) -> None:
         if self._active:
             raise RuntimeError("login submission window is already armed")
-        self._request_id = None
+        self._requests.clear()
         self._snapshot = LoginSubmissionSnapshot("missing")
         self._deadline = self._monotonic() + self._timeout_seconds
         self._active = True
@@ -132,7 +140,7 @@ class PydollLoginSubmission:
             )
             self._snapshot = LoginSubmissionSnapshot("failed", self._snapshot.status, failure)
         self._active = False
-        self._request_id = None
+        self._requests.clear()
 
     def snapshot(self) -> LoginSubmissionSnapshot:
         self._expire_if_due()
@@ -153,21 +161,18 @@ class PydollLoginSubmission:
             return
         request_id = _request_id(params)
         if request_id is None:
-            self._snapshot = LoginSubmissionSnapshot(
-                "ambiguous", self._snapshot.status, "ambiguous"
-            )
-        elif self._request_id is None:
-            self._request_id = request_id
-            if self._snapshot.state != "ambiguous":
-                self._snapshot = LoginSubmissionSnapshot("posted")
-        elif request_id != self._request_id:
-            self._snapshot = LoginSubmissionSnapshot(
-                "ambiguous", self._snapshot.status, "ambiguous"
-            )
+            self._fail("ambiguous")
+        elif request_id not in self._requests:
+            if len(self._requests) >= self.MAX_REQUESTS:
+                self._fail("ambiguous")
+                return
+            self._requests[request_id] = LoginSubmissionSnapshot("posted")
+            self._group_revision += 1
+            self._refresh()
 
     def on_response_received(self, event: object) -> None:
         params = self._matching_event(event)
-        if params is None or self._snapshot.state != "posted":
+        if params is None:
             return
         response = params.get("response")
         if (
@@ -175,40 +180,76 @@ class PydollLoginSubmission:
             or params.get("type") not in ("XHR", "Fetch")
             or not _official_origin(response.get("url"))
         ):
-            self._snapshot = LoginSubmissionSnapshot("failed", failure="invalid_response")
+            self._fail("invalid_response")
             return
         status = _http_status(response.get("status"))
         if status is None:
-            self._snapshot = LoginSubmissionSnapshot("failed", failure="invalid_response")
+            self._fail("invalid_response")
         elif not 200 <= status < 400:
-            self._snapshot = LoginSubmissionSnapshot("failed", status, "http_error")
+            self._fail("http_error", status)
         else:
-            self._snapshot = LoginSubmissionSnapshot("in_flight", status)
+            request_id = _request_id(params)
+            assert request_id is not None
+            if self._requests[request_id].state == "posted":
+                self._requests[request_id] = LoginSubmissionSnapshot("in_flight", status)
+                self._refresh()
 
     def on_loading_finished(self, event: object) -> None:
-        if self._matching_event(event) is None:
+        params = self._matching_event(event)
+        if params is None:
             return
-        if self._snapshot.state == "in_flight":
-            self._snapshot = LoginSubmissionSnapshot("completed", self._snapshot.status)
-        elif self._snapshot.state == "posted":
-            self._snapshot = LoginSubmissionSnapshot("failed", failure="invalid_response")
+        request_id = _request_id(params)
+        assert request_id is not None
+        request = self._requests[request_id]
+        if request.state == "in_flight":
+            self._requests[request_id] = LoginSubmissionSnapshot("completed", request.status)
+            self._refresh()
+        elif request.state == "posted":
+            self._fail("invalid_response")
 
     def on_loading_failed(self, event: object) -> None:
         if self._matching_event(event) is None:
             return
-        if self._snapshot.state in {"posted", "in_flight"}:
-            # Browser errorText, blockedReason and request details are deliberately ignored.
-            self._snapshot = LoginSubmissionSnapshot(
-                "failed", self._snapshot.status, "network_error"
-            )
+        # Browser errorText, blockedReason and request details are deliberately ignored.
+        self._fail("network_error")
 
     def _matching_event(self, event: object) -> Mapping[str, object] | None:
-        if not self._accepting_events() or self._request_id is None:
+        if not self._accepting_events() or not self._requests:
             return None
         params = _event_params(event)
-        if params is None or _request_id(params) != self._request_id:
+        if params is None:
+            return None
+        request_id = _request_id(params)
+        if request_id is None:
+            self._fail("invalid_response")
+            return None
+        if request_id not in self._requests:
             return None
         return params
+
+    def _fail(self, failure: LoginSubmissionFailure, status: int | None = None) -> None:
+        # Failures remain sticky. An explicit protection response still takes priority
+        # over an earlier generic failure so the driver's 403/429 owners can stop it.
+        if self._snapshot.state in {"failed", "ambiguous"}:
+            if status not in {403, 429} or self._snapshot.status in {403, 429}:
+                return
+        state: LoginSubmissionState = "ambiguous" if failure == "ambiguous" else "failed"
+        self._snapshot = LoginSubmissionSnapshot(
+            state, status if status is not None else self._snapshot.status, failure
+        )
+
+    def _refresh(self) -> None:
+        if self._snapshot.state in {"failed", "ambiguous"}:
+            return
+        requests = tuple(self._requests.values())
+        statuses = [request.status for request in requests if request.status is not None]
+        status = max(statuses) if statuses else None
+        if all(request.state == "completed" for request in requests):
+            self._snapshot = LoginSubmissionSnapshot("completed", status)
+        elif statuses:
+            self._snapshot = LoginSubmissionSnapshot("in_flight", status)
+        else:
+            self._snapshot = LoginSubmissionSnapshot("posted")
 
     def _accepting_events(self) -> bool:
         self._expire_if_due()
@@ -223,4 +264,4 @@ class PydollLoginSubmission:
             )
             self._snapshot = LoginSubmissionSnapshot("failed", self._snapshot.status, failure)
         self._active = False
-        self._request_id = None
+        self._requests.clear()

@@ -215,18 +215,18 @@ class ObservedLoginTab:
             },
         )
 
-    def response(self, status: int = 200) -> None:
+    def response(self, status: int = 200, *, request_id: str = "login") -> None:
         self.emit(
             "response",
             {
-                "requestId": "login",
+                "requestId": request_id,
                 "type": "XHR",
                 "response": {"status": status, "url": "https://www.korail.com/dynamic-login"},
             },
         )
 
-    def finish(self) -> None:
-        self.emit("finished", {"requestId": "login"})
+    def finish(self, request_id: str = "login") -> None:
+        self.emit("finished", {"requestId": request_id})
 
 
 def prepare_observed_login(
@@ -242,9 +242,14 @@ def prepare_observed_login(
     session = _PydollSession("https://www.korail.com/ticket/search/general", timeout_ms, True)
     tab = ObservedLoginTab()
     session._tab = tab
-    input_control = SimpleNamespace(clear=AsyncMock(), type_text=AsyncMock())
+    input_control = SimpleNamespace(
+        clear=AsyncMock(),
+        type_text=AsyncMock(),
+        execute_script=AsyncMock(return_value={"result": {"result": {"value": True}}}),
+    )
     submit = AsyncMock()
     monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(return_value=False))
+    monkeypatch.setattr(session._login_driver, "_find_login_controls", AsyncMock(return_value=None))
     monkeypatch.setattr(
         session,
         "_wait_for_unique_login_method_tab",
@@ -320,7 +325,260 @@ async def test_existing_header_is_not_accepted_while_submission_is_pending(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["http_500", "network", "missing", "ambiguous"])
+@pytest.mark.parametrize("positive_evidence", ["header", "official_probe", "none"])
+async def test_two_completed_login_posts_still_require_independent_authentication_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    positive_evidence: str,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    header = AsyncMock(side_effect=(False, positive_evidence == "header"))
+    monkeypatch.setattr(session, "_has_authenticated_header", header)
+    probe = AsyncMock(return_value=positive_evidence == "official_probe")
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+
+    async def submitted() -> None:
+        tab.request()
+        tab.response()
+        tab.request("second")
+        tab.finish()
+
+    submit.side_effect = submitted
+
+    async def finish_second(_: float) -> None:
+        if positive_evidence == "none" and probe.await_count:
+            return
+        assert header.await_count == 1
+        probe.assert_not_awaited()
+        assert session._login_driver._submission is not None
+        assert session._login_driver._submission.snapshot().safe_to_probe is False
+        tab.response(request_id="second")
+        tab.finish("second")
+
+    session._login_driver._sleep = finish_second
+    if positive_evidence == "none":
+        ticks = iter((0.0, 0.0, 0.0, 2.0))
+        session._login_driver._monotonic = lambda: next(ticks, 2.0)
+    assert await session.ensure_authenticated(_credential()) is (positive_evidence != "none")
+    submit.assert_awaited_once()
+    if positive_evidence == "header":
+        probe.assert_not_awaited()
+    else:
+        probe.assert_awaited_once()
+    assert tab.callbacks == {}
+    assert tab.removed == [1, 2, 3, 4]
+    tab.request("late-after-close")
+    tab.response(500, request_id="late-after-close")
+    assert session._login_driver._submission is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arrival_during", ["header", "official_probe"])
+async def test_late_post_during_authentication_evidence_blocks_success_until_finished(
+    monkeypatch: pytest.MonkeyPatch,
+    arrival_during: str,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    header_reads = 0
+
+    async def read_header() -> bool:
+        nonlocal header_reads
+        header_reads += 1
+        if header_reads == 1:
+            return False
+        if header_reads == 2:
+            if arrival_during == "header":
+                tab.request("second")
+                return True
+            return False
+        return True
+
+    header = AsyncMock(side_effect=read_header)
+    monkeypatch.setattr(session, "_has_authenticated_header", header)
+
+    async def read_probe() -> bool:
+        tab.request("second")
+        return True
+
+    probe = AsyncMock(side_effect=read_probe)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+
+    async def submitted() -> None:
+        tab.request()
+        tab.response()
+        tab.finish()
+
+    submit.side_effect = submitted
+    waits = 0
+
+    async def finish_late_post(_: float) -> None:
+        nonlocal waits
+        waits += 1
+        assert header.await_count == 2
+        assert probe.await_count == (arrival_during == "official_probe")
+        assert session._login_driver._submission is not None
+        assert session._login_driver._submission.snapshot().safe_to_probe is False
+        tab.response(request_id="second")
+        tab.finish("second")
+
+    session._login_driver._sleep = finish_late_post
+    assert await session.ensure_authenticated(_credential()) is True
+    assert waits == 1
+    submit.assert_awaited_once()
+    assert probe.await_count == (arrival_during == "official_probe")
+    assert tab.callbacks == {}
+    assert tab.removed == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe_result", [False, True])
+@pytest.mark.parametrize("completion", ["during_probe", "after_probe"])
+async def test_changed_probe_group_never_attests_authentication_or_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    probe_result: bool,
+    completion: str,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+
+    async def submitted() -> None:
+        tab.request()
+        tab.response()
+        tab.finish()
+
+    submit.side_effect = submitted
+
+    async def probe_session() -> bool:
+        tab.request("second")
+        if completion == "during_probe":
+            tab.response(request_id="second")
+            tab.finish("second")
+        return probe_result
+
+    probe = AsyncMock(side_effect=probe_session)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+
+    async def finish_pending(_: float) -> None:
+        if completion == "after_probe":
+            tab.response(request_id="second")
+            tab.finish("second")
+
+    session._login_driver._sleep = finish_pending
+    ticks = iter((0.0, 0.0, 0.0, 2.0))
+    session._login_driver._monotonic = lambda: next(ticks, 2.0)
+    with pytest.raises(PydollLoginResponseUnavailable) as error:
+        await session.ensure_authenticated(_credential())
+    assert error.value.stage == "login_response"
+    assert error.value.retry_after_seconds == 300
+    # 전송은 완료됐지만 바뀐 그룹의 과거 probe는 인증의 양성·음성 근거가 아니다.
+    assert error.value.submission_state == "completed"
+    assert error.value.submission_status == 200
+    probe.assert_awaited_once()
+    submit.assert_awaited_once()
+    assert tab.callbacks == {}
+    assert tab.removed == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_late_completed_group_after_negative_probe_cannot_reuse_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    probe = AsyncMock(return_value=False)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+
+    async def submitted() -> None:
+        tab.request()
+        tab.response()
+        tab.finish()
+
+    submit.side_effect = submitted
+
+    async def arrive_after_probe(_: float) -> None:
+        probe.assert_awaited_once()
+        tab.request("second")
+        tab.response(request_id="second")
+        tab.finish("second")
+
+    session._login_driver._sleep = arrive_after_probe
+    ticks = iter((0.0, 0.0, 2.0))
+    session._login_driver._monotonic = lambda: next(ticks, 2.0)
+    with pytest.raises(PydollLoginResponseUnavailable):
+        await session.ensure_authenticated(_credential())
+    probe.assert_awaited_once()
+    submit.assert_awaited_once()
+    assert tab.callbacks == {}
+
+
+@pytest.mark.asyncio
+async def test_completed_late_post_during_header_read_invalidates_old_positive_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    reads = 0
+
+    async def header() -> bool:
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            tab.request("second")
+            tab.response(request_id="second")
+            tab.finish("second")
+            return True
+        return False
+
+    monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(side_effect=header))
+    probe = AsyncMock(return_value=False)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+
+    async def submitted() -> None:
+        tab.request()
+        tab.response()
+        tab.finish()
+
+    submit.side_effect = submitted
+    session._login_driver._sleep = AsyncMock()
+    ticks = iter((0.0, 0.0, 0.0, 2.0))
+    session._login_driver._monotonic = lambda: next(ticks, 2.0)
+    assert await session.ensure_authenticated(_credential()) is False
+    assert reads == 3
+    probe.assert_awaited_once()
+    submit.assert_awaited_once()
+    assert tab.callbacks == {}
+    assert tab.removed == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [500, 403, 429])
+async def test_second_login_post_failure_blocks_probe_and_cleans_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    probe = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+
+    async def submitted() -> None:
+        tab.request()
+        tab.response()
+        tab.finish()
+        tab.request("second")
+        tab.response(status, request_id="second")
+
+    submit.side_effect = submitted
+    expected = {
+        500: PydollLoginResponseUnavailable,
+        403: BrowserProtectionDetected,
+        429: BrowserRateLimited,
+    }[status]
+    with pytest.raises(expected):
+        await session.ensure_authenticated(_credential())
+    probe.assert_not_awaited()
+    submit.assert_awaited_once()
+    assert tab.callbacks == {}
+    assert tab.removed == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["http_500", "network", "missing", "incomplete_multi"])
 @pytest.mark.parametrize("in_place", [False, True])
 async def test_submission_failure_is_source_unavailable_and_never_auth_required(
     monkeypatch: pytest.MonkeyPatch,
@@ -341,6 +599,9 @@ async def test_submission_failure_is_source_unavailable_and_never_auth_required(
             tab.emit("failed", {"requestId": "login", "errorText": "fixture-error"})
         else:
             tab.request("second")
+            # 두 번째 정상 요청은 허용하지만 미완료 제출 창은 timeout으로 닫힌다.
+            assert session._login_driver._submission is not None
+            session._login_driver._submission._monotonic = lambda: float("inf")
 
     submit.side_effect = fail
     if failure == "missing":
@@ -361,7 +622,7 @@ async def test_submission_failure_is_source_unavailable_and_never_auth_required(
         diagnostics = {
             "http_500": ("failed", "http_error", 500),
             "network": ("failed", "network_error", None),
-            "ambiguous": ("ambiguous", "ambiguous", None),
+            "incomplete_multi": ("failed", "timeout", None),
         }
         assert (
             error.value.submission_state,

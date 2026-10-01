@@ -231,7 +231,14 @@ class PydollLoginDomDriver:
         )
         if tab is None:
             return False
-        await self._port._login_step("login_method_select", tab.click())
+        # Re-selecting an active method and clearing fresh fields emits unnecessary
+        # UI events into the official login form. Preserve its initialized state.
+        selected = await self._port._login_step(
+            "login_method_select",
+            self._find_login_controls(credential.login_method),
+        )
+        if selected is None:
+            await self._port._login_step("login_method_select", tab.click())
         controls = await self._port._login_step(
             "login_controls",
             self._port._wait_for_login_controls(credential.login_method),
@@ -240,15 +247,23 @@ class PydollLoginDomDriver:
             return False
         login_id, password, submit = controls
 
-        await self._port._login_step("login_identity_clear", login_id.clear())
+        identity_selector = credential.login_method.identity_selector
+        password_selector = "input#password[name='password'][type='password']"
+        await self._require_input_value(login_id, identity_selector, "", "login_identity_clear")
         await self._port._login_step(
             "login_identity_input",
             login_id.type_text(credential.login_id),
         )
-        await self._port._login_step("login_password_clear", password.clear())
+        await self._require_input_value(password, password_selector, "", "login_password_clear")
         await self._port._login_step(
             "login_password_input",
             password.type_text(credential.password),
+        )
+        await self._require_input_value(
+            login_id, identity_selector, credential.login_id, "login_input_mismatch"
+        )
+        await self._require_input_value(
+            password, password_selector, credential.password, "login_input_mismatch"
         )
         await self.close_submission_observer()
         context = self._observe_submission()
@@ -262,6 +277,37 @@ class PydollLoginDomDriver:
             await self.close_submission_observer()
             raise
         return True
+
+    async def _require_input_value(
+        self, control: Any, selector: str, expected: str, stage: str
+    ) -> None:
+        """Attest the live input without returning its value or resetting its state."""
+
+        result = await self._port._login_step(
+            stage,
+            control.execute_script(
+                """function(selector, expected) {
+                  const visible = e => {
+                    const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none'
+                      && s.visibility !== 'hidden';
+                  };
+                  const panels = [...document.querySelectorAll(
+                    '.tabPage.active[role=tabpanel]')].filter(visible);
+                  const inputs = panels.length === 1
+                    ? [...panels[0].querySelectorAll(selector)].filter(visible) : [];
+                  return inputs.length === 1 && inputs[0] === this && this.isConnected
+                    && !this.disabled && !this.readOnly && this.value === expected;
+                }""",
+                arguments=[{"value": selector}, {"value": expected}],
+                return_by_value=True,
+            ),
+        )
+        outer = result.get("result") if isinstance(result, Mapping) else None
+        inner = outer.get("result", outer) if isinstance(outer, Mapping) else None
+        if not isinstance(inner, Mapping) or inner.get("value") is not True:
+            # A stale or unexpectedly populated form cannot authorize a credential POST.
+            raise BrowserSourceUnavailable(stage)
 
     async def close_submission_observer(self) -> None:
         context = self._submission_context
@@ -278,6 +324,8 @@ class PydollLoginDomDriver:
         deadline = submitted_at + self._timeout_seconds
         attempt = attempt or _LocalLoginAttemptState()
         official_session_unavailable = False
+        probe_owner: _submission_owner.PydollLoginSubmission | None = None
+        probe_revision: int | None = None
         while self._monotonic() < deadline:
             snapshot = await self._observed_login_step("login_result_snapshot", self._snapshot())
             submission = self._submission.snapshot() if self._submission is not None else None
@@ -304,22 +352,40 @@ class PydollLoginDomDriver:
             if not submission.safe_to_probe:
                 await self._sleep(0.1)
                 continue
+            observed_submission = self._submission
+            if observed_submission is None:
+                raise BrowserSourceUnavailable("login_response")
+            group_revision = observed_submission.group_revision
             authenticated_header = await self._observed_login_step(
                 "login_result_header",
                 self._port._has_authenticated_header(),
             )
+            # A further UI request may arrive while the header read yields control.
+            # Its completion is required before any session probe or success return.
+            if not self._same_submission_group(observed_submission, group_revision):
+                await self._sleep(0.1)
+                continue
             if authenticated_header:
                 self._event_logger.info("KORAIL login session marker stage=login_page present=true")
                 return True
             if not attempt.post_submit_check_attempted:
                 attempt.post_submit_check_attempted = True
                 try:
-                    attempt.post_submit_authenticated = bool(
+                    probe_authenticated = bool(
                         await self._observed_login_step(
                             "login_page_session_check",
                             self._port._probe_official_authenticated_session(),
                         )
                     )
+                    if self._same_submission_group(observed_submission, group_revision):
+                        attempt.post_submit_authenticated = probe_authenticated
+                        probe_owner, probe_revision = observed_submission, group_revision
+                    else:
+                        # A later POST invalidates either probe outcome, even if that
+                        # request already finished. Keep the one-probe budget and await
+                        # independent current header evidence; this is not a rejection.
+                        attempt.post_submit_authenticated = False
+                        official_session_unavailable = True
                 except BrowserSourceUnavailable:
                     official_session_unavailable = True
                     # A 200 HTML/invalid loginCheck response cannot attest either login
@@ -334,7 +400,9 @@ class PydollLoginDomDriver:
                     "attempt=1 present=%s",
                     str(attempt.post_submit_authenticated).lower(),
                 )
-                if attempt.post_submit_authenticated:
+                if attempt.post_submit_authenticated and self._same_submission_group(
+                    observed_submission, group_revision
+                ):
                     return True
             await self._sleep(0.1)
         self._event_logger.info("KORAIL login session marker stage=login_page present=false")
@@ -345,12 +413,27 @@ class PydollLoginDomDriver:
             or not attempt.post_submit_check_attempted
         ):
             raise self._login_response_failure(submission)
-        if not attempt.post_submit_authenticated:
-            # An unavailable probe does not establish a rejected credential.
-            # Explicit negative results are recorded separately below.
-            if official_session_unavailable:
-                raise self._login_response_failure(submission)
+        # Only this submission group's explicit negative probe can reject a credential.
+        # A stale or unavailable outcome must not become auth_required at the deadline.
+        if (
+            official_session_unavailable
+            or probe_owner is None
+            or probe_revision is None
+            or not self._same_submission_group(probe_owner, probe_revision)
+        ):
+            raise self._login_response_failure(submission)
         return False
+
+    def _same_submission_group(
+        self,
+        owner: _submission_owner.PydollLoginSubmission,
+        revision: int,
+    ) -> bool:
+        return (
+            self._submission is owner
+            and owner.group_revision == revision
+            and owner.snapshot().safe_to_probe
+        )
 
     @staticmethod
     def _login_response_failure(
@@ -543,25 +626,29 @@ class PydollLoginDomDriver:
         login_method: KorailLoginMethod,
     ) -> tuple[Any, Any, Any] | None:
         deadline = self._monotonic() + self._timeout_seconds
-        password_selector = "input#password[name='password'][type='password']"
         while self._monotonic() < deadline:
-            panels = await self._visible_elements(".tabPage.active[role='tabpanel']")
-            if len(panels) == 1:
-                panel = panels[0]
-                identities = await self._visible_elements(
-                    login_method.identity_selector,
-                    scope=panel,
-                )
-                passwords = await self._visible_elements(password_selector, scope=panel)
-                submits = [
-                    control
-                    for control in await self._visible_elements(
-                        "button,[role='button']",
-                        scope=panel,
-                    )
-                    if " ".join(str(await control.text).split()) == "로그인"
-                ]
-                if len(identities) == len(passwords) == len(submits) == 1:
-                    return identities[0], passwords[0], submits[0]
+            controls = await self._find_login_controls(login_method)
+            if controls is not None:
+                return controls
             await self._sleep(0.1)
+        return None
+
+    async def _find_login_controls(
+        self, login_method: KorailLoginMethod
+    ) -> tuple[Any, Any, Any] | None:
+        panels = await self._visible_elements(".tabPage.active[role='tabpanel']")
+        if len(panels) != 1:
+            return None
+        panel = panels[0]
+        identities = await self._visible_elements(login_method.identity_selector, scope=panel)
+        passwords = await self._visible_elements(
+            "input#password[name='password'][type='password']", scope=panel
+        )
+        submits = [
+            control
+            for control in await self._visible_elements("button,[role='button']", scope=panel)
+            if " ".join(str(await control.text).split()) == "로그인"
+        ]
+        if len(identities) == len(passwords) == len(submits) == 1:
+            return identities[0], passwords[0], submits[0]
         return None

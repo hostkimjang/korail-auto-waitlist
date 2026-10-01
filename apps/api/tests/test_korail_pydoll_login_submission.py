@@ -209,10 +209,13 @@ def test_pre_window_and_mismatched_callbacks_do_not_attest_login() -> None:
 
 
 @pytest.mark.parametrize("completed_first", [False, True])
-def test_second_distinct_official_post_is_ambiguous_even_after_first_completion(
+def test_incomplete_second_post_waits_then_times_out_even_after_first_completion(
     completed_first: bool,
 ) -> None:
-    owner = PydollLoginSubmission(10)
+    # 두 200/완료 XHR 양성 표본에 따라 두 번째 요청 자체를 오류로 보지 않는다.
+    # 미완료 요청은 여전히 인증 확인을 차단하고 제출 창 만료 시 실패한다.
+    clock = Clock()
+    owner = PydollLoginSubmission(10, monotonic=clock)
     owner.arm()
     owner.on_request_will_be_sent(request())
     if completed_first:
@@ -221,9 +224,130 @@ def test_second_distinct_official_post_is_ambiguous_even_after_first_completion(
     owner.on_request_will_be_sent(request("login-2"))
     owner.on_response_received(response())
     owner.on_loading_finished(terminal())
-    assert owner.snapshot().state == "ambiguous"
-    assert owner.snapshot().failure == "ambiguous"
     assert owner.snapshot().safe_to_probe is False
+    clock.now += 10
+    assert owner.snapshot().state == "failed"
+    assert owner.snapshot().failure == "timeout"
+
+
+@pytest.mark.parametrize("late_second", [False, True])
+def test_two_official_posts_require_every_header_and_completion(late_second: bool) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_response_received(response())
+    if late_second:
+        owner.on_loading_finished(terminal())
+        assert owner.snapshot().safe_to_probe is True
+    owner.on_request_will_be_sent(request("login-2", resource_type="Fetch"))
+    assert owner.snapshot().safe_to_probe is False
+    owner.on_loading_finished(terminal())
+    assert owner.snapshot().safe_to_probe is False
+    owner.on_response_received(response(request_id="login-2", resource_type="Fetch"))
+    assert owner.snapshot().safe_to_probe is False
+    owner.on_loading_finished(terminal("login-2"))
+    assert owner.snapshot().safe_to_probe is True
+
+
+@pytest.mark.parametrize("status", [200, 204, 302, 500, 403, 429])
+def test_second_post_response_and_completion_control_aggregate_safety(status: int) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_response_received(response())
+    owner.on_loading_finished(terminal())
+    owner.on_request_will_be_sent(request("login-2"))
+    owner.on_response_received(response(status, request_id="login-2"))
+    assert owner.snapshot().safe_to_probe is False
+    owner.on_loading_finished(terminal("login-2"))
+    assert owner.snapshot().safe_to_probe is (status < 400)
+    assert owner.snapshot().status == status
+    if status >= 400:
+        assert owner.snapshot().failure == "http_error"
+
+
+@pytest.mark.parametrize("failure", ["network", "invalid", "missing_id", "bound"])
+def test_multi_post_failure_is_sticky_and_late_success_cannot_erase_it(failure: str) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_response_received(response())
+    owner.on_loading_finished(terminal())
+    owner.on_request_will_be_sent(request("login-2"))
+    if failure == "network":
+        owner.on_loading_failed(terminal("login-2"))
+    elif failure == "invalid":
+        owner.on_response_received(response(None, request_id="login-2"))
+    elif failure == "missing_id":
+        owner.on_request_will_be_sent(request(""))
+    else:
+        for index in range(owner.MAX_REQUESTS):
+            owner.on_request_will_be_sent(request(f"extra-{index}"))
+    failed = owner.snapshot()
+    owner.on_response_received(response(request_id="login-2"))
+    owner.on_loading_finished(terminal("login-2"))
+    assert owner.snapshot() == failed
+    assert failed.safe_to_probe is False
+    assert len(owner._requests) <= owner.MAX_REQUESTS
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_later_protection_status_survives_an_earlier_generic_failure(status: int) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_request_will_be_sent(request("login-2"))
+    owner.on_response_received(response(500))
+    owner.on_response_received(response(status, request_id="login-2"))
+    assert owner.snapshot().status == status
+    assert owner.snapshot().failure == "http_error"
+    assert owner.snapshot().safe_to_probe is False
+
+
+def test_multiple_unfinished_requests_expire_and_clear_private_ids_on_close() -> None:
+    clock = Clock()
+    owner = PydollLoginSubmission(1, monotonic=clock)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_request_will_be_sent(request("login-2"))
+    owner.on_response_received(response())
+    owner.on_response_received(response(request_id="login-2"))
+    clock.now += 1
+    assert owner.snapshot().failure == "timeout"
+    assert not owner._requests
+    owner.close()
+    owner.on_loading_finished(terminal())
+    owner.on_loading_finished(terminal("login-2"))
+    assert owner.snapshot().safe_to_probe is False
+
+
+def test_private_group_revision_changes_only_for_accepted_distinct_members() -> None:
+    owner = PydollLoginSubmission(10)
+    initial = owner.group_revision
+    owner.arm()
+    owner.on_request_will_be_sent(request(method="GET"))
+    assert owner.group_revision == initial
+    owner.on_request_will_be_sent(request())
+    first = owner.group_revision
+    assert first > initial
+    owner.on_request_will_be_sent(request())
+    assert owner.group_revision == first
+    owner.on_response_received(response())
+    owner.on_loading_finished(terminal())
+    completed = owner.snapshot()
+    owner.on_request_will_be_sent(request("login-2"))
+    owner.on_response_received(response(request_id="login-2"))
+    owner.on_loading_finished(terminal("login-2"))
+    assert owner.snapshot() == completed
+    assert owner.group_revision > first
+    assert "revision" not in repr(owner.snapshot())
+    last = owner.group_revision
+    owner.close()
+    owner.on_request_will_be_sent(request("after-close"))
+    assert owner.group_revision == last
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    assert owner.group_revision > last
 
 
 def test_duplicate_request_callback_does_not_create_a_second_submission() -> None:

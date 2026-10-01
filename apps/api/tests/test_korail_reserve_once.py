@@ -154,6 +154,60 @@ class FakeElement:
         }
 
 
+class FakeLoginInput(FakeElement):
+    """Model the current fresh input separately from seat metadata fixtures."""
+
+    def __init__(self, selector: str, *, value: str = "") -> None:
+        super().__init__("")
+        self.selector = selector
+        self.value = value
+        self.current_target: FakeLoginInput = self
+        self.panel_count = 1
+        self.input_count = 1
+        self.connected = True
+        self.visible = True
+        self.disabled = False
+        self.readonly = False
+        self.deliver_input = True
+        self.clear_calls = 0
+        self.attestations: list[bool] = []
+
+    async def clear(self) -> None:
+        self.clear_calls += 1
+        self.value = ""
+        await super().clear()
+
+    async def type_text(self, value: str) -> None:
+        await super().type_text(value)
+        if self.deliver_input:
+            self.value += value
+
+    async def execute_script(
+        self,
+        script: str,
+        *,
+        arguments: list[dict[str, str]],
+        return_by_value: bool,
+    ) -> dict[str, object]:
+        assert return_by_value is True
+        assert "inputs[0] === this" in script and "this.value === expected" in script
+        assert len(arguments) == 2
+        selector, expected = (argument["value"] for argument in arguments)
+        valid = (
+            selector == self.selector
+            and self.panel_count == 1
+            and self.input_count == 1
+            and self.current_target is self
+            and self.connected
+            and self.visible
+            and not self.disabled
+            and not self.readonly
+            and self.value == expected
+        )
+        self.attestations.append(valid)
+        return {"result": {"result": {"value": valid}}}
+
+
 def reservation_request(
     version: str = "credential-v1",
     login_method: KorailLoginMethod = KorailLoginMethod.MEMBERSHIP_NUMBER,
@@ -1304,8 +1358,8 @@ async def test_session_selects_login_method_and_uses_one_scoped_login_button(
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
     install_completed_login_submission(session)
     method_tab = FakeElement(login_method.value)
-    login_id = FakeElement("")
-    password = FakeElement("")
+    login_id = FakeLoginInput(identity_selector)
+    password = FakeLoginInput("input#password[name='password'][type='password']")
     active_panel = FakeElement("회원 로그인")
     scoped_login = FakeElement("로그인")
     duplicate_outside_form = FakeElement("로그인")
@@ -1356,9 +1410,11 @@ async def test_session_selects_login_method_and_uses_one_scoped_login_button(
     )
 
     assert authenticated is True
-    assert method_tab.clicks == 1
+    assert method_tab.clicks == 0
     assert login_id.typed_values == ["fixture-login"]
     assert password.typed_values == ["fixture-password"]
+    assert login_id.clear_calls == password.clear_calls == 0
+    assert login_id.attestations == password.attestations == [True, True]
     assert scoped_login.clicks == 1
     assert duplicate_outside_form.clicks == 0
 
@@ -1370,8 +1426,8 @@ async def test_login_submit_waits_for_method_tab_to_render_then_clicks_once(
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
     install_completed_login_submission(session)
     method_tab = FakeElement("membership_number")
-    login_id = FakeElement("")
-    password = FakeElement("")
+    login_id = FakeLoginInput(KorailLoginMethod.MEMBERSHIP_NUMBER.identity_selector)
+    password = FakeLoginInput("input#password[name='password'][type='password']")
     submit = FakeElement("로그인")
     tab_results = iter(([], [method_tab]))
     tab_queries = 0
@@ -1393,6 +1449,8 @@ async def test_login_submit_waits_for_method_tab_to_render_then_clicks_once(
     assert submitted is True
     assert tab_queries == 2
     assert method_tab.clicks == 1
+    assert login_id.clear_calls == password.clear_calls == 0
+    assert login_id.attestations == password.attestations == [True, True]
     assert submit.clicks == 1
     assert login_id.typed_values == ["fixture-login"]
     assert password.typed_values == ["fixture-password"]
@@ -1433,8 +1491,8 @@ async def test_session_in_place_login_submits_once_without_navigation(
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
     install_completed_login_submission(session)
     method_tab = FakeElement("membership_number")
-    login_id = FakeElement("")
-    password = FakeElement("")
+    login_id = FakeLoginInput(KorailLoginMethod.MEMBERSHIP_NUMBER.identity_selector)
+    password = FakeLoginInput("input#password[name='password'][type='password']")
     active_panel = FakeElement("회원 로그인")
     submit = FakeElement("로그인")
 
@@ -1477,9 +1535,11 @@ async def test_session_in_place_login_submits_once_without_navigation(
 
     assert authenticated is True
     assert session._tab.go_to.await_count == 0
-    assert method_tab.clicks == 1
+    assert method_tab.clicks == 0
     assert login_id.typed_values == ["fixture-login"]
     assert password.typed_values == ["fixture-password"]
+    assert login_id.clear_calls == password.clear_calls == 0
+    assert login_id.attestations == password.attestations == [True, True]
     assert submit.clicks == 1
 
 
@@ -1490,8 +1550,8 @@ async def test_session_rejects_transient_logout_that_does_not_persist_on_search(
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
     install_completed_login_submission(session)
     method_tab = FakeElement("phone")
-    login_id = FakeElement("")
-    password = FakeElement("")
+    login_id = FakeLoginInput(KorailLoginMethod.PHONE.identity_selector)
+    password = FakeLoginInput("input#password[name='password'][type='password']")
     submit = FakeElement("로그인")
 
     async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
@@ -1537,6 +1597,8 @@ async def test_session_rejects_transient_logout_that_does_not_persist_on_search(
 
     assert authenticated is False
     assert method_tab.clicks == 1
+    assert login_id.clear_calls == password.clear_calls == 0
+    assert login_id.attestations == password.attestations == [True, True]
     assert submit.clicks == 1
     assert session._tab.go_to.await_count == 2
 
@@ -1548,8 +1610,8 @@ async def test_session_accepts_official_session_before_login_header_hydrates(
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
     install_completed_login_submission(session)
     method_tab = FakeElement("phone")
-    login_id = FakeElement("")
-    password = FakeElement("")
+    login_id = FakeLoginInput(KorailLoginMethod.PHONE.identity_selector)
+    password = FakeLoginInput("input#password[name='password'][type='password']")
     submit = FakeElement("로그인")
 
     async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
@@ -1590,9 +1652,59 @@ async def test_session_accepts_official_session_before_login_header_hydrates(
     )
 
     assert authenticated is True
+    assert login_id.clear_calls == password.clear_calls == 0
+    assert login_id.attestations == password.attestations == [True, True]
     assert submit.clicks == 1
     official_session_probe.assert_awaited_once_with()
     assert session._tab.go_to.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changed_input", "stage"),
+    [
+        ("nonblank", "login_identity_clear"),
+        ("other_target", "login_identity_clear"),
+        ("other_selector", "login_identity_clear"),
+        ("input_not_delivered", "login_input_mismatch"),
+    ],
+)
+async def test_reservation_login_rejects_changed_input_before_submission(
+    monkeypatch: pytest.MonkeyPatch,
+    changed_input: str,
+    stage: str,
+) -> None:
+    session = _PydollSession("https://www.korail.com/ticket/login", 1_000, True)
+    identity_selector = KorailLoginMethod.MEMBERSHIP_NUMBER.identity_selector
+    login_id = FakeLoginInput(identity_selector)
+    password = FakeLoginInput("input#password[name='password'][type='password']")
+    submit = FakeElement("로그인")
+    controls = login_id, password, submit
+    if changed_input == "nonblank":
+        login_id.value = "fixture-existing-value"
+    elif changed_input == "other_target":
+        login_id.current_target = FakeLoginInput(identity_selector)
+    elif changed_input == "other_selector":
+        login_id.selector = KorailLoginMethod.PHONE.identity_selector
+    else:
+        login_id.deliver_input = False
+    monkeypatch.setattr(
+        session,
+        "_wait_for_unique_login_method_tab",
+        AsyncMock(return_value=FakeElement("회원번호")),
+    )
+    monkeypatch.setattr(
+        session._login_driver, "_find_login_controls", AsyncMock(return_value=controls)
+    )
+    monkeypatch.setattr(session, "_wait_for_login_controls", AsyncMock(return_value=controls))
+
+    with pytest.raises(BrowserSourceUnavailable) as error:
+        await session._submit_login_form(reservation_request().credential)
+
+    assert error.value.stage == stage
+    assert submit.clicks == 0
+    assert login_id.clear_calls == password.clear_calls == 0
+    assert session._login_driver._submission is None
 
 
 @pytest.mark.asyncio

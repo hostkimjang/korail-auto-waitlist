@@ -218,6 +218,7 @@ IMPLEMENTATION_ISLANDS = {
     "_PydollSessionContext": set(),
 }
 STATIC_OWNER_HOOKS = {
+    "_login_submission_context_owner": {"observe_login_submission"},
     "_dom_interaction_owner": {
         "click_exact_text",
         "evaluate_text",
@@ -393,9 +394,9 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    # Network normalization now belongs to the dedicated evidence owner; the callback
-    # delegates without increasing the browser facade's responsibilities.
-    assert len(source.splitlines()) <= 1_489
+    # Submission listener ownership is delegated through the injected context;
+    # the additional shell lines only connect it to tab rotation and cleanup.
+    assert len(source.splitlines()) <= 1_506
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

@@ -38,7 +38,11 @@ def project_login_verification_result(
     result: KorailLoginVerifyResult,
 ) -> ProviderLoginVerification:
     """Map one validated sidecar result onto the provider-neutral outcome."""
-    return ProviderLoginVerification(ProviderLoginVerificationOutcome(result.outcome))
+    return ProviderLoginVerification(
+        ProviderLoginVerificationOutcome(result.outcome),
+        failure_kind=result.failure_kind,
+        retry_after_seconds=result.retry_after_seconds,
+    )
 
 
 def project_login_verification_failure(

@@ -11550,6 +11550,8 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/korail_sidecar/pydoll/http_replay.py",
         "rail_waitlist/korail_sidecar/pydoll/dom_interaction.py",
         "rail_waitlist/korail_sidecar/pydoll/login_driver.py",
+        "rail_waitlist/korail_sidecar/pydoll/login_submission.py",
+        "rail_waitlist/korail_sidecar/pydoll/login_submission_context.py",
         "rail_waitlist/korail_sidecar/pydoll/network_evidence.py",
         "rail_waitlist/korail_sidecar/pydoll/reservation_actor.py",
         "rail_waitlist/korail_sidecar/pydoll/reservation_driver.py",
@@ -12139,6 +12141,7 @@ def test_pydoll_chromium_lifecycle_has_exact_canonical_production_consumers() ->
 
     assert consumers == {
         "rail_waitlist/korail_pydoll_browser.py",
+        "rail_waitlist/korail_sidecar/pydoll/login_submission_context.py",
         "rail_waitlist/korail_sidecar/runtime.py",
     }
 

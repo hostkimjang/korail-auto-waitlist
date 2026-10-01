@@ -63,6 +63,7 @@ from .contracts import (
     KorailSessionActorStateValue,
     KorailSessionStateResult,
 )
+from .pydoll.login_submission import PydollLoginResponseUnavailable
 from .runtime import KorailBrowserEngine
 from .search_coordinator import KorailBrowserAutomation
 from .search_progress import SearchProgress
@@ -834,7 +835,11 @@ def create_adapter_app(
                 official_handoff_url=confirmation.official_handoff_url,
             )
 
-    @app.post("/v1/verify-login", response_model=KorailLoginVerifyResult)
+    @app.post(
+        "/v1/verify-login",
+        response_model=KorailLoginVerifyResult,
+        response_model_exclude_none=True,
+    )
     async def verify_login(
         request: KorailLoginVerifyRequest,
         response: Response,
@@ -865,6 +870,16 @@ def create_adapter_app(
             authenticated = await verify_credential(credential)
         except (BrowserRateLimited, BrowserProtectionDetected):
             return KorailLoginVerifyResult(outcome="provider_blocked")
+        except PydollLoginResponseUnavailable as error:
+            response.headers["Retry-After"] = str(error.retry_after_seconds)
+            dependencies.logger.warning(
+                "KORAIL login submission unavailable at stage=%s", error.stage
+            )
+            return KorailLoginVerifyResult(
+                outcome="failed",
+                failure_kind=error.failure_kind,
+                retry_after_seconds=error.retry_after_seconds,
+            )
         except BrowserSourceUnavailable as error:
             # ``stage`` is a closed, code-owned diagnostic label. Keep credentials and
             # third-party exception text out of logs while retaining an operable signal.
@@ -884,7 +899,11 @@ def create_adapter_app(
         dependencies.logger.info("KORAIL login verification completed outcome=%s", outcome)
         return KorailLoginVerifyResult(outcome=outcome)
 
-    @app.post("/v1/prewarm-login", response_model=KorailLoginVerifyResult)
+    @app.post(
+        "/v1/prewarm-login",
+        response_model=KorailLoginVerifyResult,
+        response_model_exclude_none=True,
+    )
     async def prewarm_login(
         request: KorailLoginVerifyRequest,
         response: Response,
@@ -913,6 +932,16 @@ def create_adapter_app(
             authenticated = await prewarm(credential)
         except (BrowserRateLimited, BrowserProtectionDetected):
             return KorailLoginVerifyResult(outcome="provider_blocked")
+        except PydollLoginResponseUnavailable as error:
+            response.headers["Retry-After"] = str(error.retry_after_seconds)
+            dependencies.logger.warning(
+                "KORAIL login submission unavailable at stage=%s", error.stage
+            )
+            return KorailLoginVerifyResult(
+                outcome="failed",
+                failure_kind=error.failure_kind,
+                retry_after_seconds=error.retry_after_seconds,
+            )
         except BrowserSourceUnavailable as error:
             dependencies.logger.warning("KORAIL login prewarm unavailable at stage=%s", error.stage)
             return KorailLoginVerifyResult(outcome="failed")

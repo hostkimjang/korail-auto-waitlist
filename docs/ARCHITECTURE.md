@@ -136,6 +136,14 @@ Redis는 작업 큐, 짧은 캐시, 중복 실행 방지 잠금과 호출 제한
 
 기능이 구현되어 있고 운영자가 필요한 설정을 모두 켠 경우에만 사용할 수 있습니다. 설정이나 근거가 부족하면 해당 기능을 사용할 수 없도록 막습니다.
 
+KORAIL 로그인 DOM 드라이버는 입력과 화면 전이를, `pydoll/login_submission.py`는 정상 제출 요청의
+완료 판정을, `login_submission_context.py`는 임시 CDP callback의 생명주기를 맡습니다. 요청 식별자만
+메모리에 보관하고 동적 주소·본문·쿠키는 저장하지 않습니다. 단일 제출의 완료 전에는 추가 인증 확인을
+보내지 않으며, 실제 제출 뒤 실패와 자체 관측 준비 실패를 구분합니다. 내부 로그인 확인 응답의
+`failure_kind=provider_submission_failed`·`retry_after_seconds`는 provider 중립 계약으로 전달돼
+같은 계정 generation의 300~900초 재시도 간격에 사용됩니다. 실제 제출되지 않은 로컬 장애의 빠른 복구와
+명시적인 자격증명 거절·보호 응답의 기존 제한은 각각 유지합니다.
+
 provider 기능 표면의 transport 계약은 `provider_registry/contracts.py`의 `ProviderCapabilities`가 canonical
 owner입니다. 공통 provider protocol·adapter와 registry application·HTTP는 이 leaf contract를 직접 사용하고,
 중앙 `schemas.py`와 top-level `providers.py`는 기존 import·pickle 호환을 위한 같은 class 객체의 exact alias만

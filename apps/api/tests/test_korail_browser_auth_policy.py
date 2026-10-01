@@ -221,6 +221,20 @@ def test_code_owned_login_failure_maps_without_backend_detail(outcome: str) -> N
     projected = policy.project_login_verification_failure(outcome)
 
     assert projected.outcome is ProviderLoginVerificationOutcome(outcome)
+    assert projected.failure_kind is None
+    assert projected.retry_after_seconds is None
+
+
+def test_official_submission_failure_metadata_survives_projection() -> None:
+    result = KorailLoginVerifyResult(
+        outcome="failed", failure_kind="provider_submission_failed", retry_after_seconds=300
+    )
+
+    projected = policy.project_login_verification_result(result)
+
+    assert projected.outcome is ProviderLoginVerificationOutcome.FAILED
+    assert projected.failure_kind == "provider_submission_failed"
+    assert projected.retry_after_seconds == 300
 
 
 @pytest.mark.parametrize(

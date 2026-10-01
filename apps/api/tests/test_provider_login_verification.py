@@ -87,7 +87,53 @@ async def test_srt_login_failure_is_not_retried():
     result = await verifier.verify(Provider.SRT, credentials)
 
     assert result.outcome is ProviderLoginVerificationOutcome.AUTH_REQUIRED
+    assert result.failure_kind is None
+    assert result.retry_after_seconds is None
     assert srt.verify_calls == [credentials]
+
+
+@pytest.mark.parametrize("retry_after_seconds", [300, 600, 900])
+def test_remote_submission_failure_preserves_failed_outcome(retry_after_seconds: int) -> None:
+    result = ProviderLoginVerification(
+        ProviderLoginVerificationOutcome.FAILED,
+        failure_kind="provider_submission_failed",
+        retry_after_seconds=retry_after_seconds,
+    )
+    assert result.authenticated is False
+    assert result.retry_after_seconds == retry_after_seconds
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"retry_after_seconds": 300},
+        {"failure_kind": "provider_submission_failed"},
+        {"failure_kind": "unknown", "retry_after_seconds": 300},
+        {"failure_kind": "provider_submission_failed", "retry_after_seconds": True},
+        {"failure_kind": "provider_submission_failed", "retry_after_seconds": 300.0},
+        {"failure_kind": "provider_submission_failed", "retry_after_seconds": 299},
+        {"failure_kind": "provider_submission_failed", "retry_after_seconds": 901},
+    ],
+)
+def test_submission_failure_metadata_rejects_invalid_contract(metadata) -> None:
+    with pytest.raises(ValueError):
+        ProviderLoginVerification(ProviderLoginVerificationOutcome.FAILED, **metadata)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ProviderLoginVerificationOutcome.AUTHENTICATED,
+        ProviderLoginVerificationOutcome.AUTH_REQUIRED,
+        ProviderLoginVerificationOutcome.PROVIDER_BLOCKED,
+        ProviderLoginVerificationOutcome.INVALID_IDENTIFIER,
+    ],
+)
+def test_submission_failure_metadata_cannot_label_a_credential_verdict(outcome) -> None:
+    with pytest.raises(ValueError):
+        ProviderLoginVerification(
+            outcome, failure_kind="provider_submission_failed", retry_after_seconds=300
+        )
 
 
 @pytest.mark.parametrize(

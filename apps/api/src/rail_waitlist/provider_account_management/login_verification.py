@@ -31,6 +31,21 @@ class ProviderLoginVerificationOutcome(StrEnum):
 @dataclass(frozen=True)
 class ProviderLoginVerification:
     outcome: ProviderLoginVerificationOutcome
+    failure_kind: _typing.Literal["provider_submission_failed"] | None = None
+    retry_after_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.failure_kind is None:
+            if self.retry_after_seconds is not None:
+                raise ValueError("login retry requires a submission failure")
+            return
+        if (
+            self.failure_kind != "provider_submission_failed"
+            or self.outcome is not ProviderLoginVerificationOutcome.FAILED
+            or type(self.retry_after_seconds) is not int
+            or not 300 <= self.retry_after_seconds <= 900
+        ):
+            raise ValueError("submission failure requires a failed outcome and retry interval")
 
     @property
     def authenticated(self) -> bool:

@@ -65,6 +65,17 @@ class KorailLoginVerifyRequest(_InternalModel):
 
 class KorailLoginVerifyResult(_InternalModel):
     outcome: KorailLoginVerificationOutcomeValue
+    failure_kind: Literal["provider_submission_failed"] | None = None
+    retry_after_seconds: int | None = Field(default=None, strict=True, ge=300, le=900)
+
+    @model_validator(mode="after")
+    def validate_submission_failure(self) -> KorailLoginVerifyResult:
+        if self.failure_kind is None:
+            if self.retry_after_seconds is not None:
+                raise ValueError("login retry requires a submission failure")
+        elif self.outcome != "failed" or self.retry_after_seconds is None:
+            raise ValueError("submission failure requires a failed outcome and retry interval")
+        return self
 
 
 class KorailSessionStateResult(_InternalModel):

@@ -62,9 +62,8 @@ class ProviderRuntimePrewarmRegistry:
     LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS = 5.0
     LOCAL_FAILURE_MAX_BACKOFF_SECONDS = 60.0
     AUTH_RECOVERY_MAX_ATTEMPTS = 5
-    # Outcomes that never reached the provider's credential check. They describe this
-    # deployment's own adapter or database, so retrying them quickly cannot lock an
-    # account out and is the only way a stranded session recovers on its own.
+    # These outcomes do not establish a credential verdict. A failed official submission
+    # has its own slower retry policy; an adapter/database failure can recover quickly.
     LOCAL_FAILURE_OUTCOMES = frozenset({"failed", "not_checked"})
 
     outcomes: dict[Provider, RailProviderAuthStatus] = field(default_factory=dict)
@@ -74,6 +73,8 @@ class ProviderRuntimePrewarmRegistry:
     )
     prewarm_in_flight: set[Provider] = field(default_factory=set)
     prewarm_retry_state: dict[Provider, tuple[int, int, float]] = field(default_factory=dict)
+    # provider -> (credential generation, minimum official-submission retry interval)
+    provider_submission_failures: dict[Provider, tuple[int, int]] = field(default_factory=dict)
     completed: bool = False
 
     def outcome_for(self, provider: Provider) -> RailProviderAuthStatus | None:
@@ -161,9 +162,14 @@ class ProviderRuntimePrewarmRegistry:
 
         if provider in self.prewarm_in_flight:
             return False
+        submission_failure = self.provider_submission_failures.get(provider)
+        if submission_failure is not None and submission_failure[0] != credential_version:
+            self.provider_submission_failures.pop(provider, None)
+            self.prewarm_retry_state.pop(provider, None)
+            submission_failure = None
         retry = self.prewarm_retry_state.get(provider)
         if (
-            not bypass_backoff
+            (not bypass_backoff or submission_failure is not None)
             and retry is not None
             and retry[0] == credential_version
             and now < retry[2]
@@ -171,6 +177,28 @@ class ProviderRuntimePrewarmRegistry:
             return False
         self.prewarm_in_flight.add(provider)
         return True
+
+    def record_submission_failure(
+        self,
+        provider: Provider,
+        credential_version: int,
+        *,
+        retry_after_seconds: int | None,
+    ) -> None:
+        """Keep remote failure pacing separate from local outages and other providers."""
+
+        previous = self.provider_submission_failures.get(provider)
+        if provider is not Provider.KORAIL or retry_after_seconds is None:
+            self.provider_submission_failures.pop(provider, None)
+            if previous is not None:
+                self.prewarm_retry_state.pop(provider, None)
+            return
+        if type(retry_after_seconds) is not int or not 300 <= retry_after_seconds <= 900:
+            raise ValueError("invalid submission retry interval")
+        if previous is None or previous[0] != credential_version:
+            # A preceding local outage must not advance the remote failure sequence.
+            self.prewarm_retry_state.pop(provider, None)
+        self.provider_submission_failures[provider] = (credential_version, retry_after_seconds)
 
     def backoff_seconds(self, outcome: RailProviderAuthStatus, failure_count: int) -> float:
         """Separate a provider's credential verdict from this deployment's own outage."""
@@ -198,21 +226,39 @@ class ProviderRuntimePrewarmRegistry:
         self.prewarm_in_flight.discard(provider)
         if outcome == "authenticated":
             self.prewarm_retry_state.pop(provider, None)
+            self.provider_submission_failures.pop(provider, None)
             return
         if outcome is not None:
+            if outcome != "failed":
+                self.record_submission_failure(
+                    provider, credential_version, retry_after_seconds=None
+                )
             previous = self.prewarm_retry_state.get(provider)
             failure_count = (
                 previous[1] + 1 if previous is not None and previous[0] == credential_version else 1
             )
+            submission_failure = self.provider_submission_failures.get(provider)
+            if (
+                outcome == "failed"
+                and submission_failure is not None
+                and submission_failure[0] == credential_version
+            ):
+                delay = min(
+                    submission_failure[1] * float(2 ** min(failure_count - 1, 2)),
+                    self.PREWARM_MAX_BACKOFF_SECONDS,
+                )
+            else:
+                delay = self.backoff_seconds(outcome, failure_count)
             self.prewarm_retry_state[provider] = (
                 credential_version,
                 failure_count,
-                now + self.backoff_seconds(outcome, failure_count),
+                now + delay,
             )
 
     def forget_provider(self, provider: Provider) -> None:
         self.prewarm_in_flight.discard(provider)
         self.prewarm_retry_state.pop(provider, None)
+        self.provider_submission_failures.pop(provider, None)
         self.auth_revision_attempts.pop(provider, None)
 
 
@@ -270,11 +316,23 @@ async def _prewarm_account(
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 -- provider exception text may contain secrets.
+        registry.record_submission_failure(
+            provider, credentials.credential_version, retry_after_seconds=None
+        )
         registry.outcomes[provider] = "failed"
         LOGGER.warning("Provider runtime prewarm failed provider=%s", provider.value)
         return "failed"
 
     outcome = _account_status(verification.outcome)
+    registry.record_submission_failure(
+        provider,
+        credentials.credential_version,
+        retry_after_seconds=(
+            verification.retry_after_seconds
+            if verification.failure_kind == "provider_submission_failed"
+            else None
+        ),
+    )
     if verification.outcome is ProviderLoginVerificationOutcome.AUTHENTICATED:
         try:
             async with session_factory() as session:
@@ -332,6 +390,9 @@ async def _restore_authenticated_account(
     provider = account_runtime.provider
     credentials = account_runtime.credentials
     outcome: RailProviderAuthStatus = "not_checked"
+    registry.record_submission_failure(
+        provider, credentials.credential_version, retry_after_seconds=None
+    )
     try:
         async with session_factory() as session:
             account = await update_provider_auth_status(
@@ -435,6 +496,17 @@ async def recover_provider_sessions_once(
             registry.forget_provider(provider)
             continue
 
+        submission_failure = registry.provider_submission_failures.get(provider)
+        if (
+            submission_failure is not None
+            and submission_failure[0] != account_runtime.credentials.credential_version
+        ):
+            registry.record_submission_failure(
+                provider,
+                account_runtime.credentials.credential_version,
+                retry_after_seconds=None,
+            )
+
         recoverable = account_runtime.auth_status in RECOVERABLE_PROVIDER_AUTH_STATUSES
         revision = account_runtime.recovery_revision
         recovery_started = registry.auth_revision_started_count(revision)
@@ -519,6 +591,8 @@ async def recover_provider_sessions_once(
                 )
             ):
                 registry.outcomes[provider] = "authenticated"
+                registry.prewarm_retry_state.pop(provider, None)
+                registry.provider_submission_failures.pop(provider, None)
                 continue
 
         credential_version = account_runtime.credentials.credential_version

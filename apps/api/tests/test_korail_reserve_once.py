@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
@@ -39,6 +40,51 @@ from rail_waitlist.korail_pydoll_browser import (
 )
 from rail_waitlist.korail_search_bootstrap import KorailStationIdentity
 from rail_waitlist.korail_sidecar.contracts import KorailReserveOnceRequest
+from rail_waitlist.korail_sidecar.pydoll.login_submission import PydollLoginSubmission
+
+
+def install_completed_login_submission(session: _PydollSession) -> None:
+    """Give DOM-only/loginCheck fixtures an explicit completed UI submission."""
+
+    class CompletedSubmission(PydollLoginSubmission):
+        def arm(self) -> None:
+            super().arm()
+            self.on_request_will_be_sent(
+                {
+                    "params": {
+                        "requestId": "fixture-login",
+                        "type": "XHR",
+                        "request": {
+                            "method": "POST",
+                            "url": "https://www.korail.com/fixture-login",
+                        },
+                    }
+                }
+            )
+            self.on_response_received(
+                {
+                    "params": {
+                        "requestId": "fixture-login",
+                        "type": "XHR",
+                        "response": {"status": 200, "url": "https://www.korail.com/fixture-login"},
+                    }
+                }
+            )
+            self.on_loading_finished({"params": {"requestId": "fixture-login"}})
+
+    submission = CompletedSubmission(session._timeout_seconds)
+    submission.arm()
+    session._login_driver._submission = submission
+
+    @asynccontextmanager
+    async def observe() -> AsyncIterator[PydollLoginSubmission]:
+        owner = CompletedSubmission(session._timeout_seconds)
+        try:
+            yield owner
+        finally:
+            owner.close()
+
+    session._login_driver._observe_submission = observe
 
 
 class FakeElement:
@@ -1256,6 +1302,7 @@ async def test_session_selects_login_method_and_uses_one_scoped_login_button(
     identity_selector: str,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     method_tab = FakeElement(login_method.value)
     login_id = FakeElement("")
     password = FakeElement("")
@@ -1321,6 +1368,7 @@ async def test_login_submit_waits_for_method_tab_to_render_then_clicks_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     method_tab = FakeElement("membership_number")
     login_id = FakeElement("")
     password = FakeElement("")
@@ -1358,6 +1406,7 @@ async def test_login_submit_fails_closed_when_method_tab_never_becomes_unique(
     tab_count: int,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 50, True)
+    install_completed_login_submission(session)
     method_tabs = [FakeElement("membership_number") for _ in range(tab_count)]
 
     async def visible(selector: str, *, scope: object = None) -> list[FakeElement]:
@@ -1382,6 +1431,7 @@ async def test_session_in_place_login_submits_once_without_navigation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     method_tab = FakeElement("membership_number")
     login_id = FakeElement("")
     password = FakeElement("")
@@ -1438,6 +1488,7 @@ async def test_session_rejects_transient_logout_that_does_not_persist_on_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     method_tab = FakeElement("phone")
     login_id = FakeElement("")
     password = FakeElement("")
@@ -1495,6 +1546,7 @@ async def test_session_accepts_official_session_before_login_header_hydrates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     method_tab = FakeElement("phone")
     login_id = FakeElement("")
     password = FakeElement("")
@@ -1600,6 +1652,7 @@ async def test_login_wait_continues_dom_confirmation_after_uncertain_official_pr
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 400, True)
+    install_completed_login_submission(session)
     header_ready = False
 
     async def has_authenticated_header() -> bool:
@@ -1648,6 +1701,7 @@ async def test_login_wait_propagates_explicit_official_probe_protection(
     error: Exception,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 400, True)
+    install_completed_login_submission(session)
     monkeypatch.setattr(
         session,
         "_snapshot",
@@ -1789,6 +1843,7 @@ async def test_login_wait_classifies_network_protection_before_polling(
     expected_exception: type[Exception],
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     monkeypatch.setattr(
         session,
         "_snapshot",
@@ -1811,6 +1866,7 @@ async def test_login_wait_calls_official_session_check_at_most_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 350, True)
+    install_completed_login_submission(session)
     monkeypatch.setattr(
         session,
         "_snapshot",
@@ -1837,6 +1893,7 @@ async def test_reservation_uses_distinct_pre_route_and_post_submit_session_check
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     attempt = _ReservationAttemptState()
     monkeypatch.setattr(
         session,
@@ -2226,6 +2283,7 @@ async def test_post_submit_auth_keeps_observing_login_url_until_exact_detail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     attempt = _ReservationAttemptState()
     login_snapshot = PydollPageSnapshot(
         "로그인 처리", (), url="https://www.korail.com/ticket/login"
@@ -2268,6 +2326,7 @@ async def test_post_submit_auth_failure_keeps_login_route_auth_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 350, True)
+    install_completed_login_submission(session)
     attempt = _ReservationAttemptState()
     monkeypatch.setattr(
         session,
@@ -2327,6 +2386,7 @@ async def test_session_fails_closed_when_selected_login_form_does_not_match(
     mismatched_identity_selector: str,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     method_tab = FakeElement(login_method.value)
     mismatched_id = FakeElement("")
     password = FakeElement("")
@@ -2366,6 +2426,7 @@ async def test_session_maps_login_browser_errors_to_a_safe_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    install_completed_login_submission(session)
     session._tab = SimpleNamespace(go_to=AsyncMock(side_effect=RuntimeError("opaque")))
     monkeypatch.setattr(session, "_has_exact_visible", AsyncMock(return_value=False))
 

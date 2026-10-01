@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib as _contextlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from ..browser_contracts import (
     BrowserRateLimited,
     BrowserSourceUnavailable,
 )
+from ..browser_service_availability import BrowserProviderUnavailable as _BrowserProviderUnavailable
+from . import login_submission as _submission_owner
 from .auth_contracts import KorailCredentialInput, KorailLoginMethod
 from .page_contracts import PydollPageSnapshot
 
@@ -145,6 +148,9 @@ class PydollLoginDomDriver:
         monotonic: Callable[[], float],
         sleep: Callable[[float], Awaitable[None]],
         event_logger: logging.Logger,
+        observe_submission: Callable[
+            [], _contextlib.AbstractAsyncContextManager[_submission_owner.PydollLoginSubmission]
+        ],
     ) -> None:
         self._port = port
         self._page_url = page_url
@@ -161,8 +167,19 @@ class PydollLoginDomDriver:
         self._monotonic = monotonic
         self._sleep = sleep
         self._event_logger = event_logger
+        self._observe_submission = observe_submission
+        self._submission_context: (
+            _contextlib.AbstractAsyncContextManager[_submission_owner.PydollLoginSubmission] | None
+        ) = None
+        self._submission: _submission_owner.PydollLoginSubmission | None = None
 
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
+        try:
+            return await self._ensure_authenticated(credential)
+        finally:
+            await self.close_submission_observer()
+
+    async def _ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         attempt = _LocalLoginAttemptState()
         if await self._port._login_step(
             "login_session_probe",
@@ -180,9 +197,20 @@ class PydollLoginDomDriver:
             return False
         if not await self._port._wait_for_login_authentication(attempt):
             return False
+        await self.close_submission_observer()
         return await self._port._confirm_authenticated_search(attempt)
 
     async def authenticate_in_place(
+        self,
+        credential: KorailCredentialInput,
+        attempt: LoginAttemptState | None = None,
+    ) -> bool:
+        try:
+            return await self._authenticate_in_place(credential, attempt)
+        finally:
+            await self.close_submission_observer()
+
+    async def _authenticate_in_place(
         self,
         credential: KorailCredentialInput,
         attempt: LoginAttemptState | None = None,
@@ -222,8 +250,25 @@ class PydollLoginDomDriver:
             "login_password_input",
             password.type_text(credential.password),
         )
-        await self._port._login_step("login_submit", submit.click())
+        await self.close_submission_observer()
+        context = self._observe_submission()
+        submission = await self._port._login_step("login_response", context.__aenter__())
+        self._submission_context = context
+        self._submission = submission
+        try:
+            submission.arm()
+            await self._port._login_step("login_submit", submit.click())
+        except BaseException:
+            await self.close_submission_observer()
+            raise
         return True
+
+    async def close_submission_observer(self) -> None:
+        context = self._submission_context
+        self._submission_context = None
+        self._submission = None
+        if context is not None:
+            await context.__aexit__(None, None, None)
 
     async def wait_for_login_authentication(
         self,
@@ -232,28 +277,51 @@ class PydollLoginDomDriver:
         submitted_at = self._monotonic()
         deadline = submitted_at + self._timeout_seconds
         attempt = attempt or _LocalLoginAttemptState()
-        session_probe_delay = min(0.25, self._timeout_seconds / 4)
+        official_session_unavailable = False
         while self._monotonic() < deadline:
-            snapshot = await self._port._login_step("login_result_snapshot", self._snapshot())
-            self._response_safety_guard(snapshot, "authenticate")
-            authenticated_header = await self._port._login_step(
+            snapshot = await self._observed_login_step("login_result_snapshot", self._snapshot())
+            submission = self._submission.snapshot() if self._submission is not None else None
+            try:
+                self._response_safety_guard(snapshot, "authenticate")
+            except _BrowserProviderUnavailable as error:
+                if (
+                    submission is not None
+                    and submission.state == "failed"
+                    and submission.status is not None
+                    and 500 <= submission.status <= 599
+                    and error.trigger == "business_server_error"
+                ):
+                    raise self._login_response_failure(submission) from None
+                raise
+            if submission is None:
+                raise BrowserSourceUnavailable("login_response")
+            if submission.status == 429:
+                raise BrowserRateLimited()
+            if submission.status == 403:
+                raise BrowserProtectionDetected(stage="login_response")
+            if submission.state in {"failed", "ambiguous"}:
+                raise self._login_response_failure(submission)
+            if not submission.safe_to_probe:
+                await self._sleep(0.1)
+                continue
+            authenticated_header = await self._observed_login_step(
                 "login_result_header",
                 self._port._has_authenticated_header(),
             )
             if authenticated_header:
                 self._event_logger.info("KORAIL login session marker stage=login_page present=true")
                 return True
-            elapsed = self._monotonic() - submitted_at
-            if not attempt.post_submit_check_attempted and elapsed >= session_probe_delay:
+            if not attempt.post_submit_check_attempted:
                 attempt.post_submit_check_attempted = True
                 try:
                     attempt.post_submit_authenticated = bool(
-                        await self._port._login_step(
+                        await self._observed_login_step(
                             "login_page_session_check",
                             self._port._probe_official_authenticated_session(),
                         )
                     )
                 except BrowserSourceUnavailable:
+                    official_session_unavailable = True
                     # A 200 HTML/invalid loginCheck response cannot attest either login
                     # state. Continue bounded DOM polling after a submitted credential;
                     # explicit protection and rate-limit classifications still propagate.
@@ -270,7 +338,51 @@ class PydollLoginDomDriver:
                     return True
             await self._sleep(0.1)
         self._event_logger.info("KORAIL login session marker stage=login_page present=false")
+        submission = self._submission.snapshot() if self._submission is not None else None
+        if (
+            submission is None
+            or not submission.safe_to_probe
+            or not attempt.post_submit_check_attempted
+        ):
+            raise self._login_response_failure(submission)
+        if not attempt.post_submit_authenticated:
+            # An unavailable probe does not establish a rejected credential.
+            # Explicit negative results are recorded separately below.
+            if official_session_unavailable:
+                raise self._login_response_failure(submission)
         return False
+
+    @staticmethod
+    def _login_response_failure(
+        submission: _submission_owner.LoginSubmissionSnapshot | None,
+    ) -> BrowserSourceUnavailable:
+        if (
+            submission is not None
+            and submission.state != "missing"
+            and submission.failure != "missing"
+        ):
+            return _submission_owner.PydollLoginResponseUnavailable()
+        return BrowserSourceUnavailable("login_response")
+
+    async def _observed_login_step(self, stage: str, awaitable: Awaitable[Any]) -> Any:
+        try:
+            return await self._port._login_step(stage, awaitable)
+        except _BrowserProviderUnavailable:
+            raise
+        except BrowserSourceUnavailable:
+            submission = self._submission.snapshot() if self._submission is not None else None
+            if (
+                submission is None
+                or submission.state == "missing"
+                or submission.failure == "missing"
+            ):
+                raise
+            if submission.status == 429:
+                raise BrowserRateLimited() from None
+            if submission.status == 403:
+                raise BrowserProtectionDetected(stage="login_response") from None
+            # A failed DOM read after dispatch cannot authorize a fresh credential POST.
+            raise self._login_response_failure(submission) from None
 
     async def confirm_authenticated_search(self, attempt: LoginAttemptState) -> bool:
         await self._port._login_step(

@@ -36,6 +36,7 @@ from .korail_sidecar.http_replay import (
 )
 from .korail_sidecar.pydoll import dom_interaction as _dom_interaction_owner
 from .korail_sidecar.pydoll import live_dom as _live_dom_owner
+from .korail_sidecar.pydoll import login_submission_context as _login_submission_context_owner
 from .korail_sidecar.pydoll import network_evidence as _network_evidence_owner
 from .korail_sidecar.pydoll import search_hour_carousel_input as _search_hour_carousel_input_owner
 from .korail_sidecar.pydoll import (
@@ -651,6 +652,9 @@ class _PydollSession:
     _network_response_evidence = staticmethod(
         _network_evidence_owner.pydoll_network_response_evidence
     )
+    _observe_login_submission_context = staticmethod(
+        _login_submission_context_owner.observe_login_submission
+    )
     _swipe_hour_carousel_input = staticmethod(_search_hour_carousel_input_owner.swipe_hour_carousel)
     _navigate_hour_carousel_by_keyboard_input = staticmethod(
         _search_hour_carousel_input_owner.navigate_hour_carousel_by_keyboard
@@ -736,6 +740,11 @@ class _PydollSession:
             monotonic=time.monotonic,
             sleep=asyncio.sleep,
             event_logger=logger,
+            observe_submission=lambda: self._observe_login_submission_context(
+                self._tab,
+                self._timeout_seconds,
+                event_logger=logger,
+            ),
         )
         self._reservation_driver = PydollReservationDomDriver(
             port=self,
@@ -852,7 +861,10 @@ class _PydollSession:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        await self._chromium_lifecycle.close(raise_on_failure=exc_type is None)
+        try:
+            await self._login_driver.close_submission_observer()
+        finally:
+            await self._chromium_lifecycle.close(raise_on_failure=exc_type is None)
 
     async def open(self) -> PydollPageSnapshot:
         # A warm browser keeps only the ordinary in-memory Chromium session.  Every
@@ -964,6 +976,7 @@ class _PydollSession:
         return last
 
     async def _replace_tab(self) -> None:
+        await self._login_driver.close_submission_observer()
         await self._chromium_lifecycle.replace_tab()
 
     async def _attach_network_listener(self, tab: Any) -> tuple[int, bool]:
@@ -1422,7 +1435,10 @@ class _PydollSession:
         return max(1, self.timeout_ms / 1000)
 
     async def _close(self) -> None:
-        await self._chromium_lifecycle.close()
+        try:
+            await self._login_driver.close_submission_observer()
+        finally:
+            await self._chromium_lifecycle.close()
 
     def _on_response_received(self, event: dict[str, Any]) -> None:
         """Retain only sanitized status/resource evidence from the current browser search."""
@@ -1482,6 +1498,7 @@ def _has_exact_route_markers(body: str, origin: str, destination: str) -> bool:
 
 del _dom_interaction_owner
 del _live_dom_owner
+del _login_submission_context_owner
 del _network_evidence_owner
 del _search_hour_carousel_input_owner
 del _search_hour_carousel_observation_owner

@@ -31,9 +31,12 @@ class StubRuntimeVerifier:
     prewarm_calls: list[tuple[Provider, int]] = field(default_factory=list)
     outcomes: dict[Provider, ProviderLoginVerificationOutcome] = field(default_factory=dict)
     snapshots: dict[Provider, ProviderSessionRuntimeSnapshot] = field(default_factory=dict)
+    verifications: dict[Provider, ProviderLoginVerification] = field(default_factory=dict)
 
     async def prewarm(self, provider, credentials):
         self.prewarm_calls.append((provider, credentials.credential_version))
+        if provider in self.verifications:
+            return self.verifications[provider]
         outcome = self.outcomes.get(
             provider,
             ProviderLoginVerificationOutcome.AUTHENTICATED,
@@ -812,6 +815,120 @@ async def test_local_failure_backoff_recovers_faster_than_a_provider_verdict(app
     assert retry_not_before - asyncio.get_running_loop().time() <= (
         ProviderRuntimePrewarmRegistry.LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS
     )
+
+
+async def test_official_post_failure_waits_without_spending_credential_verdict_budget(app) -> None:
+    await _seed_account(app, auth_status="auth_required")
+    verifier = StubRuntimeVerifier(
+        verifications={
+            Provider.KORAIL: ProviderLoginVerification(
+                ProviderLoginVerificationOutcome.FAILED,
+                failure_kind="provider_submission_failed",
+                retry_after_seconds=300,
+            )
+        },
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+    assert registry.outcome_for(Provider.KORAIL) == "failed"
+    assert registry.provider_submission_failures == {Provider.KORAIL: (9, 300)}
+    retry = registry.prewarm_retry_state[Provider.KORAIL]
+    assert 299 <= retry[2] - asyncio.get_running_loop().time() <= 300
+    assert registry.auth_revision_attempts[Provider.KORAIL][1:] == (1, 0)
+
+    # A newly persisted auth-required revision normally gets an immediate attempt.
+    # The same-generation official POST failure must retain its provider retry deadline.
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
+        )
+        account.updated_at = datetime.now(UTC)
+        await session.commit()
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9)]
+
+    # An unreachable local adapter after the deadline gets the fast local schedule.
+    _clear_backoff(registry)
+    verifier.verifications.clear()
+    verifier.outcomes[Provider.KORAIL] = ProviderLoginVerificationOutcome.FAILED
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+    assert registry.provider_submission_failures == {}
+    generation, count, deadline = registry.prewarm_retry_state[Provider.KORAIL]
+    assert (generation, count) == (9, 1)
+    assert 4 <= deadline - asyncio.get_running_loop().time() <= 5
+
+
+def test_submission_failure_backoff_is_bounded_and_cannot_be_bypassed() -> None:
+    registry = ProviderRuntimePrewarmRegistry()
+    now = 1000.0
+    for count, delay in enumerate((300.0, 600.0, 900.0, 900.0), start=1):
+        assert registry.begin_prewarm(Provider.KORAIL, 4, now=now)
+        registry.record_submission_failure(Provider.KORAIL, 4, retry_after_seconds=300)
+        registry.finish_prewarm(Provider.KORAIL, 4, outcome="failed", now=now)
+        assert registry.prewarm_retry_state[Provider.KORAIL] == (4, count, now + delay)
+        assert not registry.begin_prewarm(
+            Provider.KORAIL, 4, now=now + delay - 1, bypass_backoff=True
+        )
+        now += delay
+
+    assert registry.begin_prewarm(Provider.KORAIL, 5, now=now - 1)
+    assert registry.provider_submission_failures == {}
+    registry.finish_prewarm(Provider.KORAIL, 5, outcome="failed", now=now)
+    assert registry.prewarm_retry_state[Provider.KORAIL] == (5, 1, now + 5)
+
+
+def test_long_official_submission_outage_keeps_the_retry_ceiling() -> None:
+    registry = ProviderRuntimePrewarmRegistry()
+    registry.record_submission_failure(Provider.KORAIL, 4, retry_after_seconds=300)
+    registry.prewarm_retry_state[Provider.KORAIL] = (4, 100_000, 1000)
+
+    registry.finish_prewarm(Provider.KORAIL, 4, outcome="failed", now=1000)
+
+    assert registry.prewarm_retry_state[Provider.KORAIL] == (4, 100_001, 1900)
+
+
+@pytest.mark.parametrize("cleanup", ["success", "forget", "local_failure", "provider_verdict"])
+def test_submission_failure_metadata_is_cleared_on_state_change(cleanup: str) -> None:
+    registry = ProviderRuntimePrewarmRegistry()
+    registry.record_submission_failure(Provider.KORAIL, 4, retry_after_seconds=300)
+    registry.finish_prewarm(Provider.KORAIL, 4, outcome="failed", now=1000)
+    if cleanup == "forget":
+        registry.forget_provider(Provider.KORAIL)
+    elif cleanup == "local_failure":
+        registry.record_submission_failure(Provider.KORAIL, 4, retry_after_seconds=None)
+        registry.finish_prewarm(Provider.KORAIL, 4, outcome="failed", now=1000)
+        assert registry.prewarm_retry_state[Provider.KORAIL] == (4, 1, 1005)
+    else:
+        registry.finish_prewarm(
+            Provider.KORAIL,
+            4,
+            outcome="authenticated" if cleanup == "success" else "auth_required",
+            now=1000,
+        )
+    assert registry.provider_submission_failures == {}
+
+
+def test_korail_submission_failure_does_not_change_srt_or_local_retry_policy() -> None:
+    registry = ProviderRuntimePrewarmRegistry()
+    registry.finish_prewarm(Provider.KORAIL, 4, outcome="failed", now=1000)
+    registry.record_submission_failure(Provider.KORAIL, 4, retry_after_seconds=300)
+    registry.finish_prewarm(Provider.KORAIL, 4, outcome="failed", now=1005)
+    assert registry.prewarm_retry_state[Provider.KORAIL] == (4, 1, 1305)
+    registry.record_submission_failure(Provider.SRT, 4, retry_after_seconds=300)
+    registry.finish_prewarm(Provider.SRT, 4, outcome="failed", now=1000)
+    assert registry.prewarm_retry_state[Provider.SRT] == (4, 1, 1005)
+    assert registry.provider_submission_failures == {Provider.KORAIL: (4, 300)}
 
 
 async def test_auth_required_recovery_stops_after_the_bounded_attempt_budget(app) -> None:

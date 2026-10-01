@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import logging
 from datetime import date
 from pathlib import Path
@@ -288,12 +289,12 @@ async def test_search_driver_resolves_station_helpers_after_construction(
     )
     trigger = _ClickControl()
     target = _ClickControl()
-    dialog = object()
+    dialog = SimpleNamespace(text=asyncio.sleep(0, result="기차역 조회"))
     find_exact = AsyncMock(side_effect=[trigger, target])
-    wait_for_dialog = AsyncMock(return_value=dialog)
+    visible_elements = AsyncMock(return_value=[dialog])
     wait_for_value = AsyncMock()
     monkeypatch.setattr(session, "_find_exact_visible", find_exact)
-    monkeypatch.setattr(session, "_wait_for_dialog", wait_for_dialog)
+    monkeypatch.setattr(session, "_visible_elements", visible_elements)
     monkeypatch.setattr(session, "_wait_for_value", wait_for_value)
     monkeypatch.setattr(session, "_snapshot", AsyncMock(return_value=PydollPageSnapshot("", ())))
     session._tab = SimpleNamespace(
@@ -307,7 +308,7 @@ async def test_search_driver_resolves_station_helpers_after_construction(
     assert find_exact.await_args_list[0].args == ("a", "출발역 선택")
     assert find_exact.await_args_list[1].args == ("a", "대전")
     assert find_exact.await_args_list[1].kwargs == {"scope": dialog}
-    wait_for_dialog.assert_awaited_once_with("기차역 조회")
+    visible_elements.assert_awaited_once_with("[role='dialog']")
     wait_for_value.assert_awaited_once_with("input[name='txtGoStart']", "대전")
 
 

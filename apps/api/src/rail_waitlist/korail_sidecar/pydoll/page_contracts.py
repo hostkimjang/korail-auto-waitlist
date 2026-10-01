@@ -54,6 +54,7 @@ class PydollReservationListSnapshot:
     stable_observation: bool = False
     protection_detected: bool = False
     network_responses: tuple[tuple[int, str], ...] = ()
+    empty_response_provenance: Literal["not_observed", "official_response"] = "not_observed"
 
     def __post_init__(self) -> None:
         if not isinstance(self.url, str) or len(self.url) > 2048:
@@ -66,6 +67,10 @@ class PydollReservationListSnapshot:
             raise ValueError("reservation-list counts must account for every rendered card")
         if self.explicit_empty_visible and self.rendered_card_count:
             raise ValueError("reservation-list empty state cannot contain rendered cards")
+        if self.empty_response_provenance not in {"not_observed", "official_response"}:
+            raise ValueError("reservation-list empty response provenance is invalid")
+        if self.empty_response_provenance == "official_response" and self.rendered_card_count:
+            raise ValueError("reservation-list empty response cannot contain rendered cards")
         if any(
             not isinstance(flag, bool)
             for flag in (
@@ -83,7 +88,11 @@ class PydollReservationListSnapshot:
         return (
             self.page_marker_visible
             and not self.loading_visible
-            and (self.explicit_empty_visible or self.rendered_card_count > 0)
+            and (
+                self.explicit_empty_visible
+                or self.empty_response_provenance == "official_response"
+                or self.rendered_card_count > 0
+            )
         )
 
     @property
@@ -94,6 +103,7 @@ class PydollReservationListSnapshot:
     def render_complete(self) -> bool:
         return self.page_ready and (
             self.explicit_empty_visible
+            or self.empty_response_provenance == "official_response"
             or (
                 self.rendered_card_count > 0
                 and self.malformed_card_count == 0
@@ -113,6 +123,21 @@ class PydollReservationListSnapshot:
             stable_observation=True,
             protection_detected=self.protection_detected,
             network_responses=self.network_responses,
+            empty_response_provenance=self.empty_response_provenance,
+        )
+
+    def with_official_empty_response(self) -> PydollReservationListSnapshot:
+        return PydollReservationListSnapshot(
+            url=self.url,
+            reservation_rows=self.reservation_rows,
+            rendered_card_count=self.rendered_card_count,
+            malformed_card_count=self.malformed_card_count,
+            page_marker_visible=self.page_marker_visible,
+            explicit_empty_visible=self.explicit_empty_visible,
+            loading_visible=self.loading_visible,
+            protection_detected=self.protection_detected,
+            network_responses=self.network_responses,
+            empty_response_provenance="official_response",
         )
 
 

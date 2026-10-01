@@ -211,7 +211,6 @@ IMPLEMENTATION_ISLANDS = {
         "open",
         "navigate",
         "navigate_fresh",
-        "read_reservation_list",
         "read_issued_ticket_list",
         "export_http_replay_plan",
     },
@@ -219,6 +218,7 @@ IMPLEMENTATION_ISLANDS = {
 }
 STATIC_OWNER_HOOKS = {
     "_login_submission_context_owner": {"observe_login_submission"},
+    "_reservation_list_response_owner": {"read_reservation_list"},
     "_dom_interaction_owner": {
         "click_exact_text",
         "evaluate_text",

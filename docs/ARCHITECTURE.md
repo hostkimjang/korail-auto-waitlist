@@ -170,7 +170,10 @@ v1.2.3부터 공지 제목·본문·이미지 대체 텍스트에 의존하지 �
 단일 `창닫기/닫기` 버튼을 검증합니다. 검색 driver는 공개 검색 폼과 결과 목록 확장 전에 공지를 닫고
 최신 snapshot을 읽습니다. 재사용 브라우저에서 결과보다 늦게 뜨는 안내도 처리하도록 각 `더보기` 클릭
 직전에 현재 modal을 다시 관측합니다. v1.2.7부터 첫 화면이 열린 뒤 늦게 나타나는 공지도 역 선택
-직전에 현재 snapshot으로 관측합니다. 처리 전후 보호·오류 판정을 통과한 뒤 역 버튼을 한 번 클릭합니다.
+직전에 현재 snapshot으로 관측합니다. v1.2.8은 첫 역 클릭 뒤에 나타난 공지도 역 검색창 대기 중
+관측합니다. 검증된 공지를 닫고 검색창이 아직 없음을 재확인한 경우에만 역 버튼을 한 번 더 누릅니다.
+이미 검색창이 열렸거나 단순 시간 초과·불확실 닫기·보호·업무 오류이면 재클릭하지 않습니다.
+조회 제출은 반복하지 않습니다.
 겹친 창은 실제 닫기 위치의 hit test로 누를 수 있는 창을 찾고,
 긴 공지는 닫기 버튼까지 스크롤합니다. DOM identity와 콘텐츠 fingerprint를 메모리에서만 사용해 창당
 한 번 닫으며 새 공지가 같은 modal에 교체돼도 구분합니다. 한 호출은 최대 5개·5초이며 체크박스는
@@ -803,6 +806,15 @@ Pydoll의 인증된 같은 세션에서 예약 상세를 먼저 읽고, 근거�
 module-global monkeypatch seam을 유지합니다. top-level `korail_pydoll_confirmation_reader.py`는 기존 공개 22개와
 비공개 13개 심볼을 같은 객체로 노출하는 assignment-only compatibility facade이며, 기존 import·wildcard·pickle
 global은 canonical owner로 복원됩니다.
+
+현재 공식 미결제 목록은 정상 빈 배열과 요청 실패를 같은 빈 화면으로 표시할 수 있습니다.
+`korail_sidecar/pydoll/reservation_list_response.py`는 현재 목록 화면이 자연스럽게 보낸 공식 GET의
+완료 응답만 읽는 owner입니다. 현재 main frame·새 문서 loader·목록 경로·단일 요청을 연결한 뒤,
+정상 성공 JSON의 `jrny_infos.jrny_info` 빈 배열만 닫힌 `official_response` 근거로 남깁니다.
+요청 주소·인증 자료·응답 본문은 snapshot에 저장하지 않으며 별도 목록 요청을 만들지 않습니다.
+이 근거도 목록 제목, 로딩 없음, 카드·변형 카드 0개와 연속 두 번 안정된 DOM 확인이 함께 있어야
+목록 조회 완료로 수용합니다. 인증 만료, HTTP 오류, 중복·불완전·이전 문서 응답은 빈 목록이 아닙니다.
+이는 목록 완료 판독의 보완이며, 기존 UNKNOWN의 좌석 상관 조건이나 예약 재제출 fence를 바꾸지 않습니다.
 
 Pydoll 검색이 읽기 전용 browser session에서 캡처한 HTTP replay plan을 route별로 임대·재사용·폐기하는
 process-local manager는 `korail_sidecar/pydoll/http_replay.py`가 canonical owner입니다. 이 owner는 exact

@@ -127,7 +127,7 @@
 - [x] KORAIL Pydoll credential-bound 인증 session actor canonical owner 이동과 secret-free fingerprint·TTL/횟수·취소 안전 cleanup·legacy exact facade 보존
 - [x] 활성 철도 계정의 시작 예열과 30초 sanitized telemetry 점검, 동일 generation `READY` 생략·120초 전 bounded 재예열, KORAIL 인증 JSON positive-only probe·최초 로그인 DOM fallback·keepalive fail-closed, 403/429 보호 유지, 60~900초 backoff와 auth revision fence 계약
 - [x] KORAIL 세션 확인의 실제 `text/html` JSON 응답을 지원하고 본문·필드·기존 성공 조건을 검증하며, HTML 오류·잘못된 JSON·403·429·5xx를 성공과 구분하는 회귀
-- [x] 첫 화면 관측 뒤 늦게 나타나는 공식 검색 공지도 역 선택 직전에 구조를 다시 확인해 처리하고, 처리 전후 보호·오류를 검사하며 역 버튼 클릭은 한 번만 진행하는 회귀
+- [x] 첫 화면 이후·첫 역 클릭 직후의 공식 검색 공지를 구조로 확인하고, 검증된 닫기 뒤 검색창 부재가 재확인된 경우에만 역 버튼을 한 번 추가 클릭하는 회귀. 불확실 닫기·단순 시간 초과·보호·업무 오류에는 재클릭하지 않고 조회 제출은 반복하지 않음
 - [x] KORAIL 인증 session 재사용 TTL을 `last_verified_at` 절대 기준으로 고정하고 검색·예약·실패의 `last_used_at` 갱신으로 연장하지 않는 계약
 - [x] 재사용 KORAIL session의 예약 직전 공식 probe, 로그아웃·source 불가 session 선폐기와 fresh 로그인 정확히 1회, 새 인증 실패의 click 전 중단, 보호·rate-limit·취소 시 무복구, click 뒤 불명확 session 폐기·동일 session 신규 예약 차단·fresh read-only reconciliation 계약
 - [x] 현재 adapter가 명시적으로 반환한 pre-dispatch `FAILED/provider_unavailable`만 수동 공식 확인에서 제외하고, 웹이 `예약 요청`·`공식 결과 확인`을 합성하지 않는 진실한 실패 표시, 기존 외부 provider의 모호한 동일 행은 `0040_legacy_failed_unknown`으로 `UNKNOWN`·즉시 재확인에 보수 정규화
@@ -142,6 +142,7 @@
 - [x] KORAIL Pydoll 더보기의 누적 반복 window 중단·최신 snapshot envelope 보존·page-safety 차단 판정 단일화
 - [x] KORAIL Pydoll Chromium launch·tab/listener·cleanup lifecycle owner 분리와 optional import·취소 중 cleanup 보존
 - [x] KORAIL Pydoll 동일 세션 예약 확인 read-only 정책 owner 분리와 기존 import·pickle 호환 facade 보존
+- [x] 현재 미결제 목록의 자연 발생 공식 GET 완료·정상 빈 배열과 안정된 DOM을 함께 검증하는 판독. 실제 오류·인증 만료·중복·미완료 응답을 빈 화면 문구로도 부재 처리하지 않는 회귀와 기존 UNKNOWN fence 보존
 - [x] KORAIL Pydoll HTTP replay route lease·TTL·횟수·LRU·cleanup manager owner 분리와 로그·pickle 호환 보존
 - [x] KORAIL Pydoll browser를 concrete client/session composition shell로 동결하고 HTTP의 canonical contract 직행·정책 재유입 금지 고정
 - [x] KORAIL browser 검색 결과의 primary timetable·batch exact overlay·좌석 순수 projection 기능 owner 분리
@@ -288,7 +289,8 @@
 - [x] v1.2.6 서버·로컬 전체 프로필 config 검사·빌드·강제 재생성, 양쪽 장기 서비스 12개 `healthy`·migration/log-init 종료 코드 0·readyz 200·변경 Python 9개 hash·웹 버전 일치 확인. 로컬 실제 조회 12편·공식 좌석 24개와 114편 일반실 예약 가능을 확인하고 진행·예약·큐 0건 뒤 전체 중지. 서버 공식 검색 500·열차 0개와 양쪽 로그인 제출 실패가 남고 기존 `UNKNOWN` 4건·재제출 차단 4건·새 예약 0건임을 구분해 기록
 - [x] v1.2.6 서버 재기동 뒤 첫 두 로그인 제출 실패 종료 로그가 10:56:49→11:01:58 KST로 약 309초 간격임을 확인. 종료 시각을 실제 제출 시작이나 정확한 registry deadline으로 보고하지 않음
 - [ ] 실제 운영 표본에서 반복 실패의 600~900초 대기와 callback 누수 없는 장시간 실행을 확인. 정확한 예열 대기 잔여 시간은 현재 관리자 API·로그에 노출되지 않음
-- [ ] 현재 일반 코레일+ 앱·평소 브라우저의 같은 계정 로그인 결과와 비교해 로그인 POST 500의 운영사 내부 원인을 확인하고, 실제 인증·공식 예약 내역 읽기·자동 예약까지 다시 검증. 서버 IP나 비밀번호 문제로 확정하지 않음
+- [x] v1.2.8 서버·로컬 전체 이미지 빌드·컨테이너 재생성, 자료 서비스와 두 adapter health·migration 및 log-init 종료 0, API·KORAIL adapter 관련 소스 12개 일치·화면 버전·HTTP 200을 확인. 자동 로그인 없는 최신 로컬 조회에서 12개 열차·공식 좌석 상태 24개를 읽었으며 검증 뒤 로컬 전체를 중지. 서버 동일 조회는 공식 업무 XHR HTTP 500으로 실패했고 기존 UNKNOWN 4건의 차단과 새 예약 0건을 보존
+- [ ] 저장된 계정과 성공한 수동 로그인 계정의 동일 여부 및 진단 연결 없는 직접 조회 결과를 확인하고, 서버 로그인·실제 조회·공식 예약 내역·승인된 자동 예약을 다시 검증. 현재 서버는 웹·API 등 6개 서비스만 실행하고 자동 계정 호출은 중지했으며, 최신 전체 장기 서비스 12개 동시 health·상시 감시 복구도 미완료. 서버 IP나 비밀번호 문제로 확정하지 않음
 - [ ] 코레일이 공지 modal·content·닫기 버튼 구조 자체를 변경할 때 구조 미확인 상태로 중단하고 닫힌 진단만 남는지 자연 발생 표본에서 확인. 내용 갱신만으로 재설정을 요구하지 않음
 - [ ] 배포 뒤 여러 날의 Chrome 프로세스 수와 로그인한 사용자 브라우저의 접속 대기 상태 표시를 확인. 배포 직후 읽기 조회 1건 뒤 sidecar는 약 700MiB·116개 작업 단위였음
 - [ ] 출발 시각이 지난 활성 대기가 `provider_unavailable` 오류를 반복하지 않고 경과 상태로 정리되는지 확인. 2026년 9월 17일 19시 표본에서 이미 출발한 KTX 60 특실 1건이 잔여 오류를 전부 차지했음

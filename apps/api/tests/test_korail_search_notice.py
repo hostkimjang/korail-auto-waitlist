@@ -81,7 +81,7 @@ async def test_late_notice_closes_before_station_control_dispatch(
     close = SimpleNamespace(click=AsyncMock(side_effect=lambda: events.append("notice_close")))
     trigger = SimpleNamespace(click=AsyncMock(side_effect=lambda: events.append("station_open")))
     target = SimpleNamespace(click=AsyncMock(side_effect=lambda: events.append("station_select")))
-    dialog = object()
+    dialog = SimpleNamespace(text=asyncio.sleep(0, result="기차역 조회"))
     session._tab = SimpleNamespace(
         execute_script=AsyncMock(
             side_effect=[
@@ -92,13 +92,14 @@ async def test_late_notice_closes_before_station_control_dispatch(
         )
     )
     snapshots = AsyncMock(return_value=ready)
-    controls = AsyncMock(return_value=[close])
+    controls = AsyncMock(
+        side_effect=lambda selector: [dialog] if selector == "[role='dialog']" else [close]
+    )
     finder = AsyncMock(side_effect=[trigger, target])
     readback = AsyncMock()
     monkeypatch.setattr(session, "_snapshot", snapshots)
     monkeypatch.setattr(session, "_visible_elements", controls)
     monkeypatch.setattr(session, "_find_exact_visible", finder)
-    monkeypatch.setattr(session, "_wait_for_dialog", AsyncMock(return_value=dialog))
     monkeypatch.setattr(session, "_wait_for_value", readback)
 
     await session.choose_station(kind, station)
@@ -107,8 +108,11 @@ async def test_late_notice_closes_before_station_control_dispatch(
     close.click.assert_awaited_once()
     trigger.click.assert_awaited_once()
     target.click.assert_awaited_once()
-    controls.assert_awaited_once_with(CLOSE_SELECTOR)
-    assert snapshots.await_count == 2
+    assert [call.args[0] for call in controls.await_args_list] == [
+        CLOSE_SELECTOR,
+        "[role='dialog']",
+    ]
+    assert snapshots.await_count == 3
     assert finder.await_args_list[0].args == ("a", trigger_label)
     readback.assert_awaited_once_with(f"input[name='{input_name}']", station)
     assert session._submitted is False
@@ -204,6 +208,143 @@ async def test_station_selection_rechecks_page_block_after_notice_closed(monkeyp
 
     close.click.assert_awaited_once()
     finder.assert_not_awaited()
+    assert session._submitted is False
+
+
+class _StationDialog:
+    @property
+    async def text(self):
+        return "기차역 조회"
+
+
+def station_notice_race(monkeypatch, *, outcome="retry", network=None):
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    state = {"surface": "none", "clicks": 0, "clock": 0.0}
+    events = []
+    dialog = _StationDialog()
+
+    async def click_trigger():
+        state["clicks"] += 1
+        events.append("station_open")
+        if state["clicks"] == 1:
+            state["surface"] = "none" if outcome == "no_notice" else "notice"
+        else:
+            state["surface"] = "notice_again" if outcome == "second_notice" else "station"
+
+    async def close_notice():
+        events.append("notice_close")
+        if outcome == "uncertain_close":
+            raise RuntimeError("fixture dispatch outcome unknown")
+        state["surface"] = "station" if outcome == "opened_during_close" else "none"
+
+    async def execute(script, *, return_by_value):
+        assert script == OBSERVE_NOTICE_SCRIPT and return_by_value
+        surface = state["surface"]
+        if surface in {"notice", "notice_again"}:
+            if outcome == "unrecognized":
+                return script_result("unrecognized")
+            return script_result("public_search_notice", key=f"{state['clicks']}:abc")
+        return script_result("absent")
+
+    trigger = SimpleNamespace(click=AsyncMock(side_effect=click_trigger))
+    close = SimpleNamespace(click=AsyncMock(side_effect=close_notice))
+    target = SimpleNamespace(click=AsyncMock(side_effect=lambda: events.append("station_select")))
+
+    async def visible(selector, *, scope=None):
+        assert scope is None
+        if selector == CLOSE_SELECTOR:
+            return [close]
+        assert selector == "[role='dialog']"
+        return [dialog] if state["surface"] == "station" else []
+
+    async def find(selector, text, *, scope=None):
+        assert selector == "a"
+        if scope is None:
+            assert text == "출발역 선택"
+            return trigger
+        assert scope is dialog and text == "대전"
+        return target
+
+    async def snapshot():
+        failures = (network,) if network and state["clicks"] else ()
+        return PydollPageSnapshot("열차 조회", (), network_responses=failures)
+
+    async def sleep(seconds):
+        state["clock"] += seconds
+
+    session._tab = SimpleNamespace(execute_script=AsyncMock(side_effect=execute))
+    monkeypatch.setattr(session, "_visible_elements", AsyncMock(side_effect=visible))
+    monkeypatch.setattr(session, "_find_exact_visible", AsyncMock(side_effect=find))
+    monkeypatch.setattr(session, "_snapshot", AsyncMock(side_effect=snapshot))
+    monkeypatch.setattr(session, "_wait_for_value", AsyncMock())
+    session._search_driver._monotonic = lambda: state["clock"]
+    session._search_driver._sleep = sleep
+    return session, events, trigger, close, target
+
+
+@pytest.mark.parametrize("outcome", ["retry", "opened_during_close"])
+async def test_notice_arriving_after_station_click_is_resolved_without_duplicate_selection(
+    monkeypatch, outcome
+):
+    session, events, trigger, close, target = station_notice_race(monkeypatch, outcome=outcome)
+
+    await session.choose_station("departure", "대전")
+
+    expected = ["station_open", "notice_close"]
+    if outcome == "retry":
+        expected.append("station_open")
+    assert events == expected + ["station_select"]
+    assert trigger.click.await_count == (2 if outcome == "retry" else 1)
+    close.click.assert_awaited_once()
+    target.click.assert_awaited_once()
+    session._wait_for_value.assert_awaited_once_with("input[name='txtGoStart']", "대전")
+    assert session._submitted is False
+
+
+@pytest.mark.parametrize(
+    ("outcome", "stage", "trigger_count", "close_count"),
+    [
+        ("no_notice", "dialog", 1, 0),
+        ("unrecognized", "search_notice_unrecognized", 1, 0),
+        ("uncertain_close", "search_notice_close_unknown", 1, 1),
+        ("second_notice", "station_notice_action_limit", 2, 2),
+    ],
+)
+async def test_station_click_is_repeated_only_once_after_verified_notice(
+    monkeypatch, outcome, stage, trigger_count, close_count
+):
+    session, _, trigger, close, target = station_notice_race(monkeypatch, outcome=outcome)
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await session.choose_station("departure", "대전")
+
+    assert raised.value.stage == stage
+    assert trigger.click.await_count == trigger_count
+    assert close.click.await_count == close_count
+    target.click.assert_not_awaited()
+    session._wait_for_value.assert_not_awaited()
+    assert session._submitted is False
+
+
+@pytest.mark.parametrize(
+    ("network", "exception_type"),
+    [
+        ((403, "document"), BrowserProtectionDetected),
+        ((429, "fetch"), BrowserRateLimited),
+        ((500, "business_xhr"), BrowserProviderUnavailable),
+    ],
+)
+async def test_station_wait_block_preempts_late_notice_and_trigger_retry(
+    monkeypatch, network, exception_type
+):
+    session, _, trigger, close, target = station_notice_race(monkeypatch, network=network)
+
+    with pytest.raises(exception_type):
+        await session.choose_station("departure", "대전")
+
+    trigger.click.assert_awaited_once()
+    close.click.assert_not_awaited()
+    target.click.assert_not_awaited()
     assert session._submitted is False
 
 

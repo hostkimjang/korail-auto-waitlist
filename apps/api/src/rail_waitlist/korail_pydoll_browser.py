@@ -38,6 +38,7 @@ from .korail_sidecar.pydoll import dom_interaction as _dom_interaction_owner
 from .korail_sidecar.pydoll import live_dom as _live_dom_owner
 from .korail_sidecar.pydoll import login_submission_context as _login_submission_context_owner
 from .korail_sidecar.pydoll import network_evidence as _network_evidence_owner
+from .korail_sidecar.pydoll import reservation_list_response as _reservation_list_response_owner
 from .korail_sidecar.pydoll import search_hour_carousel_input as _search_hour_carousel_input_owner
 from .korail_sidecar.pydoll import (
     search_hour_carousel_observation as _search_hour_carousel_observation_owner,
@@ -655,6 +656,9 @@ class _PydollSession:
     _observe_login_submission_context = staticmethod(
         _login_submission_context_owner.observe_login_submission
     )
+    _read_reservation_list_response = staticmethod(
+        _reservation_list_response_owner.read_reservation_list
+    )
     _swipe_hour_carousel_input = staticmethod(_search_hour_carousel_input_owner.swipe_hour_carousel)
     _navigate_hour_carousel_by_keyboard_input = staticmethod(
         _search_hour_carousel_input_owner.navigate_hour_carousel_by_keyboard
@@ -929,26 +933,14 @@ class _PydollSession:
         """Open the official list without selecting rows or clicking actions."""
 
         self._network_responses.clear()
-        await self._tab.go_to(
-            _KORAIL_RESERVATION_LIST_URL,
-            timeout=max(1, self.timeout_ms // 1000),
+        return await self._read_reservation_list_response(
+            tab=self._tab,
+            current_tab=lambda: self._tab,
+            navigate=self._tab.go_to,
+            snapshot=self._search_driver.reservation_list_snapshot,
+            timeout_seconds=min(self._timeout_seconds, 10),
+            navigation_timeout_seconds=self._timeout_seconds,
         )
-        deadline = time.monotonic() + min(self._timeout_seconds, 10)
-        last = await self._search_driver.reservation_list_snapshot()
-        stable_complete: PydollReservationListSnapshot | None = None
-        while time.monotonic() < deadline:
-            path = urlsplit(last.url).path.rstrip("/")
-            if path == "/ticket/login" or last.protection_detected:
-                return last
-            if path == "/ticket/reservation/list" and last.render_complete:
-                if stable_complete == last:
-                    return last.with_stable_observation()
-                stable_complete = last
-            else:
-                stable_complete = None
-            await asyncio.sleep(0.2)
-            last = await self._search_driver.reservation_list_snapshot()
-        return last
 
     async def read_issued_ticket_list(self) -> PydollIssuedTicketListSnapshot:
         """Open MyTicket and return secret-free issued-ticket summaries only."""
@@ -1500,6 +1492,7 @@ del _dom_interaction_owner
 del _live_dom_owner
 del _login_submission_context_owner
 del _network_evidence_owner
+del _reservation_list_response_owner
 del _search_hour_carousel_input_owner
 del _search_hour_carousel_observation_owner
 del _search_hour_policy_owner

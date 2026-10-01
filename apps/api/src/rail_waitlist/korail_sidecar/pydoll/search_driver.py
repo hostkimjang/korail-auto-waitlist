@@ -291,7 +291,7 @@ class PydollSearchDomDriver:
         station_triggers = {"departure": "출발역 선택", "arrival": "도착역 선택"}
         trigger = await self._port._find_exact_visible("a", station_triggers[kind])
         await trigger.click()
-        dialog = await self._port._wait_for_dialog("기차역 조회")
+        dialog = await self._wait_for_station_dialog(station_triggers[kind])
         try:
             target = await self._port._find_exact_visible("a", station, scope=dialog)
         except LookupError:
@@ -308,6 +308,43 @@ class PydollSearchDomDriver:
             target = await self._port._wait_for_exact_text("a", station, scope=dialog)
         await target.click()
         await self._port._wait_for_value(f"input[name='{station_names[kind]}']", station)
+
+    async def _wait_for_station_dialog(self, trigger_label: str) -> Any:
+        deadline = self._monotonic() + self._timeout_seconds
+        retried_after_notice = False
+        while self._monotonic() < deadline:
+            snapshot = await self._port._snapshot()
+            _assert_pydoll_response_allowed(snapshot, "choose_station", event_logger=logger)
+            dialogs = await self._port._visible_elements("[role='dialog']")
+            station_dialogs = [dialog for dialog in dialogs if "기차역 조회" in await dialog.text]
+            if station_dialogs:
+                if len(dialogs) != 1 or len(station_dialogs) != 1:
+                    raise BrowserSourceUnavailable("station_dialog_ambiguous")
+                return station_dialogs[0]
+            closed = await dismiss_public_search_notices(
+                execute_script=self._execute_script,
+                find_controls=lambda selector: self._port._visible_elements(selector),
+                monotonic=self._monotonic,
+                sleep=self._sleep,
+                timeout_seconds=self._timeout_seconds,
+            )
+            if closed:
+                snapshot = await self._port._snapshot()
+                _assert_pydoll_response_allowed(snapshot, "choose_station", event_logger=logger)
+                # A click may have opened the station dialog behind the announcement.
+                # Inspect again after verified dismissal before considering another click.
+                dialogs = await self._port._visible_elements("[role='dialog']")
+                if any(["기차역 조회" in await dialog.text for dialog in dialogs]):
+                    continue
+                if dialogs:
+                    raise BrowserSourceUnavailable("search_notice_unrecognized")
+                if retried_after_notice:
+                    raise BrowserSourceUnavailable("station_notice_action_limit")
+                retried_after_notice = True
+                trigger = await self._port._find_exact_visible("a", trigger_label)
+                await trigger.click()
+            await self._sleep(0.1)
+        raise BrowserSourceUnavailable("dialog")
 
     async def choose_schedule(self, travel_date: date, departure_hour: int) -> None:
         applied_date, applied_hour = await self._port.current_schedule()

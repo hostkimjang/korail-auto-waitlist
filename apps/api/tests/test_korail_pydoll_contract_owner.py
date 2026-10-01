@@ -309,6 +309,7 @@ def test_production_consumers_import_exact_canonical_contract_owners() -> None:
             "korail_sidecar/pydoll/reservation_driver.py",
             "korail_sidecar/pydoll/search_actor.py",
             "korail_sidecar/pydoll/search_driver.py",
+            "korail_sidecar/pydoll/reservation_list_response.py",
         },
         "korail_sidecar.pydoll.auth_contracts": {
             "korail_sidecar/http.py",

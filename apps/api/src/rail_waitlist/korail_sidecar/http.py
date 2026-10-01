@@ -873,7 +873,11 @@ def create_adapter_app(
         except PydollLoginResponseUnavailable as error:
             response.headers["Retry-After"] = str(error.retry_after_seconds)
             dependencies.logger.warning(
-                "KORAIL login submission unavailable at stage=%s", error.stage
+                "KORAIL login submission unavailable at stage=%s state=%s failure=%s status=%s",
+                error.stage,
+                error.submission_state or "not_observed",
+                error.submission_failure or "none",
+                error.submission_status if error.submission_status is not None else "none",
             )
             return KorailLoginVerifyResult(
                 outcome="failed",
@@ -935,7 +939,11 @@ def create_adapter_app(
         except PydollLoginResponseUnavailable as error:
             response.headers["Retry-After"] = str(error.retry_after_seconds)
             dependencies.logger.warning(
-                "KORAIL login submission unavailable at stage=%s", error.stage
+                "KORAIL login submission unavailable at stage=%s state=%s failure=%s status=%s",
+                error.stage,
+                error.submission_state or "not_observed",
+                error.submission_failure or "none",
+                error.submission_status if error.submission_status is not None else "none",
             )
             return KorailLoginVerifyResult(
                 outcome="failed",

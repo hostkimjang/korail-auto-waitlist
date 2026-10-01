@@ -4,7 +4,10 @@ from dataclasses import dataclass
 
 import pytest
 
-from rail_waitlist.korail_sidecar.pydoll.login_submission import PydollLoginSubmission
+from rail_waitlist.korail_sidecar.pydoll.login_submission import (
+    PydollLoginResponseUnavailable,
+    PydollLoginSubmission,
+)
 
 
 @dataclass
@@ -82,6 +85,45 @@ def test_http_failure_cannot_become_success_and_preserves_protection_status(stat
     snapshot = owner.snapshot()
     assert (snapshot.state, snapshot.status, snapshot.failure) == ("failed", status, "http_error")
     assert snapshot.safe_to_probe is False
+
+
+def test_failure_exception_keeps_only_closed_submission_diagnostics() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    event = {
+        "params": {
+            "requestId": "login-1",
+            "type": "XHR",
+            "request": {
+                "method": "POST",
+                "url": "https://www.korail.com/fixture-sensitive-path?fixture-query",
+                "postData": "fixture-password",
+            },
+        }
+    }
+    owner.on_request_will_be_sent(event)
+    owner.on_response_received(response(500))
+    error = PydollLoginResponseUnavailable(owner.snapshot())
+    assert (error.submission_state, error.submission_failure, error.submission_status) == (
+        "failed",
+        "http_error",
+        500,
+    )
+    assert error.stage == "login_response"
+    assert error.retry_after_seconds == 300
+    diagnostic = repr(vars(error)) + str(error)
+    for private_value in ("fixture-sensitive-path", "fixture-query", "fixture-password", "login-1"):
+        assert private_value not in diagnostic
+
+
+def test_failure_exception_without_observation_preserves_legacy_constructor() -> None:
+    error = PydollLoginResponseUnavailable()
+    assert error.submission_state is None
+    assert error.submission_status is None
+    assert error.submission_failure is None
+    assert error.stage == "login_response"
+    assert error.failure_kind == "provider_submission_failed"
+    assert error.retry_after_seconds == 300
 
 
 @pytest.mark.parametrize("with_headers", [False, True])

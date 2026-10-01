@@ -79,6 +79,13 @@ interface UseTimetableSearchOptions<TTrain extends TimetableTrainSnapshot> {
   mapTimetable: (item: unknown) => TTrain;
 }
 
+interface TimetableProgressObservation {
+  queryForm: TimetableSearchForm;
+  loadProgress: ((form: TimetableRequestForm) => Promise<TimetableProgress>) | undefined;
+  enabled: boolean;
+  progress: TimetableProgress;
+}
+
 export interface TimetableSearchController<TTrain extends TimetableTrainSnapshot> {
   trains: TTrain[];
   state: TimetableSearchState;
@@ -157,7 +164,6 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
   mapTimetable,
 }: UseTimetableSearchOptions<TTrain>): TimetableSearchController<TTrain> {
   const [trains, setTrains] = useState<TTrain[]>([]);
-  const [korailProgress, setKorailProgress] = useState<TimetableProgress>({ state: "idle" });
   const [state, setState] = useState<TimetableSearchState>({
     loadingProviders: [],
     providerResults: {},
@@ -189,6 +195,30 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
   ]);
   const queryKey = buildTimetableQueryKey(queryForm);
   const queryKeyRef = useRef(queryKey);
+  const korailLoading = state.loadingProviders.includes("KORAIL");
+  const progressEnabled = active && !demo && korailLoading && loadProgress !== undefined;
+  const [progressObservation, setProgressObservation] = useState<TimetableProgressObservation>({
+    queryForm,
+    loadProgress,
+    enabled: progressEnabled,
+    progress: { state: "idle" },
+  });
+  const progressContextChanged = progressObservation.queryForm !== queryForm
+    || progressObservation.loadProgress !== loadProgress
+    || progressObservation.enabled !== progressEnabled;
+  // Queue observations belong to one polling lifetime. Reset before committing a
+  // changed query or a new retry so the old queue never appears in that search.
+  if (progressContextChanged) {
+    setProgressObservation({
+      queryForm,
+      loadProgress,
+      enabled: progressEnabled,
+      progress: { state: "idle" },
+    });
+  }
+  const korailProgress: TimetableProgress = !progressEnabled || progressContextChanged
+    ? { state: "idle" }
+    : progressObservation.progress;
 
   useLayoutEffect(() => {
     queryKeyRef.current = queryKey;
@@ -243,18 +273,16 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
     };
   }, [active, demo, filterTimetables, loadDemoTimetables, loadTimetables, queryForm, queryKey]);
 
-  const korailLoading = state.loadingProviders.includes("KORAIL");
   useEffect(() => {
-    if (!active || demo || !korailLoading || !loadProgress) {
-      setKorailProgress({ state: "idle" });
-      return undefined;
-    }
+    if (!progressEnabled || !loadProgress) return undefined;
     let current = true;
     const requestedQueryKey = queryKey;
     const requestedForm = requestForm(queryForm);
     const poll = (): void => {
       void loadProgress(requestedForm).then((progress) => {
-        if (current && queryKeyRef.current === requestedQueryKey) setKorailProgress(progress);
+        if (current && queryKeyRef.current === requestedQueryKey) {
+          setProgressObservation({ queryForm, loadProgress, enabled: true, progress });
+        }
       }).catch(() => {
         // A failed status poll does not erase the last observed official queue state.
       });
@@ -265,9 +293,8 @@ export function useTimetableSearch<TTrain extends TimetableTrainSnapshot>({
       current = false;
       window.clearTimeout(initial);
       window.clearInterval(interval);
-      setKorailProgress({ state: "idle" });
     };
-  }, [active, demo, korailLoading, loadProgress, queryForm, queryKey]);
+  }, [loadProgress, progressEnabled, queryForm, queryKey]);
 
   const retryProvider = useCallback(async (provider: RailProvider): Promise<void> => {
     const requestedQueryKey = queryKeyRef.current;

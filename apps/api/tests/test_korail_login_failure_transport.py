@@ -7,18 +7,22 @@ from pydantic import ValidationError
 from rail_waitlist.korail_browser_adapter_service import create_adapter_app
 from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
 from rail_waitlist.korail_sidecar.contracts import KorailLoginVerifyResult
-from rail_waitlist.korail_sidecar.pydoll.login_submission import PydollLoginResponseUnavailable
+from rail_waitlist.korail_sidecar.pydoll.login_submission import (
+    LoginSubmissionSnapshot,
+    PydollLoginResponseUnavailable,
+)
 
 TOKEN = "k" * 32
 
 
 class FailedLogin:
-    def __init__(self, submitted: bool) -> None:
+    def __init__(self, submitted: bool, snapshot: LoginSubmissionSnapshot | None = None) -> None:
         self.submitted = submitted
+        self.snapshot = snapshot
 
     async def verify_credentials(self, _credential: object) -> bool:
         if self.submitted:
-            raise PydollLoginResponseUnavailable()
+            raise PydollLoginResponseUnavailable(self.snapshot)
         raise BrowserSourceUnavailable("login_response")
 
     async def prewarm_credentials(self, credential: object) -> bool:
@@ -61,6 +65,63 @@ def test_login_failure_keeps_submission_retry_metadata(path: str, submitted: boo
         assert "retry-after" not in response.headers
     assert "fixture-account" not in response.text
     assert "fixture-password" not in response.text
+
+
+@pytest.mark.parametrize("path", ["/v1/verify-login", "/v1/prewarm-login"])
+@pytest.mark.parametrize(
+    ("snapshot", "diagnostic"),
+    [
+        (None, "state=not_observed failure=none status=none"),
+        (
+            LoginSubmissionSnapshot("failed", 500, "http_error"),
+            "state=failed failure=http_error status=500",
+        ),
+        (
+            LoginSubmissionSnapshot("ambiguous", failure="ambiguous"),
+            "state=ambiguous failure=ambiguous status=none",
+        ),
+        (
+            LoginSubmissionSnapshot("failed", failure="timeout"),
+            "state=failed failure=timeout status=none",
+        ),
+        (
+            LoginSubmissionSnapshot("failed", 200, "network_error"),
+            "state=failed failure=network_error status=200",
+        ),
+    ],
+)
+def test_submission_failure_logs_closed_diagnostics_without_credentials(
+    path: str,
+    snapshot: LoginSubmissionSnapshot | None,
+    diagnostic: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_adapter_app(
+        token=TOKEN, readiness_probe=ready, reservation_client=FailedLogin(True, snapshot)
+    )
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        response = client.post(
+            path,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={
+                "credential": {
+                    "login_id": "fixture-account",
+                    "password": "fixture-password",
+                    "version": "fixture-v1",
+                }
+            },
+        )
+    assert response.json() == {
+        "outcome": "failed",
+        "failure_kind": "provider_submission_failed",
+        "retry_after_seconds": 300,
+    }
+    assert response.headers["retry-after"] == "300"
+    assert f"stage=login_response {diagnostic}" in caplog.text
+    for secret in ("fixture-account", "fixture-password", "fixture-v1", TOKEN):
+        assert secret not in caplog.text
+        assert secret not in response.text
+    assert "state=" not in response.text
 
 
 @pytest.mark.parametrize(

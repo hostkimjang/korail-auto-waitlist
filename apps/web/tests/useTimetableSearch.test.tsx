@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RailProvider } from "../src/api/providerAccounts";
+import type { TimetableProgress } from "../src/api/timetables";
 import type { NewWaitForm } from "../src/features/new-wait/newWaitForm";
 import {
   type TimetableProviderResults,
@@ -106,6 +107,111 @@ describe("useTimetableSearch", () => {
     expect(options.loadProgress).toHaveBeenCalled();
     await act(async () => pending.resolve({ trains: [], providerResults: success("KORAIL", 0) }));
     await waitFor(() => expect(result.current.korailProgress).toEqual({ state: "idle" }));
+  });
+
+  it("discards old queue progress on a query change and starts same-query retries idle", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstLookup = deferred<TimetableSearchResult<TestTrain>>();
+      const secondLookup = deferred<TimetableSearchResult<TestTrain>>();
+      const retryLookup = deferred<TimetableSearchResult<TestTrain>>();
+      const lateProgress = deferred<TimetableProgress>();
+      const baseForm = form({ providers: ["KORAIL"] });
+      const loadTimetables = vi.fn()
+        .mockImplementationOnce(() => firstLookup.promise)
+        .mockImplementationOnce(() => secondLookup.promise)
+        .mockImplementationOnce(() => retryLookup.promise);
+      const loadProgress = vi.fn()
+        .mockResolvedValueOnce({ state: "official_queue", queue: { elapsedWaitSeconds: 360 } })
+        .mockImplementationOnce(() => lateProgress.promise)
+        .mockResolvedValue({ state: "official_queue", queue: { elapsedWaitSeconds: 42 } });
+      const options = { ...hookOptions(baseForm, loadTimetables), loadProgress };
+      const { result, rerender, unmount } = renderHook(
+        ({ currentForm }) => useTimetableSearch({ ...options, form: currentForm }),
+        { initialProps: { currentForm: baseForm } },
+      );
+
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(result.current.korailProgress).toEqual({
+        state: "official_queue", queue: { elapsedWaitSeconds: 360 },
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_500); });
+      expect(loadProgress).toHaveBeenCalledTimes(2);
+
+      rerender({ currentForm: { ...baseForm, time: "09:00", timeEnd: "12:00" } });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      await act(async () => {
+        lateProgress.resolve({ state: "official_queue", queue: { elapsedWaitSeconds: 999 } });
+        await lateProgress.promise;
+      });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(result.current.korailProgress).toEqual({
+        state: "official_queue", queue: { elapsedWaitSeconds: 42 },
+      });
+
+      await act(async () => {
+        secondLookup.resolve({ trains: [], providerResults: success("KORAIL", 0) });
+        await secondLookup.promise;
+      });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      let retry: Promise<void> | undefined;
+      act(() => { retry = result.current.retryProvider("KORAIL"); });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(result.current.korailProgress).toEqual({
+        state: "official_queue", queue: { elapsedWaitSeconds: 42 },
+      });
+      await act(async () => {
+        retryLookup.resolve({ trains: [], providerResults: success("KORAIL", 0) });
+        await retry;
+      });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      expect(loadTimetables).toHaveBeenCalledTimes(3);
+      expect(loadProgress).toHaveBeenCalledTimes(4);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops queue polling while inactive and ignores its pending response", async () => {
+    vi.useFakeTimers();
+    try {
+      const lookup = deferred<TimetableSearchResult<TestTrain>>();
+      const progress = deferred<TimetableProgress>();
+      const loadProgress = vi.fn(() => progress.promise);
+      const options = {
+        ...hookOptions(form({ providers: ["KORAIL"] }), vi.fn(() => lookup.promise)),
+        loadProgress,
+      };
+      const { result, rerender, unmount } = renderHook(
+        ({ active }) => useTimetableSearch({ ...options, active }),
+        { initialProps: { active: true } },
+      );
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(loadProgress).toHaveBeenCalledTimes(1);
+      rerender({ active: false });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      await act(async () => {
+        progress.resolve({ state: "official_queue", queue: { elapsedWaitSeconds: 360 } });
+        await progress.promise;
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      expect(loadProgress).toHaveBeenCalledTimes(1);
+      rerender({ active: true });
+      expect(result.current.korailProgress).toEqual({ state: "idle" });
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(loadProgress).toHaveBeenCalledTimes(2);
+      expect(result.current.korailProgress.state).toBe("official_queue");
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a successful provider result while retrying only the failed provider", async () => {

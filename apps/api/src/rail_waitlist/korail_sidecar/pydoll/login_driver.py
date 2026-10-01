@@ -361,7 +361,7 @@ class PydollLoginDomDriver:
             and submission.state != "missing"
             and submission.failure != "missing"
         ):
-            return _submission_owner.PydollLoginResponseUnavailable()
+            return _submission_owner.PydollLoginResponseUnavailable(submission)
         return BrowserSourceUnavailable("login_response")
 
     async def _observed_login_step(self, stage: str, awaitable: Awaitable[Any]) -> Any:

@@ -25,8 +25,12 @@ class PydollLoginResponseUnavailable(BrowserSourceUnavailable):
     failure_kind: Literal["provider_submission_failed"] = "provider_submission_failed"
     retry_after_seconds: int = 300
 
-    def __init__(self) -> None:
+    def __init__(self, submission: LoginSubmissionSnapshot | None = None) -> None:
         super().__init__("login_response")
+        # Retain only the observer's closed diagnostics, never its request material.
+        self.submission_state = submission.state if submission is not None else None
+        self.submission_status = submission.status if submission is not None else None
+        self.submission_failure = submission.failure if submission is not None else None
 
 
 @dataclass(frozen=True, slots=True)

@@ -358,6 +358,16 @@ async def test_submission_failure_is_source_unavailable_and_never_auth_required(
         assert isinstance(error.value, PydollLoginResponseUnavailable)
         assert error.value.failure_kind == "provider_submission_failed"
         assert error.value.retry_after_seconds == 300
+        diagnostics = {
+            "http_500": ("failed", "http_error", 500),
+            "network": ("failed", "network_error", None),
+            "ambiguous": ("ambiguous", "ambiguous", None),
+        }
+        assert (
+            error.value.submission_state,
+            error.value.submission_failure,
+            error.value.submission_status,
+        ) == diagnostics[failure]
     submit.assert_awaited_once()
     probe.assert_not_awaited()
     assert tab.callbacks == {}

@@ -51,6 +51,12 @@ Docker Compose는 위 서비스를 하나의 배포 단위로 실행합니다. �
 
 화면은 API 응답을 그대로 표시하지 않습니다. 외부 응답을 검증한 뒤 화면에 필요한 형태로 바꾸며, 출처가 불명확한 좌석은 `확인 필요`로 표시합니다.
 
+시간표 검색 hook의 진행 상태는 `queryForm`·`loadProgress`·`enabled` 문맥에 속합니다. 이 문맥이
+바뀌면 조건부 렌더 갱신으로 이전 진행 상태를 초기화하고, 검색이 비활성일 때의 `idle` 표시는 현재
+문맥에서 파생합니다. effect는 진행 타이머와 비동기 조회를 관리하며 cleanup은 타이머와 늦은 응답을
+취소합니다. 진행 갱신 500ms, 3초 지연 안내와 query key의 stale response 차단을 유지하며, 이 진행
+표시 변경으로 실제 공식 요청을 추가하지 않습니다.
+
 UI preference API와 DB는 구버전 호환을 위해 `timetable_refresh_interval_seconds` 1~300초 필드를 계속 읽고 반환하지만, 현행 웹은 이를 사용자 설정이나 런타임 주기로 사용하지 않고 응답 경계에서 유효성만 확인합니다. 중요 상태·예약 SSE와 Push·수동 갱신은 canonical 재조회를 즉시 요청합니다. 반복되는 `watch.seat_observed`도 SSE 수신은 유지하지만 목록 무효화는 다음 내부 고정 5초 복구 조회에 합쳐, 관측 이벤트가 많아도 canonical GET을 5초보다 자주 시작하지 않습니다. 새 대기 3단계도 같은 고정 5초마다 서버의 마지막 정상 query snapshot만 동기화합니다. 설정에는 이를 읽기 전용 `실시간` 상태로 표시하고 초 입력을 노출하지 않습니다. 사용자가 저장하는 전역 좌석 관측 목표는 `observation_interval_seconds` 1~600초 단일 DTO 필드입니다. 좌석 관측의 1초는 scheduler 목표 하한이지 provider I/O의 주기 보장이 아니며, 운영사별 단일 실행 gate, worker 처리량, cache, timeout, 실패 backoff와 보호 cooldown이 우선합니다. 기본 5초는 보호 응답 위험과 freshness 사이의 운영 기본값으로 유지합니다. 브라우저 문서가 숨겨지면 정기 목록 조회와 SSE별 lifecycle snapshot 투영을 생략하고 무효화만 한 건으로 접은 뒤, 다시 보일 때 한 번 최신 목록을 읽습니다. 결제기한 시계와 철도 계정 런타임 조회도 같은 가시성 경계를 지킵니다.
 
 `GET /api/v1/watches`와 명시적인 `view=all`은 기존 전체 이력을 반환합니다. `view=live`는 SQL 조회 단계에서 최근 24시간 안에 갱신된 작업을 상태와 무관하게 남기고, 그보다 오래된 작업은 watch 전체에 exact `CONFIRMED_PAID` 근거가 없으면서 비종단이거나 후보별 최신 예약 시도의 outcome이 수동 확인을 요구할 때만 남깁니다. 따라서 결제 완료 적용 경합으로 `PAUSED`·`AUTH_REQUIRED`·`COOLDOWN`에 보존된 watch도 exact paid 근거가 있으면 24시간 창이 지난 뒤 live 목록에서 제외합니다. `confirmed_absent`로 정확히 해소된 최신 `UNKNOWN`도 수동 확인이 끝난 이력으로 제외하지만, `exhausted_unresolved`는 공식 성공·부재를 확정하지 못했으므로 계속 보존합니다. 선택적인 `status`는 이 조건과 AND로 조합합니다. 웹은 홈·새 대기·설정에서 `view=live`, `내 예약`에서 `view=all`을 사용합니다. 따라서 오래된 일반 만료 이력은 5초 동기화 payload에서 제외하면서 완료·실패·결제보류 종료 같은 최근 종단 전이는 SSE 누락 뒤에도 복구합니다. exact paid 근거가 없는 경우에는 24시간 창이 지나도 만료된 미해소 `UNKNOWN`·`PROVIDER_BLOCKED` 최신 시도를 수동 확인이 끝나지 않은 canonical 상태로 보존합니다.
@@ -143,6 +149,11 @@ KORAIL 로그인 DOM 드라이버는 입력과 화면 전이를, `pydoll/login_s
 `failure_kind=provider_submission_failed`·`retry_after_seconds`는 provider 중립 계약으로 전달돼
 같은 계정 generation의 300~900초 재시도 간격에 사용됩니다. 실제 제출되지 않은 로컬 장애의 빠른 복구와
 명시적인 자격증명 거절·보호 응답의 기존 제한은 각각 유지합니다.
+
+로그인 제출 실패의 내부 진단은 관측 상태(`state`), 닫힌 실패 사유(`failure`), HTTP 상태(`status`)만
+sidecar 로그에 남깁니다. 이 값으로 실제 HTTP 오류, 응답 시간 초과, 여러 공식 POST가 관측된 불확실성을
+구분하며 URL·본문·쿠키·입력값·요청 식별자는 기록하지 않습니다. 공개 API의 실패 응답과 재시도 간격은
+그대로 유지하며, 진단 필드를 추가했다는 사실을 실제 로그인 복구로 해석하지 않습니다.
 
 provider 기능 표면의 transport 계약은 `provider_registry/contracts.py`의 `ProviderCapabilities`가 canonical
 owner입니다. 공통 provider protocol·adapter와 registry application·HTTP는 이 leaf contract를 직접 사용하고,

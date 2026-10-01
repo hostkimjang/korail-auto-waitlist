@@ -295,6 +295,10 @@ async def test_search_driver_resolves_station_helpers_after_construction(
     monkeypatch.setattr(session, "_find_exact_visible", find_exact)
     monkeypatch.setattr(session, "_wait_for_dialog", wait_for_dialog)
     monkeypatch.setattr(session, "_wait_for_value", wait_for_value)
+    monkeypatch.setattr(session, "_snapshot", AsyncMock(return_value=PydollPageSnapshot("", ())))
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(return_value={"result": {"result": {"value": "absent"}}})
+    )
 
     await session.choose_station("departure", "대전")
 

@@ -22,6 +22,7 @@ from .page_contracts import (
     PydollSeatBox,
     PydollTrainRow,
 )
+from .page_safety import assert_pydoll_response_allowed as _assert_pydoll_response_allowed
 from .search_notice import dismiss_public_search_notices
 from .search_snapshot_policy import (
     advance_search_expansion,
@@ -280,6 +281,12 @@ class PydollSearchDomDriver:
         self._protection_surface_selector = protection_surface_selector
 
     async def choose_station(self, kind: str, station: str) -> None:
+        # The public announcement can arrive after open() returned. Observe its
+        # existing shape at this control boundary before dispatching a station click.
+        snapshot = await self._port._snapshot()
+        _assert_pydoll_response_allowed(snapshot, "choose_station", event_logger=logger)
+        snapshot = await self.dismiss_search_notice(snapshot, observe_current=True)
+        _assert_pydoll_response_allowed(snapshot, "choose_station", event_logger=logger)
         station_names = {"departure": "txtGoStart", "arrival": "txtGoEnd"}
         station_triggers = {"departure": "출발역 선택", "arrival": "도착역 선택"}
         trigger = await self._port._find_exact_visible("a", station_triggers[kind])

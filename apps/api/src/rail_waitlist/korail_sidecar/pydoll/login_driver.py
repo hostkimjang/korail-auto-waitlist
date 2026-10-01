@@ -446,11 +446,19 @@ class PydollLoginDomDriver:
                 if (response.status === 403) return { outcome: 'protected' };
                 if (!response.ok) return { outcome: 'source_unavailable' };
                 const contentType = response.headers.get('content-type') || '';
-                if (!contentType.toLowerCase().includes('application/json')) {
+                const mime = contentType.split(';', 1)[0].trim().toLowerCase();
+                // The official endpoint also serves its JSON as text/html.
+                // Status, JSON parsing, and the response shape remain authoritative.
+                if (mime !== 'application/json' && mime !== 'text/html') {
                   return { outcome: 'source_unavailable' };
                 }
                 try {
                   const payload = await response.json();
+                  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+                      || typeof payload.strResult !== 'string'
+                      || (payload.h_msg_cd != null && typeof payload.h_msg_cd !== 'string')) {
+                    return { outcome: 'source_unavailable' };
+                  }
                   return {
                     outcome:
                       payload?.strResult === 'SUCC' && !payload?.h_msg_cd

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
+import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +30,150 @@ from rail_waitlist.korail_sidecar.pydoll import login_submission_context as obse
 from rail_waitlist.korail_sidecar.pydoll.login_driver import login_step
 from rail_waitlist.korail_sidecar.pydoll.login_submission import PydollLoginResponseUnavailable
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapshot
+
+
+@pytest.mark.parametrize(
+    ("status", "mime", "body", "expected", "body_reads"),
+    [
+        (200, "application/json", '{"strResult":"SUCC"}', "authenticated", 1),
+        (200, "text/html; charset=utf-8", '{"strResult":"SUCC"}', "authenticated", 1),
+        (200, " TEXT/HTML ; charset=UTF-8", '{"strResult":"SUCC"}', "authenticated", 1),
+        (200, "text/html", '{"strResult":"SUCC","h_msg_cd":""}', "authenticated", 1),
+        (200, "text/html", '{"strResult":"SUCC","h_msg_cd":null}', "authenticated", 1),
+        (
+            200,
+            "text/html",
+            '{"strResult":"SUCC","h_msg_cd":"WRT300004"}',
+            "logged_out",
+            1,
+        ),
+        (
+            200,
+            "application/json",
+            '{"strResult":"SUCC","h_msg_cd":"WRT300004"}',
+            "logged_out",
+            1,
+        ),
+        (200, "text/html", '{"strResult":"FAIL"}', "logged_out", 1),
+        (200, "text/html", "<html>Temporary error</html>", "source_unavailable", 1),
+        (200, "text/html", '{"strResult":', "source_unavailable", 1),
+        (200, "application/json", '{"strResult":', "source_unavailable", 1),
+        (200, "text/html", "null", "source_unavailable", 1),
+        (200, "text/html", "[]", "source_unavailable", 1),
+        (200, "text/html", '"SUCC"', "source_unavailable", 1),
+        (200, "text/html", "{}", "source_unavailable", 1),
+        (200, "text/html", '{"strResult":1}', "source_unavailable", 1),
+        (200, "text/html", '{"strResult":"SUCC","h_msg_cd":0}', "source_unavailable", 1),
+        (200, "text/html", '{"strResult":"SUCC","h_msg_cd":{}}', "source_unavailable", 1),
+        (200, "text/plain", '{"strResult":"SUCC"}', "source_unavailable", 0),
+        (200, "", '{"strResult":"SUCC"}', "source_unavailable", 0),
+        (200, "text/html-other", '{"strResult":"SUCC"}', "source_unavailable", 0),
+        (429, "text/html", '{"strResult":"SUCC"}', "rate_limited", 0),
+        (403, "text/html", '{"strResult":"SUCC"}', "protected", 0),
+        (500, "text/html", '{"strResult":"SUCC"}', "source_unavailable", 0),
+    ],
+    ids=(
+        "json-authenticated",
+        "official-html-json-authenticated",
+        "mime-case-and-parameters",
+        "empty-message-code-authenticated",
+        "null-message-code-authenticated",
+        "official-html-json-logged-out",
+        "json-logged-out",
+        "explicit-failure",
+        "html-error-page",
+        "invalid-html-json",
+        "invalid-json",
+        "null-payload",
+        "array-payload",
+        "scalar-payload",
+        "missing-result",
+        "non-string-result",
+        "numeric-message-code",
+        "object-message-code",
+        "unsupported-mime",
+        "missing-mime",
+        "mime-prefix-is-not-html",
+        "rate-limit-precedes-body",
+        "protection-precedes-body",
+        "server-error-precedes-body",
+    ),
+)
+@pytest.mark.asyncio
+async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    mime: str,
+    body: str,
+    expected: str,
+    body_reads: int,
+) -> None:
+    """Execute the production browser script with fixture fetch, without network I/O."""
+
+    node = shutil.which("node")
+    if node is None:
+        # make verify-api installs the browser extra, whose pinned Playwright
+        # runtime already includes Node. This regression must not silently skip.
+        from playwright._impl._driver import compute_driver_executable
+
+        node, _ = compute_driver_executable()
+        assert Path(node).is_file(), "The browser verification runtime must include Node.js"
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1000, True)
+    harness = """
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+        const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
+        let calls = 0;
+        let reads = 0;
+        const context = {
+          fetch: async (url, options) => {
+            calls++;
+            if (url !== '/ebizweb/common/loginCheck?Device=BH&Version=999999999'
+                || options.method !== 'GET' || options.credentials !== 'same-origin'
+                || options.cache !== 'no-store') throw new Error('Unexpected probe');
+            return {
+              status: fixture.status,
+              ok: fixture.status >= 200 && fixture.status < 300,
+              headers: { get: name => name === 'content-type' ? fixture.mime : null },
+              json: async () => { reads++; return JSON.parse(fixture.body); },
+            };
+          },
+        };
+        Promise.resolve(vm.runInNewContext(fixture.script, context, { timeout: 1000 }))
+          .then(value => process.stdout.write(JSON.stringify({ value, calls, reads })))
+          .catch(() => { process.exitCode = 1; });
+    """
+    executions: list[str] = []
+
+    async def execute(script: str, **kwargs: object) -> dict[str, object]:
+        assert kwargs == {"return_by_value": True, "await_promise": True, "timeout": 1000}
+        completed = subprocess.run(
+            [node, "-e", harness],
+            input=json.dumps({"script": script, "status": status, "mime": mime, "body": body}),
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=True,
+        )
+        result = json.loads(completed.stdout)
+        assert result == {"value": {"outcome": expected}, "calls": 1, "reads": body_reads}
+        executions.append(expected)
+        return {"result": {"result": {"value": result["value"]}}}
+
+    monkeypatch.setattr(session._login_driver, "_execute_script", execute)
+    if expected in {"authenticated", "logged_out"}:
+        assert await session._probe_official_authenticated_session() is (
+            expected == "authenticated"
+        )
+    else:
+        error_type = {
+            "source_unavailable": BrowserSourceUnavailable,
+            "rate_limited": BrowserRateLimited,
+            "protected": BrowserProtectionDetected,
+        }[expected]
+        with pytest.raises(error_type):
+            await session._probe_official_authenticated_session()
+    assert executions == [expected]
 
 
 def _credential() -> KorailCredentialInput:

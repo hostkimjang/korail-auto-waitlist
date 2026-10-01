@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from rail_waitlist.korail_pydoll_browser import _PydollSession
-from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
+from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserProtectionDetected,
+    BrowserRateLimited,
+    BrowserSourceUnavailable,
+)
+from rail_waitlist.korail_sidecar.browser_service_availability import BrowserProviderUnavailable
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapshot, PydollTrainRow
 from rail_waitlist.korail_sidecar.pydoll.search_notice import (
     CLOSE_SELECTOR,
@@ -57,6 +62,149 @@ async def test_reservation_notice_preparation_observes_live_modal_and_refreshes_
     assert result is clean
     close.click.assert_awaited_once()
     fresh_snapshot.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("kind", "station", "trigger_label", "input_name"),
+    [
+        ("departure", "대전", "출발역 선택", "txtGoStart"),
+        ("arrival", "서울", "도착역 선택", "txtGoEnd"),
+    ],
+)
+async def test_late_notice_closes_before_station_control_dispatch(
+    monkeypatch, kind, station, trigger_label, input_name
+):
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    # A stale body without a close label must not suppress the live modal observation.
+    ready = PydollPageSnapshot("열차 조회", ())
+    events = []
+    close = SimpleNamespace(click=AsyncMock(side_effect=lambda: events.append("notice_close")))
+    trigger = SimpleNamespace(click=AsyncMock(side_effect=lambda: events.append("station_open")))
+    target = SimpleNamespace(click=AsyncMock(side_effect=lambda: events.append("station_select")))
+    dialog = object()
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(
+            side_effect=[
+                script_result("public_search_notice"),
+                script_result("public_search_notice"),
+                script_result("absent"),
+            ]
+        )
+    )
+    snapshots = AsyncMock(return_value=ready)
+    controls = AsyncMock(return_value=[close])
+    finder = AsyncMock(side_effect=[trigger, target])
+    readback = AsyncMock()
+    monkeypatch.setattr(session, "_snapshot", snapshots)
+    monkeypatch.setattr(session, "_visible_elements", controls)
+    monkeypatch.setattr(session, "_find_exact_visible", finder)
+    monkeypatch.setattr(session, "_wait_for_dialog", AsyncMock(return_value=dialog))
+    monkeypatch.setattr(session, "_wait_for_value", readback)
+
+    await session.choose_station(kind, station)
+
+    assert events == ["notice_close", "station_open", "station_select"]
+    close.click.assert_awaited_once()
+    trigger.click.assert_awaited_once()
+    target.click.assert_awaited_once()
+    controls.assert_awaited_once_with(CLOSE_SELECTOR)
+    assert snapshots.await_count == 2
+    assert finder.await_args_list[0].args == ("a", trigger_label)
+    readback.assert_awaited_once_with(f"input[name='{input_name}']", station)
+    assert session._submitted is False
+
+
+@pytest.mark.parametrize("uncertain_close", [False, True])
+async def test_station_selection_stops_on_unrecognized_or_uncertain_notice(
+    monkeypatch, uncertain_close
+):
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    close = SimpleNamespace(click=AsyncMock(side_effect=RuntimeError("click outcome unknown")))
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(
+            side_effect=[script_result("public_search_notice")] * 2
+            if uncertain_close
+            else [script_result("unrecognized")]
+        )
+    )
+    finder = AsyncMock()
+    monkeypatch.setattr(session, "_snapshot", AsyncMock(return_value=PydollPageSnapshot("", ())))
+    monkeypatch.setattr(session, "_visible_elements", AsyncMock(return_value=[close]))
+    monkeypatch.setattr(session, "_find_exact_visible", finder)
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await session.choose_station("departure", "대전")
+
+    assert raised.value.stage == (
+        "search_notice_close_unknown" if uncertain_close else "search_notice_unrecognized"
+    )
+    assert close.click.await_count == int(uncertain_close)
+    finder.assert_not_awaited()
+    assert session._submitted is False
+
+
+@pytest.mark.parametrize(
+    ("network", "exception_type"),
+    [
+        ((403, "document"), BrowserProtectionDetected),
+        ((429, "fetch"), BrowserRateLimited),
+        ((500, "business_xhr"), BrowserProviderUnavailable),
+    ],
+)
+async def test_station_selection_preserves_blocking_page_before_notice_actions(
+    monkeypatch, network, exception_type
+):
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    script = AsyncMock()
+    session._tab = SimpleNamespace(execute_script=script)
+    finder = AsyncMock()
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(return_value=PydollPageSnapshot("", (), network_responses=(network,))),
+    )
+    monkeypatch.setattr(session, "_find_exact_visible", finder)
+
+    with pytest.raises(exception_type):
+        await session.choose_station("departure", "대전")
+
+    script.assert_not_awaited()
+    finder.assert_not_awaited()
+    assert session._submitted is False
+
+
+async def test_station_selection_rechecks_page_block_after_notice_closed(monkeypatch):
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
+    close = SimpleNamespace(click=AsyncMock())
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(
+            side_effect=[
+                script_result("public_search_notice"),
+                script_result("public_search_notice"),
+                script_result("absent"),
+            ]
+        )
+    )
+    finder = AsyncMock()
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            side_effect=[
+                PydollPageSnapshot("", ()),
+                PydollPageSnapshot("", (), network_responses=((500, "business_xhr"),)),
+            ]
+        ),
+    )
+    monkeypatch.setattr(session, "_visible_elements", AsyncMock(return_value=[close]))
+    monkeypatch.setattr(session, "_find_exact_visible", finder)
+
+    with pytest.raises(BrowserProviderUnavailable):
+        await session.choose_station("departure", "대전")
+
+    close.click.assert_awaited_once()
+    finder.assert_not_awaited()
+    assert session._submitted is False
 
 
 async def test_verified_notice_closes_once_before_expanding_and_refreshes_snapshot(

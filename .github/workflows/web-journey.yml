@@ -67,6 +67,22 @@ jobs:
         working-directory: apps/web
       - run: uv run --python 3.12 --frozen --extra browser playwright install --with-deps chromium
         working-directory: apps/api
+      - name: Select installed Chromium for API fixture tests
+        working-directory: apps/api
+        run: |
+          uv run --python 3.12 --frozen --extra browser python - <<'PY'
+          import os
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+
+          with sync_playwright() as playwright:
+              binary = Path(playwright.chromium.executable_path)
+          if not binary.is_file():
+              raise RuntimeError("Installed fixture Chromium is unavailable")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
+              environment.write(f"KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH={binary}\n")
+          print("Installed fixture Chromium selected")
+          PY
       - run: bash -n scripts/*.sh
       - run: bash scripts/ops.sh config
       - run: make verify-ops

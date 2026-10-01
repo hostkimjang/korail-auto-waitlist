@@ -155,6 +155,17 @@ sidecar 로그에 남깁니다. 이 값으로 실제 HTTP 오류, 응답 시간 
 구분하며 URL·본문·쿠키·입력값·요청 식별자는 기록하지 않습니다. 공개 API의 실패 응답과 재시도 간격은
 그대로 유지하며, 진단 필드를 추가했다는 사실을 실제 로그인 복구로 해석하지 않습니다.
 
+입력값과 DOM·React 상태의 일치, 공식 HTTP 요청의 완료, 공식 인증 상태는 각각 확인합니다.
+입력값이 같거나 HTTP 200이 반환됐다는 사실만으로 인증을 완료 처리하지 않으며, HTTP 500이나
+관측 불명도 자격증명 오류로 단정하지 않습니다. 수동 브라우저의 성공은 서버 session의 `READY`나
+공식 좌석·예약 성공의 근거로 투영하지 않습니다.
+
+진단만으로 원인을 확정하거나 운영 입력 방식을 바꾸지 않습니다. 계정 generation, 단일 제출의
+완료 판정과 callback 정리, 실제 제출 실패의 300~900초 재시도 간격을 유지합니다. 기존 `UNKNOWN`의
+재제출 차단은 정확한 공식 내역·같은 generation·정상 rearm 조건을 충족하기 전까지 보존합니다.
+개별 브라우저 진단도 같은 계정의 서버 호출을 격리한 상태에서 진행하며 이 재시도·차단 계약을 지킵니다.
+상세 비교와 검증 근거는 [장애 기록](INCIDENTS.md)에 정리합니다.
+
 provider 기능 표면의 transport 계약은 `provider_registry/contracts.py`의 `ProviderCapabilities`가 canonical
 owner입니다. 공통 provider protocol·adapter와 registry application·HTTP는 이 leaf contract를 직접 사용하고,
 중앙 `schemas.py`와 top-level `providers.py`는 기존 import·pickle 호환을 위한 같은 class 객체의 exact alias만

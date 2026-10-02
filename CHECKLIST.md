@@ -445,7 +445,17 @@
 - [x] 진단 종료 후 서버 12개 healthy·소스 30개·readyz/웹 JS/푸터 v1.2.11·migration/log-init 종료 0과 로컬 0 확인. 세대 4·기존 UNKNOWN/차단 각 4·새 시도/PENDING 0을 보존하고 대기 상태는 읽기만 수행
 - [x] 최신 로컬 AMD64 `cff272`·소스 30개로 10월 3일 대전→서울 22시 익명 조회 1회에서 업무 200·완료·열차 10개·오류 0과 소유 Chrome/컨테이너 정리 확인. 인증·예약·계정 판독 0이며 서버 로그인 500과 같은 업무 비교는 아님
 - [x] 위 최신 이미지 export의 root→manifest→config·layer/rootfs 연결과 전체 blob hash·크기·runtime env·태그 부재 검증. 상세 지문과 archive 근거는 [장애 기록](docs/INCIDENTS.md#최신-ci와-qemu-비교-준비-범위) 참조
-- [ ] export 압축 확장과 VM 진입 gate, 새 소유 overlay의 정상 종료·재사용 및 오프라인 Chrome 검증. 실패한 overlay는 재사용하지 않으며 v3 준비만 수행한 단계
+- [x] 최신 AMD64 archive 12개 layer의 독립 diffID·새 OCI descriptor 일치와 압축 확장 합계 3,617,283,072바이트 검증. 저장 공간 예산의 필요 여유 12,064,241,470바이트를 계산했으며 파일시스템 추출·Docker·SSH·Chrome·공식 요청 0
+- [x] 공통 대기 0초·실패 횟수 3회 확인 뒤 현재 서버 ARM64·소스 30개로 같은 helper·정규화기·공개 조건의 익명 UI 조회 1회 실행. 공식 업무 500·전송 완료·0행, POST 9건 중 최근 8건의 투영과 전송 실패 목록 없음 확인. 최신 로컬 200·10행과 약 34분 차이로 대조하되 요청 누락·아키텍처·egress 원인 확정과 구분; 계정 판독·로그인·예약·본문·화면 캡처·대기 쓰기 0과 소유 Chrome/컨테이너 정리
+- [x] 위 조회 후 기존 deadline과 최댓값을 보존해 대기 300초를 병합하고 실패 횟수 3회 유지. 서버 12개 healthy·API/adapter 소스 30개·readyz/웹/JS 200·v1.2.11·migration/log-init 종료 0·로컬 0과 동일 caller 8개·세대 4·기존 UNKNOWN/차단 각 4·새 시도/PENDING 0 확인. 최종 대기 275초이며 복원 helper의 공식 요청·계정 복호화·volume 삭제·counter 초기화 0
+- [x] 실제 DAYBREAK 후속 검토로 계정 입력 없는 조회의 업무 POST 500과 로컬 200을 같은 업무의 환경 연관으로 분리. 입력·자동 클릭 단독 가설은 약해졌지만 근본 원인·새 제품 수정 근거는 미확정이며 POST 수 차이를 누락으로 판정하지 않음
+- [x] 후속 문서 커밋 `a01f239`의 [저장소 CI](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37063329433) 재실행 결과 확인. 최초 API 5,042건 통과·2건 실패·경고 1건(1,220.65초), 두 loopback fixture의 `Page.navigate` 60초 timeout으로 날짜·시간 선택 전 실패 확인. 로컬 Python 3.12.6·bundled Chromium의 해당 2건+기준 1건은 3건 통과(26.84초)·fixture 정리 완료이며 공식 요청·코드/Compose 변경 0. 동일 커밋의 실패 job 1회 재실행에서 API 5,044건 통과·경고 1건(673.81초), Ruff·format ratchet·mypy 171개 파일, 웹 lint·typecheck·982건 테스트·E2E 16건·build·Sites 4건과 전체 CI 성공 확인. 최초 fixture timeout 재발 0; 최초 API 실패 이후 Ruff·mypy·웹 검증 미실행과 PostgreSQL fencing 성공을 분리. Runner·Chromium 환경 원인은 미확정이고 앞선 `712dffc`·`10e1478` 성공 기록·운영 소스 30개 보존
+- [x] 새 QEMU v4 준비의 서명된 base 복사·공개 파일 4개·새 임시 키 2쌍 준비와 이미지 build 단계 실패 확인. 실패 overlay 재사용·운영 키 판독·VM·Chrome·공식 요청 0, 서버 12개/로컬 0·기존 자원 보존. 실제 build 원인은 raw log 미확보로 확정하지 않음
+- [x] 후속 v5 준비에서 기존 소유 toolchain 이미지의 QEMU 8.2.2 binary·BIOS 지문 일치와 공개 패키지 7개 버전 관측. 소유 컨테이너 정리·서버 12개 동일 ID/로컬 0 유지, VM·공식 요청 0
+- [x] v5 새 진단 이미지 build와 cloud-init schema·seed ISO·고정 SSH host key 준비 완료. 검증한 기존 immutable toolchain에서 APT·외부 pull 없이 공개 파일 4개를 복사하고 서명된 base의 새 복사본·임시 키 2쌍 사용; 실행 QEMU·BIOS·패키지 지문 일치·비밀번호 로그인 false 확인. 준비 컨테이너 정리·OOM false·서버 12개 ID/시작 시각·로컬 0 보존, build/prepare의 VM·Chrome·공식 요청 0
+- [x] 06:37 KST의 소유 v5 게스트 정적 probe 1회에서 Ubuntu 24.04 x86·cloud-init 완료·instance 일치·커널 6.8.0-142-generic과 binfmt 없음 확인. Docker 준비 false·정상 종료 미검증, 브라우저·공식 요청·계정 판독 0·서버 12개 동일 ID/이미지/시작 시각·로컬 0 보존; bootstrap 완료와 구분
+- [x] 06:44 KST의 새 v5 bootstrap 완료: Ubuntu 24.04 x86·cloud-init·Docker 29.1.3 준비, 여유 17,324,032,000바이트·Docker/root 동일 장치, sync·poweroff 승인·QEMU 자연 종료 0·강제 terminate/kill false·overlay 재사용 가능 판정 확인. 소유 컨테이너 제거·OOM false·서버 12개 동일 ID/이미지/시작 시각·로컬 0 보존, 브라우저·공식 요청·이미지 import 0
+- [ ] 정상 종료한 새 overlay의 오프라인 재부팅·최신 실제 여유 공간과 원본 full gate 검증·이미지 import·오프라인 Chrome 검증. bootstrap의 공간 측정만으로 import를 허용하거나 공식 조회 성공으로 판정하지 않음. 실패한 이전 overlay는 재사용하지 않음
 - [ ] Dockerfile의 비고정 stable_current 설치를 고정해 빌드 재현성을 높이는 후속 개선 검토. 이번 작업에서 Dockerfile·기능 코드를 바꾸지 않았으며 HTTP 500 복구로 판정하지 않음
 - [ ] 실제 예약 흐름에서 기존 일반 안내 정책의 자동 처리 검증. 운영 설정 true·서비스 health를 실제 안내 처리 성공으로 올리지 않음
 - [ ] 검색 조건을 맞춘 egress 교차 비교와 서버 HTTP 500 근본 원인 확인. 일반 페이지 GET 성공·검색 전 중단·공통 대기 보강을 조회 복구로 판정하지 않음

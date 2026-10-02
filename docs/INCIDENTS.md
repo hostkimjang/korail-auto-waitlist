@@ -426,8 +426,73 @@ schema·seed ISO·고정 SSH host key·비밀번호 로그인 false를 확인했
 패키지 지문 일치와 소유 컨테이너 정리·OOM false·서버 12개 보존·로컬 0도 확인했습니다.
 근거는 `output/qemu-v5-build-a4c3111604ac495f8b995fb5efcbd404-20261003.json`과
 `output/qemu-v5-prepare-a4c3111604ac495f8b995fb5efcbd404-20261003.json`입니다.
-build·prepare의 VM·Chrome·공식 요청은 0입니다. 새 환경의 bootstrap은 진행 중으로
-아직 완료 결과가 없으며 이미지 가져오기·동일성·암호화 fixture·공식 비교는 미완료입니다.
+build·prepare의 VM·Chrome·공식 요청은 0입니다. 이 두 기록을 남길 때 bootstrap은 진행 중이었으며,
+후속 완료 결과는 아래에 구분합니다.
+
+새 환경의 bootstrap은 10월 2일 22:38:28.240248 UTC(10월 3일 07:38:28.240248 KST)에
+완료됐습니다. Ubuntu 24.04 x86·cloud-init·Docker 29.1.3 준비와 실제 여유
+17,324,036,096바이트·용량 19,682,557,952바이트, Docker/root 동일 장치를 확인했습니다.
+sync 완료·poweroff 명령 수락 뒤 66.984초에 QEMU 자연 종료 0을 관측했습니다. 강제
+terminate·kill은 모두 false이며 소유 외부 컨테이너 제거·OOM false·동일 서버 12개 보존·
+로컬 실행 0을 확인했습니다. 이 초기화 단계의 Chrome·공식 요청·이미지 import는 0입니다.
+근거는 `output/qemu-v5-bootstrap-a4c3111604ac495f8b995fb5efcbd404-20261003.json`이며
+SHA-256은 `c68c29ed4fd5393fc591646f0d609d146f1fe8c3d3f7f78af910f51d5bf4a7e2`입니다.
+정상 초기화와 재사용 가능 판정은 이미지 가져오기·동일성·암호화 fixture·공식 비교 성공을
+뜻하지 않습니다. 이 후속 검증은 아직 완료되지 않았습니다.
+
+### 첫 가져오기 진단 도구의 후속 보완
+
+v2 순수 검토에서는 receiver가 예외를 일반 실패 JSON으로 바꾸고, outer driver가 SSH 종료
+코드를 먼저 검사해 그 JSON을 전달하지 않으며, 최종 caller가 `stdin_import` 실패로만
+기록하는 세 관측 손실 경계를 확인했습니다. 단계·수신 바이트·종료 코드와 시간초과의
+완성된 공개 기록만 보존하도록 보완했으며 v2의 실제 실행은 0입니다.
+
+v3는 import 승인 뒤 이전 승인 대기 타이머를 해제하고 전체 import의 같은 600초 절대기한을
+쓰도록 고쳤습니다. 실패 때에는 Docker CLI의 유한 종료를 먼저 기다린 뒤 buffered stdin을
+닫도록 순서만 보완했습니다. Root가 v3 순수 회귀 20건과 Ruff 0.16.10의 API config 검사
+통과를 확인했습니다. 기존 fixture·query의 Ruff 0.12.12 기본 E/F 검사 결과는 확장 검사
+완료 근거가 아닙니다. v2·fixture·query·새 freeze·testfreeze 전체를 API config로 검사한
+후속 확장 검사에서는 오류 51건이 남았습니다.
+전체 진단 파일의 strict Ruff 통과로 기록하지 않습니다.
+
+이 순수 검증을 기록할 때 새 v3 실제 import는 진행 중이었으며 후속 실패 결과는 아래에
+구분합니다. 이 진단 도구의 타이머·정리 문제가 실제 `cfe546` 실패를 일으켰는지 아직
+확인하지 못했고 코레일 HTTP 500의 근본 원인과도 연결하지 않습니다. 기존 실패 기록과
+overlay는 보존하며 재사용하지 않습니다.
+
+### 새 환경의 실제 v3 가져오기 실패
+
+새 `a4c311` 환경의 실제 v3 가져오기는 `phase`와 `failed_phase`가 모두
+`storage_recheck`인 실패로 끝났습니다. Root는 10월 2일 22:51:19 UTC에 실패 종료 1을
+관측했습니다. 결과 파일에는 완료 시각 필드가 없으며 파일 수정 시각은
+22:51:19.103169 UTC(10월 3일 07:51:19.103169 KST)입니다. 이 시각을 영수증에 기록된
+완료 시각으로 해석하지 않습니다. 근거는
+`output/qemu-import-slice-a4c3111604ac495f8b995fb5efcbd404-0c1a668d5f5a4ddab42910d128542bb2.json`이며
+SHA-256은 `28e0615a7ae21e30e5da44c9836cec0868de14ad384d8603263f3cceefe34bd0`입니다.
+
+게스트 실제 여유 17,316,532,224바이트가 필요 여유 12,064,241,470바이트 이상임을 확인했고
+원본 전체 검증도 통과했습니다. 원본 검증 지문은
+`fc974fccd71ba72480aea3a6bd6ce5d90e56c1a3320042db1764216709d6f120`이며 호스트의
+시작 전 여유는 51,205,681,152바이트였습니다. 이 양성 근거와 후속 공간 재확인 단계의
+실패를 구분합니다. `import_verified`·`identity_verified`·`crypto_fixture_verified`·
+`overlay_reusable`는 모두 false이고 `import_diagnostics`는 빈 목록입니다. 세부 오류와
+시간초과 여부를 관측하지 못했으므로 실패 원인은 확정하지 않습니다.
+
+실패 뒤 sync 완료·poweroff 명령 수락과 64.903초의 QEMU 자연 종료 0을 확인했습니다.
+강제 terminate·kill은 모두 false이며 소유 외부 컨테이너 제거·OOM false·동일 서버 12개
+보존·로컬 실행 0을 확인했습니다. Chrome·공식 요청은 0입니다. 실패한 `a4c311` overlay도
+재사용하지 않습니다. v3 순수 회귀 20건·확장 Ruff 통과와 실제 실패 결과를 구분하며
+이미지 가져오기·동일성·암호화 fixture·공식 게스트 조회는 계속 미검증입니다. CPU·IP의
+영향과 코레일 HTTP 500의 근본 원인은 미확정입니다.
+
+후속 문서 커밋 `190e65ef170cc8d49154171e3751fe8d716edfd2`의
+[저장소 CI 37072308911](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37072308911)는
+최종 성공했습니다. GitHub 기록의 상태는 completed·conclusion success이고 마지막 갱신은
+10월 2일 22:36:28 UTC이며 Root가 22:42 UTC에 확인했습니다. API 5,044건·경고 1건
+(501.68초), Ruff·기존 예외 25개를 보존한 format ratchet·mypy 171개 파일, 웹 lint·typecheck·
+100개 파일/982건·E2E 16건(58.6초)·build(3.02초)·Sites 4건과 PostgreSQL fencing을
+통과했습니다. 앞선 `eced226`·`a01f239`의 완료된 CI 성공 기록은 보존하며 실제 코레일
+인증·좌석 조회·예약 복구와 구분합니다.
 
 ### 실제 후속 전송 비교
 

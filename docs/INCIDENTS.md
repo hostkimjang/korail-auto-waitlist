@@ -494,6 +494,56 @@ SHA-256은 `28e0615a7ae21e30e5da44c9836cec0868de14ad384d8603263f3cceefe34bd0`입
 통과했습니다. 앞선 `eced226`·`a01f239`의 완료된 CI 성공 기록은 보존하며 실제 코레일
 인증·좌석 조회·예약 복구와 구분합니다.
 
+### 실제 v4의 공간 SSH 제한 만료와 새 환경 준비
+
+새 owner `84bdd4117f2e457e95260f39d5f8fd2a`의 build·prepare는 10월 2일
+22:57:01.136051·22:58:09.033022 UTC에 완료됐고 bootstrap은 23:17:36.470410 UTC에
+성공했습니다. Ubuntu 24.04 x86·cloud-init·Docker 29.1.3, 실제 여유 17,324,027,904바이트·
+용량 19,682,557,952바이트와 sync·poweroff 수락 뒤 64.210초 자연 종료 0을 확인했습니다.
+강제 종료 없음·소유 컨테이너 제거·OOM false·서버 12개 동일 ID/이미지/시작 시각·로컬 0을
+보존했으며 초기화의 Chrome·공식 요청·import는 0입니다. 근거는
+`output/qemu-v5-bootstrap-84bdd4117f2e457e95260f39d5f8fd2a-20261003.json`,
+SHA-256 `7158bbdaaf03b2873997f59be9a83186d657ea0f24265bddc8d852d14a34fc86`입니다.
+
+이후 실제 v4는 종료 1·`storage_recheck` 실패였으며 이번에는 닫힌 관측에
+`storage_ssh_timeout`·작업 경과 20,000ms·ready 이후 56,727ms가 남았습니다. 이 실행의
+공간 SSH 20초 제한 만료를 확인했습니다. 원본 전체 검증은 36,671ms에 통과했고 최초 실제
+여유 17,316,515,840바이트는 필요 여유 12,064,241,470바이트 이상이었습니다. 공개 archive
+검증 복사·복사 전후 소유 컨테이너 부재 확인은 true였지만 최종 승인·import·receiver
+관측에는 도달하지 않았습니다. 근거는
+`output/qemu-import-slice-84bdd4117f2e457e95260f39d5f8fd2a-ece43e3fce194ac9a394ba233f5412c7.json`,
+SHA-256 `510d97b1c5f4ca17d00792574b49425a938a9236398097899d139bfef9eb3123`입니다.
+완료 시각 필드는 없고 파일 수정 시각은 23:26:51.6706455 UTC(10월 3일 08:26:51.6706455
+KST)입니다. sync·poweroff 수락 뒤 64.248초 자연 종료 0·강제 종료 없음·소유 컨테이너 제거·
+OOM false·동일 서버 12개·로컬 0·Chrome/공식 요청/Docker load 0을 확인했습니다.
+실패한 `84bdd4` overlay도 재사용하지 않습니다. 이번 SSH 제한 만료를 과거 `a4c311`·
+`cfe546` 실패나 코레일 HTTP 500의 원인으로 소급하지 않으며 CPU·IP 원인도 미확정입니다.
+
+Root가 v4 전체 코드·변경 구간을 읽고 순수 회귀 51건·Ruff 0.16.10 API config와 지문 7개를
+재확인했습니다. 후속 순수 v6는 공간 SSH 60초·Root 응답 70초·최종 승인 120초로 해당
+경계를 조정합니다. v5의 Root 준비 응답 640초가 boot600+최초 공간 SSH60보다 짧아
+전달 여유 20초를 더한 680초로 맞췄지만 게스트 boot는 600초 그대로입니다. 전체 검증
+대기 270초·같은 import 600초 절대기한·정상 종료 180초·고정 SSH pin과 원본 보호를
+유지합니다. SSH 성공/비정상 종료/timeout/parse의 실제 경과와 SIGTERM·전체 기한
+소진을 구분합니다. Root의 v6 최종 변경 전체 검토·순수 회귀 57건·Ruff 0.16.10 API config·
+고정 지문 7개 일치가 모두 통과했습니다. 실제 v6 실행은 아직 0이며 후속 결과는 미확정입니다.
+준비 계약 수정은 과거 실패나 공식 HTTP 500 원인 확정이 아니며
+기능·Compose와 v2·v3·v4·v5 고정 파일은 바꾸지 않았습니다.
+
+새 owner `37b928aa6c184b34acd602f1ed0b2195`의 build·prepare는 각각
+23:29:01.971993·23:29:47.568789 UTC에 성공했습니다. 새 이미지·seed ISO·고정 SSH
+host key·cloud-init schema와 guest password false·소유 컨테이너 제거·OOM false·
+동일 서버 12개·로컬 0을 확인했습니다. 초기화는 진행 중이며 아직 bootstrap 성공으로
+표시하지 않습니다. 가져오기·source30·Chrome·오프라인 암호화 fixture·공식 비교와 서버
+로그인·좌석 조회·자동 예약 복구는 미완료이고 새 예약 대상 승인도 아직 없습니다.
+
+문서 커밋 `998ca5d0dde12ebce2ccd3b6bb1832a7da8b662c`의
+[CI 37075519192](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37075519192)는
+10월 2일 23:17:47 UTC에 저장소 job을 성공 종료했습니다. API 5,044건·경고 1건·
+웹 100개 파일/982건·E2E 16건·Sites 4건과 lint·타입검사·빌드를 통과했습니다.
+PostgreSQL job은 23:02:13 UTC에 완료됐고 실행 임대·관찰/잠금 순서·예약
+episode/credential fencing 3종이 통과했습니다. CI 성공과 실제 철도사 기능 복구를 구분합니다.
+
 ### 실제 후속 전송 비교
 
 서버의 scheduler·maintenance worker를 멈춘 뒤 active·reserved·scheduled·철도 큐·pending이

@@ -434,8 +434,18 @@
 - [x] DAYBREAK 후속 검토에서 서로 다른 로컬 실패와 자동 POST 두 건 200·공식 로그인 표시 양성 표본을 분리하고 서버 수동/회원번호/휴대전화 500을 재확인. 입력 드라이버 단독 원인·전면 ARM 암호화 고장·이미지 업데이트 원인으로 단정하지 않음
 - [x] 정상 예열의 04:39:17·04:54:25 공식 HTTP 500과 04:56 제한 Redis의 실패 횟수 3회·남은 대기 794초를 읽기 전용으로 확인. 계정 세대 4·기존 UNKNOWN/차단 각 4·새 시도/PENDING 0·서버 12개/로컬 0 보존
 - [x] 자연 요청 관측의 `no_target`을 미관측으로 보존하고, 서버 공개 Chrome wrapper의 실행 이름 보존과 진단 파서의 `google-chrome` 누락을 확인·순수 회귀 수정. 연결·CDP 명령·입력·탐색·브라우저 실행·본문 읽기·예약 제출 0이며 공식 HTTP 500 원인과 구분
-- [ ] 수정한 진단 도구로 다음 자연 요청의 frame/loader와 공개 header 이름 존재를 실제 관측. 이전 빈 기록은 정상 동작이나 요청 부재의 근거로 쓰지 않음
-- [ ] 다음 자연 표본에서 현재 frame/loader/context 일치·선행 요청 완료의 닫힌 boolean과 공개 header 이름 존재만 관측하는 후보 검토. 사이트 요청 생성과 ARM 상호작용·서버 egress/edge/session affinity는 미확정이며 이 새 관측은 미실행
+- [x] 진단 도구 보완 뒤 정상 예열의 공식 POST가 같은 기준 frame/loader에서 HTTP 500 응답·전송 완료된 것을 실제 관측. 자체 소켓 명령 3회 외 입력·탐색·실행·본문 읽기·닫기·재연결 0이며 이전 빈 기록과 구분. 상세 근거는 [장애 기록](docs/INCIDENTS.md#입력-없이-관측한-공식-post-완료) 참조
+- [x] 최신 문서 커밋 `10e1478d8bd75fd3a7544241eb2a43acd7e7f47c`의 [저장소 CI 37057525861](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37057525861) 성공 확인. 앞선 `712dffc` 기능 커밋의 두 CI 성공을 보존하며 실제 공식 기능 복구와 구분
+- [x] QEMU 비교 준비에서 서명된 Ubuntu 파일의 다운로드·해시 검증과 helper 순수 테스트 10건 통과. 실제 VM·Chrome 실행과 구분
+- [x] V2 자연 요청의 같은 기준 frame/loader·POST 500 전송 완료와 기본 header 이름·사용자 활성화 표시 관측. 값·본문·호출 스택은 읽지 않았으며 현재 문맥과 실제 사람 클릭 입증은 아님
+- [x] QEMU 비교 이미지 재빌드와 초기화 schema·ISO·overlay·고정 SSH 지문 확인, 소유 준비 컨테이너 정리. 초기 schema 실패와 보완 근거는 [장애 기록](docs/INCIDENTS.md#최신-ci와-qemu-비교-준비-범위) 참조
+- [x] 후속 진단 전 strict drain의 active/reserved/scheduled/철도 큐/pending 모두 0과 소스 30개·계정 세대 4·기존 차단 보존 확인. caller 8개 중지 후 서버 핵심 4개·로컬 0
+- [x] 소유 QEMU VM의 x86 Ubuntu 24·cloud-init·Docker 29.1.3 준비와 binfmt 미사용 확인. 정상 종료·재사용 검증 실패를 별도 보존하고 소유 외부 컨테이너 정리 확인; Chrome·철도 요청 0
+- [ ] 현재 frame/loader/context와 역할·단계 확인. V2에서도 기준 frame/loader와 전송 완료만 확인됐으며 현재 문맥은 UNKNOWN
+- [x] 진단 종료 후 서버 12개 healthy·소스 30개·readyz/웹 JS/푸터 v1.2.11·migration/log-init 종료 0과 로컬 0 확인. 세대 4·기존 UNKNOWN/차단 각 4·새 시도/PENDING 0을 보존하고 대기 상태는 읽기만 수행
+- [x] 최신 로컬 AMD64 `cff272`·소스 30개로 10월 3일 대전→서울 22시 익명 조회 1회에서 업무 200·완료·열차 10개·오류 0과 소유 Chrome/컨테이너 정리 확인. 인증·예약·계정 판독 0이며 서버 로그인 500과 같은 업무 비교는 아님
+- [x] 위 최신 이미지 export의 root→manifest→config·layer/rootfs 연결과 전체 blob hash·크기·runtime env·태그 부재 검증. 상세 지문과 archive 근거는 [장애 기록](docs/INCIDENTS.md#최신-ci와-qemu-비교-준비-범위) 참조
+- [ ] export 압축 확장과 VM 진입 gate, 새 소유 overlay의 정상 종료·재사용 및 오프라인 Chrome 검증. 실패한 overlay는 재사용하지 않으며 v3 준비만 수행한 단계
 - [ ] Dockerfile의 비고정 stable_current 설치를 고정해 빌드 재현성을 높이는 후속 개선 검토. 이번 작업에서 Dockerfile·기능 코드를 바꾸지 않았으며 HTTP 500 복구로 판정하지 않음
 - [ ] 실제 예약 흐름에서 기존 일반 안내 정책의 자동 처리 검증. 운영 설정 true·서비스 health를 실제 안내 처리 성공으로 올리지 않음
 - [ ] 검색 조건을 맞춘 egress 교차 비교와 서버 HTTP 500 근본 원인 확인. 일반 페이지 GET 성공·검색 전 중단·공통 대기 보강을 조회 복구로 판정하지 않음

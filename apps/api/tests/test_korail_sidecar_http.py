@@ -1,11 +1,13 @@
 import ast
 import inspect
+import json
 import logging
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -16,6 +18,10 @@ from rail_waitlist.korail_sidecar.browser_contracts import (
     BrowserSeatSearchRequest,
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
+)
+from rail_waitlist.korail_sidecar.provider_cooldown import (
+    MemoryProviderCooldown,
+    ProviderCooldownDeferred,
 )
 from rail_waitlist.provider_call_context import (
     REQUEST_ID_HEADER,
@@ -29,6 +35,11 @@ from rail_waitlist.reservations.provider_confirmation.korail import (
 
 SOURCE_ROOT = Path(__file__).parents[1] / "src" / "rail_waitlist"
 TOKEN = "k" * 32
+
+
+@pytest.fixture(autouse=True)
+def isolated_provider_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(compatibility_service, "_build_provider_cooldown", MemoryProviderCooldown)
 
 
 class CapturingAutomation:
@@ -611,3 +622,168 @@ def test_adapter_service_remains_the_exact_deployment_composition_root() -> None
     )
     assert [line for line in runtime_stage if line.casefold().startswith("cmd ")] == [expected_cmd]
     assert runtime_stage[-1] == expected_cmd
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_reservation_admission_deferral_is_a_closed_no_click_result(stream) -> None:
+    class DeferredReservation(CapturingReservationClient):
+        async def reserve_once(self, _request: object, *, on_progress=None) -> object:
+            raise ProviderCooldownDeferred("provider_unavailable", 1)
+
+    app = compatibility_service.create_adapter_app(
+        automation=CapturingAutomation(),
+        token=TOKEN,
+        readiness_probe=ready_probe,
+        reservation_client=DeferredReservation(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/reserve-once/stream" if stream else "/v1/reserve-once",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json=reserve_once_payload(),
+        )
+    assert response.status_code == 200
+    payload = json.loads(response.text)["result"] if stream else response.json()
+    assert payload == {
+        "outcome": "failed",
+        "reason": "provider_cooldown",
+        "failure_kind": "provider_cooldown",
+        "cooldown_reason": "provider_unavailable",
+        "retry_after_seconds": 1,
+        "seat_clicked": False,
+        "reservation_clicked": False,
+        "reserved_seats": [],
+        "confirmation_correlation_seats": [],
+    }
+    assert "fixture-login-secret" not in response.text
+    assert "fixture-password-secret" not in response.text
+
+
+def test_confirmation_admission_deferral_does_not_fabricate_an_official_verdict() -> None:
+    class DeferredRead(CapturingReservationClient):
+        async def read_reservation_detail(self, target: object) -> object:
+            raise ProviderCooldownDeferred("cooldown_store_unavailable", 60)
+
+    app = compatibility_service.create_adapter_app(
+        automation=CapturingAutomation(),
+        token=TOKEN,
+        readiness_probe=ready_probe,
+        reservation_client=DeferredRead(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/confirm-reservation",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json=confirmation_payload(),
+        )
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "60"
+    assert response.json() == {
+        "detail": {
+            "failure_kind": "provider_cooldown",
+            "reason": "cooldown_store_unavailable",
+        }
+    }
+
+
+@pytest.mark.parametrize("startup_failure", [False, True])
+def test_lifespan_shares_one_owned_hold_and_closes_it_on_startup_or_shutdown(
+    monkeypatch, startup_failure
+) -> None:
+    closed = []
+    injected = []
+
+    class OwnedHold(MemoryProviderCooldown):
+        async def close(self) -> None:
+            closed.append(True)
+
+    hold = OwnedHold()
+
+    def build_client(*args, **kwargs):
+        injected.append(kwargs["provider_cooldown"])
+        if startup_failure:
+            raise RuntimeError("fixture_startup_failure")
+        return CapturingReservationClient()
+
+    def build_automation(*args, **kwargs):
+        injected.append(kwargs["provider_cooldown"])
+        return CapturingAutomation()
+
+    monkeypatch.setattr(compatibility_service, "_build_provider_cooldown", lambda: hold)
+    monkeypatch.setattr(compatibility_service, "_build_browser_client", build_client)
+    monkeypatch.setattr(compatibility_service, "build_automation", build_automation)
+    app = compatibility_service.create_adapter_app(token=TOKEN, readiness_probe=ready_probe)
+    if startup_failure:
+        with pytest.raises(RuntimeError, match="fixture_startup_failure"), TestClient(app):
+            pass
+    else:
+        with TestClient(app) as client:
+            assert client.get("/readyz").status_code == 200
+    assert injected == [hold] if startup_failure else injected == [hold, hold]
+    assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_status"),
+    [
+        (None, 200),
+        ("provider_unavailable", 200),
+        ("provider_access_restricted", 200),
+        ("cooldown_store_unavailable", 503),
+    ],
+)
+def test_readiness_checks_hold_storage_without_requiring_provider_admission(
+    monkeypatch: pytest.MonkeyPatch, reason: str | None, expected_status: int
+) -> None:
+    checks = []
+
+    class HealthHold(MemoryProviderCooldown):
+        async def check(self) -> None:
+            checks.append(True)
+            if reason == "provider_unavailable":
+                raise ProviderCooldownDeferred("provider_unavailable", 300)
+            if reason == "provider_access_restricted":
+                raise ProviderCooldownDeferred("provider_access_restricted", 900)
+            if reason == "cooldown_store_unavailable":
+                raise ProviderCooldownDeferred("cooldown_store_unavailable", 60)
+
+    automation = CapturingAutomation()
+    reservation = CapturingReservationClient()
+    monkeypatch.setattr(compatibility_service, "_build_provider_cooldown", HealthHold)
+    monkeypatch.setattr(
+        compatibility_service, "_build_browser_client", lambda *a, **kw: reservation
+    )
+    monkeypatch.setattr(compatibility_service, "build_automation", lambda *a, **kw: automation)
+    app = compatibility_service.create_adapter_app(token=TOKEN, readiness_probe=ready_probe)
+    with TestClient(app) as client:
+        response = client.get("/readyz")
+    assert response.status_code == expected_status
+    assert response.headers["cache-control"] == "no-store"
+    assert checks == [True]
+    assert not automation.calls and not reservation.calls
+
+
+def test_readiness_recovers_when_hold_storage_becomes_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_available = False
+
+    class RecoveringHold(MemoryProviderCooldown):
+        async def check(self) -> None:
+            if not store_available:
+                raise ProviderCooldownDeferred("cooldown_store_unavailable", 60)
+
+    monkeypatch.setattr(compatibility_service, "_build_provider_cooldown", RecoveringHold)
+    monkeypatch.setattr(
+        compatibility_service,
+        "_build_browser_client",
+        lambda *a, **kw: CapturingReservationClient(),
+    )
+    monkeypatch.setattr(
+        compatibility_service, "build_automation", lambda *a, **kw: CapturingAutomation()
+    )
+    app = compatibility_service.create_adapter_app(token=TOKEN, readiness_probe=ready_probe)
+    with TestClient(app) as client:
+        assert client.get("/readyz").status_code == 503
+        store_available = True
+        assert client.get("/readyz").status_code == 200

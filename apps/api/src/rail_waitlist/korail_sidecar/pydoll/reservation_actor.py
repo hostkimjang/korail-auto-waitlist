@@ -16,6 +16,9 @@ from ..browser_contracts import (
     BrowserRateLimited,
     BrowserSourceUnavailable,
 )
+from ..browser_service_availability import BrowserProviderUnavailable as _BrowserProviderUnavailable
+from ..provider_cooldown import ProviderCooldown as _ProviderCooldown
+from ..provider_cooldown import ProviderCooldownDeferred as _ProviderCooldownDeferred
 from .auth_actor import (
     KorailSessionActorState,
     PydollAuthenticationSessionLease,
@@ -218,6 +221,7 @@ class PydollReservationActor[Session: PydollReservationSession]:
         has_unique_reservation_target: UniqueReservationTarget,
         max_more_result_actions: int,
         utc_now: Callable[[], datetime],
+        provider_cooldown: _ProviderCooldown | None = None,
     ) -> None:
         self._auth_lock = auth_lock
         self._direct_search_url = direct_search_url
@@ -231,6 +235,7 @@ class PydollReservationActor[Session: PydollReservationSession]:
         self._has_unique_reservation_target = has_unique_reservation_target
         self._max_more_result_actions = max_more_result_actions
         self._utc_now = utc_now
+        self._provider_cooldown = provider_cooldown
 
     async def reserve_once(
         self,
@@ -238,6 +243,8 @@ class PydollReservationActor[Session: PydollReservationSession]:
         *,
         on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.check()
         direct_url = await self._direct_search_url(
             request.origin,
             request.destination,
@@ -245,6 +252,8 @@ class PydollReservationActor[Session: PydollReservationSession]:
             request.departure_time,
         )
         async with self._auth_lock:
+            if self._provider_cooldown is not None:
+                await self._provider_cooldown.check()
             # Timetable replay is isolated from this auth lock and is used only to
             # derive a public direct URL before the authenticated attempt starts.
             await self._discard_if_credential_changed(request.credential)
@@ -316,6 +325,8 @@ class PydollReservationActor[Session: PydollReservationSession]:
                         # cancellation signals deliberately bypass this recovery path.
                         reused_session_authenticated = False
                     if not reused_session_authenticated:
+                        if self._provider_cooldown is not None:
+                            await self._provider_cooldown.check()
                         lease = await self._acquire_session(
                             credential_version=request.credential.version,
                         )
@@ -411,6 +422,8 @@ class PydollReservationActor[Session: PydollReservationSession]:
                 await self._discard_with_state(KorailSessionActorState.STALE)
                 raise
             except (BrowserProtectionDetected, BrowserRateLimited):
+                if self._provider_cooldown is not None:
+                    await self._provider_cooldown.protection_detected()
                 correlation_seats = await correlate_then_discard(KorailSessionActorState.BLOCKED)
                 return KorailReservationResult(
                     outcome=KorailReservationOutcome.PROVIDER_BLOCKED,
@@ -423,7 +436,27 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     reservation_requested_at=reservation_requested_at,
                     confirmation_correlation_seats=correlation_seats,
                 )
+            except _ProviderCooldownDeferred:
+                if not reservation_clicked:
+                    raise
+                correlation_seats = await correlate_then_discard(KorailSessionActorState.STALE)
+                return KorailReservationResult(
+                    outcome=KorailReservationOutcome.FAILED,
+                    reason="source_unavailable:provider_cooldown",
+                    seat_clicked=seat_clicked,
+                    reservation_clicked=reservation_clicked,
+                    session_ready_at=session_ready_at,
+                    target_rechecked_at=target_rechecked_at,
+                    seat_selected_at=seat_selected_at,
+                    reservation_requested_at=reservation_requested_at,
+                    confirmation_correlation_seats=correlation_seats,
+                )
             except BrowserSourceUnavailable as error:
+                if (
+                    isinstance(error, _BrowserProviderUnavailable)
+                    and self._provider_cooldown is not None
+                ):
+                    await self._provider_cooldown.query_failed()
                 # An uncertain result after the reservation button is never retried.
                 source_stage = (
                     error.stage

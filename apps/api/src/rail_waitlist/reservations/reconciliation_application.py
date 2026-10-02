@@ -17,7 +17,9 @@ from ..domain import (
     SeatClass,
     WatchStatus,
 )
+from ..korail_sidecar.provider_cooldown import ProviderCooldownDeferred
 from ..provider_account_management.models import RailProviderAccount
+from ..provider_account_management.schemas import RailProviderAuthStatus
 from ..provider_call_context import bind_request_id
 from ..provider_contracts import (
     ProviderLifecycle,
@@ -203,7 +205,7 @@ def _trusted_unknown_correlation_seats(
     return ()
 
 
-def _reservation_reconciliation_due_clause(now: datetime):
+def _reservation_reconciliation_due_clause(now: datetime) -> ColumnElement[bool]:
     """Select bounded initial checks and legacy/stale payment holds needing refresh."""
 
     return or_(
@@ -549,6 +551,12 @@ async def reconcile_reservation_attempt(
             )
             try:
                 confirmation = await adapter.confirm_reservation(target)
+            except ProviderCooldownDeferred as deferred:
+                if await lease_service.is_current(lease_grant, now=dependencies.now()):
+                    await _defer_reconciliation(
+                        target, owner_watch_id, lease_grant, deferred, dependencies
+                    )
+                return 0
             except ProviderUnavailable:
                 confirmation = ReservationConfirmationResult(
                     provider=provider,
@@ -627,7 +635,7 @@ async def reconcile_reservation_attempt(
                 .with_for_update()
             )
             if watch is None or candidate is None or attempt is None:
-                auth_status = (
+                auth_status: RailProviderAuthStatus | None = (
                     "auth_required"
                     if confirmation.outcome is ReservationConfirmationOutcome.AUTH_REQUIRED
                     else "provider_blocked"
@@ -770,3 +778,83 @@ async def reconcile_reservation_attempt(
                     lease_grant,
                     now=dependencies.now(),
                 )
+
+
+async def _defer_reconciliation(
+    target: ReservationConfirmationTarget,
+    owner_watch_id: str,
+    grant: ExecutionLeaseGrant,
+    deferred: ProviderCooldownDeferred,
+    dependencies: ReconciliationDependencies,
+) -> None:
+    """Schedule an unadmitted read without spending official confirmation evidence."""
+    async with dependencies.session_factory() as session:
+        now = dependencies.now()
+        if not await dependencies.lease_is_current_in_session(session, grant, now=now):
+            return
+        account = await session.scalar(
+            select(RailProviderAccount)
+            .where(
+                RailProviderAccount.provider == target.provider,
+                RailProviderAccount.enabled.is_(True),
+                RailProviderAccount.last_auth_status == "authenticated",
+            )
+            .with_for_update()
+        )
+        if account is None or account.credential_version != target.credential_version:
+            return
+        watch = await session.scalar(
+            select(Watch).where(Watch.id == owner_watch_id).with_for_update()
+        )
+        candidate = await session.scalar(
+            select(WatchCandidate)
+            .where(WatchCandidate.id == target.candidate_id)
+            .with_for_update(of=WatchCandidate)
+        )
+        attempt = await session.scalar(
+            select(ReservationAttempt)
+            .where(ReservationAttempt.id == target.attempt_id)
+            .with_for_update()
+        )
+        if (
+            watch is None
+            or candidate is None
+            or attempt is None
+            or candidate.watch_id != watch.id
+            or attempt.candidate_id != candidate.id
+            or watch.provider != target.provider
+            or attempt.credential_version != target.credential_version
+            or attempt.outcome
+            not in {ReservationOutcome.UNKNOWN, ReservationOutcome.PAYMENT_REQUIRED}
+            or _confirmation_purpose(watch, attempt) != target.purpose
+            or not _reservation_reconciliation_is_due(attempt, watch, now)
+        ):
+            return
+        paid = await session.scalar(
+            select(ReservationAttempt.id)
+            .join(WatchCandidate, WatchCandidate.id == ReservationAttempt.candidate_id)
+            .where(
+                WatchCandidate.watch_id == watch.id,
+                ReservationAttempt.confirmation_outcome
+                == ReservationConfirmationOutcome.CONFIRMED_PAID,
+            )
+            .limit(1)
+        )
+        if paid is not None:
+            return
+        if not await dependencies.lease_is_current_in_session(
+            session, grant, now=dependencies.now()
+        ):
+            return
+        retry_at = _as_utc(now) + timedelta(seconds=deferred.retry_after_seconds)
+        if attempt.next_reconcile_at is not None:
+            retry_at = max(retry_at, _as_utc(attempt.next_reconcile_at))
+        attempt.next_reconcile_at = retry_at
+        await session.commit()
+        logger.info(
+            "Reservation confirmation deferred event=reservation_confirmation_deferred "
+            "provider=%s reason=%s retry_after_seconds=%s",
+            target.provider.value,
+            deferred.reason,
+            deferred.retry_after_seconds,
+        )

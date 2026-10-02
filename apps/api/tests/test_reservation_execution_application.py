@@ -17,6 +17,7 @@ from rail_waitlist.domain import (
     SeatClass,
     WatchStatus,
 )
+from rail_waitlist.korail_sidecar.provider_cooldown import ProviderCooldownDeferred
 from rail_waitlist.models import (
     OutboxEvent,
     RailProviderAccount,
@@ -1795,3 +1796,141 @@ async def test_progress_persistence_failure_does_not_cancel_korail_reservation(a
         )
         assert progress_events == []
         assert result_event is not None
+
+
+class AdmissionDeferredKorailAdapter:
+    def __init__(self, *, progress: bool = False) -> None:
+        self.progress = progress
+        self.calls = 0
+        self.confirmations = 0
+        self.defer = True
+
+    async def reserve_once(self, _request):
+        raise AssertionError("KORAIL must use progress transport")
+
+    async def reserve_once_with_progress(self, request, on_progress):
+        self.calls += 1
+        if self.progress:
+            await on_progress(
+                ReservationProgressStage(
+                    stage="reservation_requested", occurred_at=datetime.now(UTC)
+                )
+            )
+        if self.defer:
+            raise ProviderCooldownDeferred("provider_unavailable", 600)
+        return ReservationResult(
+            outcome=ReservationOutcome.NOT_AVAILABLE,
+            source="korail-pydoll-reservation",
+            observed_at=datetime.now(UTC),
+            credential_version=request.expected_credential_version,
+        )
+
+    async def confirm_reservation(self, _target):
+        self.confirmations += 1
+        # A command that may have crossed dispatch stays unresolved during the hold.
+        raise ProviderCooldownDeferred("provider_unavailable", 600)
+
+
+async def test_admission_defer_releases_only_new_claim_and_keeps_history(app) -> None:
+    factory = app.state.test_session_factory
+    target = await _persist_actionable_korail_target(factory)
+    adapter = AdmissionDeferredKorailAdapter()
+    started = datetime.now(UTC)
+    await execute_reservation(adapter, target, dependencies=dependencies(factory))
+    async with factory() as session:
+        watch = await session.get(Watch, target.watch_id)
+        candidate = await session.get(WatchCandidate, target.candidate_id)
+        assert watch is not None and watch.status == WatchStatus.COOLDOWN
+        assert watch.reservation_attempted is False
+        assert watch.next_check_at == watch.cooldown_until
+        assert watch.next_check_at.replace(tzinfo=UTC) >= started + timedelta(seconds=600)
+        assert candidate is not None and candidate.state == "observed"
+        assert await session.scalar(select(func.count()).select_from(ReservationAttempt)) == 0
+        kinds = set(await session.scalars(select(OutboxEvent.event_type)))
+        assert {"watch.reservation_attempted", "watch.reservation_deferred"} <= kinds
+        assert "watch.reservation_result" not in kinds
+        # A fresh observation, rather than the deferred snapshot, authorizes the next claim.
+        watch.status = WatchStatus.SEAT_FOUND
+        candidate.state = "seat_found"
+        await session.commit()
+    adapter.defer = False
+    await execute_reservation(adapter, target, dependencies=dependencies(factory))
+    assert adapter.calls == 2 and adapter.confirmations == 0
+    async with factory() as session:
+        attempts = list(await session.scalars(select(ReservationAttempt)))
+        assert len(attempts) == 1
+        assert attempts[0].outcome == ReservationOutcome.NOT_AVAILABLE
+
+
+async def test_admission_defer_after_progress_keeps_unknown_fence(app) -> None:
+    factory = app.state.test_session_factory
+    target = await _persist_actionable_korail_target(factory)
+    adapter = AdmissionDeferredKorailAdapter(progress=True)
+    await execute_reservation(adapter, target, dependencies=dependencies(factory))
+    async with factory() as session:
+        attempt = await session.scalar(select(ReservationAttempt))
+        assert attempt is not None and attempt.outcome == ReservationOutcome.UNKNOWN
+        assert attempt.progress_stages
+        watch = await session.get(Watch, target.watch_id)
+        assert watch is not None and watch.reservation_attempted is True
+        assert (
+            await session.scalar(
+                select(OutboxEvent).where(OutboxEvent.event_type == "watch.reservation_deferred")
+            )
+            is None
+        )
+    assert adapter.calls == 1 and adapter.confirmations == 1
+
+
+async def test_admission_defer_preserves_existing_unknown_attempts(app) -> None:
+    factory = app.state.test_session_factory
+    target = await _persist_actionable_korail_target(factory)
+    async with factory() as session:
+        for number in range(4):
+            old_watch = Watch(
+                provider=Provider.KORAIL,
+                origin="대전",
+                destination="서울",
+                origin_node_id="NAT011668",
+                destination_node_id="NAT010000",
+                travel_date=target.departure_at.date(),
+                time_from=time(8),
+                time_to=time(12),
+                passenger_count=1,
+                mode="official",
+                status=WatchStatus.WATCHING,
+                reservation_policy=ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+                reservation_attempted=True,
+                dedupe_key=f"unknown-fence-fixture-{number}",
+            )
+            old_candidate = WatchCandidate(
+                train_number=f"fixture-{number}",
+                departure_at=target.departure_at,
+                arrival_at=target.arrival_at,
+                seat_class=SeatClass.STANDARD,
+                priority=1,
+                state="observed",
+            )
+            old_watch.candidates.append(old_candidate)
+            session.add(old_watch)
+            await session.flush()
+            session.add(
+                ReservationAttempt(
+                    candidate_id=old_candidate.id,
+                    attempt_sequence=1,
+                    episode_key=f"fixture-unknown-{number}",
+                    idempotency_key=f"fixture-unknown-{number}",
+                    credential_version=4,
+                    outcome=ReservationOutcome.UNKNOWN,
+                )
+            )
+        await session.commit()
+        old_ids = set(await session.scalars(select(ReservationAttempt.id)))
+    await execute_reservation(
+        AdmissionDeferredKorailAdapter(), target, dependencies=dependencies(factory)
+    )
+    async with factory() as session:
+        attempts = list(await session.scalars(select(ReservationAttempt)))
+        assert {attempt.id for attempt in attempts} == old_ids
+        assert len(attempts) == 4
+        assert all(attempt.outcome == ReservationOutcome.UNKNOWN for attempt in attempts)

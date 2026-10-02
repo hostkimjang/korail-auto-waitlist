@@ -101,6 +101,15 @@ async def provider_accounts_upsert(
         ),
     )
     if not verification.authenticated:
+        if verification.failure_kind == "provider_cooldown":
+            raise HTTPException(
+                503,
+                "철도사 재시도 대기 중입니다. 로그인 확인과 계정 저장을 실행하지 않았습니다.",
+                headers={
+                    "Cache-Control": "no-store",
+                    "Retry-After": str(verification.retry_after_seconds),
+                },
+            )
         details = {
             ProviderLoginVerificationOutcome.INVALID_IDENTIFIER: (
                 422,

@@ -48,6 +48,12 @@ OWNER_IMPORTS_FROM = {
     ("sqlalchemy.ext.asyncio", 0, "AsyncSession", None),
     ("sqlalchemy.ext.asyncio", 0, "async_sessionmaker", None),
     ("domain", 2, "Provider", None),
+    (
+        "korail_sidecar.provider_cooldown",
+        2,
+        "ProviderCooldownDeferred",
+        "_ProviderCooldownDeferred",
+    ),
     ("application", 1, "SUPPORTED_ACCOUNT_PROVIDERS", None),
     ("application", 1, "get_enabled_provider_credentials", None),
     ("application", 1, "update_provider_auth_status", None),
@@ -99,6 +105,7 @@ OWNER_PRIVATE = {
     "_restore_authenticated_account",
     "_restore_locally_reusable_session",
 }
+OWNER_DEPENDENCY_PRIVATE = {"_ProviderCooldownDeferred"}
 PRE_MOVE_PICKLES = {
     "ProviderRuntimePrewarmRegistry": (
         "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfcnVudGltZQpQcm92aWRlclJ1bnRpbWVQcmV3YXJt"
@@ -268,7 +275,7 @@ def test_runtime_owner_has_exact_definitions_dependencies_and_surface() -> None:
     assert {name for name in vars(owner) if not name.startswith("_")} == OWNER_PUBLIC
     assert {
         name for name in vars(owner) if name.startswith("_") and not name.startswith("__")
-    } == OWNER_PRIVATE
+    } == OWNER_PRIVATE | OWNER_DEPENDENCY_PRIVATE
     assert not hasattr(owner, "__all__")
     assert not _module_references(
         OWNER_PATH.read_text(encoding="utf-8"), OWNER_PATH, LEGACY_MODULE

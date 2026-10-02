@@ -695,6 +695,63 @@ main query runtime이 만든 남은 deadline은 내부 `X-Rail-Timeout-Ms`로 si
 두 engine과 sidecar HTTP·runtime·시간표 projection이 공유하는 공식 검색 form URL과 격리 fullstack fixture URL은
 4줄 `korail_sidecar/browser_page_contracts.py`가 소유합니다.
 
+#### KORAIL 인증·조회·예약의 공통 대기
+
+v1.2.11의 `korail_sidecar/provider_cooldown.py`는 위 검색 전용 정책과 인증·예약 호출 사이의 공통
+진입 판정을 소유합니다. production은 Redis를 사용하며, 명시적으로 주입하는 `MemoryProviderCooldown`은
+테스트용입니다. Redis URL이 없으면 자동 메모리 대체로 공식 요청을 허용하지 않습니다. sidecar runtime은
+대기 저장소를 한 번 만들어 공유 브라우저와 검색 coordinator에 주입합니다. Main API·worker는 같은 key를
+기존 Redis client로 확인하고, 빌린 client의 종료 책임은 기존 owner에 남깁니다.
+
+production sidecar의 `/readyz`는 브라우저 준비 상태뿐 아니라 공통 저장소를 매 요청 확인합니다.
+정상 record의 장애·보호 대기는 준비 상태 200을 유지하고, 저장소 연결·ACL·인증 설정이나 record
+오류는 no-store 503 `not_ready`로 닫습니다. 브라우저 준비 성공을 캐시했어도 저장소 검사는 생략하지
+않으며 복구 후 다음 검사에서 다시 판정합니다. 설정 비밀값은 experimental-rail에서 필수이고
+실험 프로필을 실행하지 않는 구성에서는 선택 항목입니다. 전역 Compose 필수 치환으로 기본 구성을 막지 않습니다.
+
+고정 key `rail-waitlist:korail:provider-admission:v1`에는 계정 정보 없이 닫힌 이유·UTC 종료 시각·실제
+로그인 5xx 횟수를 저장합니다. Lua는 Redis `TIME`으로 읽고 원자적으로 가장 늦은 종료 시각을 보존하며,
+같은 시각에는 보호 이유를 우선합니다. 실제 로그인 5xx는 최대 세 단계 300→600→900초, 조회의 공식
+서버 오류는 최소 300초, 보호·403·429는 최소 900초로 기존의 더 긴 대기를 줄이지 않습니다. 새 공식
+인증 성공은 횟수만 초기화하고 대기는 남깁니다. 조회 성공·계정 세대 변경은 둘 다 초기화하지 않습니다.
+실제 갱신 뒤 hash TTL은 1일이며 읽기는 갱신하지 않습니다.
+
+Main query와 sidecar는 cache 이전과 실행 gate 이후에 확인하고, 인증 actor는 auth lock 이후·세션 probe
+실패 후 재인증 이전에 재확인합니다. 예약과 공식 내역 읽기도 실행 경계에서 확인합니다. 동시성은 기존
+singleflight·cache·auth lock·replay owner가 유지하며 저장 I/O를 위해 별도의 긴 전역 잠금을 만들지
+않습니다. `ProviderCooldownDeferred`는 실제 제출 실패·`BrowserSourceUnavailable`과 다른 계약입니다.
+닫힌 세 이유와 1~86400초만 전파하며 저장 불가도 공식 호출 생략으로 닫습니다. 실제 제출 뒤 실패는
+기존 제출 근거를 보존합니다. 인증값·DOM·로컬 시작 오류와 caller 취소는 실제 로그인 5xx 횟수로 세지 않습니다.
+
+예약 execution의 이번 등록은 진행·클릭 근거 없이 생략됐을 때만
+`reservations/admission_deferral_application.py`가 같은 계정 세대·작업·candidate·episode·최신 attempt를
+정상 잠금 순서로 확인해 해당 `PENDING`을 되돌립니다. 기존 시도 이력은 남기고 candidate를 새 좌석
+관측 경로로 돌려 대기 후 예전 좌석을 재사용하지 않습니다. 계정·작업·시도의 식별 정보가 바뀌거나 진행 근거가 있으면 UNKNOWN
+fence를 보존합니다. 최초 확인 생략도 UNKNOWN을 유지하며 후속 reconciliation 생략은 횟수를 늘리거나
+공식 내역 근거를 확정하지 않고 다음 확인 시각만 늦춥니다. 기존 UNKNOWN 4건은 이 경로의 해제 대상이 아닙니다.
+
+Compose의 내부 `provider-state` 망은 Redis와 KORAIL adapter를 연결하고 PostgreSQL 망과 분리합니다.
+`KORAIL_PROVIDER_COOLDOWN_REDIS_PASSWORD`는 URL-safe 무작위 32바이트 이상 `.env` 비밀값이며,
+Redis entrypoint는 매 시작마다 tmpfs에 hash ACL을 만들어 고정 key와 필요한 명령만 제한 계정에 허용합니다.
+확인된 저장은 AOF 재시작에 보존됩니다. 저장 실패의 관측은 프로세스 내 최소 대기로 보존해 다음 접근 전에
+최댓값으로 복구 저장하지만, 저장 확정 전 재시작은 이 미저장 관측을 잃을 수 있습니다. 저장소 검증 실패 시
+다음 공식 호출을 생략하는 계약과 영속성의 한계를 구분합니다.
+
+교차 호출 회귀와 격리 Redis의 실제 Lua·AOF·ACL 검증은 완료했으며 운영 데이터·공식 호출은 없었습니다.
+Pydoll의 공통 대기 판정·공식 오류 기록은 검색 actor가 소유하고 browser 조립 파일은 위임합니다.
+기존 공개 범위·모듈 경계 회귀와 오류 한 번 기록·후속 진입 생략 검증을 통과했습니다. 웹 검증과 고정
+Ruff·format ratchet·strict mypy도 통과했습니다. 후속 전체 API 실행은 5,035건 통과·4건 skip이며
+최종 readyz 코드 수정 전 수집한 범위입니다. 마지막 준비 상태 변경은 오류·복구 회귀 5건을 포함한
+HTTP/core/runtime 46건으로 따로 검증했습니다.
+최신 소스를 서버·로컬 사용 프로필 전체로 재빌드·강제 재생성해 양쪽 12개 서비스 health·일회성 작업
+종료 0·실행 소스 30개 hash·화면 v1.2.11과 제한 Redis 계정을 확인했습니다. 로컬은 검증 후 전체
+중지하고 서버만 12개 서비스를 운영합니다. 계정 세대와 기존 예약 차단은 보존합니다.
+기존 일반 안내 허용 정책은 서버에서 정규화된 auto_action true로 적용하고 전체 재배포·실행 설정을
+다시 확인했습니다. 정책 범위를 넓히거나 예약 차단을 해제한 변경은 없으며 실제 예약 안내 처리 검증은
+미완료입니다. 서버 HTTP 500의 근본 원인과 실제 인증·좌석 조회·자동 예약 복구도 미완료입니다.
+같은 서버 egress에 연결한 로컬 AMD64 비교도 일반 페이지 GET 뒤 외부 리소스 실패로
+검색 전에 중단돼 CPU·egress·보호 처리의 인과를 판단할 수 없습니다.
+
 Playwright direct-CDP client 조립점은 `korail_sidecar/playwright/client.py`가 canonical owner입니다. client는
 loopback CDP browser lifecycle, 허용된 공식/test URL과 HTTP·표면 보호 판정을 소유합니다. 역·날짜·시간 form
 navigation, submit 전 exact identity 확인과 취소 중에도 완료하는 CDP mouse release/detach는

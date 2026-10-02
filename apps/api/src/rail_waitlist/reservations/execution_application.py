@@ -20,6 +20,7 @@ from ..domain import (
     SeatClass,
     WatchStatus,
 )
+from ..korail_sidecar.provider_cooldown import ProviderCooldownDeferred
 from ..outbox_management.models import OutboxEvent
 from ..provider_account_management.models import RailProviderAccount
 from ..provider_account_management.schemas import RailProviderAuthStatus
@@ -27,6 +28,7 @@ from ..provider_call_context import bind_request_id
 from ..provider_circuit.models import ProviderCircuit
 from ..provider_contracts import ReservationExecutionProvider
 from ..watch_management.models import ReservationAttempt, Watch, WatchCandidate
+from .admission_deferral_application import release_unadmitted_claim
 from .contracts import (
     POST_REQUEST_UNKNOWN_CORRELATION_REASON_CODES,
     ReservationProgressStage,
@@ -510,7 +512,13 @@ async def confirm_provider_reservation_result(
         )
         try:
             confirmation = await adapter.confirm_reservation(confirmation_target)
-        except (*dependencies.provider_call_errors, RuntimeError, TypeError, ValueError):
+        except (
+            *dependencies.provider_call_errors,
+            ProviderCooldownDeferred,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
             confirmation = ReservationConfirmationResult(
                 provider=target.provider,
                 outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
@@ -799,6 +807,7 @@ async def execute_reservation(
                 f"reserve:{target.candidate_id}:"
                 f"{_request_hash(target.reservation_episode_key)[:32]}"
             )
+            prior_reservation_attempted = watch.reservation_attempted
             attempt, created = await dependencies.begin_reservation_attempt(
                 session,
                 watch,
@@ -853,6 +862,32 @@ async def execute_reservation(
             result = await adapter.reserve_once_with_progress(reservation_request, on_progress)
         else:
             result = await adapter.reserve_once(reservation_request)
+    except ProviderCooldownDeferred as deferred:
+        if (
+            target.provider == Provider.KORAIL
+            and not cumulative_progress
+            and await release_unadmitted_claim(
+                watch_id=target.watch_id,
+                candidate_id=target.candidate_id,
+                attempt_id=attempt_id,
+                episode_key=target.reservation_episode_key,
+                credential_version=provider_credential_version,
+                prior_reservation_attempted=prior_reservation_attempted,
+                deferred=deferred,
+                dependencies=dependencies,
+            )
+        ):
+            return
+        # A stage or identity changed after the claim. Keep the ambiguous command
+        # fence instead of treating the admission DTO as permission to retry.
+        result = ReservationResult(
+            outcome=ReservationOutcome.UNKNOWN,
+            result_reason_code=ReservationResultReasonCode.PROVIDER_UNAVAILABLE,
+            source="authorized-provider",
+            observed_at=dependencies.now(),
+            credential_version=provider_credential_version,
+            progress_stages=cumulative_progress,
+        )
     except dependencies.provider_call_errors:
         # A provider adapter that returns FAILED has proved that its reservation
         # command never crossed the dispatch boundary. An exception escaping an

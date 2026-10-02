@@ -869,6 +869,67 @@ async def test_official_post_failure_waits_without_spending_credential_verdict_b
     assert 4 <= deadline - asyncio.get_running_loop().time() <= 5
 
 
+@pytest.mark.parametrize("prior_failure", [False, True])
+async def test_provider_deferral_preserves_outcome_submission_state_and_revision_budget(
+    app, prior_failure
+) -> None:
+    await _seed_account(app, auth_status="auth_required")
+    verifier = StubRuntimeVerifier(
+        verifications={
+            Provider.KORAIL: ProviderLoginVerification(
+                ProviderLoginVerificationOutcome.FAILED,
+                failure_kind="provider_cooldown",
+                cooldown_reason="provider_unavailable",
+                retry_after_seconds=800,
+            )
+        },
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    registry.outcomes[Provider.KORAIL] = "failed"
+    if prior_failure:
+        registry.record_submission_failure(Provider.KORAIL, 9, retry_after_seconds=300)
+        registry.prewarm_retry_state[Provider.KORAIL] = (9, 2, 0)
+    failures = dict(registry.provider_submission_failures)
+    retries = dict(registry.prewarm_retry_state)
+
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
+    assert registry.provider_submission_failures == failures
+    assert registry.prewarm_retry_state == retries
+    assert registry.auth_revision_attempts == {}
+    assert registry.prewarm_in_flight == set()
+    assert registry.outcome_for(Provider.KORAIL) == "failed"
+    assert (
+        799
+        <= registry.provider_deferred_until[Provider.KORAIL] - (asyncio.get_running_loop().time())
+        <= 800
+    )
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 0
+    )
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9)]
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(select(RailProviderAccount))
+        assert account.last_auth_status == "auth_required"
+        assert account.last_authenticated_at is None
+
+
+def test_provider_deferred_deadline_survives_generation_change_without_advancing_failure() -> None:
+    registry = ProviderRuntimePrewarmRegistry()
+    registry.defer_prewarm(Provider.KORAIL, retry_after_seconds=900, now=1000)
+    registry.defer_prewarm(Provider.KORAIL, retry_after_seconds=1, now=1001)
+    assert not registry.begin_prewarm(Provider.KORAIL, 10, now=1500, bypass_backoff=True)
+    assert registry.provider_deferred_until == {Provider.KORAIL: 1900}
+    assert registry.prewarm_retry_state == {}
+    assert registry.auth_revision_attempts == {}
+    assert registry.begin_prewarm(Provider.SRT, 10, now=1500)
+    assert registry.begin_prewarm(Provider.KORAIL, 10, now=1900)
+
+
 def test_submission_failure_backoff_is_bounded_and_cannot_be_bypassed() -> None:
     registry = ProviderRuntimePrewarmRegistry()
     now = 1000.0

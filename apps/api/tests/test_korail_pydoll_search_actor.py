@@ -6,6 +6,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from datetime import date, time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -16,11 +17,16 @@ from rail_waitlist.korail_sidecar.browser_service_availability import (
     BrowserProviderUnavailable,
 )
 from rail_waitlist.korail_sidecar.http_replay import HttpReplayInvalidCapture
+from rail_waitlist.korail_sidecar.provider_cooldown import (
+    MemoryProviderCooldown,
+    ProviderCooldownDeferred,
+)
 from rail_waitlist.korail_sidecar.pydoll.page_safety import assert_pydoll_response_allowed
 from rail_waitlist.korail_sidecar.pydoll.search_actor import (
     KorailPydollReadOnlySearchSession,
     PydollReadOnlySearchActor,
 )
+from rail_waitlist.provider_adapters.korail_search_bootstrap import KorailStationIdentityResolver
 
 
 def _request() -> BrowserSeatSearchRequest:
@@ -370,3 +376,54 @@ async def test_reused_search_session_does_not_cold_retry_explicit_provider_outag
     assert raised.value.trigger == "maintenance_page"
     assert concrete_session.events.count("open") == 2
     assert actor.active_session is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_point", ["direct_url", "search"])
+async def test_direct_url_provider_outage_records_once_and_defers_before_browser(
+    entry_point: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolver = KorailStationIdentityResolver()
+    outage = BrowserProviderUnavailable("business_server_error", "station_identity")
+    resolve_pair = AsyncMock(side_effect=outage)
+    monkeypatch.setattr(resolver, "resolve_pair", resolve_pair)
+    hold = MemoryProviderCooldown(clock=lambda: 0)
+    query_failed = AsyncMock(wraps=hold.query_failed)
+    monkeypatch.setattr(hold, "query_failed", query_failed)
+    session = _ReadOnlySession(_snapshot())
+    actor = PydollReadOnlySearchActor(
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=True,
+        session_factory=lambda *_: _SessionContext(session),
+        session_reuse_ttl_seconds=0,
+        session_reuse_max_searches=1,
+        station_identity_resolver=resolver,
+        monotonic=lambda: 0,
+        cleanup=_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        http_replay_client_factory=lambda *_args, **_kwargs: object(),
+        http_replay_route_cache_size=4,
+        event_logger=logging.getLogger(__name__),
+        provider_cooldown=hold,
+    )
+    request = _request()
+
+    async def run() -> object:
+        if entry_point == "search":
+            return await actor.search(request)
+        return await actor.direct_search_url(
+            request.origin, request.destination, request.travel_date, request.departure_from
+        )
+
+    with pytest.raises(BrowserProviderUnavailable) as failed:
+        await run()
+    assert failed.value is outage
+    with pytest.raises(ProviderCooldownDeferred) as deferred:
+        await run()
+
+    assert deferred.value.reason == "provider_unavailable"
+    assert deferred.value.retry_after_seconds == 300
+    assert resolve_pair.await_count == 1
+    assert query_failed.await_count == 1
+    assert session.events == []

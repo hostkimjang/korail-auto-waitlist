@@ -51,7 +51,58 @@ from rail_waitlist.korail_sidecar.browser_service_availability import (
     ProviderUnavailableTrigger,
 )
 from rail_waitlist.korail_sidecar.playwright import search_form
+from rail_waitlist.korail_sidecar.provider_cooldown import (
+    MemoryProviderCooldown,
+    ProviderCooldownDeferred,
+)
 from rail_waitlist.provider_call_context import bind_request_id
+
+
+@pytest.fixture(autouse=True)
+def memory_provider_cooldown_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(adapter_service, "_build_provider_cooldown", MemoryProviderCooldown)
+
+
+@pytest.mark.asyncio
+async def test_login_hold_preempts_query_cache_without_query_failure_budget() -> None:
+    hold = MemoryProviderCooldown()
+    client = FakeClient()
+    automation = KorailBrowserAutomation(client, cache_ttl_seconds=60, provider_cooldown=hold)
+    await automation.search(request())
+    await hold.login_failed(500, "http_error")
+    with pytest.raises(ProviderCooldownDeferred):
+        await automation.search(request())
+    assert client.calls == 1
+    assert automation._failure_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_query_gate_rechecks_shared_hold_opened_while_waiting() -> None:
+    hold = MemoryProviderCooldown()
+    client = FakeClient()
+    automation = KorailBrowserAutomation(client, provider_cooldown=hold)
+    await automation._browser_gate.acquire()
+    task = asyncio.create_task(automation.search(request()))
+    await asyncio.sleep(0)
+    await hold.login_failed(500, "http_error")
+    automation._browser_gate.release()
+    with pytest.raises(ProviderCooldownDeferred):
+        await task
+    assert client.calls == 0
+    assert automation._failure_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_query_provider_error_publishes_shared_hold_for_authentication() -> None:
+    hold = MemoryProviderCooldown()
+    client = FakeClient(failure=BrowserProviderUnavailable("business_server_error", "wait_result"))
+    automation = KorailBrowserAutomation(client, provider_cooldown=hold)
+    with pytest.raises(BrowserProviderUnavailable):
+        await automation.search(request())
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await hold.check()
+    assert caught.value.reason == "provider_unavailable"
+    assert client.calls == 1
 
 
 @pytest.mark.parametrize(
@@ -242,6 +293,7 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
     assert init_calls == [
         {
             "page_url": OFFICIAL_KORAIL_SEARCH_URL,
+            "provider_cooldown": None,
             "timeout_seconds": 25,
             "headless": True,
             "auto_handle_dialogs": False,

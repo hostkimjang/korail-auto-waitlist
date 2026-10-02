@@ -6,6 +6,7 @@ from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import rail_waitlist.korail_browser_seat_source as legacy_source
 from rail_waitlist.domain import (
@@ -15,6 +16,7 @@ from rail_waitlist.domain import (
     SeatClass,
 )
 from rail_waitlist.korail_sidecar.contracts import KorailReserveOnceResult
+from rail_waitlist.korail_sidecar.provider_cooldown import ProviderCooldownDeferred
 from rail_waitlist.provider_account_management.contracts import ProviderCredentials
 from rail_waitlist.provider_adapters import korail_browser_reservation_policy as policy
 from rail_waitlist.reservations.contracts import ReservationRequest
@@ -117,6 +119,7 @@ def test_reservation_policy_has_exact_pure_owner_boundary() -> None:
         (0, "zoneinfo"),
         (2, "domain"),
         (2, "korail_sidecar.contracts"),
+        (2, "korail_sidecar.provider_cooldown"),
         (2, "provider_account_management.contracts"),
         (2, "reservations.contracts"),
         (2, "reservations.progress_timing_policy"),
@@ -391,6 +394,56 @@ def test_partial_click_evidence_without_request_timestamp_is_never_replayed(
     assert result.outcome is ReservationOutcome.UNKNOWN
     assert result.result_reason_code is expected_reason
     assert result.progress_stages == ()
+
+
+def test_validated_reservation_deferral_preserves_retry_without_a_reservation_verdict() -> None:
+    wire = KorailReserveOnceResult(
+        outcome="failed",
+        reason="provider_cooldown",
+        failure_kind="provider_cooldown",
+        cooldown_reason="provider_unavailable",
+        retry_after_seconds=1,
+        seat_clicked=False,
+        reservation_clicked=False,
+    )
+    with pytest.raises(ProviderCooldownDeferred) as deferred:
+        policy.project_reservation_result(wire, observed_at=OBSERVED_AT)
+    assert deferred.value.reason == "provider_unavailable"
+    assert deferred.value.retry_after_seconds == 1
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"seat_clicked": True},
+        {"reservation_clicked": True},
+        {"seat_clicked": "false"},
+        {"reservation_clicked": 0},
+        {"session_ready_at": OBSERVED_AT},
+        {"reservation_requested_at": OBSERVED_AT},
+        {"outcome": "payment_required"},
+        {"retry_after_seconds": True},
+        {"retry_after_seconds": 0},
+        {"retry_after_seconds": 86401},
+        {"cooldown_reason": None},
+        {"cooldown_reason": "unknown"},
+        {"cookie": "fixture-secret"},
+    ],
+)
+def test_reservation_deferral_rejects_click_progress_and_untrusted_fields(updates) -> None:
+    with pytest.raises(ValidationError):
+        KorailReserveOnceResult.model_validate(
+            {
+                "outcome": "failed",
+                "reason": "provider_cooldown",
+                "failure_kind": "provider_cooldown",
+                "cooldown_reason": "provider_unavailable",
+                "retry_after_seconds": 1,
+                "seat_clicked": False,
+                "reservation_clicked": False,
+                **updates,
+            }
+        )
 
 
 def test_result_projection_survives_wall_clock_rollback_after_progress() -> None:

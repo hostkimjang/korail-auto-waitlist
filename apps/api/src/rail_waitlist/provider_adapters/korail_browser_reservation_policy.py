@@ -12,6 +12,7 @@ from ..korail_sidecar.contracts import (
     KorailReserveOnceRequest,
     KorailReserveOnceResult,
 )
+from ..korail_sidecar.provider_cooldown import ProviderCooldownDeferred
 from ..provider_account_management.contracts import ProviderCredentials
 from ..reservations.contracts import (
     ReservationProgressStage,
@@ -97,6 +98,10 @@ def project_reservation_result(
     *,
     observed_at: datetime,
 ) -> ReservationResult:
+    if result.failure_kind == "provider_cooldown":
+        if result.cooldown_reason is None or result.retry_after_seconds is None:
+            raise ValueError("invalid provider cooldown result")
+        raise ProviderCooldownDeferred(result.cooldown_reason, result.retry_after_seconds)
     progress_values: tuple[tuple[ReservationProgressStageName, datetime | None], ...] = (
         ("authenticated_session_ready", result.session_ready_at),
         ("target_rechecked", result.target_rechecked_at),

@@ -5736,7 +5736,10 @@ def test_korail_reservation_contract_facade_exactly_aliases_sidecar_contracts() 
             "rail_waitlist/provider_account_management/login_verification.py",
             "korail_sidecar.contracts",
             2,
-            {("KorailSessionStateResult", None)},
+            {
+                ("KorailSessionStateResult", None),
+                ("ProviderCooldownReasonValue", "_ProviderCooldownReasonValue"),
+            },
         ),
     ],
 )

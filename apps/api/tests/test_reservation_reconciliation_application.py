@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import date, datetime, time, timedelta, timezone
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete, func, select
 
 from rail_waitlist.domain import Provider, ReservationOutcome, ReservationPolicy, WatchStatus
+from rail_waitlist.korail_sidecar.provider_cooldown import ProviderCooldownDeferred
 from rail_waitlist.models import (
     OutboxEvent,
     RailProviderAccount,
@@ -110,11 +112,13 @@ class RecordingAdapter:
         return self.result
 
 
-async def _seed_due_attempt(session_factory, *, credential_version: int = 3) -> str:
+async def _seed_due_attempt(
+    session_factory, *, credential_version: int = 3, provider: Provider = Provider.SRT
+) -> str:
     async with session_factory() as session:
         session.add(
             RailProviderAccount(
-                provider=Provider.SRT,
+                provider=provider,
                 credentials_ciphertext="test-ciphertext",
                 enabled=True,
                 credential_version=credential_version,
@@ -122,7 +126,7 @@ async def _seed_due_attempt(session_factory, *, credential_version: int = 3) -> 
             )
         )
         watch = Watch(
-            provider=Provider.SRT,
+            provider=provider,
             origin="수서",
             destination="부산",
             travel_date=date(2026, 8, 5),
@@ -161,11 +165,13 @@ async def _seed_due_attempt(session_factory, *, credential_version: int = 3) -> 
         return attempt.id
 
 
-async def _seed_due_payment_hold(session_factory, *, credential_version: int = 3) -> str:
+async def _seed_due_payment_hold(
+    session_factory, *, credential_version: int = 3, provider: Provider = Provider.SRT
+) -> str:
     async with session_factory() as session:
         session.add(
             RailProviderAccount(
-                provider=Provider.SRT,
+                provider=provider,
                 credentials_ciphertext="test-payment-hold-ciphertext",
                 enabled=True,
                 credential_version=credential_version,
@@ -174,7 +180,7 @@ async def _seed_due_payment_hold(session_factory, *, credential_version: int = 3
         )
         deadline = NOW + timedelta(minutes=30)
         watch = Watch(
-            provider=Provider.SRT,
+            provider=provider,
             origin="수서",
             destination="부산",
             travel_date=date(2026, 8, 5),
@@ -237,14 +243,16 @@ def _dependencies(
     apply_reconciliation: Callable[..., Awaitable[None]] | None = None,
     state_dependencies: ReservationReconciliationStateDependencies | None = None,
     now: Callable[[], datetime] | None = None,
+    grant: ExecutionLeaseGrant = LEASE_GRANT,
 ) -> ReconciliationDependencies:
     locked_results = locked_current if isinstance(locked_current, tuple) else (locked_current,)
     locked_check_count = 0
+    expected_grant = grant
 
     async def acquire_execution_lease(_provider: Provider, now: datetime):
         assert now.tzinfo is not None
         events.append("acquire")
-        return lease_service, LEASE_GRANT if lease_granted else None
+        return lease_service, grant if lease_granted else None
 
     def get_execution_provider(_provider: Provider):
         events.append("get-adapter")
@@ -269,7 +277,7 @@ def _dependencies(
         now: datetime,
     ) -> bool:
         nonlocal locked_check_count
-        assert grant is LEASE_GRANT
+        assert grant is expected_grant
         assert now.tzinfo is not None
         locked_check_count += 1
         events.append(f"lease-current-locked:{locked_check_count}")
@@ -1246,4 +1254,86 @@ async def test_apply_failure_rolls_back_state_and_outbox_atomically(app) -> None
         )
 
     assert await _attempt_state(session_factory, attempt_id) == (ReservationOutcome.UNKNOWN, 0, 0)
+    assert events[-2:] == ["drain", "release"]
+
+
+@pytest.mark.parametrize("payment_hold", [False, True])
+@pytest.mark.parametrize("generation_changed", [False, True])
+async def test_admission_defers_official_read_without_spending_reconciliation_budget(
+    app, payment_hold, generation_changed
+) -> None:
+    session_factory = app.state.test_session_factory
+    seed = _seed_due_payment_hold if payment_hold else _seed_due_attempt
+    attempt_id = await seed(session_factory, provider=Provider.KORAIL)
+    events = []
+
+    async def change_generation(_target):
+        if generation_changed:
+            async with session_factory() as session:
+                account = await session.scalar(select(RailProviderAccount))
+                account.credential_version += 1
+                await session.commit()
+
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.AUTH_REQUIRED,
+            source="fixture-not-read",
+            observed_at=NOW,
+        ),
+        error=ProviderCooldownDeferred("provider_unavailable", 900),
+        on_confirm=change_generation,
+    )
+    adapter.provider = Provider.KORAIL
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        before = (
+            attempt.outcome,
+            attempt.reconciliation_attempt_count,
+            attempt.confirmation_outcome,
+            attempt.last_reconciled_at,
+            attempt.post_deadline_reconciled_at,
+            attempt.credential_version,
+        )
+        prior_next = attempt.next_reconcile_at
+    assert (
+        await reconcile_reservation_attempt(
+            attempt_id,
+            dependencies=_dependencies(
+                session_factory,
+                adapter,
+                RecordingLeaseService(events),
+                events,
+                grant=replace(LEASE_GRANT, provider=Provider.KORAIL),
+            ),
+            adapter=adapter,
+        )
+        == 0
+    )
+    async with session_factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        after = (
+            attempt.outcome,
+            attempt.reconciliation_attempt_count,
+            attempt.confirmation_outcome,
+            attempt.last_reconciled_at,
+            attempt.post_deadline_reconciled_at,
+            attempt.credential_version,
+        )
+        assert after == before
+        if generation_changed:
+            assert attempt.next_reconcile_at == prior_next
+        else:
+            next_at = attempt.next_reconcile_at
+            if next_at.tzinfo is None:
+                next_at = next_at.replace(tzinfo=UTC)
+            assert next_at == NOW + timedelta(seconds=900)
+        watch = await session.scalar(select(Watch))
+        assert watch.reservation_attempted
+        assert watch.status == (
+            WatchStatus.PAYMENT_REQUIRED if payment_hold else WatchStatus.WATCHING
+        )
+        assert await session.scalar(select(func.count()).select_from(ReservationAttempt)) == 1
     assert events[-2:] == ["drain", "release"]

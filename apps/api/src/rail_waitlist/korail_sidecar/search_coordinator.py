@@ -26,6 +26,7 @@ from .browser_service_availability import (
     BrowserProviderUnavailable,
     ProviderUnavailableTrigger,
 )
+from .provider_cooldown import ProviderCooldown, ProviderCooldownDeferred
 from .search_progress import (
     IDLE_SEARCH_PROGRESS,
     OfficialQueueProgress,
@@ -104,12 +105,20 @@ class KorailBrowserAutomation:
         shutdown_drain_timeout_seconds: float = 70,
         shutdown_cancel_timeout_seconds: float = 10,
         monotonic: Callable[[], float] = time.monotonic,
+        provider_cooldown: ProviderCooldown | None = None,
     ) -> None:
         self._client = client
+        self._provider_cooldown = provider_cooldown
         self._cache_ttl_seconds = cache_ttl_seconds
         self._rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
         self._protection_cooldown_seconds = protection_cooldown_seconds
         self._provider_unavailable_cooldown_seconds = provider_unavailable_cooldown_seconds
+        if provider_cooldown is not None:
+            self._rate_limit_cooldown_seconds = max(900, rate_limit_cooldown_seconds)
+            self._protection_cooldown_seconds = max(900, protection_cooldown_seconds)
+            self._provider_unavailable_cooldown_seconds = max(
+                300, provider_unavailable_cooldown_seconds
+            )
         if search_timeout_seconds <= 0:
             raise ValueError("search_timeout_seconds must be positive")
         self._search_timeout_seconds = search_timeout_seconds
@@ -134,6 +143,8 @@ class KorailBrowserAutomation:
             raise BrowserAdapterError("passenger_count_not_supported")
         if timeout_seconds is not None and timeout_seconds <= 0:
             raise BrowserSourceUnavailable("caller_deadline")
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.check()
         key = request.cache_key()
         now = self._monotonic()
         request_id = current_request_id() or new_log_id()
@@ -362,6 +373,8 @@ class KorailBrowserAutomation:
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
                     async with self._browser_gate:
+                        if self._provider_cooldown is not None:
+                            await self._provider_cooldown.check()
                         queued_cooldown = await self._active_provider_cooldown()
                         if queued_cooldown is not None:
                             now = self._monotonic()
@@ -428,6 +441,12 @@ class KorailBrowserAutomation:
                             raise error.with_retry_after(
                                 self._provider_unavailable_cooldown_seconds
                             ) from None
+                        except (BrowserProtectionDetected, BrowserRateLimited):
+                            if self._provider_cooldown is not None:
+                                await self._provider_cooldown.protection_detected(
+                                    max(900, self._protection_cooldown_seconds)
+                                )
+                            raise
             async with self._state_lock:
                 inflight = self._inflight.get(key)
                 if self._monotonic() >= deadline or inflight is None or not inflight.waiters:
@@ -480,6 +499,9 @@ class KorailBrowserAutomation:
                     "outcome=cancelled provider_call_id=%s",
                     provider_call_id,
                 )
+            raise
+        except ProviderCooldownDeferred:
+            # Admission deferral has no actual query failure or query-local backoff.
             raise
         except BrowserRateLimited:
             if not query_started:
@@ -584,12 +606,19 @@ class KorailBrowserAutomation:
         *,
         provider_unavailable_trigger: ProviderUnavailableTrigger | None = None,
     ) -> None:
+        if self._provider_cooldown is not None:
+            if provider_unavailable_trigger is not None:
+                await self._provider_cooldown.query_failed(seconds)
+            elif reason in {"provider_access_restricted", "rate_limited"}:
+                await self._provider_cooldown.protection_detected(max(900, seconds))
         async with self._state_lock:
-            self._cooldown = _Cooldown(
+            candidate = _Cooldown(
                 reason,
                 self._monotonic() + seconds,
                 provider_unavailable_trigger,
             )
+            if self._cooldown is None or candidate.expires_at > self._cooldown.expires_at:
+                self._cooldown = candidate
 
     async def _active_provider_cooldown(self) -> _Cooldown | None:
         async with self._state_lock:

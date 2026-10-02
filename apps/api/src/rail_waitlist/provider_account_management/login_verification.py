@@ -12,6 +12,7 @@ from SRT.errors import SRTNetFunnelError  # type: ignore[import-untyped]
 
 from ..domain import Provider
 from ..korail_sidecar.contracts import KorailSessionStateResult
+from ..korail_sidecar.contracts import ProviderCooldownReasonValue as _ProviderCooldownReasonValue
 from ..srt_sidecar.contracts import SrtSessionStatus as _SrtSessionStatus
 from ..srt_sidecar.reservation import default_srt_reservation_executor
 from ..srt_sidecar.session_contract import (
@@ -31,21 +32,30 @@ class ProviderLoginVerificationOutcome(StrEnum):
 @dataclass(frozen=True)
 class ProviderLoginVerification:
     outcome: ProviderLoginVerificationOutcome
-    failure_kind: _typing.Literal["provider_submission_failed"] | None = None
+    failure_kind: _typing.Literal["provider_submission_failed", "provider_cooldown"] | None = None
     retry_after_seconds: int | None = None
+    cooldown_reason: _ProviderCooldownReasonValue | None = None
 
     def __post_init__(self) -> None:
         if self.failure_kind is None:
-            if self.retry_after_seconds is not None:
-                raise ValueError("login retry requires a submission failure")
+            if self.retry_after_seconds is not None or self.cooldown_reason is not None:
+                raise ValueError("login retry requires a classified failure")
             return
         if (
-            self.failure_kind != "provider_submission_failed"
-            or self.outcome is not ProviderLoginVerificationOutcome.FAILED
+            self.outcome is not ProviderLoginVerificationOutcome.FAILED
             or type(self.retry_after_seconds) is not int
-            or not 300 <= self.retry_after_seconds <= 900
+            or not 1 <= self.retry_after_seconds <= 86400
         ):
-            raise ValueError("submission failure requires a failed outcome and retry interval")
+            raise ValueError("login failure requires a failed outcome and retry interval")
+        if self.failure_kind == "provider_submission_failed":
+            if not 300 <= self.retry_after_seconds <= 900 or self.cooldown_reason is not None:
+                raise ValueError("invalid submission failure interval or reason")
+        elif self.failure_kind != "provider_cooldown" or self.cooldown_reason not in {
+            "provider_unavailable",
+            "provider_access_restricted",
+            "cooldown_store_unavailable",
+        }:
+            raise ValueError("provider cooldown requires a closed reason")
 
     @property
     def authenticated(self) -> bool:
@@ -205,6 +215,7 @@ class ProviderLoginVerifier:
                 )
             snapshot_reader = _typing.cast(
                 _typing.Callable[[], _SrtSessionActorSnapshot],
+                # This legacy method is optional and outside the login verifier protocol.
                 getattr(self._srt, "session_snapshot"),
             )
             raw_snapshot = snapshot_reader()

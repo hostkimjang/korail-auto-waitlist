@@ -40,7 +40,47 @@ from rail_waitlist.korail_pydoll_browser import (
 )
 from rail_waitlist.korail_search_bootstrap import KorailStationIdentity
 from rail_waitlist.korail_sidecar.contracts import KorailReserveOnceRequest
+from rail_waitlist.korail_sidecar.provider_cooldown import (
+    MemoryProviderCooldown,
+    ProviderCooldownDeferred,
+)
 from rail_waitlist.korail_sidecar.pydoll.login_submission import PydollLoginSubmission
+
+
+@pytest.fixture(autouse=True)
+def memory_provider_cooldown_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "rail_waitlist.korail_browser_adapter_service._build_provider_cooldown",
+        MemoryProviderCooldown,
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_hold_defers_reservation_before_context_or_direct_query() -> None:
+    hold = MemoryProviderCooldown()
+    factory = ReservationFixtureFactory()
+    client = PydollKorailBrowserClient(session_factory=factory, provider_cooldown=hold)
+    await hold.login_failed(500, "http_error")
+    with pytest.raises(ProviderCooldownDeferred):
+        await client.reserve_once(reservation_request())
+    assert factory.sessions == []
+    assert client.session_snapshot().state is KorailSessionActorState.COLD
+
+
+@pytest.mark.asyncio
+async def test_reservation_auth_lock_rechecks_hold_without_click_or_generation_change() -> None:
+    hold = MemoryProviderCooldown()
+    factory = ReservationFixtureFactory()
+    client = PydollKorailBrowserClient(session_factory=factory, provider_cooldown=hold)
+    await client._session_lock.acquire()
+    task = asyncio.create_task(client.reserve_once(reservation_request()))
+    await asyncio.sleep(0)
+    await hold.query_failed()
+    client._session_lock.release()
+    with pytest.raises(ProviderCooldownDeferred):
+        await task
+    assert factory.sessions == []
+    assert client.session_snapshot().credential_generation is None
 
 
 def install_completed_login_submission(session: _PydollSession) -> None:

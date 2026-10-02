@@ -20,6 +20,7 @@ from .korail_sidecar.runtime import ReadinessGate as _ReadinessGate
 from .korail_sidecar.runtime import browser_engine_setting as _browser_engine_setting
 from .korail_sidecar.runtime import build_automation as build_automation
 from .korail_sidecar.runtime import build_browser_client as _build_browser_client
+from .korail_sidecar.runtime import build_provider_cooldown as _build_provider_cooldown
 from .korail_sidecar.runtime import float_setting as _float_setting
 from .korail_sidecar.runtime import integer_setting as integer_setting
 from .korail_sidecar.runtime import readiness_probe_for_engine as _readiness_probe_for_engine
@@ -56,6 +57,7 @@ def create_adapter_app(
         getenv=os.getenv,
         monotonic=time.monotonic,
         logger=logger,
+        build_provider_cooldown=_build_provider_cooldown,
     )
     return _create_adapter_http_app(
         automation,

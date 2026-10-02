@@ -62,11 +62,17 @@ services:
       KORAIL_BROWSER_ADAPTER_TOKEN: ${E2E_BROWSER_TOKEN:?E2E_BROWSER_TOKEN is required}
       KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS: "10"
       KORAIL_BROWSER_CACHE_TTL_SECONDS: "5"
+      KORAIL_PROVIDER_COOLDOWN_REDIS_URL: redis://korail-cooldown:e2e-provider-cooldown-fixture@redis:6379/0
     depends_on:
       e2e-korail-page:
         condition: service_healthy
     networks: !override
       - app
+      - provider-state
+
+  redis:
+    environment:
+      KORAIL_PROVIDER_COOLDOWN_REDIS_PASSWORD: e2e-provider-cooldown-fixture
 
   migration:
     networks: !override

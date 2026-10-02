@@ -15,12 +15,15 @@ from ..browser_contracts import (
     BrowserRateLimited,
     BrowserSourceUnavailable,
 )
+from ..browser_service_availability import BrowserProviderUnavailable
+from ..provider_cooldown import ProviderCooldown, ProviderCooldownDeferred
 from .auth_contracts import (
     KorailCredentialInput as ContractKorailCredentialInput,
 )
 from .auth_contracts import (
     KorailLoginMethod as ContractKorailLoginMethod,
 )
+from .login_submission import PydollLoginResponseUnavailable
 from .page_contracts import PydollPageSnapshot
 
 __all__ = [
@@ -162,6 +165,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         cleanup: OwnedCleanup,
         response_safety_guard: ResponseSafetyGuard,
         fingerprint: CredentialFingerprint = credential_fingerprint,
+        provider_cooldown: ProviderCooldown | None = None,
     ) -> None:
         self._page_url = page_url
         self._timeout_ms = timeout_ms
@@ -173,6 +177,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         self._cleanup = cleanup
         self._response_safety_guard = response_safety_guard
         self._fingerprint = fingerprint
+        self._provider_cooldown = provider_cooldown
         self._lock = asyncio.Lock()
         self._active_session: ActivePydollAuthenticationSession[AuthSession] | None = None
         self._state = KorailSessionActorState.COLD
@@ -338,6 +343,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
     ) -> bool:
         """Authenticate once per exact credential generation and in-memory digest."""
 
+        await self.check_provider_cooldown()
         active = self._active_session
         if active is None or active.session is not session:
             now = self._monotonic()
@@ -345,7 +351,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
             self._generation = credential.version
             self._created_at = now
             self._last_used_at = now
-            authenticated = await session.ensure_authenticated(credential)
+            authenticated = await self._authenticate(session, credential)
             if authenticated:
                 verified_at = self._monotonic()
                 self._last_verified_at = verified_at
@@ -367,7 +373,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
             return True
         self._state = KorailSessionActorState.AUTHENTICATING
         self._generation = credential.version
-        authenticated = await session.ensure_authenticated(credential)
+        authenticated = await self._authenticate(session, credential)
         if not authenticated:
             await self.discard_active_session()
             self._state = KorailSessionActorState.AUTH_REQUIRED
@@ -380,6 +386,29 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         self._state = KorailSessionActorState.READY
         return True
 
+    async def check_provider_cooldown(self) -> None:
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.check()
+
+    async def _authenticate(self, session: AuthSession, credential: KorailCredentialInput) -> bool:
+        # ensure_authenticated_session checked admission before its synchronous
+        # telemetry transition. No await intervenes before this official call.
+        try:
+            authenticated = await session.ensure_authenticated(credential)
+        except PydollLoginResponseUnavailable as error:
+            if self._provider_cooldown is not None:
+                await self._provider_cooldown.login_failed(
+                    error.submission_status, error.submission_failure
+                )
+            raise
+        except (BrowserProtectionDetected, BrowserRateLimited):
+            if self._provider_cooldown is not None:
+                await self._provider_cooldown.protection_detected()
+            raise
+        if authenticated and self._provider_cooldown is not None:
+            await self._provider_cooldown.authentication_succeeded()
+        return authenticated
+
     async def probe_reused_authenticated_session(
         self,
         session: AuthSession,
@@ -387,6 +416,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
     ) -> bool:
         """Require fresh official evidence before a reused generation can reserve."""
 
+        await self.check_provider_cooldown()
         active = self._active_session
         fingerprint = self._fingerprint(credential)
         if (
@@ -405,10 +435,19 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
             await self.discard_with_state(KorailSessionActorState.STALE)
             raise
         except (BrowserProtectionDetected, BrowserRateLimited):
+            if self._provider_cooldown is not None:
+                await self._provider_cooldown.protection_detected()
             await self.discard_with_state(KorailSessionActorState.BLOCKED)
             raise
-        except BrowserSourceUnavailable:
+        except BrowserSourceUnavailable as error:
+            if (
+                isinstance(error, BrowserProviderUnavailable)
+                and self._provider_cooldown is not None
+            ):
+                await self._provider_cooldown.query_failed()
             await self.discard_with_state(KorailSessionActorState.STALE)
+            raise
+        except ProviderCooldownDeferred:
             raise
         except Exception as error:
             await self.discard_with_state(KorailSessionActorState.STALE)
@@ -423,14 +462,19 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         self._last_verified_at = verified_at
         self._last_used_at = verified_at
         self._state = KorailSessionActorState.READY
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.authentication_succeeded()
         return True
 
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
+        await self.check_provider_cooldown()
         async with self._lock:
             return await self._verify_credentials_locked(credential)
 
     async def _verify_credentials_locked(self, credential: KorailCredentialInput) -> bool:
         """Replace and authenticate one generation while the actor lock is held."""
+
+        await self.check_provider_cooldown()
 
         if self._active_session is not None:
             self._state = KorailSessionActorState.STALE
@@ -450,14 +494,23 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
             self._state = KorailSessionActorState.STALE
             raise
         except (BrowserProtectionDetected, BrowserRateLimited):
+            if self._provider_cooldown is not None:
+                await self._provider_cooldown.protection_detected()
             await self.discard_active_session()
             self._state = KorailSessionActorState.BLOCKED
             raise
         except BrowserSourceUnavailable as error:
+            if (
+                isinstance(error, BrowserProviderUnavailable)
+                and self._provider_cooldown is not None
+            ):
+                await self._provider_cooldown.query_failed()
             await self.discard_active_session()
             self._state = KorailSessionActorState.STALE
             if error.stage == "unspecified":
                 raise BrowserSourceUnavailable(stage) from error
+            raise
+        except ProviderCooldownDeferred:
             raise
         except Exception as error:
             await self.discard_active_session()
@@ -468,7 +521,9 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
                 await lease.context.__aexit__(*sys.exc_info())
 
     async def prewarm_credentials(self, credential: KorailCredentialInput) -> bool:
+        await self.check_provider_cooldown()
         async with self._lock:
+            await self.check_provider_cooldown()
             active = self._active_session
             fingerprint = self._fingerprint(credential)
             now = self._monotonic()

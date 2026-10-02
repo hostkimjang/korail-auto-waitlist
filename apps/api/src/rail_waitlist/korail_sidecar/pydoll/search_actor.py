@@ -26,6 +26,7 @@ from ..browser_contracts import (
 )
 from ..browser_service_availability import BrowserProviderUnavailable
 from ..http_replay import KorailHttpReplayPlan
+from ..provider_cooldown import ProviderCooldown, ProviderCooldownDeferred
 from ..search_result_policy import (
     parse_expected_delay_minutes,
     parse_official_train_type,
@@ -45,6 +46,8 @@ from .page_contracts import (
 )
 
 __all__ = (
+    "KORAIL_ROUTE_HEADING",
+    "UTC",
     "Awaitable",
     "BrowserProtectionDetected",
     "BrowserRateLimited",
@@ -54,7 +57,6 @@ __all__ = (
     "BrowserTrainSnapshot",
     "Callable",
     "Cleanup",
-    "KORAIL_ROUTE_HEADING",
     "KorailHttpReplayClientFactory",
     "KorailHttpReplayPlan",
     "KorailPydollReadOnlySearchSession",
@@ -68,7 +70,6 @@ __all__ = (
     "PydollPageSnapshot",
     "PydollReadOnlySearchActor",
     "ResponseSafetyGuard",
-    "UTC",
     "annotations",
     "asyncio",
     "build_korail_general_search_url",
@@ -188,6 +189,7 @@ class PydollReadOnlySearchActor:
         http_replay_client_factory: KorailHttpReplayClientFactory,
         http_replay_route_cache_size: int,
         event_logger: logging.Logger,
+        provider_cooldown: ProviderCooldown | None = None,
     ) -> None:
         self._page_url = page_url
         self._timeout_ms = timeout_ms
@@ -200,6 +202,7 @@ class PydollReadOnlySearchActor:
         self._cleanup = cleanup
         self._response_safety_guard = response_safety_guard
         self._event_logger = event_logger
+        self._provider_cooldown = provider_cooldown
         self._search_lock = asyncio.Lock()
         self._active_session: _ActiveReadOnlySearchSession | None = None
         self._http_replay_manager = PydollHttpReplayManager(
@@ -226,8 +229,17 @@ class PydollReadOnlySearchActor:
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult:
         if request.passenger_count != 1:
             raise BrowserSourceUnavailable("passenger_count_not_supported")
+        await self.check_admission()
         async with self._search_lock:
-            replayed = await self._http_replay_manager.try_search(request)
+            await self.check_admission()
+            try:
+                replayed = await self._http_replay_manager.try_search(request)
+            except BrowserProviderUnavailable as error:
+                await self.observe_provider_unavailable(error)
+                raise
+            except (BrowserProtectionDetected, BrowserRateLimited):
+                await self.observe_provider_protection()
+                raise
             if replayed is not None:
                 return replayed
             direct_url = await self.direct_search_url(
@@ -238,6 +250,7 @@ class PydollReadOnlySearchActor:
             )
             cold_recovery_used = False
             while True:
+                await self.check_admission()
                 stage = "browser_launch"
                 lease: _ReadOnlySearchSessionLease | None = None
                 try:
@@ -266,12 +279,14 @@ class PydollReadOnlySearchActor:
                         await self._assert_identity(session, request, stage)
                         capture_started = await self._http_replay_manager.begin_capture(session)
                         stage = "submit_search"
+                        await self.check_admission()
                         await session.submit_once()
                     else:
                         # Navigation itself starts the one official business lookup.
                         # Capture first, and never retry through the UI after this point.
                         capture_started = await self._http_replay_manager.begin_capture(session)
                         stage = "direct_navigation"
+                        await self.check_admission()
                         self._response_safety_guard(await session.navigate_fresh(direct_url), stage)
                     stage = "wait_result"
                     snapshot = await session.wait_for_result()
@@ -311,10 +326,12 @@ class PydollReadOnlySearchActor:
                         await self._discard_active_session()
                     raise
                 except (BrowserProtectionDetected, BrowserRateLimited):
+                    await self.observe_provider_protection()
                     if lease is not None and lease.persistent:
                         await self._discard_active_session()
                     raise
-                except BrowserProviderUnavailable:
+                except BrowserProviderUnavailable as error:
+                    await self.observe_provider_unavailable(error)
                     if lease is not None and lease.persistent:
                         await self._discard_active_session()
                     raise
@@ -345,6 +362,8 @@ class PydollReadOnlySearchActor:
                     if error.stage == "unspecified":
                         raise BrowserSourceUnavailable(stage) from error
                     raise
+                except ProviderCooldownDeferred:
+                    raise
                 except Exception as error:
                     if lease is not None and lease.persistent:
                         await self._discard_active_session()
@@ -365,11 +384,15 @@ class PydollReadOnlySearchActor:
         travel_date: date,
         departure_time: clock_time,
     ) -> str | None:
+        await self.check_admission()
         resolver = self._station_identity_resolver
         if resolver is None:
             return None
         try:
             origin_identity, destination_identity = await resolver.resolve_pair(origin, destination)
+        except BrowserProviderUnavailable as error:
+            await self.observe_provider_unavailable(error)
+            raise
         except KorailStationIdentityUnavailable:
             return None
         return build_korail_general_search_url(
@@ -378,6 +401,19 @@ class PydollReadOnlySearchActor:
             travel_date=travel_date,
             departure_time=departure_time,
         )
+
+    async def observe_provider_unavailable(self, error: BrowserSourceUnavailable) -> None:
+        """Record explicit provider outages in the actor's shared cooldown owner."""
+        if isinstance(error, BrowserProviderUnavailable) and self._provider_cooldown is not None:
+            await self._provider_cooldown.query_failed()
+
+    async def observe_provider_protection(self) -> None:
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.protection_detected()
+
+    async def check_admission(self) -> None:
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.check()
 
     async def _acquire_session(self) -> _ReadOnlySearchSessionLease:
         if not self._session_reuse_enabled:

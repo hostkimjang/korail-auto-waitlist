@@ -29,6 +29,7 @@ from .event_stream.http import router as event_stream_router
 from .file_logging import configure_service_file_logging
 from .health.schemas import HealthResponse
 from .korail_browser_seat_source import KorailBrowserSeatSource
+from .korail_sidecar.provider_cooldown import RedisProviderCooldown
 from .metrics import HTTP_DURATION, HTTP_REQUESTS, OUTBOX_PENDING
 from .notification_management.http import router as notification_management_router
 from .operation_summary.http import router as operation_summary_router
@@ -163,6 +164,7 @@ def create_app(
         protection_cooldown_seconds=settings.seat_status_protection_cooldown_seconds,
         cooldown_store=seat_status_cooldown_store,
         allow_fullstack_test_url=settings.environment == "test",
+        provider_cooldown=RedisProviderCooldown(app.state.seat_status_redis),
     )
     app.state.provider_login_verifier = ProviderLoginVerifier(
         app.state.korail_browser_seat_source,

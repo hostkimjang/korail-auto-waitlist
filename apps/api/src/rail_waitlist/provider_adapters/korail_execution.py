@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 from redis.asyncio import Redis
@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from ..config import Settings, get_settings
 from ..domain import Provider, ReservationOutcome
 from ..korail_browser_seat_source import KorailBrowserSeatSource
+from ..korail_sidecar.provider_cooldown import RedisProviderCooldown
 from ..observations.contracts import SeatObservationRequest, SeatObservationResult
 from ..provider_account_management.contracts import ProviderCredentials
 from ..provider_contracts import ProviderUnavailable
@@ -158,6 +159,7 @@ def _source_for_config(config: KorailExecutionSourceConfig) -> ManagedKorailSeat
         protection_cooldown_seconds=config.protection_cooldown_seconds,
         cooldown_store=RedisCooldownStore(redis),
         allow_fullstack_test_url=config.allow_fullstack_test_url,
+        provider_cooldown=RedisProviderCooldown(redis),
     )
     return ManagedKorailSeatObserver(source=source, redis=redis)
 
@@ -274,7 +276,7 @@ class KorailBrowserExecutionAdapter(RailProviderAdapter):
             return ReservationResult(
                 outcome=ReservationOutcome.AUTH_REQUIRED,
                 source="korail-pydoll-reservation",
-                observed_at=datetime.now(timezone.utc),
+                observed_at=datetime.now(UTC),
             )
         if (
             request.expected_credential_version is not None
@@ -283,7 +285,7 @@ class KorailBrowserExecutionAdapter(RailProviderAdapter):
             return ReservationResult(
                 outcome=ReservationOutcome.AUTH_REQUIRED,
                 source="korail-pydoll-reservation",
-                observed_at=datetime.now(timezone.utc),
+                observed_at=datetime.now(UTC),
                 credential_version=request.expected_credential_version,
             )
         return credentials

@@ -7,6 +7,8 @@ import time
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
+from redis.asyncio import Redis
+
 from ..provider_adapters.korail_search_bootstrap import KorailStationIdentityResolver
 from .browser_contracts import (
     BrowserClient,
@@ -16,6 +18,7 @@ from .browser_page_contracts import (
     OFFICIAL_KORAIL_SEARCH_URL,
 )
 from .playwright.client import PlaywrightKorailBrowserClient, probe_chromium
+from .provider_cooldown import ProviderCooldown, RedisProviderCooldown
 from .search_coordinator import KorailBrowserAutomation
 
 # Preserve the operational logger namespace while the compatibility facade still owns HTTP.
@@ -114,6 +117,7 @@ def build_browser_client(
     page_url: str,
     timeout_seconds: float,
     allow_fullstack_fixture: bool,
+    provider_cooldown: ProviderCooldown | None = None,
 ) -> BrowserClient:
     gui_enabled = boolean_setting("KORAIL_BROWSER_GUI_ENABLED", False)
     if engine is KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP:
@@ -128,6 +132,7 @@ def build_browser_client(
     from ..korail_pydoll_browser import PydollKorailBrowserClient
 
     return PydollKorailBrowserClient(
+        provider_cooldown=provider_cooldown,
         page_url=page_url,
         timeout_seconds=timeout_seconds,
         headless=not gui_enabled,
@@ -175,6 +180,7 @@ def build_automation(
     engine: KorailBrowserEngine | None = None,
     *,
     browser_client: BrowserClient | None = None,
+    provider_cooldown: ProviderCooldown | None = None,
 ) -> KorailBrowserAutomation:
     selected_engine = engine or browser_engine_setting()
     page_url = os.getenv("KORAIL_BROWSER_PAGE_URL", OFFICIAL_KORAIL_SEARCH_URL)
@@ -189,9 +195,11 @@ def build_automation(
             "KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS", 25, minimum=5, maximum=60
         ),
         allow_fullstack_fixture=allow_fullstack_fixture,
+        provider_cooldown=provider_cooldown,
     )
     return KorailBrowserAutomation(
         client,
+        provider_cooldown=provider_cooldown,
         search_timeout_seconds=float_setting(
             "KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", 590, minimum=30, maximum=590
         ),
@@ -211,3 +219,15 @@ def build_automation(
             maximum=86400,
         ),
     )
+
+
+def build_provider_cooldown() -> ProviderCooldown:
+    """Production HTTP owns one persistent hold; absence never becomes a memory fallback."""
+    url = os.getenv("KORAIL_PROVIDER_COOLDOWN_REDIS_URL")
+    if not url:
+        raise RuntimeError("KORAIL provider cooldown Redis configuration is required")
+    try:
+        redis = Redis.from_url(url, socket_connect_timeout=3, socket_timeout=3)
+    except (ValueError, TypeError):
+        raise RuntimeError("KORAIL provider cooldown Redis configuration is invalid") from None
+    return RedisProviderCooldown(redis, owns_client=True)

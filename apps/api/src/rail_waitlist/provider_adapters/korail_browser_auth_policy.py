@@ -42,6 +42,7 @@ def project_login_verification_result(
         ProviderLoginVerificationOutcome(result.outcome),
         failure_kind=result.failure_kind,
         retry_after_seconds=result.retry_after_seconds,
+        cooldown_reason=result.cooldown_reason,
     )
 
 

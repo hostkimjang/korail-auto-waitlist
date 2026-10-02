@@ -51,7 +51,12 @@ OWNER_PUBLIC = {
     "StrEnum",
     "time",
 }
-OWNER_PRIVATE = {"_SrtSessionActorSnapshot", "_SrtSessionStatus", "_typing"}
+OWNER_PRIVATE = {
+    "_ProviderCooldownReasonValue",
+    "_SrtSessionActorSnapshot",
+    "_SrtSessionStatus",
+    "_typing",
+}
 OWNER_IMPORTS_FROM = {
     ("__future__", 0, "annotations", None),
     ("dataclasses", 0, "dataclass", None),
@@ -64,6 +69,7 @@ OWNER_IMPORTS_FROM = {
     ("SRT.errors", 0, "SRTNetFunnelError", None),
     ("domain", 2, "Provider", None),
     ("korail_sidecar.contracts", 2, "KorailSessionStateResult", None),
+    ("korail_sidecar.contracts", 2, "ProviderCooldownReasonValue", "_ProviderCooldownReasonValue"),
     ("srt_sidecar.contracts", 2, "SrtSessionStatus", "_SrtSessionStatus"),
     (
         "srt_sidecar.reservation",

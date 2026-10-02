@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..domain import Provider
+from ..korail_sidecar.provider_cooldown import ProviderCooldownDeferred as _ProviderCooldownDeferred
 from .application import (
     SUPPORTED_ACCOUNT_PROVIDERS,
     get_enabled_provider_credentials,
@@ -75,6 +76,7 @@ class ProviderRuntimePrewarmRegistry:
     prewarm_retry_state: dict[Provider, tuple[int, int, float]] = field(default_factory=dict)
     # provider -> (credential generation, minimum official-submission retry interval)
     provider_submission_failures: dict[Provider, tuple[int, int]] = field(default_factory=dict)
+    provider_deferred_until: dict[Provider, float] = field(default_factory=dict)
     completed: bool = False
 
     def outcome_for(self, provider: Provider) -> RailProviderAuthStatus | None:
@@ -162,6 +164,8 @@ class ProviderRuntimePrewarmRegistry:
 
         if provider in self.prewarm_in_flight:
             return False
+        if now < self.provider_deferred_until.get(provider, 0):
+            return False
         submission_failure = self.provider_submission_failures.get(provider)
         if submission_failure is not None and submission_failure[0] != credential_version:
             self.provider_submission_failures.pop(provider, None)
@@ -177,6 +181,14 @@ class ProviderRuntimePrewarmRegistry:
             return False
         self.prewarm_in_flight.add(provider)
         return True
+
+    def defer_prewarm(self, provider: Provider, *, retry_after_seconds: int, now: float) -> None:
+        """Preserve actual failure state and revision budgets when no call was admitted."""
+        if type(retry_after_seconds) is not int or not 1 <= retry_after_seconds <= 86400:
+            raise ValueError("invalid provider cooldown interval")
+        self.provider_deferred_until[provider] = max(
+            self.provider_deferred_until.get(provider, 0), now + retry_after_seconds
+        )
 
     def record_submission_failure(
         self,
@@ -315,6 +327,8 @@ async def _prewarm_account(
         verification = await verifier.prewarm(provider, credentials)
     except asyncio.CancelledError:
         raise
+    except _ProviderCooldownDeferred:
+        raise
     except Exception:  # noqa: BLE001 -- provider exception text may contain secrets.
         registry.record_submission_failure(
             provider, credentials.credential_version, retry_after_seconds=None
@@ -323,6 +337,12 @@ async def _prewarm_account(
         LOGGER.warning("Provider runtime prewarm failed provider=%s", provider.value)
         return "failed"
 
+    if verification.failure_kind == "provider_cooldown":
+        if verification.cooldown_reason is None or verification.retry_after_seconds is None:
+            raise ValueError("invalid provider cooldown verification")
+        raise _ProviderCooldownDeferred(
+            verification.cooldown_reason, verification.retry_after_seconds
+        )
     outcome = _account_status(verification.outcome)
     registry.record_submission_failure(
         provider,
@@ -622,12 +642,8 @@ async def recover_provider_sessions_once(
             ),
         ):
             continue
-        if recovery_attempt:
-            # Retire the revision's immediate attempt as soon as this tick owns it, so a
-            # repeated adapter outage falls back to the local-failure backoff instead of
-            # re-entering the bypass on every tick.
-            registry.mark_auth_revision_started(revision)
         outcome: RailProviderAuthStatus | None = None
+        deferred = False
         try:
             outcome = await _prewarm_account(
                 session_factory,
@@ -636,6 +652,11 @@ async def recover_provider_sessions_once(
                 account_runtime,
             )
             attempted += 1
+        except _ProviderCooldownDeferred as error:
+            deferred = True
+            registry.defer_prewarm(
+                provider, retry_after_seconds=error.retry_after_seconds, now=loop.time()
+            )
         finally:
             registry.finish_prewarm(
                 provider,
@@ -643,6 +664,10 @@ async def recover_provider_sessions_once(
                 outcome=outcome,
                 now=loop.time(),
             )
+            if recovery_attempt and not deferred:
+                # A local or actual provider attempt retires immediate retry; admission
+                # deferral only schedules the next tick and consumes no revision budget.
+                registry.mark_auth_revision_started(revision)
             if recovery_attempt and registry.consumes_recovery_budget(outcome):
                 # Spend the budget only once this tick produced a provider verdict. An
                 # adapter outage never reached the credential check, so it must not

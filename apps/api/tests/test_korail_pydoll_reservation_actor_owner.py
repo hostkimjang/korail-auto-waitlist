@@ -437,6 +437,8 @@ def test_reservation_actor_has_one_consumer_and_exact_leaf_boundary() -> None:
     }
     assert feature_dependencies == {
         "rail_waitlist.korail_sidecar.browser_contracts",
+        "rail_waitlist.korail_sidecar.browser_service_availability",
+        "rail_waitlist.korail_sidecar.provider_cooldown",
         "rail_waitlist.korail_sidecar.pydoll.auth_actor",
         "rail_waitlist.korail_sidecar.pydoll.auth_contracts",
         "rail_waitlist.korail_sidecar.pydoll.page_contracts",

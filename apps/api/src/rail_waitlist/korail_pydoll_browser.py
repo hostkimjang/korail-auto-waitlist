@@ -172,6 +172,7 @@ from .reservations.provider_confirmation.contracts import ReservationConfirmatio
 from .reservations.provider_confirmation.korail import KorailSameSessionDetailEvidence
 
 if TYPE_CHECKING:
+    from .korail_sidecar.provider_cooldown import ProviderCooldown
     from .korail_sidecar.pydoll.page_contracts import (
         PydollIssuedTicketListSnapshot,
         PydollReservationListSnapshot,
@@ -319,6 +320,7 @@ class PydollKorailBrowserClient:
         station_identity_resolver: KorailStationIdentityResolver | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         auto_handle_dialogs: bool = False,
+        provider_cooldown: ProviderCooldown | None = None,
     ) -> None:
         if session_reuse_ttl_seconds < 0:
             raise ValueError("session_reuse_ttl_seconds must be non-negative")
@@ -350,6 +352,7 @@ class PydollKorailBrowserClient:
             cleanup=_finish_owned_cleanup,
             response_safety_guard=self._assert_response_allowed,
             fingerprint=_credential_fingerprint,
+            provider_cooldown=provider_cooldown,
         )
         # Capture module-level compatibility seams at construction time before handing
         # read-only lifecycle ownership to the search actor.
@@ -367,6 +370,7 @@ class PydollKorailBrowserClient:
             http_replay_client_factory=KorailHttpReplayClient,
             http_replay_route_cache_size=_HTTP_REPLAY_ROUTE_CACHE_SIZE,
             event_logger=logger,
+            provider_cooldown=provider_cooldown,
         )
         self._reservation_actor = PydollReservationActor[PydollBrowserSession](
             auth_lock=self._session_lock,
@@ -383,6 +387,7 @@ class PydollKorailBrowserClient:
             has_unique_reservation_target=_snapshot_has_unique_reservation_target,
             max_more_result_actions=_MAX_MORE_RESULT_ACTIONS,
             utc_now=lambda: datetime.now(UTC),
+            provider_cooldown=provider_cooldown,
         )
 
     @property
@@ -493,10 +498,7 @@ class PydollKorailBrowserClient:
         departure_time: clock_time,
     ) -> str | None:
         return await self._search_actor.direct_search_url(
-            origin,
-            destination,
-            travel_date,
-            departure_time,
+            origin, destination, travel_date, departure_time
         )
 
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
@@ -514,7 +516,9 @@ class PydollKorailBrowserClient:
             BrowserRateLimited,
         )
 
+        await self._search_actor.check_admission()
         async with self._session_lock:
+            await self._search_actor.check_admission()
             active = self._active_session
             if active is None or active.authenticated_credential_version is None:
                 raise BrowserSourceUnavailable("confirmation_session_unavailable")
@@ -536,9 +540,11 @@ class PydollKorailBrowserClient:
                 await self._auth_actor.discard_with_state(KorailSessionActorState.STALE)
                 raise
             except (BrowserProtectionDetected, BrowserRateLimited):
+                await self._search_actor.observe_provider_protection()
                 await self._auth_actor.discard_with_state(KorailSessionActorState.BLOCKED)
                 raise
-            except BrowserSourceUnavailable:
+            except BrowserSourceUnavailable as error:
+                await self._search_actor.observe_provider_unavailable(error)
                 await self._auth_actor.discard_with_state(KorailSessionActorState.STALE)
                 raise
             except Exception:

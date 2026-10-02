@@ -11,8 +11,10 @@ from rail_waitlist.korail_sidecar.contracts import (
     KorailLoginVerifyRequest,
     KorailLoginVerifyResult,
 )
+from rail_waitlist.korail_sidecar.provider_cooldown import MemoryProviderCooldown
 from rail_waitlist.provider_account_management.contracts import ProviderCredentials
 from rail_waitlist.provider_account_management.login_verification import (
+    ProviderLoginVerification,
     ProviderLoginVerificationOutcome,
 )
 from rail_waitlist.provider_adapters import korail_browser_auth_policy as policy
@@ -93,6 +95,7 @@ def _source(
     transport: _LoginTransport,
     *,
     enabled: bool = True,
+    provider_cooldown=None,
 ) -> legacy_source.KorailBrowserSeatSource:
     return legacy_source.KorailBrowserSeatSource(
         enabled=enabled,
@@ -103,6 +106,7 @@ def _source(
         protection_cooldown_seconds=60,
         transport=transport,
         monotonic=lambda: 100.0,
+        provider_cooldown=provider_cooldown,
     )
 
 
@@ -235,6 +239,73 @@ def test_official_submission_failure_metadata_survives_projection() -> None:
     assert projected.outcome is ProviderLoginVerificationOutcome.FAILED
     assert projected.failure_kind == "provider_submission_failed"
     assert projected.retry_after_seconds == 300
+
+
+@pytest.mark.parametrize("retry", [1, 900, 86400])
+def test_provider_cooldown_metadata_survives_projection_without_submission_verdict(retry) -> None:
+    result = KorailLoginVerifyResult(
+        outcome="failed",
+        failure_kind="provider_cooldown",
+        retry_after_seconds=retry,
+        cooldown_reason="cooldown_store_unavailable",
+    )
+    projected = policy.project_login_verification_result(result)
+    assert projected.failure_kind == "provider_cooldown"
+    assert projected.retry_after_seconds == retry
+    assert projected.cooldown_reason == "cooldown_store_unavailable"
+
+
+@pytest.mark.parametrize(
+    "reason", ["provider_unavailable", "provider_access_restricted", "cooldown_store_unavailable"]
+)
+def test_domain_cooldown_keeps_a_closed_reason_and_failed_outcome(reason) -> None:
+    result = ProviderLoginVerification(
+        outcome=ProviderLoginVerificationOutcome.FAILED,
+        failure_kind="provider_cooldown",
+        retry_after_seconds=1,
+        cooldown_reason=reason,
+    )
+    assert not result.authenticated
+    assert result.cooldown_reason == reason
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"retry_after_seconds": True},
+        {"retry_after_seconds": "300"},
+        {"retry_after_seconds": 0},
+        {"retry_after_seconds": 86401},
+        {"retry_after_seconds": None},
+        {"cooldown_reason": None},
+        {"cooldown_reason": "unclassified"},
+        {"outcome": ProviderLoginVerificationOutcome.AUTHENTICATED},
+        {"failure_kind": None},
+        {"failure_kind": "provider_submission_failed", "retry_after_seconds": 300},
+    ],
+)
+def test_domain_cooldown_rejects_untyped_or_misclassified_metadata(changes) -> None:
+    values = {
+        "outcome": ProviderLoginVerificationOutcome.FAILED,
+        "failure_kind": "provider_cooldown",
+        "retry_after_seconds": 300,
+        "cooldown_reason": "provider_unavailable",
+    }
+    values.update(changes)
+    with pytest.raises(ValueError):
+        ProviderLoginVerification(**values)
+
+
+@pytest.mark.parametrize("method", ["verify_login", "prewarm_login"])
+async def test_main_login_skips_transport_under_shared_query_hold(method) -> None:
+    transport = _LoginTransport()
+    hold = MemoryProviderCooldown(clock=lambda: 1000)
+    await hold.query_failed()
+    result = await getattr(_source(transport, provider_cooldown=hold), method)(_credentials())
+    assert result.failure_kind == "provider_cooldown"
+    assert result.retry_after_seconds == 300
+    assert result.cooldown_reason == "provider_unavailable"
+    assert transport.calls == []
 
 
 @pytest.mark.parametrize(

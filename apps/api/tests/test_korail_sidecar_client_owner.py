@@ -282,6 +282,7 @@ def test_transport_leaf_has_exact_legacy_aliases_and_import_boundary() -> None:
         ("pydantic", 0),
         ("browser_contracts", 1),
         ("contracts", 1),
+        ("provider_cooldown", 1),
         ("search_progress", 1),
         ("provider_call_context", 2),
         ("reservations.contracts", 2),
@@ -1015,3 +1016,37 @@ async def test_login_transports_serialize_secret_values_only_at_wire_boundary() 
         assert path == expected_path
         assert isinstance(payload, dict)
         assert payload["credential"] == expected_credential
+
+
+@pytest.mark.parametrize("method", ["verify_login", "prewarm_login"])
+async def test_login_deferral_metadata_survives_http_transport(method) -> None:
+    payload = {
+        "outcome": "failed",
+        "failure_kind": "provider_cooldown",
+        "cooldown_reason": "cooldown_store_unavailable",
+        "retry_after_seconds": 86400,
+    }
+    transport = transport_with(FakeHttpClient(FakeResponse(200, payload)))
+    result = await getattr(transport, method)(
+        owner.KorailLoginVerifyRequest(
+            credential=KorailCredentialRequest(login_id="fixture", password="fixture", version="v1")
+        )
+    )
+    assert result.model_dump(exclude_none=True) == payload
+
+
+async def test_sidecar_query_deferral_preserves_retry_without_opening_another_hold() -> None:
+    transport = transport_with(
+        FakeHttpClient(
+            FakeResponse(
+                503,
+                {"detail": {"failure_kind": "provider_cooldown", "reason": "provider_unavailable"}},
+                headers={"retry-after": "1"},
+            )
+        )
+    )
+    with pytest.raises(owner._AdapterFailure) as failure:
+        await transport.search(search_request())
+    assert failure.value.provider_deferred
+    assert failure.value.cooldown_scope == "provider"
+    assert failure.value.retry_after_seconds == 1

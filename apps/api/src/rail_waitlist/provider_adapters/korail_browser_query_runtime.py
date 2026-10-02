@@ -9,6 +9,7 @@ from typing import Any
 
 from ..korail_sidecar.browser_contracts import BrowserSeatSearchRequest, BrowserSeatSearchResult
 from ..korail_sidecar.client import _AdapterFailure
+from ..korail_sidecar.provider_cooldown import ProviderCooldown, ProviderCooldownDeferred
 from ..provider_call_context import (
     bind_request_deadline_at,
     bind_request_id,
@@ -69,7 +70,8 @@ class _ProviderCooldown(RuntimeError):
 class KorailBrowserQueryRuntime:
     """Coordinate one API process's KORAIL browser queries and cooldown evidence."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, provider_cooldown: ProviderCooldown | None = None) -> None:
+        self._shared_provider_cooldown = provider_cooldown
         self._cache: dict[QueryKey, _CacheEntry] = {}
         self._inflight: dict[QueryKey, _InflightQuery] = {}
         self._state_lock = asyncio.Lock()
@@ -77,6 +79,18 @@ class KorailBrowserQueryRuntime:
         self._failure_count = 0
         self._query_failure_counts: dict[QueryKey, int] = {}
         self._query_cooldowns: dict[QueryKey, _QueryCooldown] = {}
+
+    async def _check_shared_cooldown(self) -> None:
+        if self._shared_provider_cooldown is None:
+            return
+        try:
+            await self._shared_provider_cooldown.check()
+        except ProviderCooldownDeferred as error:
+            raise _ProviderCooldown(
+                "provider_access_restricted"
+                if error.reason == "provider_access_restricted"
+                else "source_unavailable"
+            ) from None
 
     @property
     def query_cooldowns(self) -> dict[QueryKey, _QueryCooldown]:
@@ -95,6 +109,7 @@ class KorailBrowserQueryRuntime:
     ) -> BrowserSeatSearchResult:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        await self._check_shared_cooldown()
         key = request.cache_key()
         now = monotonic()
         request_id = current_request_id() or new_log_id()
@@ -121,6 +136,9 @@ class KorailBrowserQueryRuntime:
                 and provider_cooldown.reason == "provider_access_restricted"
             ):
                 raise _ProviderCooldown(provider_cooldown.reason)
+            # A waiter may have passed the first admission before another request
+            # opened the shared hold while this local state lock was occupied.
+            await self._check_shared_cooldown()
             cached = self._cache.get(key)
             if cached is not None and cached.expires_at > now:
                 return cached.result
@@ -255,6 +273,7 @@ class KorailBrowserQueryRuntime:
             try:
                 async with asyncio.timeout(remaining):
                     async with self._provider_gate:
+                        await self._check_shared_cooldown()
                         outage = await cooldown_store().get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY)
                         if outage is not None:
                             raise _ProviderCooldown("source_unavailable")
@@ -271,7 +290,7 @@ class KorailBrowserQueryRuntime:
                             if monotonic() >= deadline:
                                 raise TimeoutError
                         except _AdapterFailure as error:
-                            if error.cooldown_scope == "provider":
+                            if error.cooldown_scope == "provider" and not error.provider_deferred:
                                 await observe_cooldown(error, key)
                             raise
             except TimeoutError:
@@ -325,7 +344,7 @@ class KorailBrowserQueryRuntime:
         rate_limit_seconds: SecondsReader,
         protection_seconds: SecondsReader,
     ) -> None:
-        if error.deadline_exceeded:
+        if error.deadline_exceeded or error.provider_deferred:
             return
         if error.cooldown_scope == "provider":
             duration = error.retry_after_seconds or SOURCE_FAILURE_COOLDOWN_MAX_SECONDS
@@ -373,6 +392,12 @@ class KorailBrowserQueryRuntime:
         *,
         cooldown_store: CooldownStoreReader,
     ) -> datetime | None:
+        shared_retry = 0
+        if self._shared_provider_cooldown is not None:
+            try:
+                await self._shared_provider_cooldown.check()
+            except ProviderCooldownDeferred as error:
+                shared_retry = error.retry_after_seconds
         outage, cooldown = await asyncio.gather(
             cooldown_store().get(KORAIL_BROWSER_OUTAGE_COOLDOWN_KEY),
             cooldown_store().get(KORAIL_BROWSER_COOLDOWN_KEY),
@@ -385,6 +410,7 @@ class KorailBrowserQueryRuntime:
             key=lambda candidate: candidate.retry_after_seconds,
             default=None,
         )
-        if active is None:
+        retry = max(shared_retry, active.retry_after_seconds if active is not None else 0)
+        if not retry:
             return None
-        return datetime.now(UTC) + timedelta(seconds=max(1, active.retry_after_seconds))
+        return datetime.now(UTC) + timedelta(seconds=retry)

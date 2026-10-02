@@ -29,7 +29,10 @@ from .contracts import (
     KorailReserveProgressFrame,
     KorailReserveResultFrame,
     KorailSessionStateResult,
+    ProviderCooldownReasonValue,
 )
+from .provider_cooldown import ProviderCooldown as ProviderCooldown
+from .provider_cooldown import ProviderCooldownDeferred as ProviderCooldownDeferred
 from .search_progress import IDLE_SEARCH_PROGRESS as IDLE_SEARCH_PROGRESS
 from .search_progress import SearchProgress as SearchProgress
 
@@ -78,6 +81,7 @@ class _AdapterFailure(RuntimeError):
         reservation_command_uncertain: bool = False,
         progress_stages: tuple[ReservationProgressStage, ...] = (),
         deadline_exceeded: bool = False,
+        provider_deferred: bool = False,
     ) -> None:
         self.reason = reason
         self.rate_limited = rate_limited
@@ -87,10 +91,38 @@ class _AdapterFailure(RuntimeError):
         self.reservation_command_uncertain = reservation_command_uncertain
         self.progress_stages = progress_stages
         self.deadline_exceeded = deadline_exceeded
+        self.provider_deferred = provider_deferred
         super().__init__(reason)
 
 
 class HttpBrowserAdapterTransport:
+    @staticmethod
+    def _deferred_response(response: httpx.Response) -> ProviderCooldownDeferred | None:
+        if response.status_code != 503:
+            return None
+        retry = response.headers.get("retry-after")
+        if (
+            not isinstance(retry, str)
+            or len(retry) > 5
+            or not retry.isascii()
+            or not retry.isdigit()
+            or not 1 <= int(retry) <= 86400
+        ):
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        reasons: tuple[ProviderCooldownReasonValue, ...] = (
+            "provider_unavailable",
+            "provider_access_restricted",
+            "cooldown_store_unavailable",
+        )
+        for reason in reasons:
+            if payload == {"detail": {"failure_kind": "provider_cooldown", "reason": reason}}:
+                return ProviderCooldownDeferred(reason, int(retry))
+        return None
+
     def __init__(
         self,
         base_url: str,
@@ -290,6 +322,16 @@ class HttpBrowserAdapterTransport:
             )
         if response.status_code == 504:
             raise _AdapterFailure("source_unavailable", deadline_exceeded=True)
+        deferred = self._deferred_response(response)
+        if deferred is not None:
+            raise _AdapterFailure(
+                "provider_access_restricted"
+                if deferred.reason == "provider_access_restricted"
+                else "source_unavailable",
+                cooldown_scope="provider",
+                retry_after_seconds=deferred.retry_after_seconds,
+                provider_deferred=True,
+            )
         if response.status_code == 429:
             raise _AdapterFailure("provider_access_restricted", rate_limited=True)
         if response.status_code in {403, 423}:
@@ -556,6 +598,9 @@ class HttpBrowserAdapterTransport:
             raise _AdapterFailure("source_unavailable") from error
         if response.status_code != 200:
             self._log_correlated_http_failure(operation, request_id, response.status_code)
+        deferred = self._deferred_response(response)
+        if deferred is not None:
+            raise deferred
         if response.status_code == 429:
             raise _AdapterFailure("provider_access_restricted", rate_limited=True)
         if response.status_code in {403, 423}:

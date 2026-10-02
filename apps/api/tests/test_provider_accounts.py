@@ -590,6 +590,35 @@ async def test_first_insert_integrity_error_rolls_back_as_generation_conflict(
     assert session.refresh_calls == 0
 
 
+async def test_provider_account_save_is_deferred_without_persisting_credentials(
+    client, app
+) -> None:
+    class DeferredVerifier:
+        async def verify(self, provider, credentials):
+            return ProviderLoginVerification(
+                ProviderLoginVerificationOutcome.FAILED,
+                failure_kind="provider_cooldown",
+                cooldown_reason="provider_unavailable",
+                retry_after_seconds=1,
+            )
+
+    app.state.provider_login_verifier = DeferredVerifier()
+    response = await client.put(
+        "/api/v1/provider-accounts/korail",
+        json={
+            "login_method": "membership_number",
+            "login_id": "fixture-account",
+            "password": "fixture-password",
+            "enabled": True,
+        },
+    )
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.headers["cache-control"] == "no-store"
+    async with app.state.test_session_factory() as session:
+        assert await session.scalar(select(RailProviderAccount)) is None
+
+
 async def test_first_insert_resume_cancellation_propagates_without_commit_or_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

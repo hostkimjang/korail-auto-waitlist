@@ -37,6 +37,7 @@ from rail_waitlist.korail_sidecar.browser_contracts import (
     BrowserRateLimited,
     BrowserSourceUnavailable,
 )
+from rail_waitlist.korail_sidecar.provider_cooldown import MemoryProviderCooldown
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import (
     PydollIssuedTicketListSnapshot,
     PydollIssuedTicketSummary,
@@ -57,6 +58,14 @@ from rail_waitlist.reservation_confirmation import (
 )
 
 KOREA = ZoneInfo("Asia/Seoul")
+
+
+@pytest.fixture(autouse=True)
+def isolated_provider_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "rail_waitlist.korail_browser_adapter_service._build_provider_cooldown",
+        MemoryProviderCooldown,
+    )
 
 
 def confirmation_target(

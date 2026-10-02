@@ -155,6 +155,7 @@ class KorailBrowserSeatSource:
         now: Callable[[], datetime] | None = None,
         cooldown_store: CooldownStore | None = None,
         allow_fullstack_test_url: bool = False,
+        provider_cooldown: _client_owner.ProviderCooldown | None = None,
     ) -> None:
         self.enabled = enabled
         self.cache_ttl_seconds = cache_ttl_seconds
@@ -175,7 +176,10 @@ class KorailBrowserSeatSource:
         self._monotonic = monotonic
         self._now = now or (lambda: datetime.now(KOREA))
         self._cooldown_store = cooldown_store or MemoryCooldownStore(monotonic)
-        self._query_runtime = _query_runtime_owner.KorailBrowserQueryRuntime()
+        self._provider_cooldown = provider_cooldown
+        self._query_runtime = _query_runtime_owner.KorailBrowserQueryRuntime(
+            provider_cooldown=provider_cooldown
+        )
 
     @property
     def _query_cooldowns(
@@ -196,8 +200,19 @@ class KorailBrowserSeatSource:
         if not self.enabled:
             return self._project_login_verification_failure("failed")
         try:
+            if self._provider_cooldown is not None:
+                await self._provider_cooldown.check()
             request = self._build_login_verify_request(credentials)
             result = await self._transport.verify_login(request)
+        except _client_owner.ProviderCooldownDeferred as error:
+            return self._project_login_verification_result(
+                KorailLoginVerifyResult(
+                    outcome="failed",
+                    failure_kind="provider_cooldown",
+                    cooldown_reason=error.reason,
+                    retry_after_seconds=error.retry_after_seconds,
+                )
+            )
         except (ValueError, ValidationError):
             return self._project_login_verification_failure("invalid_identifier")
         except _AdapterFailure as error:
@@ -213,8 +228,19 @@ class KorailBrowserSeatSource:
         if not self.enabled:
             return self._project_login_verification_failure("failed")
         try:
+            if self._provider_cooldown is not None:
+                await self._provider_cooldown.check()
             request = self._build_login_verify_request(credentials)
             result = await self._transport.prewarm_login(request)
+        except _client_owner.ProviderCooldownDeferred as error:
+            return self._project_login_verification_result(
+                KorailLoginVerifyResult(
+                    outcome="failed",
+                    failure_kind="provider_cooldown",
+                    cooldown_reason=error.reason,
+                    retry_after_seconds=error.retry_after_seconds,
+                )
+            )
         except (ValueError, ValidationError):
             return self._project_login_verification_failure("invalid_identifier")
         except _AdapterFailure as error:
@@ -235,6 +261,8 @@ class KorailBrowserSeatSource:
         self,
         target: ReservationConfirmationTarget,
     ) -> ReservationConfirmationResult:
+        if self.enabled and self._provider_cooldown is not None:
+            await self._provider_cooldown.check()
         return await _confirmation_runtime.confirm_korail_sidecar_reservation(
             enabled=self.enabled,
             target=target,
@@ -317,6 +345,8 @@ class KorailBrowserSeatSource:
         )
         if internal_request is None:
             return self._project_reservation_failure(observed_at)
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.check()
         try:
             result = await self._transport.reserve(internal_request)
         except _AdapterFailure as error:
@@ -347,6 +377,8 @@ class KorailBrowserSeatSource:
         )
         if internal_request is None:
             return self._project_reservation_failure(observed_at)
+        if self._provider_cooldown is not None:
+            await self._provider_cooldown.check()
         try:
             result = await self._transport.reserve_with_progress(internal_request, on_progress)
         except _AdapterFailure as error:
@@ -581,7 +613,7 @@ class KorailBrowserSeatSource:
                 # ``load`` writes the shared hold while still inside the provider gate.
                 # Surface the already-open hold directly so outer overlay/observe
                 # handlers do not add a query backoff or refresh the provider TTL.
-                raise _ProviderCooldown("source_unavailable") from None
+                raise _ProviderCooldown(error.reason) from None
             raise
 
     async def _open_cooldown(

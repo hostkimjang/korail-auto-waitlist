@@ -20,6 +20,7 @@ from rail_waitlist.korail_browser_automation import (
     BrowserSeatSearchResult,
     BrowserTrainSnapshot,
 )
+from rail_waitlist.korail_sidecar.provider_cooldown import MemoryProviderCooldown
 from rail_waitlist.provider_adapters import korail_browser_query_runtime as owner
 from rail_waitlist.provider_call_context import (
     bind_request_id,
@@ -122,7 +123,9 @@ class ControlledTransport:
         self.events.append("close")
 
 
-def _source(transport: ControlledTransport) -> legacy.KorailBrowserSeatSource:
+def _source(
+    transport: ControlledTransport, *, provider_cooldown=None
+) -> legacy.KorailBrowserSeatSource:
     return legacy.KorailBrowserSeatSource(
         enabled=True,
         adapter_url="http://korail-browser:8091",
@@ -133,7 +136,56 @@ def _source(transport: ControlledTransport) -> legacy.KorailBrowserSeatSource:
         transport=transport,
         monotonic=lambda: 100.0,
         now=lambda: datetime(2026, 8, 1, 12, tzinfo=KOREA),
+        provider_cooldown=provider_cooldown,
     )
+
+
+async def test_shared_login_hold_blocks_main_cache_and_transport_without_query_failure_state() -> (
+    None
+):
+    request = _request()
+    transport = ControlledTransport(_result(request))
+    hold = MemoryProviderCooldown(clock=lambda: 1000)
+    source = _source(transport, provider_cooldown=hold)
+    first = await source._search(request)
+    await hold.login_failed(500, "http_error")
+    with pytest.raises(owner._ProviderCooldown):
+        await source._search(request)
+    assert transport.calls == 1
+    assert source._query_runtime._cache[request.cache_key()].result is first
+    assert source._query_runtime._query_failure_counts == {}
+    assert source._query_cooldowns == {}
+
+
+async def test_queued_main_query_rechecks_shared_hold_after_provider_gate() -> None:
+    request = _request()
+    transport = ControlledTransport(_result(request))
+    hold = MemoryProviderCooldown(clock=lambda: 1000)
+    source = _source(transport, provider_cooldown=hold)
+    async with source._query_runtime._provider_gate:
+        task = asyncio.create_task(source._search(request))
+        await asyncio.sleep(0)
+        await hold.query_failed()
+    with pytest.raises(owner._ProviderCooldown):
+        await task
+    assert transport.calls == 0
+    assert source._query_runtime._query_failure_counts == {}
+
+
+async def test_cached_query_waiter_rechecks_hold_after_main_state_lock() -> None:
+    request = _request()
+    transport = ControlledTransport(_result(request))
+    hold = MemoryProviderCooldown(clock=lambda: 1000)
+    source = _source(transport, provider_cooldown=hold)
+    await source._search(request)
+    async with source._query_runtime._state_lock:
+        task = asyncio.create_task(source._search(request))
+        await asyncio.sleep(0)
+        await hold.login_failed(500, "http_error")
+    with pytest.raises(owner._ProviderCooldown):
+        await task
+    assert transport.calls == 1
+    assert source._query_runtime._query_failure_counts == {}
 
 
 def test_runtime_owner_preserves_legacy_aliases_pickles_and_dependency_surface() -> None:
@@ -432,7 +484,6 @@ async def test_main_query_binds_the_original_absolute_deadline_after_cooldown_re
 
         async def get(self, _key: str) -> None:
             self.clock.value += 0.2
-            return None
 
         async def set(self, _key: str, _reason: str, _seconds: int) -> None:
             return

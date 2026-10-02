@@ -12,6 +12,9 @@ from ..reservations.provider_confirmation.contracts import (
 
 KorailReservationSeatClassValue = Literal["general", "special"]
 KorailLoginMethodValue = Literal["membership_number", "email", "phone"]
+ProviderCooldownReasonValue = Literal[
+    "provider_unavailable", "provider_access_restricted", "cooldown_store_unavailable"
+]
 KorailReservationOutcomeValue = Literal[
     "payment_required",
     "auth_required",
@@ -65,16 +68,22 @@ class KorailLoginVerifyRequest(_InternalModel):
 
 class KorailLoginVerifyResult(_InternalModel):
     outcome: KorailLoginVerificationOutcomeValue
-    failure_kind: Literal["provider_submission_failed"] | None = None
-    retry_after_seconds: int | None = Field(default=None, strict=True, ge=300, le=900)
+    failure_kind: Literal["provider_submission_failed", "provider_cooldown"] | None = None
+    retry_after_seconds: int | None = Field(default=None, strict=True, ge=1, le=86400)
+    cooldown_reason: ProviderCooldownReasonValue | None = None
 
     @model_validator(mode="after")
     def validate_submission_failure(self) -> KorailLoginVerifyResult:
         if self.failure_kind is None:
-            if self.retry_after_seconds is not None:
-                raise ValueError("login retry requires a submission failure")
+            if self.retry_after_seconds is not None or self.cooldown_reason is not None:
+                raise ValueError("login retry requires a classified failure")
         elif self.outcome != "failed" or self.retry_after_seconds is None:
-            raise ValueError("submission failure requires a failed outcome and retry interval")
+            raise ValueError("login failure requires a failed outcome and retry interval")
+        elif self.failure_kind == "provider_submission_failed":
+            if not 300 <= self.retry_after_seconds <= 900 or self.cooldown_reason is not None:
+                raise ValueError("invalid submission failure interval or reason")
+        elif self.cooldown_reason is None:
+            raise ValueError("provider cooldown requires a closed reason")
         return self
 
 
@@ -119,7 +128,7 @@ class KorailReservationConfirmationRequest(_InternalModel):
         return value
 
     @model_validator(mode="after")
-    def require_distinct_route(self) -> "KorailReservationConfirmationRequest":
+    def require_distinct_route(self) -> KorailReservationConfirmationRequest:
         if self.origin.strip() == self.destination.strip():
             raise ValueError("origin and destination must differ")
         if self.arrival_at is not None and self.arrival_at <= self.departure_at:
@@ -162,7 +171,7 @@ class KorailReservationConfirmationResult(_InternalModel):
         return value
 
     @model_validator(mode="after")
-    def require_confirmed_handoff_fields(self) -> "KorailReservationConfirmationResult":
+    def require_confirmed_handoff_fields(self) -> KorailReservationConfirmationResult:
         if (self.outcome == "inconclusive") != (self.diagnostic_code is not None):
             raise ValueError("only inconclusive confirmation requires a diagnostic code")
         confirmed = self.outcome == "confirmed_payment_required"
@@ -205,7 +214,7 @@ class KorailReserveOnceRequest(_InternalModel):
         return normalized
 
     @model_validator(mode="after")
-    def validate_route_and_times(self) -> "KorailReserveOnceRequest":
+    def validate_route_and_times(self) -> KorailReserveOnceRequest:
         if self.origin == self.destination:
             raise ValueError("origin and destination must differ")
         if self.departure_time == self.arrival_time:
@@ -216,8 +225,11 @@ class KorailReserveOnceRequest(_InternalModel):
 class KorailReserveOnceResult(_InternalModel):
     outcome: KorailReservationOutcomeValue
     reason: str = Field(min_length=1, max_length=100)
-    seat_clicked: bool
-    reservation_clicked: bool
+    seat_clicked: bool = Field(strict=True)
+    reservation_clicked: bool = Field(strict=True)
+    failure_kind: Literal["provider_cooldown"] | None = None
+    retry_after_seconds: int | None = Field(default=None, strict=True, ge=1, le=86400)
+    cooldown_reason: ProviderCooldownReasonValue | None = None
     session_ready_at: datetime | None = None
     target_rechecked_at: datetime | None = None
     seat_selected_at: datetime | None = None
@@ -242,6 +254,29 @@ class KorailReserveOnceResult(_InternalModel):
 
     @model_validator(mode="after")
     def validate_progress_evidence(self) -> KorailReserveOnceResult:
+        if self.failure_kind is None:
+            if self.retry_after_seconds is not None or self.cooldown_reason is not None:
+                raise ValueError("reservation cooldown requires a classified failure")
+        elif (
+            self.outcome != "failed"
+            or self.reason != "provider_cooldown"
+            or self.retry_after_seconds is None
+            or self.cooldown_reason is None
+            or self.seat_clicked
+            or self.reservation_clicked
+            or any(
+                value is not None
+                for value in (
+                    self.session_ready_at,
+                    self.target_rechecked_at,
+                    self.seat_selected_at,
+                    self.reservation_requested_at,
+                )
+            )
+            or self.reserved_seats
+            or self.confirmation_correlation_seats
+        ):
+            raise ValueError("provider cooldown must precede reservation execution")
         if self.seat_selected_at is not None and not self.seat_clicked:
             raise ValueError("seat_selected_at requires seat_clicked")
         if self.reservation_requested_at is not None and not self.reservation_clicked:

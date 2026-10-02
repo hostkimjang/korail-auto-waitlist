@@ -63,6 +63,7 @@ from .contracts import (
     KorailSessionActorStateValue,
     KorailSessionStateResult,
 )
+from .provider_cooldown import ProviderCooldown, ProviderCooldownDeferred
 from .pydoll.login_submission import PydollLoginResponseUnavailable
 from .runtime import KorailBrowserEngine
 from .search_coordinator import KorailBrowserAutomation
@@ -111,6 +112,7 @@ class BrowserClientFactory(Protocol):
         page_url: str,
         timeout_seconds: float,
         allow_fullstack_fixture: bool,
+        provider_cooldown: ProviderCooldown | None = None,
     ) -> BrowserClient: ...
 
 
@@ -120,6 +122,7 @@ class AutomationFactory(Protocol):
         engine: KorailBrowserEngine | None = None,
         *,
         browser_client: BrowserClient | None = None,
+        provider_cooldown: ProviderCooldown | None = None,
     ) -> KorailBrowserAutomation: ...
 
 
@@ -161,6 +164,7 @@ class AdapterHttpDependencies:
     getenv: EnvironmentReader
     monotonic: Callable[[], float]
     logger: SidecarLogger
+    build_provider_cooldown: Callable[[], ProviderCooldown] | None = None
 
 
 class _SessionState(Protocol):
@@ -272,54 +276,83 @@ def create_adapter_app(
             reservation_clicked=False,
         )
 
+    def deferred_reservation_result(error: ProviderCooldownDeferred) -> KorailReserveOnceResult:
+        return KorailReserveOnceResult(
+            outcome="failed",
+            reason="provider_cooldown",
+            failure_kind="provider_cooldown",
+            cooldown_reason=error.reason,
+            retry_after_seconds=error.retry_after_seconds,
+            seat_clicked=False,
+            reservation_clicked=False,
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = dependencies.browser_engine_setting()
         app.state.browser_engine = engine.value
         app.state.pending_reservation_tasks = set()
-        if automation is None:
-            page_url = dependencies.getenv("KORAIL_BROWSER_PAGE_URL", OFFICIAL_KORAIL_SEARCH_URL)
-            allow_fullstack_fixture = (
-                dependencies.getenv("ENVIRONMENT", "").strip().lower() == "test"
-                and page_url == FULLSTACK_E2E_PAGE_URL
-            )
-            client = dependencies.build_browser_client(
-                engine,
-                page_url=page_url,
-                timeout_seconds=dependencies.float_setting(
-                    "KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS", 25, minimum=5, maximum=60
-                ),
-                allow_fullstack_fixture=allow_fullstack_fixture,
-            )
-            app.state.automation = dependencies.build_automation(engine, browser_client=client)
-            app.state.reservation_client = reservation_client or (
-                client if callable(getattr(client, "reserve_once", None)) else None
-            )
-        else:
-            app.state.automation = automation
-            inferred_client = getattr(automation, "_client", None)
-            app.state.reservation_client = reservation_client or (
-                inferred_client
-                if callable(getattr(inferred_client, "reserve_once", None))
-                else None
-            )
-        app.state.token = token or dependencies.getenv("KORAIL_BROWSER_ADAPTER_TOKEN")
-        if app.state.token is None or len(app.state.token.encode("utf-8")) < 32:
-            raise RuntimeError("KORAIL_BROWSER_ADAPTER_TOKEN must be at least 32 UTF-8 bytes")
-        app.state.readiness = dependencies.readiness_factory(
-            readiness_probe or dependencies.readiness_probe_for_engine(engine),
-            retry_interval_seconds=readiness_retry_interval_seconds,
-            probe_timeout_seconds=readiness_probe_timeout_seconds,
+        provider_cooldown = (
+            dependencies.build_provider_cooldown()
+            if automation is None and dependencies.build_provider_cooldown is not None
+            else None
         )
-        await app.state.readiness.probe_if_due(force=True)
+        app.state.provider_cooldown = provider_cooldown
+        app.state.automation = automation
+        app.state.readiness = None
         try:
+            if automation is None:
+                page_url = dependencies.getenv(
+                    "KORAIL_BROWSER_PAGE_URL", OFFICIAL_KORAIL_SEARCH_URL
+                )
+                allow_fullstack_fixture = (
+                    dependencies.getenv("ENVIRONMENT", "").strip().lower() == "test"
+                    and page_url == FULLSTACK_E2E_PAGE_URL
+                )
+                client = dependencies.build_browser_client(
+                    engine,
+                    page_url=page_url,
+                    timeout_seconds=dependencies.float_setting(
+                        "KORAIL_BROWSER_ACTION_TIMEOUT_SECONDS", 25, minimum=5, maximum=60
+                    ),
+                    allow_fullstack_fixture=allow_fullstack_fixture,
+                    provider_cooldown=provider_cooldown,
+                )
+                app.state.automation = dependencies.build_automation(
+                    engine, browser_client=client, provider_cooldown=provider_cooldown
+                )
+                app.state.reservation_client = reservation_client or (
+                    client if callable(getattr(client, "reserve_once", None)) else None
+                )
+            else:
+                inferred_client = getattr(automation, "_client", None)
+                app.state.reservation_client = reservation_client or (
+                    inferred_client
+                    if callable(getattr(inferred_client, "reserve_once", None))
+                    else None
+                )
+            app.state.token = token or dependencies.getenv("KORAIL_BROWSER_ADAPTER_TOKEN")
+            if app.state.token is None or len(app.state.token.encode("utf-8")) < 32:
+                raise RuntimeError("KORAIL_BROWSER_ADAPTER_TOKEN must be at least 32 UTF-8 bytes")
+            app.state.readiness = dependencies.readiness_factory(
+                readiness_probe or dependencies.readiness_probe_for_engine(engine),
+                retry_interval_seconds=readiness_retry_interval_seconds,
+                probe_timeout_seconds=readiness_probe_timeout_seconds,
+            )
+            await app.state.readiness.probe_if_due(force=True)
             yield
         finally:
-            app.state.readiness.ready = False
+            if app.state.readiness is not None:
+                app.state.readiness.ready = False
             pending = tuple(app.state.pending_reservation_tasks)
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
-            await app.state.automation.close()
+            try:
+                if app.state.automation is not None:
+                    await app.state.automation.close()
+            finally:
+                if provider_cooldown is not None:
+                    await provider_cooldown.close()
 
     app = FastAPI(
         title="KORAIL experimental browser adapter",
@@ -392,6 +425,15 @@ def create_adapter_app(
         response.headers.update(NO_STORE_HEADERS)
         if not await app.state.readiness.probe_if_due():
             raise HTTPException(503, "not_ready", headers=NO_STORE_HEADERS)
+        cooldown = cast(ProviderCooldown | None, app.state.provider_cooldown)
+        if cooldown is not None:
+            try:
+                await cooldown.check()
+            except ProviderCooldownDeferred as error:
+                # A valid provider hold is healthy storage. Missing credentials,
+                # denied ACL commands or an unavailable store must not look ready.
+                if error.reason == "cooldown_store_unavailable":
+                    raise HTTPException(503, "not_ready", headers=NO_STORE_HEADERS) from None
         return {"status": "ready"}
 
     @app.get(
@@ -492,6 +534,12 @@ def create_adapter_app(
                 if timeout_ms is None:
                     return await automation_owner.search(request)
                 return await automation_owner.search(request, timeout_seconds=timeout_ms / 1000)
+            except ProviderCooldownDeferred as error:
+                raise HTTPException(
+                    503,
+                    {"failure_kind": "provider_cooldown", "reason": error.reason},
+                    headers={**response_headers, "Retry-After": str(error.retry_after_seconds)},
+                ) from None
             except BrowserRateLimited as error:
                 raise HTTPException(
                     429,
@@ -563,6 +611,9 @@ def create_adapter_app(
             internal_request = internal_reservation_request(request)
             try:
                 result = cast(_ReserveOnceResult, await client.reserve_once(internal_request))
+            except ProviderCooldownDeferred as error:
+                response.headers["Retry-After"] = str(error.retry_after_seconds)
+                return deferred_reservation_result(error)
             except Exception:  # noqa: BLE001 -- never serialize backend exceptions containing secrets.
                 dependencies.logger.error(
                     "KORAIL reserve-once failed with a redacted backend error "
@@ -643,6 +694,8 @@ def create_adapter_app(
                         request_id,
                     )
                     terminal = public_reservation_result(result)
+                except ProviderCooldownDeferred as error:
+                    terminal = deferred_reservation_result(error)
                 except Exception:  # noqa: BLE001 -- redact browser and credential details.
                     dependencies.logger.error(
                         "KORAIL reserve-once stream failed with a redacted backend error "
@@ -745,6 +798,12 @@ def create_adapter_app(
                 evidence = await read_detail(target)
                 phase = "evidence_normalization"
                 confirmation = normalize_korail_same_session_detail(target, evidence)
+            except ProviderCooldownDeferred as error:
+                raise HTTPException(
+                    503,
+                    {"failure_kind": "provider_cooldown", "reason": error.reason},
+                    headers={**response_headers, "Retry-After": str(error.retry_after_seconds)},
+                ) from None
             except (BrowserProtectionDetected, BrowserRateLimited):
                 dependencies.logger.warning(
                     "KORAIL reservation confirmation failed failure=provider_blocked "
@@ -868,6 +927,14 @@ def create_adapter_app(
         verify_credential = cast(Callable[[object], Awaitable[bool]], verify or prewarm)
         try:
             authenticated = await verify_credential(credential)
+        except ProviderCooldownDeferred as error:
+            response.headers["Retry-After"] = str(error.retry_after_seconds)
+            return KorailLoginVerifyResult(
+                outcome="failed",
+                failure_kind="provider_cooldown",
+                cooldown_reason=error.reason,
+                retry_after_seconds=error.retry_after_seconds,
+            )
         except (BrowserRateLimited, BrowserProtectionDetected):
             return KorailLoginVerifyResult(outcome="provider_blocked")
         except PydollLoginResponseUnavailable as error:
@@ -934,6 +1001,14 @@ def create_adapter_app(
         )
         try:
             authenticated = await prewarm(credential)
+        except ProviderCooldownDeferred as error:
+            response.headers["Retry-After"] = str(error.retry_after_seconds)
+            return KorailLoginVerifyResult(
+                outcome="failed",
+                failure_kind="provider_cooldown",
+                cooldown_reason=error.reason,
+                retry_after_seconds=error.retry_after_seconds,
+            )
         except (BrowserRateLimited, BrowserProtectionDetected):
             return KorailLoginVerifyResult(outcome="provider_blocked")
         except PydollLoginResponseUnavailable as error:

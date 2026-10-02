@@ -19,7 +19,90 @@ from rail_waitlist.korail_pydoll_browser import (
     PydollKorailBrowserClient,
     PydollPageSnapshot,
 )
+from rail_waitlist.korail_sidecar.browser_service_availability import BrowserProviderUnavailable
+from rail_waitlist.korail_sidecar.provider_cooldown import (
+    MemoryProviderCooldown,
+    ProviderCooldownDeferred,
+)
 from rail_waitlist.korail_sidecar.pydoll.auth_actor import PydollAuthenticationSessionActor
+from rail_waitlist.korail_sidecar.pydoll.login_submission import (
+    LoginSubmissionSnapshot,
+    PydollLoginResponseUnavailable,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["verify_credentials", "prewarm_credentials"])
+async def test_shared_hold_rechecked_after_auth_lock_without_session_mutation(operation) -> None:
+    hold = MemoryProviderCooldown()
+    session = _AuthSession()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _AuthContext(session),
+        provider_cooldown=hold,
+    )
+    await client._session_lock.acquire()
+    task = asyncio.create_task(getattr(client, operation)(_credential()))
+    await asyncio.sleep(0)
+    await hold.query_failed()
+    client._session_lock.release()
+    with pytest.raises(ProviderCooldownDeferred):
+        await task
+    assert session.open_count == session.authentication_count == session.probe_count == 0
+    assert client.session_snapshot().state is KorailSessionActorState.COLD
+
+
+@pytest.mark.asyncio
+async def test_actual_login_http_error_opens_shared_hold_once() -> None:
+    class FailedLogin(_AuthSession):
+        async def open(self):
+            self.open_count += 1
+            return PydollPageSnapshot("fixture login", ())
+
+        async def ensure_authenticated(self, credential):
+            self.authentication_count += 1
+            raise PydollLoginResponseUnavailable(
+                LoginSubmissionSnapshot("failed", 500, "http_error")
+            )
+
+    now = [1_700_000_000.0]
+    hold = MemoryProviderCooldown(clock=lambda: now[0])
+    session = FailedLogin()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _AuthContext(session), provider_cooldown=hold
+    )
+    with pytest.raises(PydollLoginResponseUnavailable):
+        await client.verify_credentials(_credential())
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await client.prewarm_credentials(_credential())
+    assert caught.value.retry_after_seconds == 300
+    assert session.authentication_count == 1
+    assert hold._login_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_official_probe_cannot_reauthenticate_through_new_hold() -> None:
+    class OutageProbe(_AuthSession):
+        async def open(self):
+            self.open_count += 1
+            return PydollPageSnapshot("fixture login", ())
+
+        async def probe_authenticated_session(self):
+            self.probe_count += 1
+            raise BrowserProviderUnavailable("business_server_error", "session_keepalive")
+
+    hold = MemoryProviderCooldown()
+    session = OutageProbe()
+    client = PydollKorailBrowserClient(
+        session_factory=lambda *_args: _AuthContext(session),
+        provider_cooldown=hold,
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+    assert await client.verify_credentials(_credential())
+    with pytest.raises(ProviderCooldownDeferred):
+        await client.prewarm_credentials(_credential())
+    assert session.authentication_count == session.probe_count == 1
+    await client.close()
 
 
 class _AuthSession:

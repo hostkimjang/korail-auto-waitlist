@@ -422,6 +422,7 @@
 - [x] 업데이트 노트와 화면의 v1.2.11·2026-10-03(토) 일치 및 appRelease 회귀 7건 통과
 - [x] DAYBREAK 실제 모델 분석과 새 로컬·서버 egress 교차 진단의 loopback fixture 검증. 이 준비 검증의 공식 요청 0이며 실제 비교·원인 확정과 구분
 - [x] 전체 API 첫 실행의 구조 계약 회귀 11건을 수정하고 후속 전체 실행 5,035건 통과·4건 skip·경고 1건 확인. 전체 실행은 최종 readyz 코드 수정 전 수집한 범위이며 마지막 변경은 별도 HTTP/core/runtime 46건(준비 상태 회귀 5건 포함)으로 검증
+- [x] 커밋 `712dffcbf8d5a6ad32787bfed6b3a4a344bf9f93`의 [저장소 CI](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37054493027)·[브라우저 CI](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37054493135) 성공 확인. 전체 API 5,044건·경고 1건(620.58초), Ruff·mypy 171개 파일·웹 100개 파일/982건·웹 E2E 16건·PostgreSQL fencing과 fixture 브라우저 194건·경고 1건·fullstack E2E 1건 통과. 로컬 5,035건의 수집 시점과 구분하며 실제 공식 로그인·좌석·예약 성공으로 기록하지 않음
 - [x] 웹 typecheck·982건 테스트·build·Sites 4건과 Compose 구성 검사 통과. 고정 Ruff 전체·format ratchet·strict mypy 재확인 통과
 - [x] 로컬 AMD64를 같은 서버 browser-egress 망으로 연결한 익명 실제 비교 1회와 소유 자원 정리. 일반 페이지 GET 200·완료 뒤 외부 리소스 두 건 실패로 open_general 중단, 조회 제출·업무 POST·로그인·예약·계정 판독 0. 조건 비교 불가로 원인 확정·배제하지 않음
 - [x] 실행문 전 파싱 오류의 첫 진단은 공식 요청 0으로 별도 보존하고 loopback 준비 검증과 실제 비교를 구분. 진단 당시 서버 네 서비스 격리·로컬 전체 중지·계정 세대 4와 기존 UNKNOWN/차단 각 4건 보존 확인
@@ -431,6 +432,9 @@
 - [x] 위 비교의 immutable·네트워크 없음·비루트·읽기 전용·Python entrypoint·healthcheck 없음·환경값 복제 없음 경계와 Chrome 실행/공식 요청/계정 판독 0·임시 컨테이너 정리 확인. 서버 12개/로컬 0 유지 및 stdout/stderr 합친 closed startup 오류 재검사 0
 - [x] 추가 공식 요청 없이 정상 예열 로그에서 10월 3일 04:24:07 KST의 자연 발생 로그인 http_error 500 재발 확인. 제한 Redis 계정의 고정 key 읽기로 provider_unavailable·실패 횟수 3회·남은 대기 810초를 확인하고 기존 UNKNOWN/차단 각 4건·새 시도/진행 중 등록 0·서버 서비스 12개·로컬 0 재확인. 공통 900초 대기의 작동을 실제 기능 복구로 기록하지 않음
 - [x] DAYBREAK 후속 검토에서 서로 다른 로컬 실패와 자동 POST 두 건 200·공식 로그인 표시 양성 표본을 분리하고 서버 수동/회원번호/휴대전화 500을 재확인. 입력 드라이버 단독 원인·전면 ARM 암호화 고장·이미지 업데이트 원인으로 단정하지 않음
+- [x] 정상 예열의 04:39:17·04:54:25 공식 HTTP 500과 04:56 제한 Redis의 실패 횟수 3회·남은 대기 794초를 읽기 전용으로 확인. 계정 세대 4·기존 UNKNOWN/차단 각 4·새 시도/PENDING 0·서버 12개/로컬 0 보존
+- [x] 자연 요청 관측의 `no_target`을 미관측으로 보존하고, 서버 공개 Chrome wrapper의 실행 이름 보존과 진단 파서의 `google-chrome` 누락을 확인·순수 회귀 수정. 연결·CDP 명령·입력·탐색·브라우저 실행·본문 읽기·예약 제출 0이며 공식 HTTP 500 원인과 구분
+- [ ] 수정한 진단 도구로 다음 자연 요청의 frame/loader와 공개 header 이름 존재를 실제 관측. 이전 빈 기록은 정상 동작이나 요청 부재의 근거로 쓰지 않음
 - [ ] 다음 자연 표본에서 현재 frame/loader/context 일치·선행 요청 완료의 닫힌 boolean과 공개 header 이름 존재만 관측하는 후보 검토. 사이트 요청 생성과 ARM 상호작용·서버 egress/edge/session affinity는 미확정이며 이 새 관측은 미실행
 - [ ] Dockerfile의 비고정 stable_current 설치를 고정해 빌드 재현성을 높이는 후속 개선 검토. 이번 작업에서 Dockerfile·기능 코드를 바꾸지 않았으며 HTTP 500 복구로 판정하지 않음
 - [ ] 실제 예약 흐름에서 기존 일반 안내 정책의 자동 처리 검증. 운영 설정 true·서비스 health를 실제 안내 처리 성공으로 올리지 않음

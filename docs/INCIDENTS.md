@@ -13,9 +13,11 @@ SHA-256은 `194e9bb81deda8db73f9bfff6aee0e4856021c1fe1f227731d2b96448132375d`입
 다릅니다. bootstrap과 Ubuntu·cloud-init·Docker 준비는 성공했고 이후 Docker 대기·이미지
 가져오기 완료를 확인하지 못했습니다. 기존 개별 실패 기록과 이 구분을 보존합니다.
 
-커밋 `7ece442`의 [저장소 CI 37090974603](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37090974603)
-03:03:39 UTC 성공과 API 5,044건·웹 982건·E2E 16건·Sites 4건·PostgreSQL fencing 3종·Ruff·mypy 171개 파일·build 통과를 확인했습니다. 새 격리
-capsule의 순수 테스트 37건·Ruff·준비 검증도 통과했지만 실제 외부 경로 성공과 구분합니다.
+커밋 `7e02c35`의 [저장소 CI 37095551185](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37095551185)
+성공과 API 5,044건·웹 982건·E2E 16건·Sites 4건·PostgreSQL fencing 3종·Ruff·mypy 171개 파일·build 통과를 확인했습니다.
+직전 문서 커밋 `13292c3`에서는 로컬 fixture의 `Page.navigate`가 CDP 60초 timeout으로 실패했으나
+이번 실행에서 재발하지 않았습니다. 이 결과를 해당 timeout의 원인 해결이나 실제 공식 기능 복구로
+판정하지 않습니다. 격리 진단의 순수 회귀·Ruff·준비 검증도 실제 외부 경로 성공과 구분합니다.
 
 02:34:11 UTC의 실제 격리 owner `4d6145d5989f480bb8986d0ff138bf25`에서 caller 8개를 멈추고
 서버 핵심 4개·로컬 0개, 소스 30개·계정 세대 4·UNKNOWN/차단 각 4건·새 시도 0을 확인했습니다.
@@ -70,6 +72,52 @@ v4c 결과 `output/offline-connect-fixture-v4c-84b45e0c5a034d8aaabf3698d44c9a0a.
 
 relay 실행 명령을 AST로 계산한 오프라인 결과는 소스 26,540바이트·base64 35,388자·loader 35,467자였고 전체 Windows 명령은 NUL 제외 36,157자에 실제 network 이름 길이를 더합니다. 이름의 최소 16자만 적용해도 NUL 포함 36,174자로, [Microsoft CreateProcessW 문서](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw)의 NUL 포함 32,767자 한도를 넘습니다. 실제 network 이름 원문은 관측하지 않았습니다.
 별도 무해한 OS 재현 `output/root-windows-commandline-limit-repro-32c53a7e44344bb188ec3045d7535f74.json`(SHA-256 `30244152fdf1e4ef7dbddf87d41d73a9d0db67d32da3ebff1559b7e38fc3e998`, 완료 04:04:52.890185 UTC)은 `python -c pass`와 공개 padding의 35,582자 인자로 `OSError/WinError 206/errno 2`·자식 프로세스 미시작을 확인했습니다. 이 재현의 공식 호출·SSH·Docker·자격증명 접근은 0입니다. Windows 진단 실행 명령의 길이 초과 결함은 확인했지만 실제 v5에서 관측한 분류는 runtime뿐이므로 같은 오류 코드나 정확한 실패 인과, 기존 코레일 HTTP 500의 원인을 확정하지 않습니다.
+
+### v6 relay 실행과 리소스 감시 경계
+
+진단 v6은 압축한 relay loader로 Windows 명령 길이를 줄였습니다. 실제 결과 `output/fixed-egress-capsule-isolated-rejection-v6-b0c800314b434c2e94c7d6685431ab71.json`(SHA-256 `3169c5b9760aef3836134eed8e74321d32fc3c89b26bec9a10e1f933d6649108`, 완료 04:17:49.449650 UTC)에서 relay 실행·상태 수집·최종 정리를 확인했습니다. 조회 helper 시작 표시는 있지만 `query_once/network_failed/open_general`로 끝났고 UI 제출·업무 POST·결과 행은 0, 조건 일치는 false입니다. 리소스 수집기는 요청·응답·완료·실패 수 모두 0, 이벤트 3건·첫 오류 `invalid_event`를 기록했습니다. relay의 연결 수락 13건은 일반 평문 HTTP 개별 거절 1건과 고정 대상 외 CONNECT 개별 거절 12건이며, 고정 철도사 대상 CONNECT·완료 tunnel은 0입니다. 네 범주의 정리는 모두 true였습니다. 조회 helper의 시작을 공식 요청 제출로 해석하지 않으며 CPU·IP·공식 HTTP 500 비교는 성립하지 않았습니다.
+
+소스 검토에서는 준비 중 응답 callback이 먼저 연결되고 요청·완료·실패 callback은 준비가 끝난 뒤 연결되는 순서를 확인했습니다. 원래 소스의 AST와 Pydoll의 중첩 `params` 형식을 사용하는 같은 `ResourceObservation` fixture에서 준비 중 응답 세 건으로 동일 실패를 재현했습니다. 다만 실제 세 이벤트의 종류와 발생 시점은 미관측이므로 v6의 직접 원인으로 확정하지 않습니다. 후속 진단 v7은 준비 단계와 실제 관측 단계를 구분했으며 실제 결과는 아래에 따로 기록합니다.
+
+복원 결과 `output/fixed-egress-capsule-v6-server-restored-71fca4e35c0e44ed887d32d64888a453.json`(SHA-256 `c312640a62cbe622b727c549165c23c450047a84e35dd4bee7dc10a44c50fb63`, 완료 04:19:05.197112 UTC)은 동일 ID/이미지의 서버 12개 healthy·핵심 서비스 시작 시각·소스 30개·API 준비/웹/JS 200·푸터 v1.2.11·로컬 0과 소유 clone/relay/SSH 부재를 확인했습니다. 계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0을 보존했고 대기 쓰기·실패 횟수 초기화는 0입니다. 실패 횟수 3회와 기존 대기를 줄이지 않았으며 복원 전·병합 후 0초, 운영 재개 후 897초·최종 887초를 읽었습니다. 이 운영 관측을 별도 새 HTTP 500이나 공식 기능 복구 증거로 사용하지 않습니다.
+
+### v7의 공식 페이지 응답과 검색 전 중단
+
+실제 결과 `output/fixed-egress-capsule-isolated-rejection-v7-0159d62efd094a05af0ac9f8bffc12ee.json`(SHA-256 `923d10a40eb0f402b8fe9ddf8b3014a5043a42860c15895325ca097324ec0dfa`, 완료 04:34:46.954432 UTC)은 준비 단계의 `invalid_event` 없이 일반 조회 Document HTTP 200을 관측했습니다. 다만 문서 통신 완료는 false이며 요청 7건·응답 1건·이벤트 8건 뒤 허용 목록 밖 Script 두 건으로 `disallowed_request` 중단했습니다. UI 제출·업무 POST·결과 행은 0이므로 조회 비교는 `INVALID`입니다. relay 수락 19건은 고정 대상 CONNECT 5건·일반 HTTP 개별 거절 1건·고정 대상 밖 CONNECT 개별 거절 13건으로 나뉘며 고정 대상 tunnel 5건의 완료와 upstream 실패·예상 밖 거절 0, 소유 자원 네 범주의 정리를 확인했습니다. 이 결과는 기존 업무 HTTP 500의 새 표본이 아닙니다.
+
+복원 결과 `output/fixed-egress-capsule-v7-server-restored-784073f1c04d415cb3be836bb5dc5b1e.json`(SHA-256 `e589c5ae80347807c5ea64cf3bd000b84833e2a073b9374a668ad215d9226280`, 완료 04:36:08.538292 UTC)은 같은 ID/이미지의 서버 12개 healthy·핵심 서비스 시작 시각·소스 30개·readyz/웹/JS 200·푸터 v1.2.11·로컬 0과 소유 clone/relay/SSH 부재를 확인했습니다. 계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0을 보존했습니다. 복원 도구의 대기 쓰기와 실패 횟수 초기화는 0이며 횟수 3회·복원 전/병합 후 대기 0초를 유지했습니다. 정상 운영 재개 후 897초·최종 886초를 읽은 사실은 별도 새 HTTP 500 증거로 올리지 않습니다.
+
+### 공개 SDK 선언과 v8 비교 준비
+
+공개 HTML 확인 `output/public-general-script-origins-20261003.json`(SHA-256 `bc2b00edec39acd5fb7c1ebccd11e5b5147ff1f59ec96f46ad327ab6efd47d58`, 완료 04:36:34.410725 UTC)의 문서 응답은 200이며 문서 SHA-256은 `dc36e6640d905513cb6e655d982656c65c188fd8e0f0119bb5f551fe99afe5af`입니다. 선언된 Script 11개는 코레일 8개·네이버 2개·휴대전화 인증 1개로, `static.nid.naver.com`과 `cert.mobile-ok.com` 두 호스트가 기존 진단 경로의 허용 목록에 빠졌음을 확인했습니다. 이 목록은 격리 비교에 사용하는 진단 정책이며 제품 브라우저의 원래 HTTP 500 원인으로 연결하지 않습니다. 본문은 저장하지 않았고 쿠키·자격증명을 읽지 않았습니다. 선언만으로 조회 필수 여부나 실제 v7의 차단 Script 두 건과의 동일성을 확정하지 않습니다.
+
+진단 v8은 기존 공개 네트워크 suffix 네 종류를 유지하고 위 두 호스트의 HTTPS 443만 추가했습니다. 모든 리소스 종류에 기존 관측·오류 중단 정책을 적용하며 직접 연결 대체·동적 허용 확대·로그인·예약은 없습니다. 고정 manifest SHA-256은 `ab719c7acbbd29da32d39e2bec7ebdb5c311df95dbf6bf54da213bff3da46938`입니다. 순수 회귀 70건·API Ruff·준비 검증과 Root·독립 검토는 통과했고 실제 결과는 아래에 따로 기록합니다. 실제 인증·좌석 조회·자동 예약 복구와 새 예약 검증 대상의 승인은 미완료입니다.
+
+### v8 실행 전 대기 증가와 운영 복원
+
+04:51:13 UTC에 완료한 격리 준비 `b30de914e3d9477ab50564e8f1b70291`에서 공통 대기가 16→890초로 늘고 로그인 실패 횟수는 3회였습니다. UI 제출·공식 호출·새 예약 시도는 0이며 대기 증가를 새 HTTP 500 발생이나 특정 원인으로 확정하지 않습니다. 해당 준비는 재사용하지 않고 폐기했으며 이 준비에서 v8 비교를 실행하지 않았습니다.
+
+04:53:28 UTC의 같은 ID 운영 복원에서 서버 12개 healthy·로컬 0을 확인했습니다. 다만 후속 임시 검사에서 x86_64 전용 `contract.source30_ok`를 ARM 서버에 적용해 runtime 단계의 `AssertionError`가 발생했습니다. 실패 원기록을 보존하고 아키텍처에 맞는 읽기 전용 검증으로 확인 범위를 보완했습니다.
+
+후속 확인 `output/v8-predispatch-restore-verified-299a562bc11f4e2589b05d0224366317.json`(SHA-256 `82e276c0cbae58649a5731b969613957159b7ba32065cdce6411fc9a4a7c45b6`)은 같은 ID/이미지의 서버 12개 healthy·핵심 서비스 시작 시각·API와 ARM adapter 소스 30개·readyz/웹/JS 200·푸터 v1.2.11·로컬 0·임시 capsule과 tunnel 부재를 확인했습니다. UNKNOWN/차단 각 4건·PENDING/큐 0·로그인 실패 횟수 3회를 보존했으며 대기 505초를 읽었습니다. Root의 대기 쓰기·횟수 초기화는 0입니다. 후속 준비는 대기가 약 150초 남은 시점부터 격리하고, 다시 증가하면 원인을 단정하거나 비교를 실행하지 않고 운영을 복원하는 방침입니다.
+
+### v8 실제 UI 제출과 결과 확인 전 중단
+
+새 격리 준비 `fc73feed089446139c1907e66810b639`에서 대기 140→104초·실패 횟수 3회와 처리 중 작업의 다섯 drain 필드 0을 확인했습니다. 이후 읽기 전용 gate에서 대기가 58→22→0초로 자연 만료한 뒤 05:06:38.340763 UTC에 한 번의 실제 비교를 시작했습니다.
+
+결과 `output/fixed-egress-capsule-public-dependencies-v8-b7748f17f0b84ba88cd6b8ddf60a6243.json`(SHA-256 `72b26f7ea78a784253322720742e794834b1d3e8b6815d38358ad1f09f3553a9`, 완료 05:06:56.181456 UTC)은 조건 일치와 UI 제출 1회를 확인했습니다. 공식 POST 8건은 모두 `official_other` HTTP 200·통신 완료이며 선택 열차 검색의 business 응답은 없었습니다. 결과 행은 0입니다. 리소스 요청 79건·응답 70건·완료 70건·이벤트 219건·통신 실패와 redirect 0을 관측했고 네이버·휴대전화 SDK Script 각각 2건이 모두 200·통신 완료였습니다. 이후 불허 Fetch 1건으로 `wait_result/network_failed/disallowed_request` 중단했으며 관측은 incomplete입니다. 해당 Fetch의 URL scheme·호스트·역할은 미관측입니다. 따라서 조회 비교는 `INVALID`이고 원래 업무 HTTP 500의 새 표본이나 CPU·IP 원인 증명이 아닙니다.
+
+relay 수락 42건은 고정 대상 CONNECT 13건·평문 HTTP 개별 거절 1건·대상 밖 CONNECT 개별 거절 28건이며 고정 대상 tunnel 13건이 완료됐습니다. upstream 실패·예상 밖 거절 0과 소유 자원 네 범주의 정리를 확인했으며 새 대기 계획은 0입니다.
+
+복원 `output/fixed-egress-capsule-v8-server-restored-52fa8df592664bc5a8a14be1ff0f94ea.json`(SHA-256 `5e62a6510966b2a6c313abbe17a3ac8120b9904fed1976225e425ce996088396`, 완료 05:08:23.986607 UTC)은 같은 ID/이미지의 서버 12개 healthy·핵심 서비스 시작 시각·소스 30개·readyz/웹/JS 200·푸터 v1.2.11·로컬 0·임시 자원 부재를 확인했습니다. 계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0·실패 횟수 3회를 보존했고 Root의 대기 쓰기·초기화는 0입니다. 운영 재개 후 대기 0→897초·최종 887초를 읽었지만 별도 새 HTTP 500 증거로 판정하지 않습니다. 조회·인증·예약의 실제 복구는 미완료입니다.
+
+### DAYBREAK 후속 권고와 근거 보정
+
+`gpt-daybreak-blue-latest`의 후속 CLI 실행은 정상 종료했고 도구 호출은 0이었습니다(입력 20,452·출력 1,630 tokens). 답변 SHA-256은 `b3b7d2a54c8706f1963edecf4d93bf055d6ac66ae711f2214aa793609fe346d3`, 영수증 SHA-256은 `2ec4f9c26452f750c2443b1d2f598ee9bb22c167e3defd5dfcc3d447d9c09dc0`입니다. 검토한 표현은 `output/daybreak-resource-boundary-review-20261003.root-reviewed.md`에 보존했습니다.
+
+원문에서 과장된 인과는 네 가지를 보정했습니다. v5의 실제 오류는 `relay/runtime`만 기록돼 별도 Windows 길이 초과 재현을 같은 OS 오류로 소급하지 않습니다. v6의 준비 응답 재현은 실제 세 이벤트의 종류·시점이나 callback 충돌을 확정하지 않습니다. 공개 SDK 선언과 실제 v7 차단 대상의 동일성은 미관측입니다. 정상 UI 제출 한 번은 여러 POST를 만들 수 있으므로 UI 1회와 전체 POST 1개를 혼동하지 않습니다.
+
+권고는 v8에서 정상 익명 UI 조회를 한 번 관측하고 업무 200·업무 500·리소스 실패를 구분하는 것입니다. 업무 200이면 그 비교에서 Oracle 접속 경로만으로 실패가 재현되지 않은 것입니다. 리소스가 정상인데 업무 500이면 ARM이 필요조건이라는 가설은 약해지고 서버 접속 경로·세션 분류의 연관 가설이 강해집니다. 어느 경우에도 시간·전체 세션·공인 IP 동등성을 확인하지 않아 CPU·IP 단독 원인을 확정하지 않습니다. 리소스 실패는 유효하지 않은 비교로 남기며 기능 복구로 올리지 않습니다.
 
 ## 2026년 10월 3일 · DAYBREAK 독립 원인 분석
 

@@ -489,8 +489,16 @@
 - [x] [코레일 외부 네트워크 연결 안내](https://www.korail.com/public/info/urlList.html)와 probe 관측 한계 기록. failures=[]는 해당 target/관측 구간의 loadingFailed 부재이며 외부 리소스 HTTP 오류 부재·정상 응답 보장 아님
 - [ ] Dockerfile의 비고정 stable_current 설치를 고정해 빌드 재현성을 높이는 후속 개선 검토. 이번 작업에서 Dockerfile·기능 코드를 바꾸지 않았으며 HTTP 500 복구로 판정하지 않음
 - [ ] 실제 예약 흐름에서 기존 일반 안내 정책의 자동 처리 검증. 운영 설정 true·서비스 health를 실제 안내 처리 성공으로 올리지 않음
-- [x] 격리 경로 진단의 조회 전 실패·업무 비교 불성립과 서버 전체 운영 복원 확인. 오프라인 v4c의 about:blank·15초 관측 창과 v5 loopback 왕복·listener 정리를 통과했으나 실제 v4는 결과 수집 `KeyError`·마지막 실패 단계 미관측, v5는 relay 단계 runtime 실패이며 공식 조회 dispatch는 모두 0. 진단 명령의 Windows 길이 한도 초과 결함은 계산·별도 무해한 WinError 206 재현으로 확인했지만 실제 v5 오류 코드는 미관측. 별도 v5 복원에서 소유 clone/relay/SSH 부재·동일 서버 12개 healthy·소스 30개·로컬 0·세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0·대기 쓰기/초기화 0 확인. 준비 검증·운영 재개 후 자연 대기를 실제 비교 성공·새 HTTP 500·원인 확정·기능 복구로 판정하지 않음
-- [ ] 검색 조건과 실제 경로를 맞춘 egress 교차 비교 및 서버 공식 실패의 근본 원인 확인. 문서 응답 없는 네트워크 실패와 loopback 검증 성공을 공식 HTTPS 경로나 조회 복구로 판정하지 않음
+- [x] 격리 진단 v6의 relay 실행·상태 수집·정리와 서버 전체 운영 복원 확인. Windows 명령 길이를 줄인 경로에서 helper는 시작됐지만 리소스 `invalid_event`·이벤트 3건·요청/응답 수 0으로 검색 UI·업무 POST·고정 철도사 대상 연결은 0이며 실제 비교는 불성립. 별도 복원에서 소유 clone/relay/SSH 부재·동일 서버 12개 healthy·소스 30개·로컬 0·세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0·대기 쓰기/초기화 0 확인. 준비 중 callback 순서로 같은 실패를 재현했지만 실제 이벤트 종류·시점은 미관측이며 공식 HTTP 500 원인·기능 복구로 판정하지 않음
+- [x] 문서 커밋 `7e02c35`의 [CI 37095551185](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37095551185) 성공: API 5,044건·웹 982건·E2E 16건·Sites 4건·PostgreSQL fencing 3종·Ruff·mypy 171개 파일·build 통과. 직전 로컬 fixture CDP 탐색 timeout은 미재발이며 원인 해결·실제 철도사 기능 복구와 구분
+- [x] 격리 진단 v7에서 준비 `invalid_event` 없이 일반 조회 Document 200 관측. 요청 7건·응답 1건·이벤트 8건 뒤 허용 목록 밖 Script 두 건으로 중단돼 문서 완료 false·UI/업무 POST/결과 행 0·비교 INVALID 유지. 고정 CONNECT/tunnel 완료 각 5건·개별 거절 14건·소유 네 범주 정리 확인; 기존 업무 500의 새 근거로 올리지 않음
+- [x] v7 복원에서 같은 ID/이미지의 서버 12개 healthy·핵심 서비스 시작 시각·소스 30개·readyz/웹/JS 200·푸터 1.2.11·로컬 0·소유 임시 자원 부재 확인. 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0·실패 횟수 3회·대기 쓰기/초기화 0 보존. 운영 재개 후 대기 897→886초 관측을 새 HTTP 500 증거로 판정하지 않음
+- [x] 공개 HTML의 Script 선언 11개에서 `static.nid.naver.com`·`cert.mobile-ok.com`의 진단 경로 허용 목록 누락 확인. 실제 v7 차단 두 건과 동일한지는 미관측이며 제품 브라우저의 원래 HTTP 500 원인으로 연결하지 않음. 두 호스트의 HTTPS 443만 추가한 v8 후보 순수 회귀 70건·API Ruff·prepare와 Root/독립 검토 통과; 실제 비교·기능 복구와 구분
+- [x] DAYBREAK 후속 모델 검토와 Root 근거 대조 완료. v5 OS 오류·v6 callback 인과·v7 차단 SDK 동일성을 확정하지 않으며 UI 제출 1회와 POST 수를 구분. 정상 익명 UI 조회 후 업무 200/500/리소스 실패를 나눠 해석하는 권고 확인; CPU·IP·근본 원인 미확정 유지
+- [x] 첫 v8 격리 준비에서 대기 16→890초·실패 횟수 3회 관측 후 실행 없이 준비 폐기와 운영 복원 확인. UI/공식/새 시도 0·증가 원인 미관측 유지. 임시 x86 전용 검사 적용의 ARM runtime AssertionError 원기록을 보존하고 후속 읽기 전용 검증에서 동일 서버 12개 healthy·CORE 시작 시각·API/ARM adapter 소스 30개·readyz/웹/JS 200·푸터 1.2.11·로컬 0·임시 자원 부재·UNKNOWN/차단 각 4건·PENDING/큐 0 확인. 대기 505초·횟수 3회·Root 쓰기/초기화 0 보존
+- [x] 새 v8 준비에서 대기140→104·횟수3·drain5필드0과 자연58→22→0 gate를 확인한 뒤 익명 UI 제출1회·조건 일치 관측. 공식 POST8건은 전부 official_other 200·통신 완료이고 선택 열차 검색 응답 없음·행0. 리소스 요청79/응답70/완료70/이벤트219·통신 실패/redirect0, 네이버/휴대전화 SDK Script 각각2건 200·완료 뒤 불허 Fetch1로 중단. Fetch scheme/호스트/역할 미관측·관측 incomplete·비교 INVALID·원래500 새 표본 아님 유지
+- [x] v8 소유 자원 네 범주 정리와 05:08:23.986607 UTC 운영 복원 확인. 같은 서버12 ID/이미지·CORE 시작 시각·healthy·소스30·readyz/웹/JS200·푸터1.2.11·로컬0·임시자원 부재·세대4·UNKNOWN/차단4·새 시도/PENDING/큐0·횟수3·Root 대기 쓰기/초기화0 보존. 운영 재개 후 대기0→897·최종887초를 별도 새500 증거로 판정하지 않음
+- [ ] 선택 열차 검색 응답을 포함한 유효한 환경 교차 비교와 서버 공식 실패의 근본 원인 확인. 리소스 실패·공식 다른 POST의 200·준비 검증 통과를 조회·인증·예약 복구로 판정하지 않음
 - [ ] 서버 현재 계정 세대 인증·공식 좌석 조회·공식 미결제/발권 내역 확인과 새 승인 대상 정상 rearm·결제 전 자동 예약 검증. 기존 UNKNOWN/차단 각 4건은 확인 근거 없이 해제하지 않음
 
 ## 유지 원칙

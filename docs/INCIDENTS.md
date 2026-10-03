@@ -526,16 +526,62 @@ Root가 v4 전체 코드·변경 구간을 읽고 순수 회귀 51건·Ruff 0.16
 대기 270초·같은 import 600초 절대기한·정상 종료 180초·고정 SSH pin과 원본 보호를
 유지합니다. SSH 성공/비정상 종료/timeout/parse의 실제 경과와 SIGTERM·전체 기한
 소진을 구분합니다. Root의 v6 최종 변경 전체 검토·순수 회귀 57건·Ruff 0.16.10 API config·
-고정 지문 7개 일치가 모두 통과했습니다. 실제 v6 실행은 아직 0이며 후속 결과는 미확정입니다.
+고정 지문 7개 일치가 모두 통과했습니다. 이후 실제 v6 실패 결과는 아래에 구분해 남깁니다.
 준비 계약 수정은 과거 실패나 공식 HTTP 500 원인 확정이 아니며
 기능·Compose와 v2·v3·v4·v5 고정 파일은 바꾸지 않았습니다.
 
 새 owner `37b928aa6c184b34acd602f1ed0b2195`의 build·prepare는 각각
 23:29:01.971993·23:29:47.568789 UTC에 성공했습니다. 새 이미지·seed ISO·고정 SSH
 host key·cloud-init schema와 guest password false·소유 컨테이너 제거·OOM false·
-동일 서버 12개·로컬 0을 확인했습니다. 초기화는 진행 중이며 아직 bootstrap 성공으로
-표시하지 않습니다. 가져오기·source30·Chrome·오프라인 암호화 fixture·공식 비교와 서버
-로그인·좌석 조회·자동 예약 복구는 미완료이고 새 예약 대상 승인도 아직 없습니다.
+동일 서버 12개·로컬 0을 확인했습니다. bootstrap은 **10월 2일 23:48:33.703590 UTC**에
+성공했습니다. bootstrap 영수증의 SHA256은
+`41959e190a675138e61a7f5fa5acbd9f04ecda06b3acb64412ec680b62402a29`입니다.
+준비 성공과 실제 이미지 가져오기 성공은 구분합니다.
+
+### v6의 실제 전송 제한 만료와 v7 준비
+
+실제 v6 결과는 `qemu-import-slice-37b928aa6c184b34acd602f1ed0b2195-22b54c7101094709ab529d3ad78025a2.json`에
+남았습니다. SHA256은 `b3d990e061a3f22fbc75eaf8a8874ad8290c823168ba593cc66c3c26d3092806`이고
+파일 수정 시각은 10월 3일 00:08:43.9007701 UTC입니다. 완료 시각 필드는 없으므로 이 파일
+시각을 별도의 완료 시각으로 바꾸어 적지 않습니다.
+
+공간 SSH는 최초 부팅 뒤 8,159ms, 전체 검증 뒤 재조회 24,136ms, import 직전 7,297ms에
+모두 성공했습니다. 전체 archive 검증은 36,827ms에 통과했습니다. 재조회 실측은 이전
+20초 제한보다 길었지만 이번 v6에서는 공간 SSH 60초 안에 끝났습니다. 이미지 전송은
+600,014ms에 `transport_timeout`으로 실패했습니다. 570,040ms 시점의 닫힌 진행 관측은
+1,341,095,839바이트 중 939,524,096바이트 전달을 기록했습니다. Docker load는 시작됐지만
+완료·이미지 연결 검증은 확인되지 않았습니다. `streaming` 단계 5,246ms부터
+`load_started=true`, `load_completed=false`, `image_binding_verified=false`였으며
+570,040ms 관측도 같은 상태였습니다. 최초 `contract`·`initial_storage`·`docker_spawn`
+관측의 시작 false를 이후 전송 상태에 적용하지 않습니다. archive 전체 검증이나 load 시작·
+일부 전송을 Docker load 성공으로 올리지 않습니다.
+
+sync·poweroff 수락 뒤 69.412초의 QEMU 자연 종료 0을 확인했고 강제 종료는 없었습니다.
+소유 외부 컨테이너 제거·OOM false·서버 12개의 동일 ID/이미지/시작 시각과 로컬 0을
+보존했습니다. Chrome과 공식 요청은 0이고 import·동일성·암호화 fixture 검증 및 overlay
+재사용은 false입니다. `37b928`의 실패 overlay도 재사용하지 않습니다. 이 전송 제한 만료를
+과거 `a4c311`·`cfe546`·`84bdd4` 실패나 코레일 HTTP 500의 원인으로 소급하지 않습니다.
+
+후속 v7은 이번 전송의 실제 경과·바이트 진행을 근거로 **오프라인 import만 1200초**로
+조정했습니다. Root 대기는 1225초, 외부 컨테이너 수명은 2900초, 닫힌 관측의 경과 한도는
+1,230,000ms이며 자체 policy도 `load_stdin(..., 1200)`을 명시합니다. 실패 owner
+`37b928`을 거부하고 기존 boot 600초·공간 SSH 60초·Root 공간 응답 70초·최종 승인 120초·
+ready 680초·정상 종료 180초·공식 provider 기한과 이미지/핀/원본/운영 서비스 보호를
+유지합니다. Root의 순수 회귀 68건(0.122초)·Ruff 0.16.10 API config·지문 9개와 전체
+변경 검토가 통과했으며 실제 v7 실행은 아직 0입니다.
+
+후속 fixture v2는 Root의 순수 회귀 26건(0.188초)·같은 Ruff·지문 5개와 최종 변경 검토를
+통과했고 실제 실행은 0입니다. 공간 SSH 60초·ready 680초·닫힌 outcome/경과/적용 제한을
+준비했으며 fixture 500초·boot 600초·정상 종료 180초·정적 지문과 원래 sandbox를 유지합니다.
+상속 runtime이 이미 `host_storage=None`을 초기화하는 것을 확인해 기록 소실 우려는
+철회했습니다. 원본에서 기록 소실이 확인됐거나 이를 고쳤다고 주장하지 않습니다. 실제 import
+성공·정상 종료를 요구하는 gate는 `37b928`의 실패 영수증을 runtime 생성과 부팅 전에 거부합니다.
+
+다음 새 owner `d9da25af581e4c4891c2bebd29532782`의 build·prepare는 각각
+10월 3일 00:11:19.808616·00:11:42.370155 UTC에 성공했습니다. bootstrap은 현재 진행
+중이며 성공으로 표시하지 않습니다. 실제 v7 import·source30·Chrome·오프라인 암호화
+fixture·공식 비교와 서버 로그인·좌석 조회·자동 예약 복구는 미완료이며 새 예약 대상 승인도
+아직 없습니다.
 
 문서 커밋 `998ca5d0dde12ebce2ccd3b6bb1832a7da8b662c`의
 [CI 37075519192](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37075519192)는
@@ -543,6 +589,31 @@ host key·cloud-init schema와 guest password false·소유 컨테이너 제거�
 웹 100개 파일/982건·E2E 16건·Sites 4건과 lint·타입검사·빌드를 통과했습니다.
 PostgreSQL job은 23:02:13 UTC에 완료됐고 실행 임대·관찰/잠금 순서·예약
 episode/credential fencing 3종이 통과했습니다. CI 성공과 실제 철도사 기능 복구를 구분합니다.
+
+문서 커밋 `48085c5e639c8d899bbeaff0911b99b72e681eca`의
+[CI 37079032655](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37079032655)
+첫 검증 job `111075251687`은 10월 3일 00:01:23 UTC에 실패 종료했습니다. API
+5,043건 통과·1건 실패·경고 1건(887.54초)이었고 PostgreSQL job은 통과했습니다.
+실패는 loopback 검증 페이지의 `Page.navigate` 60초 제한과 `load_page` timeout으로
+달력 선택 전에 발생했습니다. 이 실패 이후 웹 검증은 실행되지 않았습니다. 해당 한 테스트는
+로컬에서 9.41초에 통과했지만 로컬과 CI의 Python 환경이 달라 원인 연결은 미확정입니다.
+같은 CI의 두 번째 실행을 한 번 요청하고 10월 3일 00:07:03 UTC에 재실행을 확인했습니다.
+두 번째 검증 job `111080229445`도 00:22:35 UTC(09:22:35 KST)에 실패 종료했습니다.
+API 5,043건 통과·1건 실패·경고 1건(862.62초)이며 이번 실패는 테스트 파일 1612행의
+`test_pydoll_real_browser_selects_fixture_tomorrow_across_month_boundaries[2026-10-01]`입니다.
+`load_page → open → tab.go_to → Page.navigate → wait_for(60초)`에서
+`CommandExecutionTimeout`이 발생해 `BrowserSourceUnavailable`로 끝났습니다.
+대상은 loopback 검증 페이지이며 날짜 선택 전 실패입니다.
+
+웹·E2E·Sites·typecheck·build는 실행되지 않았고 이 실패 결과를 API Ruff·mypy 통과로
+기록하지 않습니다. PostgreSQL fencing 3종의 성공은 재사용됐고 Bash 구성·운영 스크립트
+검사는 통과했습니다. 한 번의 재실행 뒤 추가 요청은 없었습니다. 같은 head의 두 실패와
+앞선 문서 커밋의 CI 성공을 각각 보존하며, 원격 timeout의 원인과 실제 철도사 기능 복구는
+아직 미확정입니다.
+
+외부 네트워크 연결은 [코레일 안내](https://www.korail.com/public/info/urlList.html)를
+참고합니다. 진단 probe의 `failures=[]`는 해당 target의 관측 구간에서 `loadingFailed`가
+없었다는 뜻입니다. 외부 리소스의 HTTP 오류 부재나 정상 응답까지 보장하는 값은 아닙니다.
 
 ### 실제 후속 전송 비교
 

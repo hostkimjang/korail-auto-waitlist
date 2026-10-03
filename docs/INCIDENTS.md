@@ -3,6 +3,43 @@
 운영 환경에서 실제로 발생한 장애와 그 해결 과정을 남깁니다. 재발했을 때 같은 진단을 다시 반복하지
 않도록 증상, 근본 원인, 조치, 검증 근거, 남은 과제를 함께 적습니다. 최신 기록을 위에 둡니다.
 
+## 2026년 10월 3일 · 최신 독립 검토와 격리 경로 진단의 현재 상태
+
+실제 CLI에서 `--model gpt-daybreak-blue-latest`로 읽기 전용·임시 실행·도구 호출 없이 최신
+독립 검토를 완료했습니다. 근거는 `output/daybreak-current-evidence-review-20261003.md`이고
+SHA-256은 `194e9bb81deda8db73f9bfff6aee0e4856021c1fe1f227731d2b96448132375d`입니다.
+서버 환경에서 반복되는 공식 HTTP 500이 주요 실패 경계이며 비밀번호만으로 설명하는 가설은
+약해졌지만 CPU·IP와 근본 원인은 미확정입니다. 검토 답변의 게스트 부팅 실패 해석은 실제 기록과
+다릅니다. bootstrap과 Ubuntu·cloud-init·Docker 준비는 성공했고 이후 Docker 대기·이미지
+가져오기 완료를 확인하지 못했습니다. 기존 개별 실패 기록과 이 구분을 보존합니다.
+
+커밋 `5ed3120`의 [저장소 CI 37088526332](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37088526332)
+전체 성공과 API 5,044건·웹 982건·E2E 16건·PostgreSQL fencing 3종을 확인했습니다. 새 격리
+capsule의 순수 테스트 37건·Ruff·준비 검증도 통과했지만 실제 외부 경로 성공과 구분합니다.
+
+02:34:11 UTC의 실제 격리 owner `4d6145d5989f480bb8986d0ff138bf25`에서 caller 8개를 멈추고
+서버 핵심 4개·로컬 0개, 소스 30개·계정 세대 4·UNKNOWN/차단 각 4건·새 시도 0을 확인했습니다.
+읽은 대기는 남은 359초·실패 횟수 3회였으며 자연 만료를 기다린 뒤 진단했습니다.
+
+실제 결과 `output/fixed-egress-capsule-bfe0777fe2d54962b305f4ef5ef40ba4.json`의 SHA-256은
+`76ae5d0f13ecbe01365e5ef309010f36d6176dcb02c0701ad3a7bb0eddbc63b5`이고 완료 시각은
+02:40:54.960786 UTC입니다. 결과는 `INVALID/network_failed/open_general`로, 공식 일반
+Document 요청 1건에 응답 0·status null·실패 1·기타 분류·canceled false를 관측했습니다.
+조건 일치는 false, UI·업무 POST는 0이고 업무 기록은 빈 목록이어서 공식 요청 비교가 성립하지
+않았습니다. loopback fixture는 통과했지만 공식 HTTPS proxy 경로를 입증하지 않으며 relay의
+최종 health와 counter는 관측하지 못했습니다. 새 대기 쓰기는 0·실패 횟수 3회를 보존했고 소유
+자원 네 범주의 정리를 모두 확인했습니다. 이 실패를 공식 HTTP 500이나 CPU·IP 원인의 새
+표본으로 사용하지 않습니다.
+
+복원 결과 `output/fixed-egress-capsule-server-restored-a593bbd70d344c8dbac6c47d7697837b.json`의
+SHA-256은 `635c991a3021d06109e3c77202743941a057f2adb1af85a96d9d1a2d68793373`이고 완료
+시각은 02:41:56.653906 UTC입니다. 서버 12개 healthy·동일 ID/이미지와 핵심 서비스 시작 시각,
+API/adapter 소스 30개·readyz/웹/JS 200·푸터 v1.2.11·로컬 실행 서비스 0·철도 큐 0을 확인했습니다.
+계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0을 보존했고 임시 컨테이너 두 개와 SSH 연결의 부재도
+확인했습니다. 복원 helper의 대기 쓰기는 0이며 실패 횟수 3회, 대기는 사전 0·병합 0·최종 888초로
+읽혔습니다. 정상 운영을 재개한 뒤 공통 대기가 열린 상태이며 별도 새 500 발생 증거로 해석하지
+않습니다. 현재 서버는 전체 운영으로 복원됐고 실제 공식 인증·좌석 조회·예약 복구는 미완료입니다.
+
 ## 2026년 10월 3일 · DAYBREAK 독립 원인 분석
 
 사용자 요청에 따라 `gpt-daybreak-blue-latest` 모델로 기존 진단과 현재 소스를 독립 검토했습니다.

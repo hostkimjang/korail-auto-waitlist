@@ -3,6 +3,20 @@
 운영 환경에서 실제로 발생한 장애와 그 해결 과정을 남깁니다. 재발했을 때 같은 진단을 다시 반복하지
 않도록 증상, 근본 원인, 조치, 검증 근거, 남은 과제를 함께 적습니다. 최신 기록을 위에 둡니다.
 
+## 2026년 10월 3일 · 운영 세션 상태와 제한된 로그인 로그 관측
+
+07:33 UTC 입력 없는 관측 `output/passive-native-login-observation-v2-20261003T073413.json`(SHA-256 `29b1eb8c70e28e844055db87b8a260ef6bd4e26b4919c59172108dfe67c71552`)은 `no_target`·CDP 명령/이벤트 0을 기록했습니다. 서버 서비스 running 12개·로컬 0·기존 차단을 보존했지만 관측 대상 부재가 사이트 활동 부재를 증명하지는 않습니다.
+
+기존 sidecar의 loopback 내부 GET 1회 기록 `output/live-korail-session-root-read-1a994d17c2d047f3aafcfa55d254c574.json`(SHA-256 `595a42a051854dcfa03e8fe27a7c2a3b3d0eb0f43c78c991c448e156a5bfbd00`, 완료 07:45:18 UTC)은 세대 관측·현재 세대 4 일치, `stale`·재사용 불가를 확인했습니다. 마지막 검증 경과와 재사용 잔여 시간은 null이고 생성·마지막 사용 경과는 각각 약 610.765초입니다. actor의 시각은 lease 폐기 뒤에도 남으므로 현재 lease 존재·지속 실패 시간·계정 전체 이력으로 확대하지 않습니다. 이 endpoint는 프로세스 내부 snapshot이며 새로운 공식 인증을 확인하는 호출이 아닙니다.
+
+해당 읽기 전후 동일 서버 12개 ID/이미지/시작 시각·healthy·API/ARM adapter 소스 30개를 확인했습니다. DB 세대 4·기존 UNKNOWN/차단 각 4건·새 PENDING/큐 0·로컬 0을 보존했습니다. 내부 adapter bearer만 메모리에서 사용했고 회원번호·비밀번호 판독·공식/DOM/로그인/예약 호출·대기 쓰기는 0입니다.
+
+제한된 로그 기록 `output/root-closed-login-log-slices-51aeb30fe3354ee38a583eed70047007.json`(SHA-256 `9a0db75cbfad045c5df65b03d0ef8ece9386c66ca38051d2ec257a52e6744923`)은 sidecar 소유 로그의 07:35:14.303714 UTC `login_response`·`failed`·`http_error`·HTTP 500 한 건을 확인했습니다. API 로그는 해당 읽기에서 unavailable이며 전체 로그가 없다는 뜻은 아닙니다. 앞선 `root-closed-existing-login-logs-fb82e22a4d2e434e9f5b8dc26b511b4c.json`의 읽기 실패는 원인 근거에서 제외합니다. 현재 stale 상태·공통 대기와 이 요청의 상관은 미확정이며 원문 로그·본문·자격증명은 보존하지 않았습니다.
+
+실패 횟수 3은 대기 단계가 900초 상한에 도달한 값이며 실제 모든 로그인 POST의 총량을 뜻하지 않습니다. 별도 복구 verdict 5회 제한도 모든 POST 총량의 한도가 아닙니다. 현재 관측을 근본 원인이나 로그인·좌석 조회·자동 예약 복구 완료로 올리지 않습니다.
+
+커밋 `f39d852f66a46aa41a835c8d62f35abb149df767`의 [CI 37105926731](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37105926731) attempt 1은 07:34:43 UTC에 성공했습니다. 검증 job `111154310476`과 PostgreSQL job `111154310545`의 checkout SHA가 일치합니다. API 5,044건·경고 1건(663.88초), 웹 100개 파일/982건·E2E 16건·Sites 4건·PostgreSQL fencing 3종과 Ruff·mypy 171개 파일·typecheck·build(4.72초)를 통과했습니다. 앞선 커밋의 성공을 소급한 결과가 아니며 실제 기능 복구와 구분합니다.
+
 ## 2026년 10월 3일 · 최신 독립 검토와 격리 경로 진단의 현재 상태
 
 실제 CLI에서 `--model gpt-daybreak-blue-latest`로 읽기 전용·임시 실행·도구 호출 없이 최신

@@ -64,6 +64,13 @@ v4c 결과 `output/offline-connect-fixture-v4c-84b45e0c5a034d8aaabf3698d44c9a0a.
 
 별도 수동 복원 결과 `output/fixed-egress-v4-abrupt-restored-91899511e293408ab5dcd37ac41cec00.json`(SHA-256 `f0d55d95019962e69321f99e9cc72353e272af5fdd824830ca8f0946faa255fa`, 완료 03:45:22.844224 UTC)에서 소유 clone·relay의 이름/label 부재와 해당 SSH forward 0을 확인했습니다. 핵심 4개의 ID·이미지·시작 시각과 데이터·큐를 확인한 뒤 동일 ID의 서버 전체 12개 healthy·API/adapter 소스 30개·readyz/웹/JS 200·푸터 v1.2.11·migration 작업 종료 0·로컬 0과 기존 차단 각 4건·새 시도/PENDING 0을 확인했습니다. 대기 쓰기·초기화는 0이며 복원 전 대기 0초·실패 횟수 3회, 정상 운영 재개 후 대기 897→890초·실패 횟수 3회를 읽었습니다. 이는 운영 재개 상태의 관측이며 별도 새 HTTP 500 발생 증거로 해석하지 않습니다. 실제 비교는 성립하지 않았고 앞선 실패의 동일 원인·근본 원인과 공식 기능 복구는 계속 미확정·미완료입니다.
 
+새 freeze owner `9a03436053674e02a3a52736ee3b29c8`에서 drain 0·핵심 4개·소스 30개·기존 세대/차단과 새 시도/PENDING 0을 확인한 뒤 v5 owner `f358a20f0e6246e7b34b042b207c3583`를 실행했습니다. 결과 `output/fixed-egress-capsule-isolated-rejection-v5-f358a20f0e6246e7b34b042b207c3583.json`(SHA-256 `0f93c32ba16e8d1f44295c43b4084dd0bffc42f24c1636106092bd46edb86005`, 완료 04:00:53.052527 UTC)은 `phase=relay/failed_phase=relay/failure_kind=runtime`으로 실패를 기록했습니다. loopback 왕복·listener 닫기는 통과했지만 dispatch marker 부재·probe null로 공식 조회 dispatch·자격증명 판독·대기 쓰기는 0입니다. SSH·clone 정리와 핵심 서비스 확인은 true, relay 부재 확인은 false였으며 구체적인 relay 실행 실패 이유는 미확정입니다.
+
+별도 v5 복원 결과 `output/fixed-egress-capsule-v5-server-restored-6e8ad16369ca4579a1c5928657c9ac41.json`(SHA-256 `730a1a8a4f57872e308e85288b1d2a481cce4c0ae459dce76304d0b2e02e326b`, 완료 04:02:03.758805 UTC)은 실제 inventory에서 clone·relay가 이미 없었음을 확인했고 최종 소유 자원·SSH tunnel 부재도 검증했습니다. 서버 12개 healthy·동일 ID/이미지와 핵심 서비스 시작 시각·소스 30개·API 준비/웹/JS 200·푸터 v1.2.11·로컬 0·세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0을 보존했습니다. 대기 쓰기·초기화는 0·실패 횟수 3회이며 복원 전·운영 재개 직전에 읽은 대기는 각각 0초였고, 운영 재개 후 897초·최종 889초를 읽었습니다. 실패 단계 기록의 개선과 전체 운영 복원은 확인했지만 실제 비교·공식 기능 복구와 새 HTTP 500의 발생·근본 원인은 입증하지 못했습니다.
+
+relay 실행 명령을 AST로 계산한 오프라인 결과는 소스 26,540바이트·base64 35,388자·loader 35,467자였고 전체 Windows 명령은 NUL 제외 36,157자에 실제 network 이름 길이를 더합니다. 이름의 최소 16자만 적용해도 NUL 포함 36,174자로, [Microsoft CreateProcessW 문서](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw)의 NUL 포함 32,767자 한도를 넘습니다. 실제 network 이름 원문은 관측하지 않았습니다.
+별도 무해한 OS 재현 `output/root-windows-commandline-limit-repro-32c53a7e44344bb188ec3045d7535f74.json`(SHA-256 `30244152fdf1e4ef7dbddf87d41d73a9d0db67d32da3ebff1559b7e38fc3e998`, 완료 04:04:52.890185 UTC)은 `python -c pass`와 공개 padding의 35,582자 인자로 `OSError/WinError 206/errno 2`·자식 프로세스 미시작을 확인했습니다. 이 재현의 공식 호출·SSH·Docker·자격증명 접근은 0입니다. Windows 진단 실행 명령의 길이 초과 결함은 확인했지만 실제 v5에서 관측한 분류는 runtime뿐이므로 같은 오류 코드나 정확한 실패 인과, 기존 코레일 HTTP 500의 원인을 확정하지 않습니다.
+
 ## 2026년 10월 3일 · DAYBREAK 독립 원인 분석
 
 사용자 요청에 따라 `gpt-daybreak-blue-latest` 모델로 기존 진단과 현재 소스를 독립 검토했습니다.

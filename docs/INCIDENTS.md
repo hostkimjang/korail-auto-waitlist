@@ -111,6 +111,72 @@ relay 수락 42건은 고정 대상 CONNECT 13건·평문 HTTP 개별 거절 1�
 
 복원 `output/fixed-egress-capsule-v8-server-restored-52fa8df592664bc5a8a14be1ff0f94ea.json`(SHA-256 `5e62a6510966b2a6c313abbe17a3ac8120b9904fed1976225e425ce996088396`, 완료 05:08:23.986607 UTC)은 같은 ID/이미지의 서버 12개 healthy·핵심 서비스 시작 시각·소스 30개·readyz/웹/JS 200·푸터 v1.2.11·로컬 0·임시 자원 부재를 확인했습니다. 계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0·실패 횟수 3회를 보존했고 Root의 대기 쓰기·초기화는 0입니다. 운영 재개 후 대기 0→897초·최종 887초를 읽었지만 별도 새 HTTP 500 증거로 판정하지 않습니다. 조회·인증·예약의 실제 복구는 미완료입니다.
 
+### 기존 서버 Chrome의 자연 로그인 구간 관측
+
+기록 `output/passive-native-login-observation-v3-20261003T052322.json`의 SHA-256은 `6d4590ebd6bed9dcf116955833c012332d39ae114b7909e643837a725b474889`입니다. 기존 native `09623280…` 이미지의 Chrome에 CDP 명령 3개만 연결해 자연 발생한 POST XHR/Fetch 한 건의 HTTP 500과 `loadingFinished`를 관측했습니다. 요청의 frame·loader는 관측 시작 기준과 일치했고 `has_gesture=true`였습니다. 현재 실행 문맥·phase·업무 역할은 `unknown`이므로 이 근거만으로 정확한 사이트 핸들러나 HTTP 500의 원인을 확정하지 않습니다.
+
+관측 도구의 새 로그인 생성·UI 행동·탐색·브라우저 실행·본문 읽기·target 닫기는 모두 0이며 관측 연결 종료는 true였습니다. 전후 서버 서비스 12개·로컬 0·계정 세대 4·기존 UNKNOWN/차단 각 4건·새 예약 시도/PENDING 0을 보존했습니다. 최초 불허 Fetch는 null이었지만 자연 로그인 구간의 관측 부재가 v8 조회에서 나타난 특정 Fetch의 원인을 배제하지는 않습니다. 이 시점에는 `data:`·`blob:` 등 내부 Fetch를 가설로 두었으며, 후속 v9에서 첫 불허 Fetch가 HTTPS임을 확인해 이번 차단에 대한 내부 scheme 가설을 기각했습니다. 실제 조회·인증·예약 복구는 미완료입니다.
+
+### 오프라인 Fetch 시험의 시작 절차 점검
+
+외부 연결이 차단된 `network=none` 컨테이너에서 고정 `data:`·`blob:` Fetch를 확인하는 별도 진단입니다. 첫 결과 `output/offline-local-fetch-local-c4f410e1ca7342f891b2774624030649.json`(SHA-256 `76a60ab22604b77cc3799a2c4a65fa632a426de9022057f1de47b3e49c35ffd0`, 완료 05:47:22.428271 UTC)은 시작 완료 전에 끝났고 Fetch 실행·CDP 이벤트는 모두 0입니다. 소스 검토에서는 응답 callback 없는 시작 뒤 항상 callback을 연결하는 `replace_tab()`을 호출하는 잘못된 조합을 확인했습니다. 실제 실패 단계는 기록하지 못했으므로 그 실행의 직접 원인으로 확정하지 않으며, 제품의 공식 HTTP 500 원인과도 구분합니다.
+
+초기 소유 탭을 사용하는 v2는 순수 회귀 13건·Ruff·독립 검토를 통과한 뒤 실행했습니다. 결과 `output/offline-local-fetch-v2-local-c0bf45202a284807bd73b7f2acbcc7ff.json`(SHA-256 `4ce91fe31e3e84c166a1f95ffc0150820e4c325018bcbeeb14dc5eda9b89a5dc`, 완료 05:53:50.560666 UTC)은 시작과 고정 탐색 응답을 확인했지만 전체 타깃의 빈 페이지 조건을 통과하지 못했습니다. callback·Network·Fetch·CDP 이벤트는 0이며 상세 타깃 판정은 버려져 실패 조건을 확정하지 못했습니다. 초기 탭 하나의 이동과 브라우저 전체의 단일 빈 탭 보장은 다른 계약이므로, 후속 진단은 기존 조건을 유지하면서 닫힌 타깃 판정과 개수를 보존합니다.
+
+시작 흐름을 유지하고 타깃 판정만 보완한 v3는 순수 회귀 15건·Ruff·독립 검토를 통과했습니다. 결과 `output/offline-local-fetch-v3-local-3eae44c755cc4a84abaec0bc836ec9e8.json`(SHA-256 `59a18a853c5f25caaa0f6633acb3824c89c4bdc8db03c63b9366a0a47d001c9f`, 완료 05:59:14.478195 UTC)은 첫 타깃 확인에서 `target_unknown`을 기록했습니다. 빈 페이지 0·기타 페이지 1·내부 새 탭 0·비page 타깃 4·retired false였습니다. 고정 탐색 응답 직후의 빈 페이지 조건 실패를 확인했지만 기타 페이지의 정체나 탐색 완료 여부는 미관측이며 Fetch/CDP는 0입니다.
+
+세 실행 모두 임시 컨테이너 부재·정리·API/adapter 소스 30개·동일 서버 서비스 12개와 데이터·로컬 실행 0을 확인했습니다. 공식 요청·자격증명 판독·서비스 변경·대기 쓰기는 0입니다. 이 세 실행 시점에는 내부 Fetch의 실제 수명주기를 관측하지 못했으며 진단 정책의 내부 scheme 허용도 활성화하지 않았습니다.
+
+### 오프라인 v4의 빈 탭 준비와 일부 Fetch 수명주기
+
+v4는 원래 소유 새 빈 탭 준비를 사용하고, 준비 callback·Network를 해제한 뒤 fixture callback 네 개를 등록하고 Network를 켜는 흐름을 순수 회귀 17건·Ruff·독립 검토로 확인했습니다. 실제 결과 `output/offline-local-fetch-v4-local-7fb3127901bb4a1b8e1a507e16143803.json`(SHA-256 `9012b2ceb442c916eccb59acbfb3fe14418a0398fb650379708ceab5fbda1a5b`, 완료 06:06:53.468940 UTC)은 두 번의 타깃 확인에서 빈 탭 1·내부 새 탭 1→0을 관측하고 준비·fixture 소유권과 전체 정리를 확인했습니다.
+
+객체 blob은 CDP 요청→응답 200→완료를 관측했습니다. 짧은 data와 8,192자 초과 data는 JS fulfilled·status 200이었지만 CDP case 이벤트는 없어 수명주기를 `unknown`으로 남겼습니다. 전체 CDP 이벤트는 9개·nonfixture 2개·unmatched 4개입니다. 수집 절차 성공을 모든 내부 Fetch의 정상 분류로 올리지 않으며 일괄 분류 활성화는 0입니다. 소스 30개·동일 서버 서비스 12개와 데이터·로컬 0을 보존했고 공식·외부 upstream·자격증명·대기 쓰기는 0입니다. 제외된 요청 type만 더 관측하는 v5 후보 준비는 후속 v9의 HTTPS 관측 뒤 보류했으며 제품 코드는 바꾸지 않았습니다.
+
+### v9의 첫 불허 HTTPS Fetch와 운영 복원
+
+새 격리 준비 `7e60b68b490448c2a5ace96682f9defb`는 실제 대기 52→16초와 drain 다섯 필드 0을 확인했고 이후 읽기 전용 gate에서 자연 만료 0을 확인했습니다. 권장 약 150초 준비 시점보다 늦게 격리한 실제 값을 그대로 기록합니다. 새 대기 쓰기나 로그인 실패 횟수 초기화 없이 익명 UI 조회를 한 번 제출했습니다.
+
+결과 `output/fixed-egress-local-fetch-v9-b96f60a7972a49fba726015f7f9fcd22.json`(SHA-256 `741dc066886a1e3a452e9d55a602502ca234e866fdbc9561bd7dd75d0a16d047`, 완료 06:09:45.477033 UTC)은 UI 제출 1회·공식 POST 8건을 관측했습니다. POST는 전부 `official_other` HTTP 200·통신 완료이며 선택 열차 검색의 business 응답과 결과 행은 0입니다. 리소스 요청 79개·응답과 완료 각 69개·이벤트 217개·통신 실패와 redirect 0을 관측한 뒤 첫 불허 Fetch로 중단했습니다.
+
+해당 Fetch는 HTTPS·길이 구간 `1_1024`·`outside_fixed_public_scope`였습니다. hostname SHA-256은 `7d34cb19c214fcbaae3a7af9e2d1992371c1f34b04650da75de30137e8e8bb50`이며 관측에는 원문 URL·호스트를 보관하지 않았습니다. 이 관측으로 이번 차단의 data/blob 가설을 기각했습니다. 후속 공개 소스 검토에서 아래 NetFunnel 호스트와 지문이 일치했지만 관측은 불완전하고 조회 비교는 `INVALID`입니다. 원래 업무 HTTP 500의 새 표본이나 CPU·IP 원인 증명이 아니며 소유 자원 네 범주 정리와 진단의 새 대기 계획 0·Root 대기 쓰기 0을 확인했습니다.
+
+복원 `output/fixed-egress-local-fetch-v9-server-restored-60022615997643739060ed52d773fe4b.json`(SHA-256 `9b5251f64a1af91bfdc834664e89b0874612ef70d780f3cb86e55e6866119be4`, 완료 06:11:05.237460 UTC)은 같은 ID/이미지의 서버 12개 healthy·핵심 서비스 시작 시각·API/adapter 소스 30개·readyz/웹/JS 200·푸터 1.2.11·로컬 0·임시 자원 부재를 확인했습니다. 계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0·실패 횟수 3회와 Root 대기 쓰기/초기화 0을 보존했습니다. 운영 재개 후 대기 0→897초·최종 886초는 운영 상태 관측이며 별도 새 HTTP 500 증거로 해석하지 않습니다.
+
+현재 공개 번들 확보 기록 `output/current-public-bundle-equality-da62821966e9457a887436dbad91c300.json`의 SHA-256은 `e0a1774df8a1159042fcc8060c752e3b0e73257cee86716ee93f00ca9ac4328b`입니다. 현재 원본은 SHA-256 `b7a06c687d15747f2a13ef11eadacd7a8188d361a4d28261282891d0a7d8f319`·5,842,409바이트이며 과거 원본 `88ede8c34519ed4b732c7a57ef9d372cfb383bb3899700dca3292791d6165734`·5,842,119바이트와 다릅니다. 공개 HTML의 `dc36e6640d905513cb6e655d982656c65c188fd8e0f0119bb5f551fe99afe5af` 지문은 같지만 옛 literal 호스트 69개만으로 현재 Fetch 호스트의 일치를 추정하지 않습니다.
+
+후속 공개 소스 기록 `output/public-declared-sdk-match-94774eb1d0c84f86a69c372142c4843b.json`(SHA-256 `db68e6f19330a23918c3f91ee9920a2dbbf148371c422708c97ee11b7cc6e726`)에서 현재 공식 HTML에 선언된 NetFunnel skin의 `nf.letskorail.com` literal와 첫 불허 Fetch 호스트 지문이 정확히 일치했습니다. 공개 skin `output/public-declared-sdk-94774eb1d0c84f86a69c372142c4843b-5.js`의 SHA-256은 `74f8bba70f541c15afc4b9745359a9af68e1f7084a80dd65133e4c05a508675b`입니다. 이는 진단 허용 목록에서 빠진 호스트의 귀속 확인이며 제품 ARM HTTP 500의 원인·해결이나 해당 호스트의 완료 필요성을 확정하지 않습니다. 이 시점에는 해당 호스트의 exact HTTPS 443만 허용하고 정상 UI 대기열을 거치는 v10 재검증을 준비했으며 실제 결과는 아래에 따로 기록합니다. 코드/token 우회는 없고 실제 인증·좌석 조회·자동 예약 복구는 미완료입니다.
+
+### DAYBREAK의 대기열 호스트 재검토
+
+`codex exec -m gpt-daybreak-blue-latest --ephemeral --sandbox read-only --json -`의 새 실행은 06:27:26.195359 UTC에 종료 0·도구 호출 0으로 끝났습니다. 입력 20,426·출력 1,801 tokens이며 CLI 설정·priority 경고 세 건을 보존합니다. 모델 선택 인자는 기록했으나 실제 runtime identity는 별도 증명하지 않았습니다. Root와 독립 검토자가 답변·영수증·근거를 읽어 확인한 문서는 `output/daybreak-queue-host-review-20261003.root-reviewed.md`(SHA-256 `1a3eadb301b35103fb0a2c1109d5bee7214c8ffe72ef4277b110239b19d3b69d`)입니다.
+
+환경의 플랫폼·접속 경로·세션 조건과 공식 500의 연관성을 가장 강한 남은 가설로 보지만 CPU·IP·특정 리소스의 단독 원인을 확정하지 않습니다. 두 공개 호스트 선언은 대기 화면 CSS 이미지 참조이며 실제 Fetch의 path·역할·완료 필요성이나 제품의 500 원인을 증명하지 않습니다. 모델 입력 시점에는 v10 조회를 실행하지 않았습니다. 이후 Root의 실제 관측과 모델의 조건부 해석을 구분합니다. v10의 리소스 관측이 완전하고 선택 업무가 200이면 해당 AMD64+relay 흐름의 성공 근거이며 native ARM 복구를 뜻하지 않습니다. 업무 500·통신 완료이면 ARM이 실패의 필요조건이라는 가설은 약해지지만 IP 단독 원인은 미확정입니다. 준비/리소스 실패는 비교 INVALID로 남기고 실제 외부 리소스 실패와 계측 문제를 구분합니다. 공인 IP·전체 세션·약 34분 표본 시간차의 교란은 미확인으로 유지하며 새 요청 자동 반복·대기열 또는 code/token 우회 권고는 채택하지 않습니다.
+
+### v10 첫 격리 준비 폐기와 같은 ID의 운영 복원
+
+v10 조회 후보의 순수 회귀 84건·복원 회귀 20건·Ruff·Root/독립 준비 검증은 통과했습니다. 첫 실제 격리 준비의 보고서 `output/v1211-guest-public-query-freeze-report-1a7598db108744c98410ab1481fb3c14.json`(SHA-256 `21944fa89f1eb4c9c3a477fcd8d76736439b7a5a0bc735452bb599a36aa2d63b`)은 사전 대기 0 확인 뒤 실제 대기 768→732초·실패 횟수 3회를 기록했습니다. 운영이 새 대기를 시작해 해당 준비를 폐기했으며 UI 제출·공식 호출은 0입니다. 대기 증가를 새 500 발생 증거나 특정 원인으로 확정하지 않습니다.
+
+같은 ID 복원 기록 `output/v10-fresh-freeze-abandoned-restored-58ccf33c4ac14fa08d312874e8fb8a75.json`(SHA-256 `ec52228357625925d867d1dc43f6d3b37de91bf4960846825ca584446f830c10`)은 서버 12개 healthy·동일 ID/이미지·핵심 서비스 시작 시각·API/ARM adapter 소스 30개·readyz/웹/JS 200·푸터 1.2.11·로컬 0을 확인했습니다. 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0과 Root 대기 쓰기/실패 횟수 초기화 0을 보존했습니다. 대기 627→604초·최종 598초와 횟수 3회를 읽었으며 해당 준비에서 실제 v10 조회는 실행하지 않았습니다. 이후 새 준비와 실제 조회 결과는 아래에 구분해 기록하며 실제 인증·좌석 조회·예약 복구는 미완료입니다.
+
+### v10의 완결된 업무 HTTP 500 관측
+
+새 준비의 읽기 전용 기록 `output/v10-running-natural-window-c72143c2eea24119981c04d71f8ed4e6.json`(SHA-256 `f7f8514d76cf8d4b0b6bc4762ecd48e20413f74abad684f67a51bfcd30789769`)은 06:38:49 UTC에 대기 132초·실패 횟수 3회를 읽었습니다. 격리 준비 `a9fcf5edc0fd450e86c15f03f1baffe3`는 실제 대기 91→54초·drain 다섯 필드 0을 확인했고 자연 만료 0 이후 조회를 실행했습니다.
+
+결과 `output/fixed-egress-queue-sdk-v10-b76cf9ce6046425c8eada27b0632beea.json`(SHA-256 `cb566a1ad1770064e522ba912aa271113f0e3f2cd42c0f4a9f9ba8cc43b67447`, 완료 06:41:48.286363 UTC)은 정상 UI 제출 1회·조건 일치 뒤 선택 업무 XHR의 HTTP 500·`finished=true`를 기록했습니다. 결과 행은 0이고 결과는 `official_http_error`입니다. 공식 POST는 9건이며 제한된 표시 기록은 8건으로 truncated이므로 전체 POST 수와 표시 기록 수를 혼동하지 않습니다. `nf.letskorail.com` exact Fetch는 HTTP 200·통신 완료였습니다.
+
+리소스 요청·응답·완료는 각각 81건, 이벤트 243건입니다. failed·redirect는 0이고 첫 오류는 `http_error`, incomplete·overflow·protection은 false, 첫 불허 Fetch는 null·transport failures는 빈 목록입니다. 진단 허용 목록 누락을 해소한 뒤 리소스 관측을 마치고 얻은 완결된 공식 업무 500 표본으로, v9의 불완전한 INVALID와 구분합니다. 조회 성공이나 NetFunnel이 원래 제품 500의 원인이라는 증거는 아닙니다.
+
+소스 30개를 확인한 로컬 AMD64가 Oracle의 같은 bridge/NAT 구조를 거쳤고 단일 proxy·DIRECT 대체 없음 설정·TLS 비개입을 유지했습니다. 물리적인 DIRECT 차단과 공인 IP 동등성은 증명하지 않았습니다. 이 표본은 ARM만 실패의 필요조건이라는 가설을 약화하지만 접속 경로·세션·시간 교란과 KORAIL의 근본 실패 원인은 미확정입니다. 최신 DAYBREAK 분석의 입력 시점에는 이 실제 결과가 없었으므로 후속 Root 관측으로 기록합니다.
+
+소유 자원 네 범주의 정리는 true이고 실제 공식 오류 근거에 따른 대기 계획은 300초 `provider_unavailable`입니다. 복원 `output/fixed-egress-queue-sdk-v10-server-restored-d4d4d2a3dbdb4920bac9ce7253a4b9ba.json`(SHA-256 `25338ce80084b17f40679dbb3b193cf1e74dc26c2ad18d5590c4850416007d1b`, 완료 06:43:17.489712 UTC)은 success/complete·닫힌 최종 결과와 `route_probe_valid=true`·`route_successful=false`를 확인했습니다. 서버 12개 동일 ID/이미지·핵심 서비스 시작 시각·healthy·API/ARM adapter 소스 30개·readyz/웹/JS 200·푸터 1.2.11·로컬 0·모든 임시 자원 부재를 확인했습니다. 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0을 보존했습니다.
+
+이번에는 완료된 공식 업무 500 근거에 따라 Root가 기존 대기 병합 계약으로 한 번 0→300초를 적용했습니다. 쓰기의 count 인자는 0으로 기존 실패 횟수 3회를 보존하며 로그인 실패 횟수 초기화는 false입니다. 복원 과정의 대기 297→274초·최종 264초를 확인했고 새 인증·예약은 0입니다. 진단 대기 쓰기는 이번 v10에서 1회이며 앞선 v9·SDK/인프라 실패의 쓰기 0과 구분합니다. 이 정책 적용과 정상 운영 복원은 제품 로그인·좌석 조회·자동 예약 복구를 뜻하지 않습니다.
+
+### 최신 문서 커밋의 저장소 CI
+
+커밋 `72ed92296917fcbe1cc2fb875932de91900647b6`의 [CI 37099077091](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37099077091)는 05:29:05 UTC에 성공으로 종료됐습니다. REST의 head와 실제 job checkout SHA가 일치하며 Root가 결과를 독립 확인했습니다. API 5,044건·웹 982건·E2E 16건·Sites 4건·PostgreSQL fencing 3종, Ruff·strict mypy 171개 파일·typecheck·build를 통과했고 실패 단계는 없습니다. 앞선 `7e02c35`의 CI 성공과 별도 결과이며 공식 로그인·좌석 조회·예약 성공을 증명하지 않습니다.
+
 ### DAYBREAK 후속 권고와 근거 보정
 
 `gpt-daybreak-blue-latest`의 후속 CLI 실행은 정상 종료했고 도구 호출은 0이었습니다(입력 20,452·출력 1,630 tokens). 답변 SHA-256은 `b3b7d2a54c8706f1963edecf4d93bf055d6ac66ae711f2214aa793609fe346d3`, 영수증 SHA-256은 `2ec4f9c26452f750c2443b1d2f598ee9bb22c167e3defd5dfcc3d447d9c09dc0`입니다. 검토한 표현은 `output/daybreak-resource-boundary-review-20261003.root-reviewed.md`에 보존했습니다.

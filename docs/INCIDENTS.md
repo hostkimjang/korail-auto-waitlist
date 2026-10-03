@@ -622,10 +622,40 @@ Root가 전체 변경·97개 순수 회귀(0.151초)·strict API Ruff 0.16.10·�
 Ubuntu 24 x86·kernel 6.8.0-142·Docker 29.1.3·binfmt false·source attestation·SSH pin·
 cloud-init을 확인했고 실제 여유 17,319,514,112바이트/용량 19,682,557,952바이트였습니다.
 sync·poweroff 수락·66.612초 자연 종료 0·강제 종료 없음·소유 정리·OOM false·
-동일 서버 12개/로컬 0·Chrome/공식 0을 보존했습니다. 이후 v8 가져오기는 실행 중이며
-결과는 미확정입니다. 실제 import 성공·정상 종료가 있어야 후속 source30/Chrome·
-암호화 fixture와 공식 비교를 진행할 수 있습니다. 서버 로그인·좌석 조회·자동 예약 복구와
-새 예약 검증 대상 승인은 계속 미완료입니다.
+동일 서버 12개/로컬 0·Chrome/공식 0을 보존했습니다.
+
+실제 v8 결과는 `qemu-import-slice-fdf165e38db84e419ac5d0d0f9a44394-e385d2c5a0704d1db10065ebc889f6ae.json`이며
+SHA는 `896da2b3e0c9a60bdb5c372cfa1a5f442d8f2ea7e7261816448c4ca862deb034`입니다.
+파일 수정 시각은 10월 3일 01:55:03.378953 UTC이고 완료 시각 필드는 없습니다.
+`stdin_import`의 `receiver_nonzero` 1로 끝났으며 load 시작 true·완료 false·이미지 연결 false입니다.
+readonly block·rdev 분리·원본 해시·97바이트 zero 패딩 검증은 통과했습니다. raw 길이는
+1,341,095,936바이트이고 SHA는 `5c5c58b5d72138a8fa7debf950d1b00c1f43d4bccf74b7404271d38485bed2a6`입니다.
+원본 전체 1,341,095,839바이트 수신·SHA 검증은 640,014ms에 마쳤고 640,024ms부터
+`docker_wait`에 들어갔습니다. 적용 게스트 기한 1131초는 외부 잔여 1,191,951ms에서
+정리·결과 전달 60초를 예약한 값입니다. 최종 `deadline` 관측은 1,132,921ms이며 CLI exit 143은
+실패 정리 뒤 종료 코드입니다. 이를 Docker가 자체 오류 143으로 끝났다는 증거로 쓰지 않습니다.
+
+Docker 대기 관측 5개(655,354/701,010/761,398/881,683/1,121,983ms)는 CLI 실행 중·
+MemAvailable 3,564,388,352~3,604,488,192바이트·daemon active를 기록했습니다.
+현재 메모리 관측과 active 상태를 Docker API 응답성이나 이전 guest OOM 부재로 해석하지 않습니다.
+receiver 관측 32개와 driver `receiver_nonzero` 경과 1,151,161ms, 작업 1,151,524ms·
+ready 이후 1,213,278ms를 보존했습니다. 공간 SSH는 8,371/24,391/8,037ms에 성공했고
+full gate는 36,843ms에 통과했습니다. 게이트 SHA는
+`46d1deb3b68f352943100c92d7022f46194744850f7b35669530994e0c6dd1ad`입니다.
+실제 게스트 여유 17,312,038,912바이트는 필요 12,064,241,470바이트 이상이었고
+host 여유 35,514,707,968바이트도 필요 23,622,320,128바이트 이상이었습니다.
+
+sync·poweroff 수락·79.581초 자연 종료 0·강제 종료 없음·소유 제거·outer OOM false·
+운영 서비스 보존·로컬 0·Chrome/공식 0을 확인했지만 overlay 재사용은 false입니다.
+실패한 `fdf165` 환경은 모든 후속 VM 쓰기·실행 대상으로 사용하지 않습니다.
+별도 읽기 전용 후검증에서 운영 서버 source 30개 해시·release 1.2.11·readyz/웹/JS HTTP 200·
+푸터 release 일치를 확인했습니다. 서버 12개 healthy·로컬 0·fdf 소유 컨테이너 부재를 확인했고
+계정 판독·공식 요청·재시작은 0입니다. registry 인증과 현재 예약 fences 상태는 조회하지 않았으며
+이 후검증을 게스트 이미지 연결이나 새 예약 차단 상태의 최신 관측으로 해석하지 않습니다.
+이 결과는 SSH bulk를 제거해도 load 완료를 확인하지 못했다는 관측이며 SSH 단독 병목이나
+Docker 내부 원인, CPU/IP 및 공식 HTTP 500의 원인을 확정하지 않습니다.
+실제 import 성공·정상 종료가 있어야 후속 source30/Chrome·암호화 fixture와 공식 비교를
+진행할 수 있습니다. 서버 로그인·좌석 조회·자동 예약 복구와 새 예약 검증 대상 승인은 미완료입니다.
 
 문서 커밋 `998ca5d0dde12ebce2ccd3b6bb1832a7da8b662c`의
 [CI 37075519192](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37075519192)는
@@ -663,6 +693,14 @@ build 4.84초·Sites 4/4와 PostgreSQL fencing 3종을 통과했습니다. 직�
 원인 해결 증거로 삼지 않습니다. 해당 fixture는 이미 ThreadingHTTPServer여서 단일 thread
 가설은 기각됐고 startup/cleanup과 원격 timeout의 인과는 미확정입니다. 실제 철도사 기능 복구도
 미완료입니다.
+
+새 head `085a95eb311ee5980e4ce87aebbd3594b909be7c`의
+[CI 37086328099](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37086328099)는
+attempt 1·검증 job `111097300141`을 10월 3일 01:47:12 UTC에 성공 종료했습니다.
+API 5,044건·경고 1건(677.52초), Ruff 0.12.12의 E/F/I 검사·format ratchet·mypy 171개 파일,
+웹 100개 파일/982건·E2E 16건(1.3분)·build 4.75초·Sites 4/4와 lint/typecheck를 통과했습니다.
+PostgreSQL job `111097299929`는 01:31:01 UTC에 완료했고 fencing 3종 모두 통과했습니다.
+이번 CI는 재실행하지 않았으며 이전 loopback 원인 해결이나 실제 철도사 기능 복구 증거로 올리지 않습니다.
 
 외부 네트워크 연결은 [코레일 안내](https://www.korail.com/public/info/urlList.html)를
 참고합니다. 진단 probe의 `failures=[]`는 해당 target의 관측 구간에서 `loadingFailed`가

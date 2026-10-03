@@ -552,7 +552,7 @@ host key·cloud-init schema와 guest password false·소유 컨테이너 제거�
 1,341,095,839바이트 중 939,524,096바이트 전달을 기록했습니다. Docker load는 시작됐지만
 완료·이미지 연결 검증은 확인되지 않았습니다. `streaming` 단계 5,246ms부터
 `load_started=true`, `load_completed=false`, `image_binding_verified=false`였으며
-570,040ms 관측도 같은 상태였습니다. 최초 `contract`·`initial_storage`·`docker_spawn`
+570,040ms 관측도 같은 상태였습니다. 최초 `guest_contract`·`initial_storage`·`docker_spawn`
 관측의 시작 false를 이후 전송 상태에 적용하지 않습니다. archive 전체 검증이나 load 시작·
 일부 전송을 Docker load 성공으로 올리지 않습니다.
 
@@ -568,7 +568,7 @@ sync·poweroff 수락 뒤 69.412초의 QEMU 자연 종료 0을 확인했고 강�
 `37b928`을 거부하고 기존 boot 600초·공간 SSH 60초·Root 공간 응답 70초·최종 승인 120초·
 ready 680초·정상 종료 180초·공식 provider 기한과 이미지/핀/원본/운영 서비스 보호를
 유지합니다. Root의 순수 회귀 68건(0.122초)·Ruff 0.16.10 API config·지문 9개와 전체
-변경 검토가 통과했으며 실제 v7 실행은 아직 0입니다.
+변경 검토를 통과했습니다. 당시 실제 실행 0인 준비 상태였으며 아래의 후속 v7 실패와 구분합니다.
 
 후속 fixture v2는 Root의 순수 회귀 26건(0.188초)·같은 Ruff·지문 5개와 최종 변경 검토를
 통과했고 실제 실행은 0입니다. 공간 SSH 60초·ready 680초·닫힌 outcome/경과/적용 제한을
@@ -577,11 +577,55 @@ ready 680초·정상 종료 180초·공식 provider 기한과 이미지/핀/원�
 철회했습니다. 원본에서 기록 소실이 확인됐거나 이를 고쳤다고 주장하지 않습니다. 실제 import
 성공·정상 종료를 요구하는 gate는 `37b928`의 실패 영수증을 runtime 생성과 부팅 전에 거부합니다.
 
-다음 새 owner `d9da25af581e4c4891c2bebd29532782`의 build·prepare는 각각
-10월 3일 00:11:19.808616·00:11:42.370155 UTC에 성공했습니다. bootstrap은 현재 진행
-중이며 성공으로 표시하지 않습니다. 실제 v7 import·source30·Chrome·오프라인 암호화
-fixture·공식 비교와 서버 로그인·좌석 조회·자동 예약 복구는 미완료이며 새 예약 대상 승인도
-아직 없습니다.
+### v7의 전체 수신 후 Docker 대기와 v8 준비
+
+새 owner `d9da25af581e4c4891c2bebd29532782`의 build·prepare에 이어 bootstrap이
+10월 3일 00:31:06.720963 UTC에 성공했습니다. bootstrap SHA는
+`e19a8fa359df174f8ee808beedc0822dd55865d7e3b4c429ce81b06d9ed34c3e`이며
+77.000초 자연 종료 0·강제 종료 없음·소유 제거·OOM false·서버 12개 동일/로컬 0을 확인했습니다.
+
+후속 실제 v7 결과는 `qemu-import-slice-d9da25af581e4c4891c2bebd29532782-9654b307e2d649df840600ba6c0f1cb9.json`이고
+SHA는 `9d856701bbce6fd6014f24014fbe93a1c2aa28fa1e1ae046f2e2274be05f1b2`입니다.
+파일 수정 시각은 01:01:18.1134633 UTC이며 완료 시각 필드는 없습니다. 원본 archive의
+1,341,095,839바이트 전체 수신과 SHA 검증은 780,656ms에 마쳤고 780,662ms부터
+`docker_wait`에 들어갔습니다. 외부 교환은 1,200,105ms에 `transport_timeout`으로 끝났으며
+load 시작 true·완료 false·image binding false였습니다. 전체 수신·SHA 검증을 load 성공으로
+올리지 않습니다. sync·poweroff 수락 뒤 89.461초 자연 종료 0·강제 종료 없음·소유 컨테이너
+제거·OOM false·동일 서버 12개·로컬 0·Chrome/공식 0을 보존했고 이 실패 overlay도 재사용하지 않습니다.
+이 관측만으로 Docker 내부 대기 원인이나 SSH 암호화 병목을 확정하지 않으며, 과거 실패와
+코레일 HTTP 500의 원인으로 소급하지 않습니다.
+
+Root의 별도 로컬 cache load는 Docker 27.3.1 overlayfs에서 같은 공개 archive가 cff/AMD64/Linux로
+받아들여졌음을 확인했습니다. receipt `qemu-v7-local-cache-load-check-69a6e2febff345adb430d195819ffffc.json`의
+SHA는 `298d71ea4d7040d536944decabc24233780555a28c98d777215deb8abe5e51e6`이고 기록 시각은
+01:07:40.779473 UTC입니다. uncached 조건과 경과 시간은 미검증이며 게스트 Docker 29.1.3과
+버전·캐시 차이가 있어 성능이나 실패 인과 증거로 쓰지 않습니다. 로컬 서비스 0·서버 12개 healthy와
+Chrome/공식/계정 판독 0을 보존했습니다.
+
+후속 v8은 SSH bulk 전달 대신 검증한 공개 archive 하나를 readonly virtio block으로 제공합니다.
+새 owner/run의 exclusive raw fd만 생성하고 원본 길이/SHA·97바이트 zero 정렬 패딩·전체 raw SHA를 재검증합니다.
+outer mount는 소유 디렉터리 RW와 그 raw 파일 하나 RO의 정확한 두 개로 제한하며, 게스트는
+serial·ro·용량·mount/partition 부재·실제 block fd와 root/Docker 장치 분리를 확인합니다.
+전체 import 1200초/Root 대기 1225초/외부 컨테이너 2900초를 유지하고 dispatch 시 잔여 시간에서
+60초를 정리·닫힌 결과 전달에 예약합니다. 게스트 적용 시간은 감소하며 30초 미만이면 실행하지 않습니다.
+block을 열기 전 receiver alarm을 적용하고 launch 지연 시 외부 기한이 우선합니다.
+기존 boot 600초/공간 SSH 60초/ready 680초/full gate 270초/정상 종료 180초와 provider 기한·고정 pin·원본 보호는 유지합니다.
+닫힌 Docker 대기 CLI poll·최대 4GiB MemAvailable/null·systemd 상태를 최대 6개로 남기지만
+`active`를 Docker API 응답성으로 해석하지 않습니다. 원문 로그·계정·키·주소 출력은 없습니다.
+Root가 전체 변경·97개 순수 회귀(0.151초)·strict API Ruff 0.16.10·지문 12개를 재검증했습니다.
+이 검증은 준비 코드에 한정되며 실제 v8 결과와 구분합니다.
+
+새 owner `fdf165e38db84e419ac5d0d0f9a44394`의 build·prepare는 각각
+01:05:22.206876·01:06:17.240268 UTC에 성공했습니다. bootstrap은
+10월 3일 01:26:00.742700 UTC에 성공 완료했고 SHA는
+`16113ebabfecb741651d32e2c578a83c103b0255a658bdc4ec966e38eb94b3fe`입니다.
+Ubuntu 24 x86·kernel 6.8.0-142·Docker 29.1.3·binfmt false·source attestation·SSH pin·
+cloud-init을 확인했고 실제 여유 17,319,514,112바이트/용량 19,682,557,952바이트였습니다.
+sync·poweroff 수락·66.612초 자연 종료 0·강제 종료 없음·소유 정리·OOM false·
+동일 서버 12개/로컬 0·Chrome/공식 0을 보존했습니다. 이후 v8 가져오기는 실행 중이며
+결과는 미확정입니다. 실제 import 성공·정상 종료가 있어야 후속 source30/Chrome·
+암호화 fixture와 공식 비교를 진행할 수 있습니다. 서버 로그인·좌석 조회·자동 예약 복구와
+새 예약 검증 대상 승인은 계속 미완료입니다.
 
 문서 커밋 `998ca5d0dde12ebce2ccd3b6bb1832a7da8b662c`의
 [CI 37075519192](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37075519192)는
@@ -610,6 +654,15 @@ API 5,043건 통과·1건 실패·경고 1건(862.62초)이며 이번 실패는 
 검사는 통과했습니다. 한 번의 재실행 뒤 추가 요청은 없었습니다. 같은 head의 두 실패와
 앞선 문서 커밋의 CI 성공을 각각 보존하며, 원격 timeout의 원인과 실제 철도사 기능 복구는
 아직 미확정입니다.
+
+새 문서 head `418a226b939705a1b2b1bb142f2d63dfde44a1bb`의
+[CI 37082307887](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37082307887)는
+10월 3일 00:46:30 UTC에 검증 job `111085281724`를 성공 종료했습니다. API 5,044건·경고 1건·
+688.49초, 고정 Ruff 0.12.12·mypy 171개 파일, 웹 100개 파일/982건·E2E 16건(1.3분)·
+build 4.84초·Sites 4/4와 PostgreSQL fencing 3종을 통과했습니다. 직전 `48085c5e`의 두 loopback 실패를 보존하며 이번 성공을
+원인 해결 증거로 삼지 않습니다. 해당 fixture는 이미 ThreadingHTTPServer여서 단일 thread
+가설은 기각됐고 startup/cleanup과 원격 timeout의 인과는 미확정입니다. 실제 철도사 기능 복구도
+미완료입니다.
 
 외부 네트워크 연결은 [코레일 안내](https://www.korail.com/public/info/urlList.html)를
 참고합니다. 진단 probe의 `failures=[]`는 해당 target의 관측 구간에서 `loadingFailed`가

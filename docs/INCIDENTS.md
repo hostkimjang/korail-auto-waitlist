@@ -173,7 +173,27 @@ v10 조회 후보의 순수 회귀 84건·복원 회귀 20건·Ruff·Root/독립
 
 이번에는 완료된 공식 업무 500 근거에 따라 Root가 기존 대기 병합 계약으로 한 번 0→300초를 적용했습니다. 쓰기의 count 인자는 0으로 기존 실패 횟수 3회를 보존하며 로그인 실패 횟수 초기화는 false입니다. 복원 과정의 대기 297→274초·최종 264초를 확인했고 새 인증·예약은 0입니다. 진단 대기 쓰기는 이번 v10에서 1회이며 앞선 v9·SDK/인프라 실패의 쓰기 0과 구분합니다. 이 정책 적용과 정상 운영 복원은 제품 로그인·좌석 조회·자동 예약 복구를 뜻하지 않습니다.
 
-### 최신 문서 커밋의 저장소 CI
+### 로컬 직접 경로의 업무 200과 Oracle 경유 업무 500
+
+결과 `output/direct-local-resource-query-v1-2b72dff3fad94fe8934740b77abffcb9.json`(SHA-256 `d5f1c29cba8a1d91bb48e1510e6ef9ce0b738546d60f46981a38bbb1c7a93311`, 07:03:51 UTC)은 로컬 AMD64의 원래 직접 경로에서 정상 UI 조회 1회·공식 POST 10건·선택 업무 HTTP 200·통신 완료·열차 10행을 확인했습니다. 리소스 86건은 완료됐고 실패가 없었으며 공개 대기열 SDK Fetch 두 건은 HTTP 200·통신 완료였습니다. 실행 전후 소스 30개와 소유 clone 정리를 확인했습니다.
+
+앞선 v10은 같은 로컬 AMD64가 Oracle bridge/NAT 구조를 거쳐 선택 업무 HTTP 500·완료를 기록했습니다. 두 결과는 22분 3초 차이이며 접속 경로와 새 세션도 다릅니다. 공인 IP 동등성은 증명하지 않았습니다. ARM만 실패에 필요하다는 설명은 약해졌고 접속 경로·세션 조건의 연관 가설을 검토할 근거가 늘었지만, IP 차단이나 특정 대기열 리소스·CPU의 단독 원인을 확정하지 않습니다. 이후 DAYBREAK 자문은 아래에 구분해 기록합니다.
+
+복원 `output/direct-local-resource-query-v1-server-restored-bae84c8c52e5408aa47348ea07dea59b.json`(SHA-256 `6df90f3598aafb2edf6fe74fc748ca9ca2eb17a1678ba7bc1eb9816413f17786`, 07:05:04 UTC)은 같은 ID의 서버 12개 healthy·소스 30개·웹 1.2.11·로컬 0·계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING/큐 0을 확인했습니다. Root 대기 쓰기는 0이고 기존 실패 횟수 3회를 보존했습니다. 운영 재개 후 대기 0→897초·최종 890초의 원인은 미관측으로, 이를 별도 새 HTTP 500 증거로 판정하지 않습니다. 실제 서버 로그인·좌석 조회·자동 예약 복구는 미완료입니다.
+
+### 직접 조회 이후 DAYBREAK 자문과 자료 한계
+
+`gpt-daybreak-blue-latest`를 `exec -m gpt-daybreak-blue-latest --ephemeral --sandbox read-only --json -` 인자로 한 번 실행했습니다. 시작 07:08:33.145689 UTC·완료 07:09:14.356640 UTC, 종료 0·답변 1개·도구 0이며 입력 20,349·출력 977 tokens입니다. 설정/priority 경고 3건은 도구 호출이나 실행 실패와 구분합니다. 모델 선택 인자는 확인했으나 내부 런타임 모델 식별을 별도로 증명하지 않았습니다. Root 검토는 `output/daybreak-direct-local-followup-20261003.root-reviewed.md`(SHA-256 `10a00d0491ad01a3148340805174f078d8b929c80b6c2342437469df99cc407d`)에 보존했습니다.
+
+경로·세션 조건의 연관성이 강해지고 CPU 단독 설명은 약해졌다는 해석은 실제 두 표본과 맞습니다. 다만 시각·새 프로필·POST/리소스 수가 달라 경로 하나만 바꾼 동시 비교나 IP 단독 원인 증명으로 올리지 않습니다. HTTP finished는 전송 완료이며 SDK 내부 실행 전체나 서버 인증·좌석·예약 성공을 뜻하지 않습니다.
+
+모델이 권고한 개별 요청 시각·initiator·업무 전후 상대 간격은 현재 자료에 없습니다. 보존 범위는 리소스 집계와 한도 8개의 공식 POST 응답·phase·제한된 transport 메타데이터이므로 해당 비교를 완료로 기록하지 않습니다. 새 요청 없이 집계 차이와 보존된 응답만 대조했으며, 추가 자료 확보 요청이나 우회·운영 변경은 채택하지 않았습니다. 근본 원인과 실제 기능 복구는 미완료입니다.
+
+### 커밋 272e09f의 저장소 CI
+
+커밋 `272e09fb45f293bc1125db1f051d2d4a61b8f75a`의 [CI 37104235715](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37104235715) attempt 1은 성공으로 종료됐고 완료 상태 갱신 시각은 07:04:10 UTC입니다. 검증 job `111149541247`과 PostgreSQL job `111149541191`의 checkout 로그 SHA는 해당 커밋과 일치합니다. API 5,044건·경고 1건(667.95초), 웹 100개 파일·982건, E2E 16건, Sites 4건과 PostgreSQL fencing 3종을 통과했습니다. Ruff·mypy 171개 파일·typecheck·build(4.83초)도 통과했고 실패 단계는 없습니다. 이전 `72ed922` 성공을 소급한 결과가 아니며 실제 서버 인증·조회·예약 복구와 구분합니다.
+
+### 앞선 문서 커밋의 저장소 CI
 
 커밋 `72ed92296917fcbe1cc2fb875932de91900647b6`의 [CI 37099077091](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37099077091)는 05:29:05 UTC에 성공으로 종료됐습니다. REST의 head와 실제 job checkout SHA가 일치하며 Root가 결과를 독립 확인했습니다. API 5,044건·웹 982건·E2E 16건·Sites 4건·PostgreSQL fencing 3종, Ruff·strict mypy 171개 파일·typecheck·build를 통과했고 실패 단계는 없습니다. 앞선 `7e02c35`의 CI 성공과 별도 결과이며 공식 로그인·좌석 조회·예약 성공을 증명하지 않습니다.
 

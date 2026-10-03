@@ -13,8 +13,8 @@ SHA-256은 `194e9bb81deda8db73f9bfff6aee0e4856021c1fe1f227731d2b96448132375d`입
 다릅니다. bootstrap과 Ubuntu·cloud-init·Docker 준비는 성공했고 이후 Docker 대기·이미지
 가져오기 완료를 확인하지 못했습니다. 기존 개별 실패 기록과 이 구분을 보존합니다.
 
-커밋 `5ed3120`의 [저장소 CI 37088526332](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37088526332)
-전체 성공과 API 5,044건·웹 982건·E2E 16건·PostgreSQL fencing 3종을 확인했습니다. 새 격리
+커밋 `7ece442`의 [저장소 CI 37090974603](https://github.com/hostkimjang/korail-auto-waitlist/actions/runs/37090974603)
+03:03:39 UTC 성공과 API 5,044건·웹 982건·E2E 16건·Sites 4건·PostgreSQL fencing 3종·Ruff·mypy 171개 파일·build 통과를 확인했습니다. 새 격리
 capsule의 순수 테스트 37건·Ruff·준비 검증도 통과했지만 실제 외부 경로 성공과 구분합니다.
 
 02:34:11 UTC의 실제 격리 owner `4d6145d5989f480bb8986d0ff138bf25`에서 caller 8개를 멈추고
@@ -39,6 +39,30 @@ API/adapter 소스 30개·readyz/웹/JS 200·푸터 v1.2.11·로컬 실행 서�
 확인했습니다. 복원 helper의 대기 쓰기는 0이며 실패 횟수 3회, 대기는 사전 0·병합 0·최종 888초로
 읽혔습니다. 정상 운영을 재개한 뒤 공통 대기가 열린 상태이며 별도 새 500 발생 증거로 해석하지
 않습니다. 현재 서버는 전체 운영으로 복원됐고 실제 공식 인증·좌석 조회·예약 복구는 미완료입니다.
+
+### 로컬 CONNECT 준비와 후속 격리 실행
+
+`network=none`에서 원래 Pydoll 기본 flags와 `start→replace_tab` 흐름을 유지한 오프라인 진단입니다. 각 오프라인 실행의 소스 30개·원본 불변, 모든 소유 자원 정리·소유 clone 부재·로컬 실행 0을 확인했고 공식 호출·로그인·예약·DNS 전달·upstream·자격증명 판독·대기 쓰기·서버 조작은 0입니다.
+
+첫 결과 `output/offline-connect-fixture-b946b89b705b456ba76abc2f53197205.json`(SHA-256 `8748619601693cf7c585c0c0c0bc9e2eaf9e134545c796a4f17d90de163a8467`, 완료 03:02:12.457130 UTC)는 시작 1.33초 안에 listener 연결·CONNECT 검사 invalid·합성 502·닫기 각 1건을 관측하고 `background_stopped/invalid_connect`로 끝났습니다. 프로세스는 시작했지만 startup·about:blank 확인과 관측 창 시작은 미완료이며 원문과 세부 실패 이유는 미관측입니다.
+
+v2 결과 `output/offline-connect-fixture-v2-421f8e85ff2a485ea0c0ad754c5b7b41.json`(SHA-256 `09fd896ca71321c7cc3be2395f5608624fe9afc230917966b7f0d3cdfdc2d257`, 완료 03:09:02.287203 UTC)는 시작 1.281초 안에 startup 이전의 완결된 읽기 1건을 `non_connect_http`로 분류해 일반 평문 HTTP 형식으로 좁혔고 EOF·timeout·크기 제한은 0이었습니다. CONNECT 검사는 invalid 1건이며 tab 준비와 관측 창 시작은 미완료입니다.
+
+v3 결과 `output/offline-connect-fixture-v3-b650a745ce714020af64d0294a11fcb4.json`(SHA-256 `c2dd633d4153feca30713fd7239989259e4ead18ccaea7f3f73b71336f334b3a`, 완료 03:17:20.750174 UTC)는 일반 평문 HTTP 1건을 개별 합성 502로 거절·닫은 뒤 시작 흐름을 유지했지만 다음 형식 정상·고정 대상 외 CONNECT 1건에서 `forbidden_background`로 중단됐습니다. startup·about:blank 확인과 관측 창 시작은 미완료입니다.
+
+v4 결과 `output/offline-connect-fixture-v4-6f0e0f8db589411198d9df45cd80dcb1.json`(SHA-256 `822183ba5ee7ee38cb29726c1f8f33af19dc2f9df7a42c13d435d5dbf572b9c7`, 완료 03:26:44.517221 UTC)는 일반 평문 HTTP 1건에 개별 합성 502, 고정 대상 외 정상 CONNECT 10건에 개별 합성 403을 보냈고 총 응답·닫기 각 11건·overflow false를 확인했습니다. 프로세스 시작·원래 startup·replace_tab은 완료했지만 1,382ms에 `navigation_rejected`로 끝나 about:blank 확인과 관측 창 시작은 미완료입니다.
+
+v4b 결과 `output/offline-connect-fixture-v4b-fbe5e0a56e2a4d10a38e97a5736c017e.json`(SHA-256 `5ae583947193f42677a86853078f73e4c6da99baf233a44c29320758083bc8f7`, 완료 03:37:20.809029 UTC)는 startup 완료 뒤 blank page 1·내부 page 1·기타 page 0·비page 4를 관측했으나 `target_unknown`으로 끝났고 관측 창은 시작하지 못했습니다. `retired=false`와 모든 연결 닫기를 확인했습니다.
+
+v4c 결과 `output/offline-connect-fixture-v4c-84b45e0c5a034d8aaabf3698d44c9a0a.json`(SHA-256 `90f1b3fdd86d3f19cedbaf2bb63b8121ca3de5f4dae97acd6048da27a7f46c87`, 완료 03:40:11.828677 UTC)는 진단에 추가한 비page URL 검사를 제거해 기존 page 대상만 판정하는 준비 조건으로 돌아간 뒤 startup·about:blank·15초 관측 창을 통과했습니다. proxy 판정 두 조건·about:blank 전용 CDP·네트워크 없음·시간 제한을 유지했고 일반 평문 HTTP 1건·고정 대상 외 CONNECT 19건의 개별 합성 응답·닫기 각 20건을 확인했습니다. 초기→마지막 목록은 blank 1→1·내부 page 1→0·비page 5→4였으며 `retired=false`를 유지했습니다.
+
+별도 읽기 전용 확인(03:04:30.601137 UTC)에서도 서버 전체 12개 healthy·로컬 0·활성 계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING 0을 보존했고 남은 공통 대기 446초·실패 횟수 3회를 읽었습니다.
+합성 502·403은 코레일 응답이 아닙니다. 호스트·HTTP method·용도 원문은 미관측이고, page 목록의 내부 대상 소멸과 오프라인 준비 조건 통과가 앞선 v1 relay 실패의 동일 원인·Oracle KORAIL HTTP 500의 근본 원인을 입증하지는 않습니다. 최신 DAYBREAK 원인 후보와 실제 인증·조회·예약 복구는 미확정·미완료입니다.
+
+후속 실행 전 새 freeze owner `269e311dbaa1400b9c665c8aa79da508`에서 서버 전체 12개→drain 모두 0→핵심 4개와 소스 30개·계정 세대 4·UNKNOWN/차단 각 4건·새 시도/PENDING 0을 확인했습니다(완료 03:41:09.750585 UTC). 공통 대기는 100→64초·실패 횟수 3회를 읽었고 쓰기·초기화는 없었습니다.
+실제 owner `7339ac4942384dcb98a28dc4463a50ad`의 controller는 finally에서 `KeyError: relay_observation`으로 종료됐습니다. 결과 `output/fixed-egress-capsule-isolated-rejection-v4-7339ac4942384dcb98a28dc4463a50ad.json`의 SHA-256은 `7586a9073a4a04ceed6097e2dfe8822a74a15efc9711e0f44d119a1dd891dbcc`이며 INITIAL admission·probe null·cleanup 빈 객체로 남았습니다. 공식 helper 전에 저장하는 dispatch marker가 없어 공식 조회 dispatch는 0이고, 마지막 실패 단계 관측은 유실됐으므로 실제 실패 단계와 정리 성공을 이 결과만으로 확정하지 않습니다. 공유 attempt 파일은 새 owner의 freeze 근거로 재사용하지 않습니다.
+
+별도 수동 복원 결과 `output/fixed-egress-v4-abrupt-restored-91899511e293408ab5dcd37ac41cec00.json`(SHA-256 `f0d55d95019962e69321f99e9cc72353e272af5fdd824830ca8f0946faa255fa`, 완료 03:45:22.844224 UTC)에서 소유 clone·relay의 이름/label 부재와 해당 SSH forward 0을 확인했습니다. 핵심 4개의 ID·이미지·시작 시각과 데이터·큐를 확인한 뒤 동일 ID의 서버 전체 12개 healthy·API/adapter 소스 30개·readyz/웹/JS 200·푸터 v1.2.11·migration 작업 종료 0·로컬 0과 기존 차단 각 4건·새 시도/PENDING 0을 확인했습니다. 대기 쓰기·초기화는 0이며 복원 전 대기 0초·실패 횟수 3회, 정상 운영 재개 후 대기 897→890초·실패 횟수 3회를 읽었습니다. 이는 운영 재개 상태의 관측이며 별도 새 HTTP 500 발생 증거로 해석하지 않습니다. 실제 비교는 성립하지 않았고 앞선 실패의 동일 원인·근본 원인과 공식 기능 복구는 계속 미확정·미완료입니다.
 
 ## 2026년 10월 3일 · DAYBREAK 독립 원인 분석
 

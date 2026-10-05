@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib as _contextlib
+import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 from ..browser_contracts import (
@@ -176,8 +178,31 @@ class PydollLoginDomDriver:
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         try:
             return await self._ensure_authenticated(credential)
+        except _submission_owner.PydollLoginResponseUnavailable:
+            await self._observe_submission_failure()
+            raise
         finally:
             await self.close_submission_observer()
+
+    async def _observe_submission_failure(self) -> None:
+        owner = self._submission
+        if owner is None:
+            return
+        header = "unavailable"
+        try:
+            # The actor closes this tab on failure. Read its existing DOM before
+            # disposal; this never probes, retries, or turns a failure into success.
+            async with asyncio.timeout(min(2.0, self._timeout_seconds)):
+                authenticated = await self._port._has_authenticated_header()
+            if type(authenticated) is bool:
+                header = "present" if authenticated else "absent"
+        except Exception:  # noqa: BLE001 -- diagnostic reads preserve the original failure.
+            header = "unavailable"
+        self._event_logger.info(
+            "KORAIL login submission failure observation header=%s requests=%s",
+            header,
+            json.dumps([asdict(row) for row in owner.diagnostics()], sort_keys=True),
+        )
 
     async def _ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         attempt = _LocalLoginAttemptState()
@@ -207,6 +232,9 @@ class PydollLoginDomDriver:
     ) -> bool:
         try:
             return await self._authenticate_in_place(credential, attempt)
+        except _submission_owner.PydollLoginResponseUnavailable:
+            await self._observe_submission_failure()
+            raise
         finally:
             await self.close_submission_observer()
 

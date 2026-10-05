@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import FrozenInstanceError, asdict, dataclass
 
 import pytest
 
@@ -446,3 +447,428 @@ def test_explicit_official_tls_port_is_accepted_and_close_ignores_late_events() 
 def test_invalid_timeout_is_rejected(value: float) -> None:
     with pytest.raises(ValueError, match="finite and positive"):
         PydollLoginSubmission(value)
+
+
+PUBLIC_BUNDLE = "https://cdn.korail.com/bundle/bundle.38e6dfeb5a3af0094a69.js"
+
+
+def frame(column: object = 30620, *, name: str = "handleLogin") -> dict[str, object]:
+    return {"functionName": name, "url": PUBLIC_BUNDLE, "lineNumber": 2, "columnNumber": column}
+
+
+def with_initiator(event: dict[str, object], initiator: object) -> dict[str, object]:
+    params = event["params"]
+    assert isinstance(params, dict)
+    params["initiator"] = initiator
+    return event
+
+
+@pytest.mark.parametrize(
+    ("path", "family"),
+    [
+        ("/ebizweb/common/loginProcess", "public_login"),
+        ("/ebizweb/integrate/srCheck.do", "integration_check"),
+        ("/web_s/fixture-private-path", "business_dynamic"),
+        ("/web_s", "official_other"),
+        ("/ebizweb/common/loginProcess/extra", "official_other"),
+        ("/ebizweb/common/LoginProcess", "official_other"),
+        ("/fixture-private-path", "official_other"),
+    ],
+)
+def test_request_diagnostics_classify_only_path_family_and_keep_no_material(path, family) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    event = with_initiator(
+        request(url=f"https://www.korail.com{path}?fixture-query"),
+        {"stack": {"callFrames": [frame()]}},
+    )
+    owner.on_request_will_be_sent(event)
+    owner.on_response_received(response(500))
+    owner.on_loading_finished(terminal())
+    rows = owner.diagnostics()
+    assert isinstance(rows, tuple) and len(rows) == 1
+    row = rows[0]
+    assert (row.sequence, row.path_family, row.status, row.terminal) == (
+        1,
+        family,
+        500,
+        "completed",
+    )
+    assert row.initiator_handle_login is True
+    assert row.initiator_complete is True
+    assert row.public_callsite == "login_submit"
+    assert owner.snapshot().failure == "http_error"
+    encoded = json.dumps([asdict(item) for item in rows])
+    for private_value in (path, "fixture-query", "login-1", "handleLogin", PUBLIC_BUNDLE):
+        assert private_value not in encoded
+    with pytest.raises(FrozenInstanceError):
+        row.sequence = 2
+    owner.close()
+    assert owner.diagnostics() == ()
+    assert not owner._requests
+
+
+@pytest.mark.parametrize(
+    ("column", "callsite"),
+    [
+        (30619, "unresolved"),
+        (30620, "login_submit"),
+        (30651, "login_submit"),
+        (30652, "unresolved"),
+        (24950, "unresolved"),
+        (24951, "integration_check"),
+        (24992, "integration_check"),
+        (24993, "unresolved"),
+        (True, "unresolved"),
+        ("30620", "unresolved"),
+        (30620.0, "unresolved"),
+    ],
+)
+def test_exact_public_callsite_spans_use_integer_utf16_columns(column, callsite) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"stack": {"callFrames": [frame(column, name="callApi")]}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.public_callsite == callsite
+    assert row.initiator_handle_login is False
+    assert owner.snapshot().state == "posted"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"url": PUBLIC_BUNDLE + "#fixture-fragment"},
+        {"url": PUBLIC_BUNDLE.replace("38e6", "ffff")},
+        {"lineNumber": 3},
+        {"lineNumber": "2"},
+        {"lineNumber": 2.0},
+        {"columnNumber": None},
+        {"url": None},
+    ],
+)
+def test_bundle_identity_or_coordinates_cannot_be_inferred_from_function_name(changes) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    changed = {**frame(), **changes}
+    owner.on_request_will_be_sent(with_initiator(request(), {"stack": {"callFrames": [changed]}}))
+    assert owner.diagnostics()[0].initiator_handle_login is True
+    assert owner.diagnostics()[0].public_callsite == "unresolved"
+
+
+def test_parent_stack_can_supply_exact_callsite_and_both_roles_remain_mixed() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    initiator = {
+        "stack": {
+            "callFrames": [frame(24951, name="callApi")],
+            "parent": {"callFrames": [frame()]},
+        }
+    }
+    owner.on_request_will_be_sent(with_initiator(request(), initiator))
+    assert owner.diagnostics()[0].public_callsite == "mixed"
+    assert owner.diagnostics()[0].initiator_handle_login is True
+
+
+@pytest.mark.parametrize(
+    "kind", ["absent", "missing_stack", "invalid", "parent_id", "wide", "deep", "cycle", "name"]
+)
+def test_malformed_or_truncated_initiators_remain_bounded_and_unresolved(kind) -> None:
+    stack: dict[str, object] = {"callFrames": [frame()]}
+    initiator: object = {"stack": stack}
+    if kind == "absent":
+        initiator = None
+    elif kind == "missing_stack":
+        initiator = {"type": "script"}
+    elif kind == "invalid":
+        stack["callFrames"] = "fixture-private-stack"
+    elif kind == "parent_id":
+        stack["parentId"] = {"id": "fixture-private-id"}
+    elif kind == "wide":
+        stack["callFrames"] = [frame()] * 65
+    elif kind == "deep":
+        for _ in range(9):
+            stack = {"callFrames": [], "parent": stack}
+        initiator = {"stack": stack}
+    elif kind == "cycle":
+        stack["parent"] = stack
+    else:
+        stack["callFrames"] = [frame(name="fixture-private-name" * 100)]
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(with_initiator(request(), initiator))
+    row = owner.diagnostics()[0]
+    assert row.initiator_complete is False
+    assert row.public_callsite == "unresolved"
+    assert owner.snapshot().state == "posted"
+    assert "fixture-private" not in repr(vars(owner)) + repr(row)
+
+
+def test_total_frame_budget_applies_across_parent_nodes() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    stack = {"callFrames": [frame()] * 40, "parent": {"callFrames": [frame(24951)] * 25}}
+    owner.on_request_will_be_sent(with_initiator(request(), {"stack": stack}))
+    assert owner.diagnostics()[0].initiator_complete is False
+    assert owner.diagnostics()[0].public_callsite == "unresolved"
+
+
+def test_diagnostics_distinguish_transport_failure_from_http_error_completion() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_request_will_be_sent(request("second"))
+    owner.on_request_will_be_sent(request("third"))
+    owner.on_response_received(response(500))
+    owner.on_loading_finished(terminal())
+    owner.on_response_received(response(200, request_id="second"))
+    owner.on_loading_failed(terminal("second"))
+    owner.on_loading_finished(terminal("second"))
+    rows = owner.diagnostics()
+    assert [(row.sequence, row.status, row.terminal) for row in rows] == [
+        (1, 500, "completed"),
+        (2, 200, "failed"),
+        (3, None, "incomplete"),
+    ]
+    assert owner.snapshot().failure == "http_error"
+
+
+@pytest.mark.parametrize(
+    ("transport_event", "expected_terminal"),
+    [("none", "incomplete"), ("finished", "completed"), ("failed", "failed")],
+)
+def test_http_error_headers_and_transport_terminal_remain_distinct(
+    transport_event: str, expected_terminal: str
+) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_response_received(response(500))
+    assert owner.diagnostics()[0].terminal == "incomplete"
+    if transport_event == "finished":
+        owner.on_loading_finished(terminal())
+    elif transport_event == "failed":
+        owner.on_loading_failed(terminal())
+    row = owner.diagnostics()[0]
+    assert (row.status, row.terminal) == (500, expected_terminal)
+    assert (owner.snapshot().failure, owner.snapshot().status) == ("http_error", 500)
+    assert owner.snapshot().safe_to_probe is False
+
+
+@pytest.mark.parametrize("status", [None, "200", True])
+def test_invalid_response_does_not_supply_a_transport_terminal(status: object) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_response_received(response(status))
+    row = owner.diagnostics()[0]
+    assert row.terminal == "incomplete"
+    assert row.evidence_complete is False
+    assert row.status is None
+    assert owner.snapshot().failure == "invalid_response"
+
+
+@pytest.mark.parametrize("kind", ["redirect", "invalid", "missing_id", "overflow"])
+def test_unknown_observation_evidence_is_explicit_without_changing_verdict(kind) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    if kind == "redirect":
+        redirect = request()
+        params = redirect["params"]
+        assert isinstance(params, dict)
+        params["redirectResponse"] = {"url": "https://fixture-private.example", "status": 302}
+        owner.on_request_will_be_sent(redirect)
+        owner.on_response_received(response(302))
+        owner.on_loading_finished(terminal())
+        assert owner.snapshot().safe_to_probe is True
+    elif kind == "invalid":
+        owner.on_response_received(response(None))
+        assert owner.snapshot().failure == "invalid_response"
+    elif kind == "missing_id":
+        owner.on_request_will_be_sent(request(""))
+        assert owner.snapshot().state == "ambiguous"
+    else:
+        for index in range(9):
+            owner.on_request_will_be_sent(request(str(index)))
+        assert owner.snapshot().state == "ambiguous"
+        assert len(owner.diagnostics()) == owner.MAX_REQUESTS
+    assert all(row.evidence_complete is False for row in owner.diagnostics())
+
+
+def test_safe_diagnostics_remain_available_at_deadline_before_close() -> None:
+    clock = Clock()
+    owner = PydollLoginSubmission(1, monotonic=clock)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.on_response_received(response())
+    clock.now += 1
+    assert owner.snapshot().failure == "timeout"
+    assert not owner._requests
+    row = owner.diagnostics()[0]
+    assert (row.status, row.terminal) == (200, "incomplete")
+    assert "login-1" not in repr(vars(owner))
+    owner.close()
+    assert owner.diagnostics() == ()
+
+
+def test_arming_again_does_not_reuse_closed_diagnostics() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    owner.close()
+    owner.arm()
+    owner.on_request_will_be_sent(request("new"))
+    assert owner.diagnostics()[0].sequence == 1
+    assert len(owner.diagnostics()) == 1
+
+
+@pytest.mark.parametrize(
+    "url",
+    [PUBLIC_BUNDLE, PUBLIC_BUNDLE + "?fixture-private-query", PUBLIC_BUNDLE + "?"],
+)
+def test_verified_source_matches_with_query_but_retains_only_query_presence(url: str) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    public_frame = {**frame(), "url": url}
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"stack": {"callFrames": [public_frame]}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.public_callsite == "login_submit"
+    assert row.initiator_complete is True
+    assert len(row.initiator_public_frames) == 1
+    fact = row.initiator_public_frames[0]
+    assert asdict(fact) == {
+        "source_id": "verified_main_bundle",
+        "source_query_present": "?" in url,
+        "line_0based": 2,
+        "utf16_column_0based": 30620,
+    }
+    encoded = json.dumps(asdict(row))
+    assert "fixture-private-query" not in encoded
+    assert PUBLIC_BUNDLE not in encoded
+    assert "handleLogin" not in encoded
+    assert "callFrames" not in encoded
+    assert "url" not in encoded
+    assert "fixture-private-query" not in repr(vars(owner))
+    with pytest.raises(FrozenInstanceError):
+        fact.line_0based = 3
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        PUBLIC_BUNDLE.replace("https://", "http://"),
+        PUBLIC_BUNDLE.replace("cdn.korail.com", "cdn.korail.com.evil.example"),
+        PUBLIC_BUNDLE.replace("cdn.korail.com", "fixture@cdn.korail.com"),
+        PUBLIC_BUNDLE.replace("cdn.korail.com", "cdn.korail.com:444"),
+        PUBLIC_BUNDLE.replace("cdn.korail.com", "cdn.korail.com:invalid"),
+        PUBLIC_BUNDLE.replace("cdn.korail.com", "cdn.korail.com."),
+        PUBLIC_BUNDLE.replace("/bundle/bundle.", "/bundle/other."),
+        PUBLIC_BUNDLE.replace("/bundle/", "/%62undle/"),
+        PUBLIC_BUNDLE + "#",
+        PUBLIC_BUNDLE + "?fixture-query#fragment",
+        "https://evil.example?source=" + PUBLIC_BUNDLE,
+        PUBLIC_BUNDLE + "/extra?fixture-query",
+        PUBLIC_BUNDLE.replace("cdn.korail", "cdn.\nkorail"),
+        " " + PUBLIC_BUNDLE,
+        PUBLIC_BUNDLE + "?" + "x" * 16384,
+    ],
+)
+def test_query_does_not_expand_verified_source_identity(url: str) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    public_frame = {**frame(), "url": url}
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"stack": {"callFrames": [public_frame]}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.public_callsite == "unresolved"
+    assert row.initiator_public_frames == ()
+    assert url not in json.dumps(asdict(row))
+
+
+def test_default_tls_port_and_canonical_hostname_are_accepted() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    public_frame = {
+        **frame(),
+        "url": PUBLIC_BUNDLE.replace("cdn.korail.com", "CDN.KORAIL.COM:443") + "?v=fixture",
+    }
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"stack": {"callFrames": [public_frame]}})
+    )
+    assert owner.diagnostics()[0].public_callsite == "login_submit"
+    assert owner.diagnostics()[0].initiator_public_frames[0].source_query_present is True
+
+
+@pytest.mark.parametrize(
+    ("line", "column"),
+    [
+        (-1, 30620),
+        (10000, 30620),
+        (True, 30620),
+        (2.0, 30620),
+        (2, -1),
+        (2, 6000001),
+        (2, True),
+        (2, 30620.0),
+        (2, float("inf")),
+        (2, float("nan")),
+        (2, 10**400),
+    ],
+)
+def test_invalid_public_coordinates_remain_unresolved_and_incomplete(line, column) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    public_frame = {**frame(), "lineNumber": line, "columnNumber": column}
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"stack": {"callFrames": [public_frame]}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.public_callsite == "unresolved"
+    assert row.initiator_complete is False
+    assert row.initiator_public_frames == ()
+    assert owner.snapshot().state == "posted"
+
+
+@pytest.mark.parametrize(("line", "column"), [(0, 0), (9999, 6000000), (2, 30619)])
+def test_generic_verified_coordinates_are_retained_without_role_inference(line, column) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    public_frame = {**frame(), "lineNumber": line, "columnNumber": column}
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"stack": {"callFrames": [public_frame]}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.public_callsite == "unresolved"
+    assert row.initiator_complete is True
+    assert row.initiator_public_frames[0].line_0based == line
+    assert row.initiator_public_frames[0].utf16_column_0based == column
+
+
+@pytest.mark.parametrize("count", [8, 9])
+def test_public_frame_budget_across_stack_parents_is_explicit(count: int) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    frames = [frame(name="callApi") for _ in range(count)]
+    stack = {"callFrames": frames[:4], "parent": {"callFrames": frames[4:]}}
+    owner.on_request_will_be_sent(with_initiator(request(), {"stack": stack}))
+    row = owner.diagnostics()[0]
+    assert len(row.initiator_public_frames) == min(count, 8)
+    assert row.initiator_complete is (count <= 8)
+    assert row.public_callsite == ("login_submit" if count <= 8 else "unresolved")
+
+
+def test_unresolved_parent_id_preserves_only_verified_coordinate_prefix() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    stack = {"callFrames": [frame()], "parentId": {"id": "fixture-private-stack-id"}}
+    owner.on_request_will_be_sent(with_initiator(request(), {"stack": stack}))
+    row = owner.diagnostics()[0]
+    assert row.initiator_complete is False
+    assert row.public_callsite == "unresolved"
+    assert len(row.initiator_public_frames) == 1
+    assert "fixture-private-stack-id" not in json.dumps(asdict(row))

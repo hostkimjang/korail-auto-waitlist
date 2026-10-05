@@ -690,7 +690,21 @@ v1.2.10에서는 요청 식별자 누락이나 관측 상한 초과를 뜻합니
 sidecar의 닫힌 `login submission unavailable at stage=login_response` 로그와 실제 반복 제출 시각을
 함께 확인하고, readiness나 과거 인증 시각만으로 로그인 복구를 판정하지 않습니다.
 
-v1.2.10 서버와 로컬의 전체 배포·health·실행 소스·화면 검증은 완료했습니다. 로컬은 검증 후
+`KORAIL login submission failure observation`은 실패 직후 같은 탭의 로그아웃 표시와
+요청별 닫힌 진단을 남깁니다. `header=present/absent/unavailable`은 당시 표시 상태이며,
+원래 실패를 성공으로 바꾸지 않습니다. `public_callsite`는 확인된 공개 번들의 정확한
+호출 위치에만 맞춥니다. 공개 파일은 검증한 CDN host·port·path로 비교하고 query 원문은
+버립니다. `initiator_public_frames`에는 공개 source ID·query 존재·줄·UTF-16 열만 최대
+8개 남기며 잘림·잘못된 좌표는 불완전한 initiator로 처리합니다.
+`path_family=business_dynamic`이나 `handleLogin` 이름만으로
+자격증명 요청을 확정하지 않습니다. `terminal`은 HTTP 성공 여부와 별도로 통신 완료·
+실패·미완료를 나타냅니다. `evidence_complete=false`나 불완전한 initiator에는 역할
+추정을 적용하지 않습니다. 로그의 요청 묶음 500을 실제 로그인 endpoint의 500으로
+단정하지 말고, 회원 통합 확인 같은 후속 요청과 구분합니다. 진단은 URL·query를
+메모리에서 분류한 뒤 원문을 버리고 본문·쿠키를 읽거나 보존하지 않습니다.
+별도 인증 GET·로그인 재제출을 만들지 않습니다.
+
+이전 v1.2.10 배포에서 서버와 로컬의 전체 배포·health·실행 소스·화면 검증은 완료했습니다. 로컬은 검증 후
 전체 중지·실행 서비스 0개를 유지합니다. 서버는 개별 입력 비교 뒤 전체 프로필을 강제 재생성해
 12개 상시 서비스의 정상 상태와 migration·log-init 종료 0을 확인하고 운영을 복구했습니다.
 공식 인증·좌석 조회·승인된 예약은 아직 복구되지 않았습니다.

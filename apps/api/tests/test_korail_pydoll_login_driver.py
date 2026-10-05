@@ -147,7 +147,8 @@ async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
 
     async def execute(script: str, **kwargs: object) -> dict[str, object]:
         assert kwargs == {"return_by_value": True, "await_promise": True, "timeout": 1000}
-        completed = subprocess.run(
+        completed = await asyncio.to_thread(
+            subprocess.run,
             [node, "-e", harness],
             input=json.dumps({"script": script, "status": status, "mime": mime, "body": body}),
             text=True,
@@ -632,6 +633,157 @@ async def test_submission_failure_is_source_unavailable_and_never_auth_required(
     submit.assert_awaited_once()
     probe.assert_not_awaited()
     assert tab.callbacks == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header_outcome", ["present", "absent", "unavailable", "timeout"])
+@pytest.mark.parametrize("in_place", [False, True])
+async def test_failure_observes_existing_header_before_disposal_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    header_outcome: str,
+    in_place: bool,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    probe = AsyncMock()
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+    session._login_driver._timeout_seconds = 0.05
+    caplog.set_level("INFO")
+
+    async def existing_header() -> bool:
+        assert tab.callbacks, "Failure evidence must be read before the observer is disposed"
+        if header_outcome == "unavailable":
+            raise RuntimeError("fixture-private-dom-error")
+        if header_outcome == "timeout":
+            await asyncio.sleep(60)
+        return header_outcome == "present"
+
+    header = AsyncMock(side_effect=existing_header)
+
+    async def failed() -> None:
+        tab.request()
+        tab.response(500)
+        tab.finish()
+        monkeypatch.setattr(session, "_has_authenticated_header", header)
+
+    submit.side_effect = failed
+    with pytest.raises(PydollLoginResponseUnavailable) as error:
+        if in_place:
+            await session._authenticate_in_place(_credential())
+        else:
+            await session.ensure_authenticated(_credential())
+    assert error.value.submission_status == 500
+    header.assert_awaited_once()
+    submit.assert_awaited_once()
+    probe.assert_not_awaited()
+    assert tab.go_to.await_count == (0 if in_place else 1)
+    assert tab.callbacks == {}
+    expected_header = "unavailable" if header_outcome == "timeout" else header_outcome
+    observations = [
+        row.getMessage()
+        for row in caplog.records
+        if "login submission failure observation" in row.getMessage()
+    ]
+    assert len(observations) == 1
+    assert f"header={expected_header}" in observations[0]
+    assert '"status": 500' in observations[0]
+    for private_value in (
+        "fixture-account",
+        "fixture-password",
+        "fixture-private-dom-error",
+        "dynamic-login",
+    ):
+        assert private_value not in observations[0]
+
+
+@pytest.mark.asyncio
+async def test_failure_log_serializes_only_verified_public_frame_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    probe = AsyncMock()
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+    caplog.set_level("INFO")
+
+    async def failed() -> None:
+        tab.emit(
+            "request",
+            {
+                "requestId": "fixture-private-request-id",
+                "type": "XHR",
+                "request": {
+                    "method": "POST",
+                    "url": "https://www.korail.com/fixture-private-path?fixture-private-query",
+                },
+                "initiator": {
+                    "stack": {
+                        "callFrames": [
+                            {
+                                "functionName": "fixture-private-function",
+                                "url": "https://cdn.korail.com/bundle/"
+                                "bundle.38e6dfeb5a3af0094a69.js?fixture-private-script-query",
+                                "lineNumber": 2,
+                                "columnNumber": 30620,
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+        tab.response(500, request_id="fixture-private-request-id")
+        tab.finish("fixture-private-request-id")
+
+    submit.side_effect = failed
+    with pytest.raises(PydollLoginResponseUnavailable):
+        await session.ensure_authenticated(_credential())
+    observation = next(
+        row.getMessage()
+        for row in caplog.records
+        if "login submission failure observation" in row.getMessage()
+    )
+    rows = json.loads(observation.partition("requests=")[2])
+    assert rows[0]["public_callsite"] == "login_submit"
+    assert rows[0]["initiator_public_frames"] == [
+        {
+            "source_id": "verified_main_bundle",
+            "source_query_present": True,
+            "line_0based": 2,
+            "utf16_column_0based": 30620,
+        }
+    ]
+    assert "fixture-private" not in observation
+    assert "https://" not in observation
+    probe.assert_not_awaited()
+    submit.assert_awaited_once()
+    assert tab.callbacks == {}
+
+
+@pytest.mark.asyncio
+async def test_failure_observation_cancellation_still_releases_owned_listeners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    reading = asyncio.Event()
+
+    async def existing_header() -> bool:
+        reading.set()
+        await asyncio.Event().wait()
+        return False
+
+    async def failed() -> None:
+        tab.request()
+        tab.response(500)
+        monkeypatch.setattr(session, "_has_authenticated_header", existing_header)
+
+    submit.side_effect = failed
+    task = asyncio.create_task(session.ensure_authenticated(_credential()))
+    await asyncio.wait_for(reading.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert tab.callbacks == {}
+    submit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

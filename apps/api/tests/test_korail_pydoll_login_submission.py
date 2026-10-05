@@ -872,3 +872,184 @@ def test_unresolved_parent_id_preserves_only_verified_coordinate_prefix() -> Non
     assert row.public_callsite == "unresolved"
     assert len(row.initiator_public_frames) == 1
     assert "fixture-private-stack-id" not in json.dumps(asdict(row))
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("script", "script"),
+        ("parser", "parser"),
+        ("preload", "preload"),
+        ("SignedExchange", "SignedExchange"),
+        ("preflight", "preflight"),
+        ("other", "other"),
+        ("signedexchange", "unknown"),
+        ("fixture-private-kind", "unknown"),
+        (None, "unknown"),
+        ([], "unknown"),
+        ("x" * 1000, "unknown"),
+    ],
+)
+def test_initiator_kind_is_a_closed_cdp_enum(kind, expected) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"type": kind, "stack": {"callFrames": []}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.initiator_kind == expected
+    assert row.initiator_frame_count == 0
+    assert row.initiator_source_scopes == ()
+    assert row.initiator_complete is True
+    assert "fixture-private-kind" not in json.dumps(asdict(row))
+
+
+@pytest.mark.parametrize(
+    ("url", "scope"),
+    [
+        (PUBLIC_BUNDLE + "?fixture-private-query", "verified_main_bundle"),
+        ("https://cdn.korail.com/unknown-main.js", "official_cdn"),
+        ("https://CDN.KORAIL.COM:443/unknown-main.js", "official_cdn"),
+        ("https://www.korail.com/source.js", "korail_origin"),
+        ("https://www.korail.com:443/source.js", "korail_origin"),
+        ("https://www.korail.com:444/source.js", "empty_or_invalid"),
+        ("https://cdn.korail.com:444/source.js", "empty_or_invalid"),
+        ("http://www.korail.com/source.js", "empty_or_invalid"),
+        ("https://fixture@cdn.korail.com/source.js", "empty_or_invalid"),
+        ("https://cdn.korail.com:invalid/source.js", "empty_or_invalid"),
+        ("https://cdn.korail.com.evil.example/source.js", "third_party"),
+        ("https://fixture-third-party.example/private-path?fixture-private-query", "third_party"),
+        ("http://fixture-third-party.example/source.js", "third_party"),
+        ("data:fixture-private-source", "empty_or_invalid"),
+        ("", "empty_or_invalid"),
+        (None, "empty_or_invalid"),
+    ],
+)
+def test_initiator_scope_never_preserves_url_or_infers_login_role(url, scope) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    observed = {**frame(100, name="callApi"), "url": url}
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"type": "script", "stack": {"callFrames": [observed]}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.initiator_kind == "script"
+    assert row.initiator_frame_count == 1
+    assert row.initiator_source_scopes == (scope,)
+    assert row.public_callsite == "unresolved"
+    assert row.initiator_handle_login is False
+    encoded = json.dumps(asdict(row))
+    for private_value in (
+        "fixture-private-query",
+        "private-path",
+        "fixture-third-party.example",
+        "source.js",
+    ):
+        assert private_value not in encoded + repr(vars(owner))
+
+
+def test_empty_stack_and_unregistered_cdn_script_are_distinct() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"type": "script", "stack": {"callFrames": []}})
+    )
+    other = {**frame(name="callApi"), "url": "https://cdn.korail.com/unknown-main.js"}
+    owner.on_request_will_be_sent(
+        with_initiator(request("second"), {"type": "script", "stack": {"callFrames": [other]}})
+    )
+    empty, unregistered = owner.diagnostics()
+    assert (empty.initiator_frame_count, empty.initiator_source_scopes) == (0, ())
+    assert (unregistered.initiator_frame_count, unregistered.initiator_source_scopes) == (
+        1,
+        ("official_cdn",),
+    )
+    assert empty.initiator_public_frames == unregistered.initiator_public_frames == ()
+    assert empty.public_callsite == unregistered.public_callsite == "unresolved"
+
+
+@pytest.mark.parametrize("count", [64, 65])
+def test_frame_count_is_actual_bounded_work_and_scopes_are_unique(count: int) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    unknown = {**frame(name="callApi"), "url": "https://cdn.korail.com/unknown-main.js"}
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"type": "script", "stack": {"callFrames": [unknown] * count}})
+    )
+    row = owner.diagnostics()[0]
+    # Oversized nodes are rejected before visiting any of their frames.
+    assert row.initiator_frame_count == (64 if count == 64 else 0)
+    assert row.initiator_complete is (count == 64)
+    assert row.initiator_source_scopes == (("official_cdn",) if count == 64 else ())
+
+
+def test_malformed_frame_and_parent_id_keep_counted_prefix_only() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(
+        with_initiator(request(), {"type": "script", "stack": {"callFrames": [frame(), None]}})
+    )
+    row = owner.diagnostics()[0]
+    assert row.initiator_frame_count == 2
+    assert row.initiator_source_scopes == ("verified_main_bundle", "empty_or_invalid")
+    assert row.initiator_complete is False
+    owner.on_request_will_be_sent(
+        with_initiator(
+            request("second"),
+            {
+                "type": "script",
+                "stack": {"callFrames": [frame()], "parentId": {"id": "fixture-private-id"}},
+            },
+        )
+    )
+    second = owner.diagnostics()[1]
+    assert second.initiator_frame_count == 1
+    assert second.initiator_source_scopes == ("verified_main_bundle",)
+    assert second.initiator_complete is False
+
+
+@pytest.mark.parametrize(
+    ("mime", "expected"),
+    [
+        ("application/json", "json"),
+        ("Application/JSON; charset=UTF-8", "json"),
+        ("application/problem+json", "json"),
+        ("text/json", "json"),
+        (" text/html ; charset=fixture-private-media", "html"),
+        ("application/xhtml+xml", "html"),
+        ("text/plain", "text"),
+        ("text/css", "text"),
+        ("application/octet-stream", "other"),
+        ("image/png", "other"),
+        (None, "unknown"),
+        ([], "unknown"),
+        ("", "unknown"),
+        ("invalid", "unknown"),
+        ("text/", "unknown"),
+        ("/html", "unknown"),
+        ("text/html/extra", "unknown"),
+        ("text/ht\nml", "unknown"),
+        ("x" * 257, "unknown"),
+    ],
+)
+def test_response_media_is_closed_bounded_and_independent_of_http_failure(mime, expected) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request())
+    event = response(500)
+    params = event["params"]
+    assert isinstance(params, dict)
+    data = params["response"]
+    assert isinstance(data, dict)
+    data["mimeType"] = mime
+    data["headers"] = {"Content-Type": "fixture-private-header"}
+    owner.on_response_received(event)
+    owner.on_loading_finished(terminal())
+    row = owner.diagnostics()[0]
+    assert row.response_media == expected
+    assert (row.status, row.terminal) == (500, "completed")
+    assert owner.snapshot().failure == "http_error"
+    assert owner.snapshot().safe_to_probe is False
+    encoded = json.dumps(asdict(row)) + repr(vars(owner))
+    assert "fixture-private-media" not in encoded
+    assert "fixture-private-header" not in encoded

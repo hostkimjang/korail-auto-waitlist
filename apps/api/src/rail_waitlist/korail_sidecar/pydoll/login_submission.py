@@ -22,6 +22,13 @@ type LoginRequestPathFamily = Literal[
 ]
 type LoginRequestTerminal = Literal["completed", "failed", "incomplete"]
 type LoginPublicCallsite = Literal["login_submit", "integration_check", "unresolved", "mixed"]
+type LoginInitiatorKind = Literal[
+    "script", "parser", "preload", "SignedExchange", "preflight", "other", "unknown"
+]
+type LoginInitiatorSourceScope = Literal[
+    "verified_main_bundle", "korail_origin", "official_cdn", "third_party", "empty_or_invalid"
+]
+type LoginResponseMedia = Literal["json", "html", "text", "other", "unknown"]
 
 # Public bundle SHA-256: b7a06c687d15747f2a13ef11eadacd7a8188d361a4d28261282891d0a7d8f319.
 # These zero-based UTF-16 spans identify calls in that exact bundle only. They are
@@ -47,11 +54,98 @@ class LoginRequestDiagnostic:
     path_family: LoginRequestPathFamily
     initiator_handle_login: bool
     initiator_complete: bool
+    initiator_kind: LoginInitiatorKind = "unknown"
+    initiator_frame_count: int = 0
+    initiator_source_scopes: tuple[LoginInitiatorSourceScope, ...] = ()
     public_callsite: LoginPublicCallsite = "unresolved"
     initiator_public_frames: tuple[LoginPublicFrameDiagnostic, ...] = ()
     status: int | None = None
     terminal: LoginRequestTerminal = "incomplete"
     evidence_complete: bool = True
+    response_media: LoginResponseMedia = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class _InitiatorDiagnostic:
+    kind: LoginInitiatorKind = "unknown"
+    frame_count: int = 0
+    source_scopes: tuple[LoginInitiatorSourceScope, ...] = ()
+    handle_login: bool = False
+    complete: bool = False
+    callsite: LoginPublicCallsite = "unresolved"
+    public_frames: tuple[LoginPublicFrameDiagnostic, ...] = ()
+
+
+def _initiator_kind(value: object) -> LoginInitiatorKind:
+    match value:
+        case "script":
+            return "script"
+        case "parser":
+            return "parser"
+        case "preload":
+            return "preload"
+        case "SignedExchange":
+            return "SignedExchange"
+        case "preflight":
+            return "preflight"
+        case "other":
+            return "other"
+        case _:
+            return "unknown"
+
+
+def _source_scope(url: object) -> LoginInitiatorSourceScope:
+    """An origin category describes source provenance, never a script or login role."""
+    if not isinstance(url, str) or len(url) > 16384 or any(ord(char) < 33 for char in url):
+        return "empty_or_invalid"
+    try:
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return "empty_or_invalid"
+        port = parsed.port
+        if parsed.hostname in {"www.korail.com", "cdn.korail.com"}:
+            if parsed.scheme != "https" or port not in {None, 443}:
+                return "empty_or_invalid"
+            if parsed.hostname == "www.korail.com":
+                return "korail_origin"
+            if parsed.path == _PUBLIC_CALLSITE_BUNDLE_PATH and "#" not in url:
+                return "verified_main_bundle"
+            return "official_cdn"
+    except ValueError:
+        return "empty_or_invalid"
+    return "third_party"
+
+
+def _response_media(value: object) -> LoginResponseMedia:
+    if not isinstance(value, str) or len(value) > 256:
+        return "unknown"
+    media = value.split(";", 1)[0].strip().lower()
+    major, separator, minor = media.partition("/")
+    if (
+        not separator
+        or not major
+        or not minor
+        or "/" in minor
+        or any(
+            not (char.isascii() and (char.isalnum() or char in "!#$&^_.+-"))
+            for char in major + minor
+        )
+    ):
+        return "unknown"
+    if media in {"application/json", "text/json"} or (
+        major == "application" and minor.endswith("+json")
+    ):
+        return "json"
+    if media in {"text/html", "application/xhtml+xml"}:
+        return "html"
+    if major == "text":
+        return "text"
+    return "other"
 
 
 def _path_family(url: str) -> LoginRequestPathFamily:
@@ -95,50 +189,63 @@ def _public_frame_diagnostic(
     return LoginPublicFrameDiagnostic("verified_main_bundle", "?" in url, line, column), True
 
 
-def _initiator_diagnostics(
-    value: object,
-) -> tuple[bool, bool, LoginPublicCallsite, tuple[LoginPublicFrameDiagnostic, ...]]:
+def _initiator_diagnostics(value: object) -> _InitiatorDiagnostic:
     """Inspect only bounded CDP stack structure and retain no frame or function text."""
 
     if not isinstance(value, Mapping):
-        return False, False, "unresolved", ()
+        return _InitiatorDiagnostic()
+    kind = _initiator_kind(value.get("type"))
     stack = value.get("stack")
     if stack is None:
-        return False, False, "unresolved", ()
+        return _InitiatorDiagnostic(kind=kind)
     found = False
     login_call = False
     integration_call = False
     seen: set[int] = set()
     frame_count = 0
     public_frames: list[LoginPublicFrameDiagnostic] = []
+    source_scopes: list[LoginInitiatorSourceScope] = []
+
+    def result(
+        complete: bool, callsite: LoginPublicCallsite = "unresolved"
+    ) -> _InitiatorDiagnostic:
+        return _InitiatorDiagnostic(
+            kind, frame_count, tuple(source_scopes), found, complete, callsite, tuple(public_frames)
+        )
+
     for _ in range(8):
         if not isinstance(stack, Mapping) or id(stack) in seen:
-            return found, False, "unresolved", tuple(public_frames)
+            return result(False)
         seen.add(id(stack))
         frames = stack.get("callFrames")
         if not isinstance(frames, list) or len(frames) > 64 - frame_count:
-            return found, False, "unresolved", tuple(public_frames)
+            return result(False)
         for frame in frames:
+            frame_count += 1
             if not isinstance(frame, Mapping):
-                return found, False, "unresolved", tuple(public_frames)
+                if "empty_or_invalid" not in source_scopes:
+                    source_scopes.append("empty_or_invalid")
+                return result(False)
+            scope = _source_scope(frame.get("url"))
+            if scope not in source_scopes:
+                source_scopes.append(scope)
             name = frame.get("functionName")
             if not isinstance(name, str) or len(name) > 256:
-                return found, False, "unresolved", tuple(public_frames)
+                return result(False)
             found = found or name == "handleLogin"
             public_frame, complete = _public_frame_diagnostic(frame)
             if not complete:
-                return found, False, "unresolved", tuple(public_frames)
+                return result(False)
             if public_frame is not None:
                 if len(public_frames) >= 8:
-                    return found, False, "unresolved", tuple(public_frames)
+                    return result(False)
                 public_frames.append(public_frame)
                 if public_frame.line_0based == 2:
                     column = public_frame.utf16_column_0based
                     login_call = login_call or 30620 <= column < 30652
                     integration_call = integration_call or 24951 <= column < 24993
-        frame_count += len(frames)
         if stack.get("parentId") is not None:
-            return found, False, "unresolved", tuple(public_frames)
+            return result(False)
         parent = stack.get("parent")
         if parent is None:
             callsite: LoginPublicCallsite = (
@@ -150,9 +257,9 @@ def _initiator_diagnostics(
                 if integration_call
                 else "unresolved"
             )
-            return found, True, callsite, tuple(public_frames)
+            return result(True, callsite)
         stack = parent
-    return found, False, "unresolved", tuple(public_frames)
+    return result(False)
 
 
 class PydollLoginResponseUnavailable(BrowserSourceUnavailable):
@@ -329,17 +436,18 @@ class PydollLoginSubmission:
                 return
             url = request.get("url")
             assert isinstance(url, str)
-            initiator_found, initiator_complete, callsite, public_frames = _initiator_diagnostics(
-                params.get("initiator")
-            )
+            initiator = _initiator_diagnostics(params.get("initiator"))
             self._diagnostics.append(
                 LoginRequestDiagnostic(
                     sequence=len(self._diagnostics) + 1,
                     path_family=_path_family(url),
-                    initiator_handle_login=initiator_found,
-                    initiator_complete=initiator_complete,
-                    public_callsite=callsite,
-                    initiator_public_frames=public_frames,
+                    initiator_handle_login=initiator.handle_login,
+                    initiator_complete=initiator.complete,
+                    initiator_kind=initiator.kind,
+                    initiator_frame_count=initiator.frame_count,
+                    initiator_source_scopes=initiator.source_scopes,
+                    public_callsite=initiator.callsite,
+                    initiator_public_frames=initiator.public_frames,
                     evidence_complete=self._diagnostic_evidence_complete
                     and params.get("redirectResponse") is None,
                 )
@@ -357,6 +465,10 @@ class PydollLoginSubmission:
             return
         index = self._diagnostic_index(params)
         response = params.get("response")
+        if isinstance(response, Mapping):
+            self._diagnostics[index] = replace(
+                self._diagnostics[index], response_media=_response_media(response.get("mimeType"))
+            )
         if (
             not isinstance(response, Mapping)
             or params.get("type") not in ("XHR", "Fetch")

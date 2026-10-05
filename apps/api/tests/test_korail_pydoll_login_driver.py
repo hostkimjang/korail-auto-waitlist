@@ -744,6 +744,10 @@ async def test_failure_log_serializes_only_verified_public_frame_coordinates(
     )
     rows = json.loads(observation.partition("requests=")[2])
     assert rows[0]["public_callsite"] == "login_submit"
+    assert rows[0]["initiator_kind"] == "unknown"
+    assert rows[0]["initiator_frame_count"] == 1
+    assert rows[0]["initiator_source_scopes"] == ["verified_main_bundle"]
+    assert rows[0]["response_media"] == "unknown"
     assert rows[0]["initiator_public_frames"] == [
         {
             "source_id": "verified_main_bundle",

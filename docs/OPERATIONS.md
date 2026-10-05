@@ -696,6 +696,10 @@ sidecar의 닫힌 `login submission unavailable at stage=login_response` 로그�
 호출 위치에만 맞춥니다. 공개 파일은 검증한 CDN host·port·path로 비교하고 query 원문은
 버립니다. `initiator_public_frames`에는 공개 source ID·query 존재·줄·UTF-16 열만 최대
 8개 남기며 잘림·잘못된 좌표는 불완전한 initiator로 처리합니다.
+`initiator_kind`·`initiator_frame_count`·`initiator_source_scopes`는 빈 스택과 등록되지
+않은 스크립트를 구분하는 닫힌 관측입니다. 출처는 검증한 공개 번들·코레일 origin·
+공식 CDN·제3자·빈 값/불명 범위만 기록합니다. `response_media`는 CDP MIME에서
+JSON·HTML·텍스트·기타·불명만 분류하며 응답 본문이나 header를 읽지 않습니다.
 `path_family=business_dynamic`이나 `handleLogin` 이름만으로
 자격증명 요청을 확정하지 않습니다. `terminal`은 HTTP 성공 여부와 별도로 통신 완료·
 실패·미완료를 나타냅니다. `evidence_complete=false`나 불완전한 initiator에는 역할

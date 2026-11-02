@@ -30,8 +30,16 @@
   먼저 호출했고 `outcome=logged_out`(`restored_session present=false`)이었음. 직전 로그인 13:09:51 뒤 약 1시간 반
   미사용 세션이 서버에서 만료된 표본. 제출 기록이 아직 없어 한 번 제출했고 14:50:16 차단 없이 인증됐으며, Redis
   제출 시각 key 생성(ACL 정상)을 확인
-- [ ] 남은 운영 확인: 재시작 직후 `present=true`로 제출 없이 복구되는 경우, 간격 미달 시 `login submission deferred`
-  뒤 한 번만 제출되는지, 보호 뒤 첫 재시도가 1800초 뒤인지 adapter 로그로 확인
+- [x] 간격 미달 미룸과 보호 뒤 재시도 확인(11월 2일): 17:51:25 재시작 직후 `login submission deferred
+  retry_after_seconds=145` 뒤 17:54:18에 한 번만 제출했고, 16:50:44 차단 뒤 첫 재시도는 1800초 이상 지난 17:23:46
+  (인증 성공)이었음
+- [x] 1.2.19 재배포(11월 2일 17:50 KST): PR #2(HTTPX2, Pydoll 빈 loopback 포트 선택)를 합친 통합 소스(전체 pytest
+  5495 passed)로 experimental-rail 전체를 build하고 `scripts/ops.ps1 experimental`의 단계적 종료 뒤 재생성.
+  migration·log-init 종료 0, 장기 서비스 12개 healthy, 웹 번들 1.2.19 확인. 재시작 직후 복원 세션은 17:23:51 로그인
+  뒤 27분 유휴로 `logged_out`이었고, 30분 하한 뒤 제출한 17:54:21 로그인이 `macro_err1`로 차단돼 감시 3건이 다시
+  계정 확인 대기로 바뀜(keepalive가 없던 1.2.18 세션이라 재시작 로그인은 피할 수 없었음)
+- [ ] 남은 운영 확인: 재시작 직후 `present=true`로 제출 없이 복구되는 경우를 adapter 로그로 확인(keepalive가 세션을
+  유지하면 재시작 때 복원 세션이 살아 있어야 함)
 - [x] 11월 2일 12:23 예약의 새 로그인 원인 조사(Qwen 협업): keepalive 세션은 로컬 기준 재사용 가능했고, 예약 actor의
   공식 세션 확인이 재사용을 거부해 세션을 폐기한 뒤 새 Chrome에서 로그인함. 거부가 서버 측 유휴 만료인지 판독 불가인지는
   정상 확인 결과가 로그에 남지 않아 미확정이라, 모든 확인 결과를 `login session probe completed outcome=...`로 기록하도록 보완

@@ -72,8 +72,9 @@ class Settings(BaseSettings):
     korail_browser_adapter_timeout_seconds: float = Field(default=600, ge=30, le=600)
     # Idle seconds after which the API session manager probes the KORAIL login session
     # (loginCheck, no credential submission) while an automatic-booking watch is active.
-    # 0 disables it; otherwise 300..3600.
-    korail_session_keepalive_seconds: int = 900
+    # 0 disables it; otherwise 300..3600. The default stays under KORAIL's documented
+    # ten-minute idle logout so each probe still finds the session alive.
+    korail_session_keepalive_seconds: int = 300
     webpush_vapid_private_key: str | None = None
     webpush_vapid_public_key: str | None = None
     webpush_vapid_subject: str = "mailto:admin@localhost"

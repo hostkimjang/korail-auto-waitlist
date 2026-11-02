@@ -431,16 +431,20 @@ API는 시작할 때 활성 철도 계정의 로그인 session을 예열하고, 
 
 코레일 서버는 로컬 재사용 기한(최대 7200초)보다 먼저 유휴 로그인 세션을 만료시킵니다. 11월 2일 재시작 직후
 약 1시간 반 미사용 세션의 `loginCheck`가 `outcome=logged_out`이었고, 밤사이 약 110분 주기 갱신 6회도 모두
-실제 로그인 제출로 끝났습니다. 그래서 API 세션 관리자는 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 900초,
+실제 로그인 제출로 끝났습니다. 그래서 API 세션 관리자는 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 300초,
 0 또는 300~3600, 0이면 끔)마다 공식 `loginCheck`만으로 세션을 확인합니다. 자격증명은 제출하지 않으며, 자동
 예약(`RESERVE_ONCE_BEFORE_PAYMENT`) KORAIL 감시가 `scheduled`·`watching`·`official_waitlist`·`seat_found`·
 `cooldown` 중 하나로 있을 때만 확인합니다. 양성이면 같은 session의 재사용 기한이 늘어나 예약 직전 새 로그인이
 필요 없고, 로그아웃이면 위 갱신과 같이 새 로그인으로 바꾸되 아래 제출 간격 하한 안이면 미룹니다. api 로그의
 `Provider runtime session keepalive due provider=korail last_verified_age_seconds=N`(확인이 실제로 시작될 때만
 기록)과 adapter 로그의
-`KORAIL login session probe completed outcome=...`로 확인합니다. 서버 만료 시간 자체는 아직 측정하지 않았으므로,
-keepalive 뒤에도 `outcome=logged_out`이 반복되면 값을 300~600초로 낮춰 봅니다. 확인 요청은 세션당 시간당 약
-4회(기본값)이며 로그인 제출이 아니므로 `macro_err1` 간격 판정과는 별개로 봅니다(운영 미검증).
+`KORAIL login session probe completed outcome=...`로 확인합니다. 기본값 300초는 레츠코레일 로그인 안내의
+"10분 동안 입력이 없으면 로그아웃"보다 짧게 잡은 값입니다. 현재 예매 화면 번들에는 클라이언트 쪽 자동 로그아웃
+타이머가 없어 만료는 서버 쪽으로 보며, 세션 쿠키를 실은 `loginCheck`가 유휴 시간을 초기화한다고 가정합니다(운영
+미검증). 간격을 실제 만료보다 길게 두면 확인할 때마다 `logged_out`을 보고 새 로그인을 제출하므로 로그인 제출이
+오히려 늘어납니다. 300초에서도 `outcome=logged_out`이 반복되면 `loginCheck`가 세션을 연장하지 않는다는 뜻이므로
+값을 0으로 꺼 기존 갱신 주기로 되돌리고 원인을 확인합니다. 확인 요청은 세션당 시간당 약 12회(기본값)이며 로그인
+제출이 아니므로 `macro_err1` 간격 판정과는 별개로 봅니다(운영 미검증).
 
 갱신 임계값은 KORAIL과 SRT가 다릅니다. KORAIL은 재사용 기한이 `last_verified_at` 기준이고 예열이 성공할 때마다
 그 시각이 갱신되므로 남은 시간과 마지막 검증 경과로 재사용 창을 정확히 계산할 수 있습니다. 그 창의 25%를 쓰되

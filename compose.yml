@@ -191,7 +191,7 @@ services:
       <<: *api-environment
       APP_LOG_FILE: /logs/api/current.log
       APP_LOG_SERVICE: api
-      KORAIL_SESSION_KEEPALIVE_SECONDS: ${KORAIL_SESSION_KEEPALIVE_SECONDS:-900}
+      KORAIL_SESSION_KEEPALIVE_SECONDS: ${KORAIL_SESSION_KEEPALIVE_SECONDS:-300}
     depends_on:
       log-init:
         condition: service_completed_successfully

@@ -881,8 +881,9 @@ KORAIL prewarm은 같은 auth lock 안에서 기존 session을 공식 same-origi
 복구 예산을 소비하지 않으며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
 
 로컬 재사용 기한이 남았어도 코레일 서버는 유휴 로그인 세션을 먼저 만료시킵니다(11월 2일 약 1시간 반 미사용
-session의 `loginCheck`가 `logged_out`). 그래서 session manager는 KORAIL `READY` session의 마지막 공식 확인
-경과(`last_verified_age_seconds`)가 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 900초, 0이면 끔, 300~3600) 이상이고
+session의 `loginCheck`가 `logged_out`, 레츠코레일 로그인 안내는 10분 무입력 로그아웃). 그래서 session manager는
+KORAIL `READY` session의 마지막 공식 확인 경과(`last_verified_age_seconds`)가
+`KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 300초, 0이면 끔, 300~3600) 이상이고
 자동 예약 감시가 있으면 갱신 임계값과 별개로 같은 prewarm 경로를 호출합니다. 자동 예약 감시는
 `RESERVE_ONCE_BEFORE_PAYMENT` 정책의 KORAIL watch 중 `scheduled`·`watching`·`official_waitlist`·`seat_found`·
 `cooldown` 상태가 하나라도 있는지로 판단하며(`provider_account_management/session_keepalive.py`, keepalive가

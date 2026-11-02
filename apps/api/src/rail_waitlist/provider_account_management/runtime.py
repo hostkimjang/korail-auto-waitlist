@@ -97,8 +97,9 @@ class ProviderRuntimePrewarmRegistry:
         default_factory=dict
     )
     # KORAIL expires an idle login on the server well before the local reuse deadline
-    # (a session idle about 90 minutes answered loginCheck as logged out). Probing the
-    # official session at this interval keeps it alive without a credential submission.
+    # (its login guide documents a ten-minute idle logout; a session idle about 90 minutes
+    # answered loginCheck as logged out). Probing the official session at this interval
+    # keeps it alive without a credential submission.
     # 0 disables the probe; the API wires the configured value at startup.
     korail_session_keepalive_seconds: int = 0
     completed: bool = False

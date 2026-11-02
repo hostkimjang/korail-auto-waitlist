@@ -329,10 +329,10 @@ def test_test_upstream_override_rejects_arbitrary_internal_hosts():
         )
 
 
-def test_korail_session_keepalive_defaults_to_fifteen_minutes(monkeypatch):
+def test_korail_session_keepalive_defaults_to_five_minutes(monkeypatch):
     monkeypatch.delenv("KORAIL_SESSION_KEEPALIVE_SECONDS", raising=False)
 
-    assert Settings(_env_file=None).korail_session_keepalive_seconds == 900
+    assert Settings(_env_file=None).korail_session_keepalive_seconds == 300
 
 
 @pytest.mark.parametrize("value", ["0", "300", "3600"])
@@ -359,10 +359,10 @@ def test_korail_session_keepalive_default_is_synced_to_the_api_service():
 
     compose = (REPO_ROOT / "compose.yml").read_text(encoding="utf-8").replace("\r\n", "\n")
 
-    assert example_values["KORAIL_SESSION_KEEPALIVE_SECONDS"] == "900"
+    assert example_values["KORAIL_SESSION_KEEPALIVE_SECONDS"] == "300"
     # Only the API process runs the provider session manager.
-    assert compose.count("${KORAIL_SESSION_KEEPALIVE_SECONDS:-900}") == 1
+    assert compose.count("${KORAIL_SESSION_KEEPALIVE_SECONDS:-300}") == 1
     api_section = compose.split("\n  api:\n", 1)[1].split("\n  scheduler:\n", 1)[0]
-    assert "KORAIL_SESSION_KEEPALIVE_SECONDS: ${KORAIL_SESSION_KEEPALIVE_SECONDS:-900}" in (
+    assert "KORAIL_SESSION_KEEPALIVE_SECONDS: ${KORAIL_SESSION_KEEPALIVE_SECONDS:-300}" in (
         api_section
     )

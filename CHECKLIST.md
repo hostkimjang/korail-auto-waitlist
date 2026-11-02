@@ -45,14 +45,18 @@
 - [ ] 재배포 뒤 운영 확인: 로컬 판독 거부가 자연 발생하면 `confirmation_session_preserved` 뒤 새 로그인 제출 없이
   다음 공식 확인이 같은 세션으로 진행되는지 adapter 로그로 확인
 - [x] `login session probe completed outcome=logged_out`으로 서버 측 유휴 만료가 확인되면 예약 직전 재로그인을 줄이는 방안 검토:
-  API 세션 관리자가 KORAIL `READY` session의 마지막 공식 확인 뒤 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 900초,
+  API 세션 관리자가 KORAIL `READY` session의 마지막 공식 확인 뒤 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 300초,
   0 또는 300~3600)가 지나면 자격증명 제출 없이 `loginCheck`로 확인해 세션을 유지. 자동 예약 감시가 활성일 때만
   확인하고(감시 조회 실패 때는 그 tick만 건너뛰고 앞선 실패의 재시도 대기 유지), 로그아웃이면 기존처럼 제출 간격
   하한을 지키는 BACKGROUND 로그인으로 교체. 판독 불가 시 세션 보존은
   예약 경로와 갱신 경로의 구분 계약이 없어 이번에는 구현하지 않음. 관련 회귀 테스트 통과
+- [x] 11월 2일 16:50 재로그인 차단 조사: 14:50 로그인 뒤 약 2시간 유휴로 `loginCheck`가 `logged_out`이었고, 이어진
+  BACKGROUND 로그인이 `macro_err1`로 차단돼 감시 3건이 계정 확인 대기로 바뀜. 하루 동안 차단 7회 중 3회가 약 2시간
+  주기 자동 갱신, 2회가 차단 15~17분 뒤 재시도에서 남. 레츠코레일 안내의 10분 무입력 로그아웃과 현재 예매 번들에
+  클라이언트 자동 로그아웃 타이머가 없다는 점을 근거로 keepalive 기본값을 900초에서 300초로 낮춤
 - [ ] 운영 확인: 재배포 뒤 api의 `session keepalive due` 다음 adapter `probe completed outcome=authenticated`가
-  15분 주기로 이어지는지, 예약 직전 새 로그인과 하루 로그인 제출 수가 줄었는지, keepalive 뒤에도
-  `outcome=logged_out`이 나오면 서버 만료가 900초보다 짧은지 adapter 로그로 확인
+  5분 주기로 이어지는지, 예약 직전 새 로그인과 하루 로그인 제출 수가 줄었는지 확인. 300초에서도
+  `outcome=logged_out`이 반복되면 `loginCheck`가 세션을 연장하지 않는 것이므로 0으로 끄고 원인 확인
 - [x] 조회 제한 대기 단축: KORAIL 공통 대기의 보호·호출 제한 900초 하한을 없애고
   `SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS`(기본 60초)·`SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS`(기본 300초)를
   sidecar·API·예약 실행 경로에 같은 값으로 연결. 계정 보호 정지는 무기한 중단 대신 60→120→240→300초

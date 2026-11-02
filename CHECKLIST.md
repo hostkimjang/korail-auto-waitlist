@@ -26,9 +26,12 @@
   시각 뒤 `KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS`(기본 1800초) 안이면 fail-closed로 미룸. 예약·직접 계정
   확인 로그인은 미루지 않고 기록만 함. Redis ACL에 제출 시각 key 추가. 관련 회귀 테스트와 임시 Redis 7.4
   컨테이너의 ACL·Lua 실행 확인 통과
-- [ ] 재배포(Redis 포함 재생성) 뒤 운영 확인: adapter 재시작 직후 `stage=restored_session present=true`로 제출 없이
-  복구되는지, 음성일 때 간격 미달이면 `login submission deferred` 뒤 하한 경과 후 한 번만 제출되는지, 보호 뒤 첫
-  재시도가 1800초 뒤인지 adapter 로그로 확인
+- [x] 1.2.18 재배포(11월 2일 14:50 KST, Redis 포함 재생성) 직후 확인: 재시작 뒤 자격증명 제출 전에 `loginCheck`를
+  먼저 호출했고 `outcome=logged_out`(`restored_session present=false`)이었음. 직전 로그인 13:09:51 뒤 약 1시간 반
+  미사용 세션이 서버에서 만료된 표본. 제출 기록이 아직 없어 한 번 제출했고 14:50:16 차단 없이 인증됐으며, Redis
+  제출 시각 key 생성(ACL 정상)을 확인
+- [ ] 남은 운영 확인: 재시작 직후 `present=true`로 제출 없이 복구되는 경우, 간격 미달 시 `login submission deferred`
+  뒤 한 번만 제출되는지, 보호 뒤 첫 재시도가 1800초 뒤인지 adapter 로그로 확인
 - [x] 11월 2일 12:23 예약의 새 로그인 원인 조사(Qwen 협업): keepalive 세션은 로컬 기준 재사용 가능했고, 예약 actor의
   공식 세션 확인이 재사용을 거부해 세션을 폐기한 뒤 새 Chrome에서 로그인함. 거부가 서버 측 유휴 만료인지 판독 불가인지는
   정상 확인 결과가 로그에 남지 않아 미확정이라, 모든 확인 결과를 `login session probe completed outcome=...`로 기록하도록 보완

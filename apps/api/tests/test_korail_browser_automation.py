@@ -301,6 +301,8 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
             "session_reuse_ttl_seconds": 1800,
             "session_reuse_max_searches": 100,
             "manual_session_only": False,
+            # Only a dedicated automatic profile can restore an official session cookie.
+            "probe_restored_session": False,
         }
     ]
     asyncio.run(selected_probe())

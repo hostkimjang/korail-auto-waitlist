@@ -198,6 +198,7 @@ files = [
   "src/rail_waitlist/korail_sidecar/playwright/search_form.py",
   "src/rail_waitlist/korail_browser_automation.py",
   "src/rail_waitlist/korail_sidecar/pydoll/login_driver.py",
+  "src/rail_waitlist/korail_sidecar/pydoll/login_submission_pacing.py",
   "src/rail_waitlist/korail_pydoll_login_driver.py",
   "src/rail_waitlist/korail_sidecar/pydoll/page_safety.py",
   "src/rail_waitlist/korail_sidecar/pydoll/dom_interaction.py",

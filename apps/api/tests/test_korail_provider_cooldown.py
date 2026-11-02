@@ -6,6 +6,7 @@ import pytest
 
 from rail_waitlist.korail_sidecar.provider_cooldown import (
     KEY,
+    LOGIN_SUBMISSION_KEY,
     MemoryProviderCooldown,
     ProviderCooldownDeferred,
     RedisProviderCooldown,
@@ -178,6 +179,138 @@ async def test_redis_read_failure_defers_without_observation_or_writes() -> None
         await RedisProviderCooldown(redis).check()
     assert caught.value.reason == "cooldown_store_unavailable"
     assert redis.operations == ["read"]
+
+
+async def test_login_submission_interval_paces_only_inside_the_window() -> None:
+    now = [1_700_000_000.0]
+    hold = MemoryProviderCooldown(clock=lambda: now[0], login_submission_min_interval_seconds=1800)
+    await hold.admit_login_submission()
+    await hold.record_login_submission()
+    now[0] += 600
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await hold.admit_login_submission()
+    assert (caught.value.reason, caught.value.retry_after_seconds) == (
+        "provider_access_restricted",
+        1200,
+    )
+    # The pacing never opens the shared admission hold used by searches.
+    await hold.check()
+    now[0] += 1200
+    await hold.admit_login_submission()
+
+
+async def test_login_submission_interval_zero_never_defers() -> None:
+    hold = MemoryProviderCooldown()
+    await hold.record_login_submission()
+    await hold.admit_login_submission()
+
+
+@pytest.mark.parametrize("seconds", [-1, 7201, True, 1800.0])
+def test_login_submission_interval_setting_rejects_out_of_range_values(seconds) -> None:
+    with pytest.raises(ValueError):
+        MemoryProviderCooldown(login_submission_min_interval_seconds=seconds)
+
+
+class _LoginLedgerFixture:
+    """Closed fake of the login-submission script; never opens a Redis connection."""
+
+    def __init__(self) -> None:
+        self.now_ms = 1_700_000_000_000
+        self.submitted_at_ms: int | None = None
+        self.failed = False
+        self.row: object = None
+        self.operations: list[str] = []
+
+    async def execute_command(self, command, script, number, key, operation):
+        assert command == "EVAL"
+        assert number == 1 and key == LOGIN_SUBMISSION_KEY
+        assert "redis.call('TIME')" in script and "submitted_at_ms" in script
+        self.operations.append(operation)
+        if self.failed:
+            raise ConnectionError("fixture transport unavailable")
+        if self.row is not None:
+            return self.row
+        if operation == "record":
+            self.submitted_at_ms = self.now_ms
+            return 0
+        assert operation == "read"
+        if self.submitted_at_ms is None:
+            return -1
+        return max(0, self.now_ms - self.submitted_at_ms)
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_redis_login_submission_survives_an_adapter_restart() -> None:
+    redis = _LoginLedgerFixture()
+    await RedisProviderCooldown(
+        redis, login_submission_min_interval_seconds=1800
+    ).record_login_submission()
+    redis.now_ms += 1_770_500
+    restarted = RedisProviderCooldown(redis, login_submission_min_interval_seconds=1800)
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await restarted.admit_login_submission()
+    assert (caught.value.reason, caught.value.retry_after_seconds) == (
+        "provider_access_restricted",
+        30,
+    )
+    redis.now_ms += 29_500
+    await restarted.admit_login_submission()
+    assert redis.operations == ["record", "read", "read"]
+
+
+async def test_redis_login_submission_without_history_admits() -> None:
+    redis = _LoginLedgerFixture()
+    await RedisProviderCooldown(
+        redis, login_submission_min_interval_seconds=1800
+    ).admit_login_submission()
+    assert redis.operations == ["read"]
+
+
+async def test_redis_login_submission_disabled_interval_skips_the_store() -> None:
+    redis = _LoginLedgerFixture()
+    redis.failed = True
+    await RedisProviderCooldown(redis).admit_login_submission()
+    assert redis.operations == []
+
+
+@pytest.mark.parametrize("row", [None, -2, True, "0", [0]])
+async def test_redis_login_submission_unknown_history_fails_closed(row) -> None:
+    redis = _LoginLedgerFixture()
+    if row is None:
+        redis.failed = True
+    else:
+        redis.row = row
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await RedisProviderCooldown(
+            redis, login_submission_min_interval_seconds=1800
+        ).admit_login_submission()
+    assert caught.value.reason == "cooldown_store_unavailable"
+    assert caught.value.retry_after_seconds >= 60
+
+
+async def test_redis_login_submission_record_failure_still_paces_this_process() -> None:
+    redis = _LoginLedgerFixture()
+    hold = RedisProviderCooldown(redis, login_submission_min_interval_seconds=1800)
+    redis.failed = True
+    await hold.record_login_submission()
+    redis.failed = False
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await hold.admit_login_submission()
+    assert caught.value.reason == "provider_access_restricted"
+    assert 1790 <= caught.value.retry_after_seconds <= 1800
+
+
+def test_production_factory_reads_the_login_submission_interval(monkeypatch) -> None:
+    monkeypatch.setenv("KORAIL_PROVIDER_COOLDOWN_REDIS_URL", "redis://fixture.invalid:6379/0")
+    monkeypatch.delenv("KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS", raising=False)
+    assert build_provider_cooldown()._fallback.login_submission_interval_seconds == 1800
+    monkeypatch.setenv("KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS", "0")
+    assert build_provider_cooldown()._fallback.login_submission_interval_seconds == 0
+    monkeypatch.setenv("KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS", "7201")
+    with pytest.raises(RuntimeError, match="between 0 and 7200"):
+        build_provider_cooldown()
 
 
 async def test_failed_observation_write_preserves_real_failure_and_blocks_next_admission() -> None:

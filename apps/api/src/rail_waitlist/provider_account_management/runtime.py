@@ -66,10 +66,11 @@ class ProviderRuntimePrewarmRegistry:
     # Protection verdicts retry on an escalating schedule instead of stopping the account
     # until a human re-verifies it. KORAIL's macro detection scores login submissions by
     # their spacing: logins about 23 minutes apart were blocked half the time, while gaps
-    # of two hours or more passed. Retrying 1-5 minutes after a verdict only raises that
-    # score, so the first retry waits 15 minutes and doubling caps a persistent block at
-    # one login every two hours (900 -> 1800 -> 3600 -> 7200 seconds).
-    PROTECTION_INITIAL_BACKOFF_SECONDS = 900.0
+    # of two hours or more usually passed. After a verdict, 15-minute retries were blocked
+    # again in two of three samples while 30-minute retries passed in both, so the first
+    # retry waits 30 minutes and doubling caps a persistent block at one login every two
+    # hours (1800 -> 3600 -> 7200 seconds).
+    PROTECTION_INITIAL_BACKOFF_SECONDS = 1800.0
     PROTECTION_MAX_BACKOFF_SECONDS = 7200.0
     LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS = 5.0
     LOCAL_FAILURE_MAX_BACKOFF_SECONDS = 60.0

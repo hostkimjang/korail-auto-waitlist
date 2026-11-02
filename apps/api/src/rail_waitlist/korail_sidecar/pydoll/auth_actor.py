@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import sys
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
@@ -24,6 +25,7 @@ from .auth_contracts import (
     KorailLoginMethod as ContractKorailLoginMethod,
 )
 from .login_submission import PydollLoginResponseUnavailable
+from .login_submission_pacing import LoginSubmissionPurpose, login_submission_pacing
 from .page_contracts import PydollPageSnapshot
 
 __all__ = [
@@ -402,11 +404,26 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         if self._provider_cooldown is not None:
             await self._provider_cooldown.check()
 
+    def required_login_submissions(self) -> AbstractContextManager[None]:
+        """Record, never defer, logins a booking needs (including in-place logins).
+
+        They still count toward the interval that paces the next background login.
+        """
+
+        return login_submission_pacing(self._provider_cooldown, LoginSubmissionPurpose.REQUIRED)
+
     async def _authenticate(self, session: AuthSession, credential: KorailCredentialInput) -> bool:
         # ensure_authenticated_session checked admission before its synchronous
         # telemetry transition. No await intervenes before this official call.
         try:
-            authenticated = await session.ensure_authenticated(credential)
+            # Callers without their own scope (a reservation) must log in; record only.
+            with login_submission_pacing(self._provider_cooldown, LoginSubmissionPurpose.REQUIRED):
+                authenticated = await session.ensure_authenticated(credential)
+        except ProviderCooldownDeferred:
+            # A background login was paced before any credential left the process. Retire
+            # the unauthenticated browser so no caller mistakes it for a usable session.
+            await self.discard_with_state(KorailSessionActorState.STALE)
+            raise
         except PydollLoginResponseUnavailable as error:
             if self._provider_cooldown is not None:
                 await self._provider_cooldown.login_failed(
@@ -480,8 +497,9 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
 
     async def verify_credentials(self, credential: KorailCredentialInput) -> bool:
         await self.check_provider_cooldown()
-        async with self._lock:
-            return await self._verify_credentials_locked(credential)
+        with login_submission_pacing(self._provider_cooldown, LoginSubmissionPurpose.REQUIRED):
+            async with self._lock:
+                return await self._verify_credentials_locked(credential)
 
     async def _verify_credentials_locked(self, credential: KorailCredentialInput) -> bool:
         """Replace and authenticate one generation while the actor lock is held."""
@@ -582,6 +600,12 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
                 await lease.context.__aexit__(*sys.exc_info())
 
     async def prewarm_credentials(self, credential: KorailCredentialInput) -> bool:
+        # Startup prewarm and keepalive are deferrable: a credential submission inside the
+        # shared minimum interval is postponed, while an official session probe still runs.
+        with login_submission_pacing(self._provider_cooldown, LoginSubmissionPurpose.BACKGROUND):
+            return await self._prewarm_credentials(credential)
+
+    async def _prewarm_credentials(self, credential: KorailCredentialInput) -> bool:
         await self.check_provider_cooldown()
         async with self._lock:
             await self.check_provider_cooldown()

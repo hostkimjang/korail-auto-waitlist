@@ -16,7 +16,9 @@ from ..browser_contracts import (
     BrowserSourceUnavailable,
 )
 from ..browser_service_availability import BrowserProviderUnavailable as _BrowserProviderUnavailable
+from ..provider_cooldown import ProviderCooldownDeferred as _ProviderCooldownDeferred
 from . import login_submission as _submission_owner
+from . import login_submission_pacing as _pacing
 from .auth_contracts import KorailCredentialInput, KorailLoginMethod
 from .page_contracts import PydollPageSnapshot
 
@@ -162,6 +164,7 @@ class PydollLoginDomDriver:
             [], _contextlib.AbstractAsyncContextManager[_submission_owner.PydollLoginSubmission]
         ],
         manual_session_only: bool = False,
+        probe_restored_session: bool = False,
     ) -> None:
         self._port = port
         self._page_url = page_url
@@ -181,6 +184,7 @@ class PydollLoginDomDriver:
         self._event_logger = event_logger
         self._observe_submission = observe_submission
         self._manual_session_only = manual_session_only
+        self._probe_restored_session = probe_restored_session
         self._submission_context: (
             _contextlib.AbstractAsyncContextManager[_submission_owner.PydollLoginSubmission] | None
         ) = None
@@ -290,6 +294,20 @@ class PydollLoginDomDriver:
                 attempt.post_submit_authenticated = True
                 return await self._port._confirm_authenticated_search(attempt)
             raise BrowserSourceUnavailable("manual_login_required")
+        if self._probe_restored_session and await self._restored_session_is_authenticated():
+            attempt.post_submit_check_attempted = True
+            attempt.post_submit_authenticated = True
+            return await self._port._confirm_authenticated_search(attempt)
+        # Only a credential submission is paced; the official probe above sends none.
+        try:
+            await _pacing.admit_login_submission()
+        except _ProviderCooldownDeferred as deferred:
+            self._event_logger.info(
+                "KORAIL login submission deferred reason=%s retry_after_seconds=%s",
+                deferred.reason,
+                deferred.retry_after_seconds,
+            )
+            raise
         await self._port._login_step(
             "login_page_navigate",
             self._go_to(
@@ -344,6 +362,33 @@ class PydollLoginDomDriver:
         if not await self._port._submit_login_form(credential):
             return False
         return await self._port._wait_for_login_authentication(attempt)
+
+    async def _restored_session_is_authenticated(self) -> bool:
+        """Reuse a persistent-profile session before submitting credentials again.
+
+        The header hydrates asynchronously from loginCheck, so its instant read right
+        after a cold start can miss a session the restored cookie still carries. Ask
+        loginCheck directly; protection and rate limits still propagate unchanged.
+        """
+
+        try:
+            authenticated = bool(
+                await self._port._login_step(
+                    "restored_session_check",
+                    self._port._probe_official_authenticated_session(),
+                )
+            )
+        except BrowserSourceUnavailable:
+            # An unreadable probe proves neither state; keep the previous login path.
+            self._event_logger.info(
+                "KORAIL login session marker stage=restored_session outcome=unavailable"
+            )
+            return False
+        self._event_logger.info(
+            "KORAIL login session marker stage=restored_session present=%s",
+            str(authenticated).lower(),
+        )
+        return authenticated
 
     async def _manual_session_is_authenticated(self) -> bool:
         """Accept a shared live session even when the retained tab DOM is stale."""
@@ -416,6 +461,7 @@ class PydollLoginDomDriver:
         self._submission = submission
         try:
             submission.arm()
+            await _pacing.record_login_submission()
             await self._port._login_step("login_submit", submit.click())
         except BaseException:
             await self.close_submission_observer()
@@ -803,6 +849,15 @@ class PydollLoginDomDriver:
                 else "invalid",
                 (_submission_owner.sanitized_login_err_code(value.get("err_code")),),
             )
+        # Log every verdict, not only errCode-bearing ones: a reuse rejected by an official
+        # logout (server-side expiry) must stay distinguishable from an unreadable probe.
+        self._event_logger.info(
+            "KORAIL login session probe completed outcome=%s",
+            outcome
+            if outcome
+            in {"authenticated", "logged_out", "source_unavailable", "rate_limited", "protected"}
+            else "invalid",
+        )
         if outcome == "authenticated":
             return True
         if outcome == "logged_out":

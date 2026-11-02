@@ -733,7 +733,7 @@ production sidecar의 `/readyz`는 브라우저 준비 상태뿐 아니라 공�
 
 저장된 계정의 `last_auth_status=authenticated`와 현재 keepalive 결과는 구분합니다. 그 상태의 계정이
 실제 예열에서 `provider_blocked`를 받으면 session manager는 provider·credential generation·저장 auth
-revision을 기록하고, 같은 revision의 다음 로그인은 보호 backoff(900초에서 시작해 반복마다 두 배, 최대
+revision을 기록하고, 같은 revision의 다음 로그인은 보호 backoff(1800초에서 시작해 반복마다 두 배, 최대
 7200초)가 지난 뒤에만 제출합니다. 그동안 좌석 관측은 인증 대기로 멈춥니다. 자동 재시도가 성공하거나
 새로운 저장 revision·계정 세대 또는 재사용 가능한 같은 세대의 공식 양성 session이 확인되면 이 중단을
 벗어납니다. 과거 성공 이력을 다시 쓰거나 공통 대기를 삭제하지 않습니다.
@@ -869,12 +869,26 @@ KORAIL prewarm은 같은 auth lock 안에서 기존 session을 공식 same-origi
 `last_verified`·`last_used`를 갱신합니다. 검증에 실패하거나 응답이 로그인 상태를 확정하지 못한 session은 먼저
 폐기한 뒤 같은 호출 안에서 새 로그인을 한 번 수행합니다. 즉 keepalive 불확실성 때문에 계정이 다음 주기까지
 미인증으로 남지 않습니다. 실패 backoff는 원인에 따라 나뉩니다. 운영사의 자격증명 판정인 `auth_required`는
-60초부터 최대 900초까지, 보호 응답은 900초부터 최대 7200초까지 적용합니다. 코레일 탐지가 로그인 제출 간격으로
-차단하므로 보호 직후의 짧은 재시도를 피합니다. 반면 자격증명 확인에 도달하지도 못한
+60초부터 최대 900초까지, 보호 응답은 1800초부터 최대 7200초까지 적용합니다. 코레일 탐지가 로그인 제출 간격으로
+차단하므로 보호 직후의 짧은 재시도를 피합니다(11월 1~2일 실측에서 보호 뒤 900초 재시도는 3회 중 2회 재차단,
+1800초 재시도는 2회 모두 통과). 반면 자격증명 확인에 도달하지도 못한
 어댑터·DB 실패는 5초부터 최대 60초까지만 기다려 어댑터가 살아나는 즉시 session이 복구됩니다. 저장된
 `auth_required` 상태는 같은 DB revision에서 운영사 판정 기준 최대 5회까지 복구를 시도하고, `provider_blocked`는
 횟수 제한 대신 보호 backoff 간격으로 계속 복구를 시도합니다. 어댑터 장애처럼 운영사에 닿지 못한 실패는 이
 복구 예산을 소비하지 않으며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
+
+adapter 재시작이나 TTL 만료로 메모리 session이 없을 때 `dedicated_auto` 영속 profile은 로그인 화면으로 가기
+전에 공식 `loginCheck`를 한 번 호출합니다. 헤더는 이 응답으로 비동기 hydration되므로 cold start 직후의 즉시
+읽기로는 복원된 세션을 놓칠 수 있습니다. 양성이면 자격증명 제출 없이 그 세션을 채택하고, 음성·판독 불가면
+기존 로그인으로 진행하며, 403·429는 그대로 보호·호출 제한입니다. 임시 profile은 쿠키가 없으므로 이 확인을
+하지 않습니다. 실제 로그인 버튼 클릭 직전에는 성공·차단과 무관하게 제출 시각을 Redis 고정 key
+`rail-waitlist:korail:login-submission:v1`(계정 정보 없음, TTL 1일)에 기록합니다. 시작 예열·keepalive 같은
+비필수 로그인은 로그인 화면으로 가기 전에 이 시각을 읽어 `KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS`(기본
+1800초, 0이면 끔) 안이면 기존 `provider_cooldown` 생략(`provider_access_restricted`, 남은 초)으로 미루고 actor는
+미인증 브라우저를 폐기해 `stale`로 둡니다. session manager는 이 생략을 복구 예산 없이 다음 tick으로 미룹니다.
+저장소를 읽지 못하면 `cooldown_store_unavailable`로 닫습니다. 예약 실행과 사용자가 직접 요청한 계정 확인
+로그인은 미루지 않고 기록만 합니다. 공유 `ensure_authenticated(credential)` session 계약을 바꾸지 않도록 이
+목적은 context-local 범위(`pydoll/login_submission_pacing.py`)로 actor에서 login driver로 전달합니다.
 
 갱신 임계값은 provider마다 다릅니다. KORAIL은 재사용 기한이 `last_verified_at` 기준이고 성공한 prewarm이 그
 시각을 항상 갱신하므로, `last_verified_age + local_reuse_remaining`으로 재사용 창을 정확히 역산할 수 있습니다.

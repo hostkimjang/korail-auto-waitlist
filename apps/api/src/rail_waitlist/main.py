@@ -127,6 +127,10 @@ def create_app(
     app.state.seat_status_redis = Redis.from_url(settings.redis_url, decode_responses=True)
     seat_status_cooldown_store = RedisCooldownStore(app.state.seat_status_redis)
     app.state.seat_status_cooldown_store = seat_status_cooldown_store
+    app.state.korail_provider_cooldown = RedisProviderCooldown(
+        app.state.seat_status_redis,
+        protection_seconds=settings.seat_status_protection_cooldown_seconds,
+    )
     app.state.timetable_snapshot_cache = TimetableSnapshotCache()
     app.state.timetable_snapshot_session_factory = session_factory
     if settings.srt_provider_adapter_enabled:
@@ -164,7 +168,7 @@ def create_app(
         protection_cooldown_seconds=settings.seat_status_protection_cooldown_seconds,
         cooldown_store=seat_status_cooldown_store,
         allow_fullstack_test_url=settings.environment == "test",
-        provider_cooldown=RedisProviderCooldown(app.state.seat_status_redis),
+        provider_cooldown=app.state.korail_provider_cooldown,
     )
     app.state.provider_login_verifier = ProviderLoginVerifier(
         app.state.korail_browser_seat_source,

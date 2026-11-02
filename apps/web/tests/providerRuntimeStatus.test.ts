@@ -21,22 +21,30 @@ const readyRuntime: ProviderRuntimeStatus = {
 
 describe("provider runtime status presentation", () => {
   it("uses explicit, readable labels for every runtime state", () => {
-    expect(providerRuntimeStatusPresentation(readyRuntime)).toMatchObject({
+    expect(providerRuntimeStatusPresentation(readyRuntime, 1)).toMatchObject({
       label: "재사용 가능",
       tone: "ready",
     });
-    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "authenticating" }).label)
+    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "authenticating" }, 1).label)
       .toBe("로그인 준비 중");
-    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "stale" }).label)
+    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "stale" }, 1).label)
       .toBe("재검증 예정");
-    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "auth_required" }).label)
+    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "auth_required" }, 1).label)
       .toBe("로그인 필요");
-    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "blocked" }).label)
+    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "blocked" }, 1).label)
       .toBe("운영사 제한");
-    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "cold" }).label)
+    expect(providerRuntimeStatusPresentation({ ...readyRuntime, state: "cold" }, 1).label)
       .toBe("시작 전");
-    expect(providerRuntimeStatusPresentation({ ...readyRuntime, locallyReusable: false }).label)
+    expect(providerRuntimeStatusPresentation({ ...readyRuntime, locallyReusable: false }, 1).label)
       .toBe("재검증 예정");
+    expect(providerRuntimeStatusPresentation(readyRuntime, 2)).toEqual({
+      label: "계정 변경 후 재확인",
+      tone: "warning",
+    });
+    expect(providerRuntimeStatusPresentation(readyRuntime, null)).toEqual({
+      label: "계정 연결 후 확인",
+      tone: "warning",
+    });
   });
 
   it("rounds verification age and the local reuse window for people", () => {

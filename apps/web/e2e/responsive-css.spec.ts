@@ -453,6 +453,29 @@ async function expectRefreshPreferencesWithinBounds(
   );
 }
 
+async function expectProviderAccountWithinBounds(page: Page, viewport: ViewportCase): Promise<void> {
+  await page.getByRole("navigation", { name: "설정 메뉴" })
+    .getByRole("button", { name: "철도 계정" })
+    .click();
+  const card = page.getByRole("region", { name: "KORAIL 계정" });
+  const history = card.getByText("마지막 확인: 로그인 성공");
+  await expect(history).toBeVisible();
+  await expectWithinViewport(history, viewport.width, "saved login history");
+  await expectWithinViewport(card, viewport.width, "provider account card");
+  await expect(card.getByText("재사용 가능", { exact: true })).toBeVisible();
+  const edit = card.getByRole("button", { name: "로그인 정보 변경" });
+  await expectVisibleActionTarget(edit, "provider account edit action");
+  await edit.focus();
+  await page.keyboard.press("Enter");
+  await expect(card.getByRole("textbox", { name: "회원번호", exact: true })).toBeVisible();
+  await expect(card.getByLabel("비밀번호", { exact: true })).toBeVisible();
+  const rootWidths = await page.evaluate(() => ({
+    client: document.documentElement.clientWidth,
+    scroll: document.documentElement.scrollWidth,
+  }));
+  expect(rootWidths.scroll).toBeLessThanOrEqual(rootWidths.client);
+}
+
 async function expectReservationPolicyWithinBounds(
   page: Page,
   viewport: ViewportCase,
@@ -744,6 +767,7 @@ for (const viewport of viewportCases) {
     await expectOfficialHandoffWithinBounds(page, viewport);
     await expectReservationsWithinBounds(page, viewport);
     await expectRefreshPreferencesWithinBounds(page, viewport);
+    await expectProviderAccountWithinBounds(page, viewport);
     await expectReservationPolicyWithinBounds(page, viewport);
     await expectHomeApiAndBrowserClean(telemetry);
   });

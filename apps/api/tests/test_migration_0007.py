@@ -76,9 +76,7 @@ def test_migration_0007_station_catalog_cache_round_trips(tmp_path, monkeypatch)
     with sqlite3.connect(database_path) as connection:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         assert "station_catalog_cache" not in tables
         assert "admin_accounts" in tables

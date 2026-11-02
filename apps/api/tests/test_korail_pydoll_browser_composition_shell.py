@@ -394,9 +394,9 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
 
     assert definitions == LOCAL_DEFINITIONS
     assert assignments == MODULE_ASSIGNMENTS
-    # Submission listener ownership is delegated through the injected context;
-    # the additional shell lines only connect it to tab rotation and cleanup.
-    assert len(source.splitlines()) <= 1_506
+    # Search protection classification lives in a leaf owner. The additional wiring
+    # only arms, drains, and resets it at the existing search/tab lifecycle boundaries.
+    assert len(source.splitlines()) <= 1_557
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

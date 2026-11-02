@@ -35,6 +35,8 @@ LOCAL_DEFINITIONS = {
     "upsert_provider_account": ast.AsyncFunctionDef,
     "delete_provider_account": ast.AsyncFunctionDef,
     "update_provider_auth_status": ast.AsyncFunctionDef,
+    "record_provider_protection_halt": ast.AsyncFunctionDef,
+    "clear_provider_protection_halt": ast.AsyncFunctionDef,
 }
 OWNER_ASSIGNMENTS = {
     "ProviderCredentials",
@@ -49,12 +51,14 @@ OWNER_IMPORTS = {
     ("datetime", 0, "UTC", None),
     ("datetime", 0, "datetime", None),
     ("sqlalchemy", 0, "select", None),
+    ("sqlalchemy", 0, "update", None),
     ("sqlalchemy.exc", 0, "IntegrityError", None),
     ("sqlalchemy.ext.asyncio", 0, "AsyncSession", None),
     ("domain", 2, "Provider", None),
     ("security", 2, "secret_box", None),
     (None, 1, "contracts", "_account_contracts"),
     ("models", 1, "RailProviderAccount", None),
+    ("models", 1, "auth_revision_micros", None),
     ("schemas", 1, "RailProviderAccountRead", None),
     ("schemas", 1, "RailProviderAccountUpsert", None),
     ("schemas", 1, "RailProviderAuthStatus", None),
@@ -93,6 +97,8 @@ LEGACY_PUBLIC = {
     "secret_box",
     "select",
     "unconfigured_provider_account_read",
+    "record_provider_protection_halt",
+    "clear_provider_protection_halt",
     "update_provider_auth_status",
     "upsert_provider_account",
 }
@@ -149,6 +155,12 @@ PRE_MOVE_PICKLES = {
     "update_provider_auth_status": (
         "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfYWNjb3VudHMKdXBkYXRlX3Byb3ZpZGVyX2F1dGhfc3RhdHVzCnAwCi4="
     ),
+    "record_provider_protection_halt": (
+        "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfYWNjb3VudHMKcmVjb3JkX3Byb3ZpZGVyX3Byb3RlY3Rpb25faGFsdApwMAou"
+    ),
+    "clear_provider_protection_halt": (
+        "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfYWNjb3VudHMKY2xlYXJfcHJvdmlkZXJfcHJvdGVjdGlvbl9oYWx0CnAwCi4="
+    ),
 }
 CANONICAL_CONSUMERS = {
     "rail_waitlist/provider_account_management/http.py": {
@@ -163,7 +175,9 @@ CANONICAL_CONSUMERS = {
     },
     "rail_waitlist/provider_account_management/runtime.py": {
         "SUPPORTED_ACCOUNT_PROVIDERS",
+        "clear_provider_protection_halt",
         "get_enabled_provider_credentials",
+        "record_provider_protection_halt",
         "update_provider_auth_status",
     },
     "rail_waitlist/watch_management/application.py": {

@@ -46,10 +46,16 @@ from .provider_account_management.runtime import (
     _account_status as _account_status,
 )
 from .provider_account_management.runtime import (
+    _clear_persisted_protection_halt as _clear_persisted_protection_halt,
+)
+from .provider_account_management.runtime import (
     _EnabledAccountRuntime as _EnabledAccountRuntime,
 )
 from .provider_account_management.runtime import (
     _load_enabled_account_runtime as _load_enabled_account_runtime,
+)
+from .provider_account_management.runtime import (
+    _persist_protection_halt as _persist_protection_halt,
 )
 from .provider_account_management.runtime import (
     _prewarm_account as _prewarm_account,
@@ -61,6 +67,9 @@ from .provider_account_management.runtime import (
     _restore_locally_reusable_session as _restore_locally_reusable_session,
 )
 from .provider_account_management.runtime import (
+    active_protection_halt_version as active_protection_halt_version,
+)
+from .provider_account_management.runtime import (
     annotations as annotations,
 )
 from .provider_account_management.runtime import (
@@ -68,6 +77,9 @@ from .provider_account_management.runtime import (
 )
 from .provider_account_management.runtime import (
     asyncio as asyncio,
+)
+from .provider_account_management.runtime import (
+    clear_provider_protection_halt as clear_provider_protection_halt,
 )
 from .provider_account_management.runtime import (
     dataclass as dataclass,
@@ -89,6 +101,9 @@ from .provider_account_management.runtime import (
 )
 from .provider_account_management.runtime import (
     prewarm_provider_sessions as prewarm_provider_sessions,
+)
+from .provider_account_management.runtime import (
+    record_provider_protection_halt as record_provider_protection_halt,
 )
 from .provider_account_management.runtime import (
     recover_auth_required_provider_sessions_once as recover_auth_required_provider_sessions_once,

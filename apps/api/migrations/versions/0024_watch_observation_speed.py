@@ -45,9 +45,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("watches") as batch_op:
-        batch_op.drop_constraint(
-            "ck_watch_focused_observation_interval_seconds", type_="check"
-        )
+        batch_op.drop_constraint("ck_watch_focused_observation_interval_seconds", type_="check")
         batch_op.drop_constraint("ck_watch_seat_observation_mode_allowed", type_="check")
         batch_op.drop_column("focused_observation_interval_seconds")
         batch_op.drop_column("seat_observation_mode")

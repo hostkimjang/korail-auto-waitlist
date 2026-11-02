@@ -292,6 +292,8 @@ def _default_pydoll_session_factory(
     timeout_ms: int,
     headless: bool,
     auto_handle_dialogs: bool = False,
+    manual_session_only: bool = False,
+    allow_dedicated_profile: bool = True,
 ) -> PydollSessionContext:
     return _PydollSessionContext(
         _PydollSession(
@@ -299,6 +301,8 @@ def _default_pydoll_session_factory(
             timeout_ms,
             headless,
             auto_handle_dialogs=auto_handle_dialogs,
+            manual_session_only=manual_session_only,
+            allow_dedicated_profile=allow_dedicated_profile,
         )
     )
 
@@ -321,6 +325,7 @@ class PydollKorailBrowserClient:
         monotonic: Callable[[], float] = time.monotonic,
         auto_handle_dialogs: bool = False,
         provider_cooldown: ProviderCooldown | None = None,
+        manual_session_only: bool = False,
     ) -> None:
         if session_reuse_ttl_seconds < 0:
             raise ValueError("session_reuse_ttl_seconds must be non-negative")
@@ -336,6 +341,20 @@ class PydollKorailBrowserClient:
                 timeout_ms,
                 headless,
                 auto_handle_dialogs=auto_handle_dialogs,
+                manual_session_only=manual_session_only,
+                allow_dedicated_profile=True,
+            )
+        )
+        # The authentication actor is the only owner of the persistent profile.
+        # Read-only searches must not contend with its live Chromium singleton lock.
+        search_session_factory: PydollSessionFactory = session_factory or (
+            lambda page_url, timeout_ms, headless: _default_pydoll_session_factory(
+                page_url,
+                timeout_ms,
+                headless,
+                auto_handle_dialogs=auto_handle_dialogs,
+                manual_session_only=False,
+                allow_dedicated_profile=False,
             )
         )
         self._session_reuse_ttl_seconds = session_reuse_ttl_seconds
@@ -353,6 +372,7 @@ class PydollKorailBrowserClient:
             response_safety_guard=self._assert_response_allowed,
             fingerprint=_credential_fingerprint,
             provider_cooldown=provider_cooldown,
+            retain_auth_required_session=manual_session_only,
         )
         # Capture module-level compatibility seams at construction time before handing
         # read-only lifecycle ownership to the search actor.
@@ -360,7 +380,7 @@ class PydollKorailBrowserClient:
             page_url=self.page_url,
             timeout_ms=self.timeout_ms,
             headless=self.headless,
-            session_factory=self._session_factory,
+            session_factory=search_session_factory,
             session_reuse_ttl_seconds=self._session_reuse_ttl_seconds,
             session_reuse_max_searches=self._session_reuse_max_searches,
             station_identity_resolver=station_identity_resolver,
@@ -713,18 +733,30 @@ class _PydollSession:
         headless: bool,
         *,
         auto_handle_dialogs: bool = False,
+        manual_session_only: bool = False,
+        allow_dedicated_profile: bool = True,
     ) -> None:
+        from .korail_sidecar.pydoll.search_response_protection import (
+            PydollSearchResponseProtectionObserver,
+        )
+
         self.page_url = page_url
         self.timeout_ms = timeout_ms
         self.headless = headless
         self._chromium_lifecycle = PydollChromiumLifecycle(
             headless=headless,
             on_response=self._on_response_received,
-            options_configurer=_configure_chromium_options,
+            owns_dedicated_profile=allow_dedicated_profile,
+            options_configurer=lambda options, *, headless: _configure_chromium_options(
+                options,
+                headless=headless,
+                allow_dedicated_profile=allow_dedicated_profile,
+            ),
             event_logger=logger,
         )
         self._submitted = False
         self._network_responses: dict[tuple[int, str], None] = {}
+        self._search_response_protection = PydollSearchResponseProtectionObserver()
         self._opened_once = False
         self._http_capture_start: int | None = None
         self._login_driver = PydollLoginDomDriver(
@@ -734,6 +766,7 @@ class _PydollSession:
             timeout_seconds=self._timeout_seconds,
             go_to=self._login_go_to,
             execute_script=self._login_execute_script,
+            execute_command=lambda command: self._tab._execute_command(command),
             snapshot=lambda: self._snapshot(),
             visible_elements=lambda selector, **options: self._visible_elements(
                 selector,
@@ -755,6 +788,7 @@ class _PydollSession:
                 self._timeout_seconds,
                 event_logger=logger,
             ),
+            manual_session_only=manual_session_only,
         )
         self._reservation_driver = PydollReservationDomDriver(
             port=self,
@@ -861,10 +895,12 @@ class _PydollSession:
 
     def _mark_search_submitted(self) -> None:
         self._submitted = True
+        self._search_response_protection.arm()
 
     def reset_search_state(self) -> None:
         self._submitted = False
         self._network_responses.clear()
+        self._search_response_protection.reset()
 
     async def __aenter__(self) -> Self:
         await self._chromium_lifecycle.start()
@@ -886,6 +922,7 @@ class _PydollSession:
         self._opened_once = True
         self._submitted = False
         self._network_responses.clear()
+        self._search_response_protection.reset()
         try:
             await self._tab.go_to(self.page_url, timeout=max(1, self.timeout_ms // 1000))
         except Exception as error:
@@ -906,6 +943,8 @@ class _PydollSession:
             raise BrowserSourceUnavailable("direct_navigation") from error
         self._submitted = True
         self._network_responses.clear()
+        # Direct navigation itself starts the one official lookup.
+        self._search_response_protection.arm()
         try:
             await self._tab.go_to(url, timeout=max(1, self.timeout_ms // 1000))
         except Exception as error:
@@ -939,6 +978,7 @@ class _PydollSession:
         """Open the official list without selecting rows or clicking actions."""
 
         self._network_responses.clear()
+        self._search_response_protection.reset()
         return await self._read_reservation_list_response(
             tab=self._tab,
             current_tab=lambda: self._tab,
@@ -952,6 +992,7 @@ class _PydollSession:
         """Open MyTicket and return secret-free issued-ticket summaries only."""
 
         self._network_responses.clear()
+        self._search_response_protection.reset()
         try:
             await self._tab.go_to(
                 "https://www.korail.com/ticket/myticket/list",
@@ -974,6 +1015,8 @@ class _PydollSession:
         return last
 
     async def _replace_tab(self) -> None:
+        # Request ids belong to the retired tab and must not be read from its successor.
+        self._search_response_protection.reset()
         await self._login_driver.close_submission_observer()
         await self._chromium_lifecycle.replace_tab()
 
@@ -1128,6 +1171,8 @@ class _PydollSession:
         *,
         on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
+        # Reservation responses keep their own dedicated policy owners.
+        self._search_response_protection.reset()
         if on_progress is None:
             return await self._reservation_driver.reserve_once(request)
         return await self._reservation_driver.reserve_once(request, on_progress=on_progress)
@@ -1180,6 +1225,11 @@ class _PydollSession:
         return await self._search_driver.wait_for_result_growth(previous_rows)
 
     async def _snapshot(self) -> PydollPageSnapshot:
+        evidence = await self._search_response_protection.drain(
+            lambda command: self._tab._execute_command(command)
+        )
+        if evidence is not None:
+            self._network_responses.setdefault(evidence, None)
         return await self._search_driver.snapshot()
 
     async def _issued_ticket_snapshot(self) -> PydollIssuedTicketListSnapshot:
@@ -1433,6 +1483,7 @@ class _PydollSession:
         return max(1, self.timeout_ms / 1000)
 
     async def _close(self) -> None:
+        self._search_response_protection.reset()
         try:
             await self._login_driver.close_submission_observer()
         finally:
@@ -1443,6 +1494,7 @@ class _PydollSession:
         evidence = self._network_response_evidence(event)
         if evidence is not None:
             self._network_responses.setdefault(evidence, None)
+        self._search_response_protection.observe(event)
 
 
 class _PydollSessionContext:

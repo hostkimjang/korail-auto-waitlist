@@ -12032,11 +12032,15 @@ def test_production_and_scripts_do_not_reenter_legacy_pydoll_snapshot_policy() -
 
 
 PYDOLL_CHROMIUM_LIFECYCLE_OWNER_SYMBOLS = {
+    "PydollBrowserProfileMode",
     "PydollChromiumLifecycle",
     "PydollChromiumPhase",
     "PydollChromiumRuntime",
+    "browser_profile_mode_setting",
+    "cleanup_dedicated_profile_singletons",
     "cleanup_pydoll_tab_listener",
     "configure_chromium_options",
+    "dedicated_browser_profile_directory",
     "finish_owned_cleanup",
     "probe_pydoll_chromium",
     "set_chromium_binary",
@@ -12073,6 +12077,7 @@ def test_pydoll_chromium_lifecycle_has_exact_top_level_dependency_boundary() -> 
     }
 
     assert definitions == {
+        "PydollBrowserProfileMode",
         "PydollChromiumPhase",
         "_ChromiumOptions",
         "_PydollTab",
@@ -12082,6 +12087,9 @@ def test_pydoll_chromium_lifecycle_has_exact_top_level_dependency_boundary() -> 
         "PydollChromiumRuntime",
         "_load_pydoll_runtime",
         "_load_response_received_event",
+        "browser_profile_mode_setting",
+        "dedicated_browser_profile_directory",
+        "cleanup_dedicated_profile_singletons",
         "set_chromium_binary",
         "configure_chromium_options",
         "finish_owned_cleanup",

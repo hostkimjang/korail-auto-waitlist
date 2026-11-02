@@ -40,6 +40,10 @@ from rail_waitlist.korail_pydoll_browser import (
     _set_chromium_binary,
 )
 from rail_waitlist.korail_search_bootstrap import KorailStationIdentity
+from rail_waitlist.korail_sidecar.provider_cooldown import (
+    MemoryProviderCooldown,
+    ProviderCooldownDeferred,
+)
 
 
 def search_request() -> BrowserSeatSearchRequest:
@@ -359,6 +363,43 @@ async def test_direct_bootstrap_protection_never_falls_back_to_ui_submit() -> No
         await client.search(search_request())
 
     assert session.events.count("navigate") == 1
+    assert "open" not in session.events
+    assert "submit" not in session.events
+
+
+class MacroJsonEmptyScheduleSession(FixtureSession):
+    async def wait_for_result(self) -> PydollPageSnapshot:
+        self.events.append("wait")
+        return PydollPageSnapshot(
+            body_text="해당 스케줄 운행 열차 없음",
+            rows=(),
+            network_responses=((200, "business_macro_err1"),),
+        )
+
+
+@pytest.mark.asyncio
+async def test_direct_search_macro_json_is_protection_without_retry_or_ui_fallback() -> None:
+    session = MacroJsonEmptyScheduleSession(_fixture_snapshot())
+    hold = MemoryProviderCooldown(clock=lambda: 0)
+    client = PydollKorailBrowserClient(
+        page_url="http://127.0.0.1:8011/korail_browser_page.html",
+        timeout_seconds=3,
+        allow_test_loopback=True,
+        session_factory=FixtureSessionFactory(session),
+        station_identity_resolver=StaticStationResolver(),  # type: ignore[arg-type]
+        provider_cooldown=hold,
+    )
+
+    with pytest.raises(BrowserProtectionDetected) as raised:
+        await client.search(search_request())
+    assert raised.value.trigger == "marker_macro_err1"
+    assert raised.value.stage == "wait_result"
+
+    # The shared provider hold now refuses another official lookup before navigation.
+    with pytest.raises(ProviderCooldownDeferred):
+        await client.search(search_request())
+    assert session.events.count("navigate") == 1
+    assert session.events.count("wait") == 1
     assert "open" not in session.events
     assert "submit" not in session.events
 
@@ -1537,6 +1578,8 @@ def test_pydoll_disables_password_manager_surfaces(
     binary = tmp_path / "chrome"
     binary.write_bytes(b"fixture")
     monkeypatch.setenv("KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH", str(binary))
+    monkeypatch.delenv("KORAIL_BROWSER_PROFILE_MODE", raising=False)
+    monkeypatch.delenv("KORAIL_BROWSER_PROFILE_DIR", raising=False)
 
     class Options:
         def __init__(self) -> None:

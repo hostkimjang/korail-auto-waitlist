@@ -124,12 +124,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_watch_candidates_registration_evidence_id", table_name="watch_candidates"
-    )
+    op.drop_index("ix_watch_candidates_registration_evidence_id", table_name="watch_candidates")
     with op.batch_alter_table("watch_candidates") as batch_op:
-        batch_op.drop_constraint(
-            "fk_watch_candidate_registration_evidence", type_="foreignkey"
-        )
+        batch_op.drop_constraint("fk_watch_candidate_registration_evidence", type_="foreignkey")
         batch_op.drop_column("registration_evidence_id")
     op.drop_table("timetable_seat_evidence")

@@ -38,9 +38,7 @@ def test_migration_0008_operations_indexes_round_trip(tmp_path, monkeypatch):
     with sqlite3.connect(database_path) as connection:
         index_names = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'index'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
         }
         assert EXPECTED_INDEXES.keys().isdisjoint(index_names)
 

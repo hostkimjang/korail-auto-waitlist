@@ -60,9 +60,7 @@ class FakeApprovedTransport:
         self.reservation_source = self.source
         self.failure: Exception | None = None
 
-    async def observe_seats(
-        self, request: SeatObservationRequest
-    ) -> ApprovedObservationEnvelope:
+    async def observe_seats(self, request: SeatObservationRequest) -> ApprovedObservationEnvelope:
         self.observe_calls += 1
         if self.failure is not None:
             raise self.failure
@@ -82,9 +80,7 @@ class FakeApprovedTransport:
             ),
         )
 
-    async def reserve_once(
-        self, request: ReservationRequest
-    ) -> ApprovedReservationEnvelope:
+    async def reserve_once(self, request: ReservationRequest) -> ApprovedReservationEnvelope:
         self.reserve_calls += 1
         if self.failure is not None:
             raise self.failure

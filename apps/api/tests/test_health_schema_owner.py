@@ -223,9 +223,12 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     assert schema["paths"]["/api/v1/timetable-progress"]["get"]["responses"]["200"]["content"][
         "application/json"
     ]["schema"] == {"$ref": "#/components/schemas/SearchProgress"}
-    assert len(encoded) == 92306
+    assert schema["paths"]["/api/v1/seat-status/status"]["get"]["description"] == (
+        "Expose every hold that prevents seat I/O, including authentication protection."
+    )
+    assert len(encoded) == 92309
     assert hashlib.sha256(encoded).hexdigest() == (
-        "0d2f101ee0c8970fc7202805bb5895b3ae17107290fb61a80e7ce6583f490601"
+        "4ec22aa925b2ea0bd36ae6d130778720b9294343bb75194b19e9f539eb0e16f5"
     )
 
 

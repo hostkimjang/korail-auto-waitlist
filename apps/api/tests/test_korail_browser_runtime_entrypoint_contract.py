@@ -13,6 +13,10 @@ GUI_COMPOSE_PATH = REPOSITORY_ROOT / "compose.korail-gui.yml"
 RUNTIME_ENTRYPOINT_PATH = (
     REPOSITORY_ROOT / "apps" / "api" / "scripts" / "start-korail-browser-runtime.sh"
 )
+PROFILE_BOOTSTRAP_PATH = (
+    REPOSITORY_ROOT / "apps" / "api" / "scripts" / "start-korail-browser-profile-bootstrap.sh"
+)
+FULLSTACK_RUNNER_PATH = REPOSITORY_ROOT / "apps" / "web" / "scripts" / "run-fullstack-e2e.mjs"
 
 
 def _adapter_block(compose: str) -> str:
@@ -30,6 +34,9 @@ def test_default_adapter_uses_internal_non_headless_display_without_publishing_n
 
     assert 'KORAIL_BROWSER_GUI_ENABLED: "${KORAIL_BROWSER_GUI_ENABLED:-true}"' in adapter
     assert 'KORAIL_NOVNC_ENABLED: "false"' in adapter
+    assert 'KORAIL_NOVNC_INPUT_ENABLED: "false"' in adapter
+    assert "KORAIL_BROWSER_PROFILE_MODE" in adapter
+    assert "korail_browser_profile:/var/lib/rail-waitlist/korail-browser-profile" in adapter
     assert "DISPLAY: :99" in adapter
     assert "XAUTHORITY: /tmp/korail-gui/Xauthority" in adapter
     assert "6080:6080" not in adapter
@@ -41,15 +48,32 @@ def test_gui_override_alone_owns_loopback_novnc_and_password_secret() -> None:
 
     assert 'KORAIL_BROWSER_GUI_ENABLED: "true"' in override
     assert 'KORAIL_NOVNC_ENABLED: "true"' in override
+    assert 'KORAIL_NOVNC_INPUT_ENABLED: "${KORAIL_NOVNC_INPUT_ENABLED:-false}"' in override
     assert "KORAIL_NOVNC_PASSWORD_FILE: /run/secrets/korail_novnc_password" in override
     assert '"127.0.0.1:${KORAIL_NOVNC_PORT:-6080}:6080"' in override
     assert "korail_novnc_password" in override
+
+
+def test_manual_profile_bootstrap_only_initializes_the_isolated_owned_volume() -> None:
+    override = GUI_COMPOSE_PATH.read_text(encoding="utf-8")
+    bootstrap = PROFILE_BOOTSTRAP_PATH.read_text(encoding="utf-8")
+
+    assert "korail-browser-profile-bootstrap:" in override
+    assert 'profiles: ["korail-profile-bootstrap"]' in override
+    assert "korail_browser_profile:/var/lib/rail-waitlist/korail-browser-profile" in override
+    assert "network_mode: none" in override
+    assert ".rail-waitlist-korail-profile" in bootstrap
+    assert "flock -n 9" in bootstrap
+    assert "SingletonLock SingletonSocket SingletonCookie" in bootstrap
+    assert "google-chrome" not in bootstrap
+    assert "--remote-debugging" not in bootstrap
 
 
 def test_runtime_starts_novnc_only_when_a_password_file_is_configured() -> None:
     entrypoint = RUNTIME_ENTRYPOINT_PATH.read_text(encoding="utf-8")
 
     assert 'novnc_enabled="${KORAIL_NOVNC_ENABLED:-false}"' in entrypoint
+    assert 'novnc_input_enabled="${KORAIL_NOVNC_INPUT_ENABLED:-false}"' in entrypoint
     assert 'password_file="${KORAIL_NOVNC_PASSWORD_FILE:-}"' in entrypoint
     viewer_guards = re.findall(
         r'if \[\[ "\$\{novnc_enabled\}" == "true" \]\]; then(?P<body>.*?)\nfi',
@@ -62,6 +86,19 @@ def test_runtime_starts_novnc_only_when_a_password_file_is_configured() -> None:
     assert "VNC/noVNC proxy did not become ready" in viewer_guard
     assert "GUI mode requires a readable KORAIL_NOVNC_PASSWORD_FILE" not in entrypoint
     assert "KORAIL_NOVNC_ENABLED=true requires KORAIL_BROWSER_GUI_ENABLED=true" in entrypoint
+    assert "KORAIL_NOVNC_INPUT_ENABLED=true requires KORAIL_NOVNC_ENABLED=true" in entrypoint
+    assert "vnc_access=(-viewonly)" in entrypoint
+    assert 'profile_mode="${KORAIL_BROWSER_PROFILE_MODE:-ephemeral}"' in entrypoint
+    assert '"${profile_mode}" == "dedicated_auto"' in entrypoint
+    assert '"${profile_mode}" == "dedicated_manual"' in entrypoint
+    assert "flock -n 9" in entrypoint
+    assert "SingletonLock SingletonSocket SingletonCookie" in entrypoint
+
+
+def test_fullstack_runner_isolates_the_browser_profile_from_operator_environment() -> None:
+    runner = FULLSTACK_RUNNER_PATH.read_text(encoding="utf-8")
+
+    assert 'KORAIL_BROWSER_PROFILE_MODE: "ephemeral"' in runner
 
 
 def _run_entrypoint(*, gui_enabled: str, novnc_enabled: str) -> subprocess.CompletedProcess[str]:
@@ -72,6 +109,7 @@ def _run_entrypoint(*, gui_enabled: str, novnc_enabled: str) -> subprocess.Compl
             **os.environ,
             "KORAIL_BROWSER_GUI_ENABLED": gui_enabled,
             "KORAIL_NOVNC_ENABLED": novnc_enabled,
+            "KORAIL_NOVNC_INPUT_ENABLED": "false",
         },
         capture_output=True,
         check=False,
@@ -105,3 +143,24 @@ def test_runtime_rejects_novnc_without_a_readable_secret() -> None:
         result.stderr == "KORAIL_NOVNC_ENABLED=true requires a readable "
         "KORAIL_NOVNC_PASSWORD_FILE\n"
     )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows bash does not inherit test env reliably")
+def test_runtime_rejects_input_when_novnc_is_disabled() -> None:
+    result = subprocess.run(
+        ["bash", "apps/api/scripts/start-korail-browser-runtime.sh", "true"],
+        cwd=REPOSITORY_ROOT,
+        env={
+            **os.environ,
+            "KORAIL_BROWSER_GUI_ENABLED": "true",
+            "KORAIL_NOVNC_ENABLED": "false",
+            "KORAIL_NOVNC_INPUT_ENABLED": "true",
+        },
+        capture_output=True,
+        check=False,
+        errors="replace",
+        text=True,
+    )
+
+    assert result.returncode == 64
+    assert result.stderr == "KORAIL_NOVNC_INPUT_ENABLED=true requires KORAIL_NOVNC_ENABLED=true\n"

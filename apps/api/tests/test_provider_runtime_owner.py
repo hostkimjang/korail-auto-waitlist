@@ -27,6 +27,8 @@ LOCAL_DEFINITIONS = {
     "_prewarm_account": ast.AsyncFunctionDef,
     "_restore_authenticated_account": ast.AsyncFunctionDef,
     "_restore_locally_reusable_session": ast.AsyncFunctionDef,
+    "_persist_protection_halt": ast.AsyncFunctionDef,
+    "_clear_persisted_protection_halt": ast.AsyncFunctionDef,
     "prewarm_provider_sessions": ast.AsyncFunctionDef,
     "recover_provider_sessions_once": ast.AsyncFunctionDef,
     "maintain_provider_sessions": ast.AsyncFunctionDef,
@@ -55,7 +57,9 @@ OWNER_IMPORTS_FROM = {
         "_ProviderCooldownDeferred",
     ),
     ("application", 1, "SUPPORTED_ACCOUNT_PROVIDERS", None),
+    ("application", 1, "clear_provider_protection_halt", None),
     ("application", 1, "get_enabled_provider_credentials", None),
+    ("application", 1, "record_provider_protection_halt", None),
     ("application", 1, "update_provider_auth_status", None),
     ("auth_recovery_runtime", 1, "resume_watches_after_verified_provider_login", None),
     ("contracts", 1, "ProviderCredentials", None),
@@ -63,6 +67,7 @@ OWNER_IMPORTS_FROM = {
     ("login_verification", 1, "ProviderLoginVerifier", None),
     ("login_verification", 1, "ProviderSessionRuntimeState", None),
     ("models", 1, "RailProviderAccount", None),
+    ("models", 1, "active_protection_halt_version", None),
     ("schemas", 1, "RailProviderAuthStatus", None),
 }
 OWNER_DIRECT_IMPORTS = {("asyncio", None), ("logging", None)}
@@ -91,6 +96,9 @@ OWNER_PUBLIC = {
     "logging",
     "maintain_provider_sessions",
     "prewarm_provider_sessions",
+    "record_provider_protection_halt",
+    "active_protection_halt_version",
+    "clear_provider_protection_halt",
     "recover_auth_required_provider_sessions_once",
     "recover_provider_sessions_once",
     "run_provider_session_manager",
@@ -104,6 +112,8 @@ OWNER_PRIVATE = {
     "_prewarm_account",
     "_restore_authenticated_account",
     "_restore_locally_reusable_session",
+    "_persist_protection_halt",
+    "_clear_persisted_protection_halt",
 }
 OWNER_DEPENDENCY_PRIVATE = {"_ProviderCooldownDeferred"}
 PRE_MOVE_PICKLES = {
@@ -141,6 +151,12 @@ PRE_MOVE_PICKLES = {
     ),
     "run_provider_session_manager": (
         "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfcnVudGltZQpydW5fcHJvdmlkZXJfc2Vzc2lvbl9tYW5hZ2VyCnAwCi4="
+    ),
+    "_persist_protection_halt": (
+        "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfcnVudGltZQpfcGVyc2lzdF9wcm90ZWN0aW9uX2hhbHQKcDAKLg=="
+    ),
+    "_clear_persisted_protection_halt": (
+        "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfcnVudGltZQpfY2xlYXJfcGVyc2lzdGVkX3Byb3RlY3Rpb25faGFsdApwMAou"
     ),
 }
 CANONICAL_CONSUMERS = {

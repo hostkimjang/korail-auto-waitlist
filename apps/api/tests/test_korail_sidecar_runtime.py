@@ -5,6 +5,10 @@ import pytest
 
 import rail_waitlist.korail_browser_adapter_service as compatibility_service
 from rail_waitlist.korail_sidecar import runtime
+from rail_waitlist.korail_sidecar.pydoll.chromium_lifecycle import (
+    DEDICATED_PROFILE_MARKER_CONTENT,
+    DEDICATED_PROFILE_MARKER_FILENAME,
+)
 
 
 def test_sidecar_service_reexports_the_canonical_runtime_objects() -> None:
@@ -54,6 +58,8 @@ def test_build_browser_client_forwards_dialog_auto_action_setting(
     )
     monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "false")
     monkeypatch.delenv("KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED", raising=False)
+    monkeypatch.delenv("KORAIL_BROWSER_PROFILE_MODE", raising=False)
+    monkeypatch.delenv("KORAIL_BROWSER_PROFILE_DIR", raising=False)
 
     runtime.build_browser_client(
         runtime.KorailBrowserEngine.PYDOLL,
@@ -63,6 +69,7 @@ def test_build_browser_client_forwards_dialog_auto_action_setting(
     )
 
     assert captured["auto_handle_dialogs"] is False
+    assert captured["manual_session_only"] is False
 
     monkeypatch.setenv("KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED", "true")
 
@@ -74,6 +81,76 @@ def test_build_browser_client_forwards_dialog_auto_action_setting(
     )
 
     assert captured["auto_handle_dialogs"] is True
+
+
+def test_dedicated_profile_builds_a_manual_session_only_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    profile = tmp_path / "korail-browser-profile"
+    profile.mkdir(mode=0o700)
+    (profile / DEDICATED_PROFILE_MARKER_FILENAME).write_text(
+        DEDICATED_PROFILE_MARKER_CONTENT,
+        encoding="ascii",
+    )
+    profile.chmod(0o700)
+    monkeypatch.setattr(
+        "rail_waitlist.korail_pydoll_browser.PydollKorailBrowserClient",
+        FakeClient,
+    )
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "true")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_manual")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+
+    runtime.build_browser_client(
+        runtime.KorailBrowserEngine.PYDOLL,
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_seconds=25,
+        allow_fullstack_fixture=False,
+    )
+
+    assert captured["manual_session_only"] is True
+
+
+def test_dedicated_auto_profile_keeps_automatic_login_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    profile = tmp_path / "korail-browser-profile"
+    profile.mkdir(mode=0o700)
+    (profile / DEDICATED_PROFILE_MARKER_FILENAME).write_text(
+        DEDICATED_PROFILE_MARKER_CONTENT,
+        encoding="ascii",
+    )
+    profile.chmod(0o700)
+    monkeypatch.setattr(
+        "rail_waitlist.korail_pydoll_browser.PydollKorailBrowserClient",
+        FakeClient,
+    )
+    monkeypatch.setenv("KORAIL_BROWSER_GUI_ENABLED", "true")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_auto")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+
+    runtime.build_browser_client(
+        runtime.KorailBrowserEngine.PYDOLL,
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_seconds=25,
+        allow_fullstack_fixture=False,
+    )
+
+    assert captured["manual_session_only"] is False
 
 
 def test_search_timeout_setting_accepts_only_the_internal_budget_range(monkeypatch) -> None:

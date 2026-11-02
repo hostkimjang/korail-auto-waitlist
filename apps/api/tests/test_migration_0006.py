@@ -44,9 +44,7 @@ def test_migration_0006_invalidates_legacy_sessions_and_round_trips(tmp_path, mo
     with sqlite3.connect(database_path) as connection:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         assert "admin_accounts" in tables
         assert {"admin_credentials", "recovery_codes", "auth_challenges"}.issubset(tables)
@@ -91,9 +89,7 @@ def test_migration_0006_invalidates_legacy_sessions_and_round_trips(tmp_path, mo
     with sqlite3.connect(database_path) as connection:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         assert "admin_accounts" not in tables
         assert "admin_sessions" in tables

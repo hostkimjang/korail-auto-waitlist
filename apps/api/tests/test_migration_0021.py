@@ -29,8 +29,7 @@ def test_migration_0021_adds_bounded_reconciliation_schedule(tmp_path, monkeypat
         assert columns["reconciliation_attempt_count"][4] == "'0'"
         assert "next_reconcile_at" in columns
         table_sql = connection.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' "
-            "AND name = 'reservation_attempts'"
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'reservation_attempts'"
         ).fetchone()[0]
         assert "reconciliation_attempt_count >= 0" in table_sql
         assert "reconciliation_attempt_count <= 3" in table_sql

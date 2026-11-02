@@ -15,6 +15,15 @@ __all__ = (
 )
 
 
+# A wedged renderer or CDP connection can stall the release dispatch forever. The
+# shield keeps the mouse up from being dropped mid-drag, so without a deadline the
+# shielded cleanup itself becomes the hang: every repeated cancellation would block
+# again on the same stalled request. A bounded release instead converts the stall
+# into a fail-closed source-unavailable signal, which makes the search actor discard
+# the owned session instead of reusing a page with a stuck mouse button.
+HOUR_CAROUSEL_RELEASE_TIMEOUT_SECONDS = 2.0
+
+
 class PydollHourCarouselInputPort(Protocol):
     _tab: Any
 
@@ -84,13 +93,16 @@ async def swipe_hour_carousel(
         finally:
             if pressed:
                 await asyncio.shield(
-                    port._dispatch_mouse_event(
-                        "mouseReleased",
-                        trailing_x,
-                        pointer_y,
-                        button="left",
-                        buttons=0,
-                        click_count=1,
+                    asyncio.wait_for(
+                        port._dispatch_mouse_event(
+                            "mouseReleased",
+                            trailing_x,
+                            pointer_y,
+                            button="left",
+                            buttons=0,
+                            click_count=1,
+                        ),
+                        timeout=HOUR_CAROUSEL_RELEASE_TIMEOUT_SECONDS,
                     )
                 )
     except BrowserSourceUnavailable:

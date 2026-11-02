@@ -40,10 +40,12 @@ from .provider_confirmation.contracts import (
 )
 from .provider_confirmation.safety_policy import enforce_confirmation_target_safety
 from .reconciliation_policy import (
+    OFFICIAL_READ_UNAVAILABLE_MAX_RECONCILIATION_INTERVAL,
     PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
     RESERVATION_RECONCILIATION_INTERVAL,
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
+    official_read_unavailable_backoff,
     payment_hold_reconciliation_retry_interval,
     unknown_reconciliation_retry_interval,
 )
@@ -216,6 +218,16 @@ def _reservation_reconciliation_due_clause(now: datetime) -> ColumnElement[bool]
                 and_(
                     ReservationAttempt.reconciliation_attempt_count == 0,
                     ReservationAttempt.next_reconcile_at.is_(None),
+                    # Only a never-reconciled attempt is due at once. Rows left unscheduled
+                    # after an unreachable official read (written before that read was
+                    # paced) wait the backoff ceiling: portable SQL cannot compare the
+                    # two attempt timestamps, and the in-lock Python check uses the exact
+                    # age-based backoff, which is never longer than this ceiling.
+                    or_(
+                        ReservationAttempt.last_reconciled_at.is_(None),
+                        ReservationAttempt.last_reconciled_at
+                        <= now - OFFICIAL_READ_UNAVAILABLE_MAX_RECONCILIATION_INTERVAL,
+                    ),
                 ),
                 ReservationAttempt.next_reconcile_at <= now,
                 and_(
@@ -365,6 +377,24 @@ def _watch_has_no_exact_paid_confirmation_clause() -> ColumnElement[bool]:
     )
 
 
+def _unscheduled_unspent_reconciliation_is_due(
+    attempt: ReservationAttempt,
+    now: datetime,
+) -> bool:
+    """Decide an attempt with no counted official answer and no scheduled read.
+
+    A never-reconciled attempt is due at once. One that was already read without reaching
+    the official page is paced from that read so it can neither replay immediately nor
+    stall forever.
+    """
+
+    if attempt.last_reconciled_at is None:
+        return True
+    last_reconciled_at = _as_utc(attempt.last_reconciled_at)
+    backoff = official_read_unavailable_backoff(last_reconciled_at - _as_utc(attempt.started_at))
+    return last_reconciled_at + backoff <= now
+
+
 def _reservation_reconciliation_is_due(
     attempt: ReservationAttempt,
     watch: Watch,
@@ -374,7 +404,7 @@ def _reservation_reconciliation_is_due(
         if attempt.reconciliation_attempt_count >= UNKNOWN_RECONCILIATION_MAX_ATTEMPTS:
             return False
         if attempt.reconciliation_attempt_count == 0 and attempt.next_reconcile_at is None:
-            return True
+            return _unscheduled_unspent_reconciliation_is_due(attempt, now)
         if attempt.next_reconcile_at is not None:
             return _as_utc(attempt.next_reconcile_at) <= now
         retry_interval = unknown_reconciliation_retry_interval(attempt.reconciliation_attempt_count)
@@ -432,7 +462,7 @@ def _reservation_reconciliation_is_due(
             and (attempt.next_reconcile_at is None or _as_utc(attempt.next_reconcile_at) <= now)
         )
     if attempt.reconciliation_attempt_count == 0 and attempt.next_reconcile_at is None:
-        return True
+        return _unscheduled_unspent_reconciliation_is_due(attempt, now)
     if attempt.next_reconcile_at is not None:
         return _as_utc(attempt.next_reconcile_at) <= now
     return (

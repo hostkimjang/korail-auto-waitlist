@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -110,13 +111,17 @@ function testDependencies() {
 function renderController(
   dependencies: ReturnType<typeof testDependencies>,
   initialProps: HookProps = defaultHookProps,
+  strict = false,
 ) {
   const pushToast = vi.fn<(message: string) => void>();
   const hook = renderHook((props: HookProps) => useProviderAccountSettings({
     ...props,
     pushToast,
     ...dependencies,
-  }), { initialProps });
+  }), {
+    initialProps,
+    ...(strict ? { wrapper: StrictMode } : {}),
+  });
   return { ...hook, pushToast };
 }
 
@@ -140,6 +145,7 @@ describe("useProviderAccountSettings", () => {
     expect(dependencies.loadRuntimeStatuses).not.toHaveBeenCalled();
     expect(result.current.accounts).toEqual([]);
     expect(result.current.runtimeStatuses).toEqual([]);
+    expect(result.current.runtimeStatusLoadState).toBe("idle");
     expect(result.current.loading).toBe(false);
   });
 
@@ -164,8 +170,23 @@ describe("useProviderAccountSettings", () => {
 
     await waitFor(() => expect(result.current.runtimeStatuses).toEqual(loadedRuntime));
     expect(result.current.accounts).toEqual(loadedAccounts);
+    expect(result.current.runtimeStatusLoadState).toBe("ready");
     expect(result.current.loading).toBe(false);
     expect(result.current.accountAuthStatusFor("KORAIL")).toBe("authenticated");
+  });
+
+  it("loads current account and runtime state after StrictMode effect replay", async () => {
+    const dependencies = testDependencies();
+    const loadedAccount = account("KORAIL");
+    const loadedRuntime = runtimeStatus("KORAIL");
+    dependencies.loadAccounts.mockResolvedValue([loadedAccount]);
+    dependencies.loadRuntimeStatuses.mockResolvedValue([loadedRuntime]);
+
+    const { result } = renderController(dependencies, defaultHookProps, true);
+
+    await waitFor(() => expect(result.current.accounts).toEqual([loadedAccount]));
+    await waitFor(() => expect(result.current.runtimeStatuses).toEqual([loadedRuntime]));
+    expect(result.current.runtimeStatusLoadState).toBe("ready");
   });
 
   it("reports an initial account failure safely and skips runtime loading", async () => {
@@ -310,7 +331,7 @@ describe("useProviderAccountSettings", () => {
     expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the latest runtime status when polling fails", async () => {
+  it("fails closed instead of preserving a reusable runtime status when polling fails", async () => {
     const dependencies = testDependencies();
     const latest = runtimeStatus("KORAIL");
     dependencies.loadRuntimeStatuses
@@ -322,8 +343,44 @@ describe("useProviderAccountSettings", () => {
     rerender({ ...defaultHookProps, runtimePollingEnabled: true });
     await waitFor(() => expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledTimes(2));
 
-    expect(result.current.runtimeStatuses).toEqual([latest]);
+    await waitFor(() => expect(result.current.runtimeStatusLoadState).toBe("unavailable"));
+    expect(result.current.runtimeStatuses).toEqual([]);
     expect(pushToast).not.toHaveBeenCalled();
+  });
+
+  it("keeps the newest runtime response when overlapping polls finish out of order", async () => {
+    const dependencies = testDependencies();
+    const initial = runtimeStatus("KORAIL", { lastUsedAgeSeconds: 30 });
+    const older = runtimeStatus("KORAIL", { lastUsedAgeSeconds: 20 });
+    const newer = runtimeStatus("KORAIL", { lastUsedAgeSeconds: 10 });
+    const pendingOlder = deferred<ReadonlyArray<ProviderRuntimeStatus>>();
+    const pendingNewer = deferred<ReadonlyArray<ProviderRuntimeStatus>>();
+    dependencies.loadAccounts.mockResolvedValue([account("KORAIL")]);
+    dependencies.loadRuntimeStatuses
+      .mockResolvedValueOnce([initial])
+      .mockReturnValueOnce(pendingOlder.promise)
+      .mockReturnValueOnce(pendingNewer.promise);
+    setVisibility("visible");
+    const { result, rerender } = renderController(dependencies);
+    await waitFor(() => expect(result.current.runtimeStatuses).toEqual([initial]));
+
+    rerender({ ...defaultHookProps, runtimePollingEnabled: true });
+    await waitFor(() => expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledTimes(2));
+    act(() => setVisibility("hidden"));
+    act(() => setVisibility("visible"));
+    await waitFor(() => expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      pendingNewer.resolve([newer]);
+      await pendingNewer.promise;
+    });
+    expect(result.current.runtimeStatuses).toEqual([newer]);
+
+    await act(async () => {
+      pendingOlder.resolve([older]);
+      await pendingOlder.promise;
+    });
+    expect(result.current.runtimeStatuses).toEqual([newer]);
   });
 
   it("saves a live account at the front, collapses its provider, and refreshes runtime", async () => {
@@ -504,8 +561,27 @@ describe("useProviderAccountSettings", () => {
 
     expect(result.current.accounts).toEqual([]);
     expect(result.current.runtimeStatuses).toEqual([]);
+    expect(result.current.runtimeStatusLoadState).toBe("idle");
     expect(result.current.loading).toBe(false);
     expect(result.current.pendingProvider).toBeNull();
     expect(result.current.accountAuthStatusFor("KORAIL")).toBeNull();
+  });
+
+  it("ignores a runtime response that finishes after reset", async () => {
+    const dependencies = testDependencies();
+    const pendingRuntime = deferred<ReadonlyArray<ProviderRuntimeStatus>>();
+    dependencies.loadAccounts.mockResolvedValue([account("KORAIL")]);
+    dependencies.loadRuntimeStatuses.mockReturnValue(pendingRuntime.promise);
+    const { result } = renderController(dependencies);
+    await waitFor(() => expect(dependencies.loadRuntimeStatuses).toHaveBeenCalledOnce());
+
+    act(() => result.current.reset());
+    await act(async () => {
+      pendingRuntime.resolve([runtimeStatus("KORAIL")]);
+      await pendingRuntime.promise;
+    });
+
+    expect(result.current.runtimeStatuses).toEqual([]);
+    expect(result.current.runtimeStatusLoadState).toBe("idle");
   });
 });

@@ -430,7 +430,7 @@ iOS·iPadOS 16.4 이상은 홈 화면에 설치한 Web App에서 표준 Web Push
 - 같은 좌석 가용 상태가 이어지는 동안 최대 한 번만 시도합니다.
 - 결과가 불확실하면 같은 요청을 즉시 자동 반복하지 않습니다. read-only reconciliation에서 대상 부재가 연속 두 번 확인되면 `confirmed_absent`로 닫고, 그 확인보다 새로운 공식 `AVAILABLE`·`LIMITED` 관측이 생긴 경우에만 별도 복구 episode를 한 번 허용합니다. 이 해소 상태는 수동 공식 확인 필요 상태가 아니며 오래된 terminal 작업을 live 목록에 붙잡지 않습니다. 그 복구 결과가 다시 불명확해도 연쇄 재시도하지 않습니다. 최신 attempt가 이 복구 episode 자체를 소비한 뒤 다시 `confirmed_absent`가 되면 REST와 reconciliation SSE는 raw episode key 대신 닫힌 `automatic_reservation_retry_fence_reason=confirmed_absent_recovery_consumed`만 공개해 추가 자동 예매 차단 근거를 표시합니다.
 - 미해소 `UNKNOWN`과 정확한 결제 완료 근거의 fence는 후보별이 아니라 watch 전체의 모든 attempt를 대상으로 계산합니다. 한 후보에 active 미해소 `UNKNOWN`이 있으면 다른 후보의 더 늦은 시도나 새 공식 가용 관측도 우회 예약을 열지 못하고, 정확한 결제 완료 근거가 하나라도 있으면 모든 후속 예약을 막습니다. 원본이 `CONFIRMED_ABSENT`로 해소되면 이 watch-global fence도 끝나므로 다른 후보 B의 fresh 가용성은 정상 최초 episode를 열 수 있고, 원본 A 자체만 confirmed-absent 복구 episode를 한 번 사용합니다. 수동 복구는 유일한 원본 attempt를 가리키는 child lineage로 한 번만 소비하며, 그 child가 다시 `UNKNOWN`이 되어도 같은 예외를 재귀 적용하지 않습니다.
-- `UNKNOWN`의 공식 확인이 계속 `INCONCLUSIVE`이면 최초 확인과 별도로 최대 6회까지 30초, 30초, 30초, 5분, 15분, 60분 간격으로 확인합니다. 세 번째 재확인부터는 자동 확인을 계속하면서도 사용자가 공식 예약 내역을 직접 확인해 제한적인 1회 재개를 승인할 수 있습니다. 여섯 번째까지 결론이 없거나 마지막 한 번만 `NOT_FOUND`인 경우는 `exhausted_unresolved`로 닫아 더 이상 무한 재확인하지 않습니다. 단 공식 페이지에 도달조차 못한 `official_read_unavailable`은 이 횟수를 소비하지 않습니다. 인증된 session이 없는 순간의 확인은 운영사에게 아무것도 묻지 못한 상태이므로, 살아 있는 예약을 근거 없이 미해결로 닫지 않습니다. 이 상태는 불명확한 예약 결과가 session을 폐기한 직후에 자주 발생합니다.
+- `UNKNOWN`의 공식 확인이 계속 `INCONCLUSIVE`이면 최초 확인과 별도로 최대 6회까지 30초, 30초, 30초, 5분, 15분, 60분 간격으로 확인합니다. 세 번째 재확인부터는 자동 확인을 계속하면서도 사용자가 공식 예약 내역을 직접 확인해 제한적인 1회 재개를 승인할 수 있습니다. 여섯 번째까지 결론이 없거나 마지막 한 번만 `NOT_FOUND`인 경우는 `exhausted_unresolved`로 닫아 더 이상 무한 재확인하지 않습니다. 단 공식 페이지에 도달조차 못한 `official_read_unavailable`은 이 횟수를 소비하지 않습니다. 인증된 session이 없는 순간의 확인은 운영사에게 아무것도 묻지 못한 상태이므로, 살아 있는 예약을 근거 없이 미해결로 닫지 않습니다. 이 상태는 불명확한 예약 결과가 session을 폐기한 직후에 자주 발생합니다. 횟수를 아끼는 대신 다음 확인은 `UNKNOWN`과 결제 대기 모두 시도 시작 뒤 경과 시간만큼(최소 30초, 최대 15분) 미루며, 횟수 간격표가 더 길면 그 값을, 결제기한이 더 이르면 기한을 씁니다. 그래서 읽기 불가가 이어져도 같은 공식 목록 읽기를 관측 주기마다 즉시 반복하지 않습니다. 즉시 확인은 아직 한 번도 재확인하지 않은(`last_reconciled_at` 없음) 시도에만 적용합니다.
 - 인증 필요·운영사 보호 신호는 예약 명령 경계를 기준으로 분리합니다. 영속된 `reservation_requested` 전에 끝난 시도만 `AUTH_REQUIRED`·`PROVIDER_BLOCKED`와 재인증 뒤 `auth:` 예약 episode를 가질 수 있습니다. 그 단계 뒤의 terminal 또는 최초 공식 확인에서 같은 신호가 나오면 명령 결과를 `UNKNOWN`으로 보존하고 계정·watch만 `auth_required`로 멈추며, 같은 credential generation을 다시 인증해도 새 예약 없이 read-only reconciliation만 재개합니다. 단, 같은 최초 확인에서 provider별 exact `CONFIRMED_PAYMENT_REQUIRED`·`CONFIRMED_PAID` 양성 근거를 얻었다면 그 근거가 terminal의 인증·보호 신호보다 우선합니다. 재확인 중의 인증·보호 신호는 6회 evidence 횟수를 소비하지 않고 기존 수동 승인 marker를 지우며, 새 generation은 과거 시도의 예약 상태를 자동으로 이어서 판단하지 않습니다. legacy `AUTH_REQUIRED`·`PROVIDER_BLOCKED` 행도 `reservation_requested`가 남아 있으면 재인증 시 `UNKNOWN`으로 정규화하고 예약 claim을 허용하지 않습니다. 인증·보호 근거는 해당 provider와 credential generation의 계정 행에 먼저 적용합니다. 외부 I/O 중 watch 삭제가 이긴 경합에서는 존재하지 않는 watch 전이·outbox를 만들지 않지만 계정 강등만 커밋해 provider-global 호출 gate가 삭제된 aggregate와 함께 사라지지 않게 합니다.
 - `NOT_AVAILABLE` 뒤에는 확정적인 판매 불가 관측과 그 이후의 새 행동 가능 관측이 모두 있어야 다음 가용성 에피소드를 엽니다. 연속 행동 가능 관측만으로 즉시 재시도하지 않습니다.
 - adapter가 정상 반환한 `FAILED`는 예약 명령 전달 전 종료가 확인된 결과이므로 공식 예약 내역 수동 확인을 요구하지 않습니다. 반대로 KORAIL·SRT 외부 호출 경계를 탈출한 timeout·transport·5xx·응답 검증 예외는 명령 전달 여부를 증명할 수 없으므로 `UNKNOWN`으로 보존해 공식 확인과 재조정으로 보냅니다. KORAIL은 예약 click 사실이나 `reservation_requested` 시각 중 하나만 남은 부분 증거도 전달 가능성으로 간주해 `UNKNOWN`으로 잠급니다. `0040_legacy_failed_unknown`은 이 구분을 영속하기 전 외부 provider가 남긴 `FAILED/PROVIDER_UNAVAILABLE` 중 확인·재조정 근거가 없는 완료 행을 배포 시 한 번 `UNKNOWN`으로 보수 정규화하고 즉시 읽기 전용 재확인을 예약합니다. 이 데이터 fence는 downgrade로 되돌리지 않으며, 구버전으로 복귀해야 하면 업그레이드 전 검증 백업을 복원합니다. 보호 응답과 공식 부재가 두 번 확인되지 않은 `UNKNOWN`은 자동으로 새 시도를 열지 않고 공식 예약 내역 확인 또는 계정·운영 상태 확인을 안내합니다.
@@ -654,6 +654,13 @@ HTTP 500~599이며 페이지 본문만으로 만드는 점검 판정과 구분�
 오류는 제외합니다. page safety는 호출 제한·보호·명시적 점검을 먼저 검사한 뒤 이 근거가 있으면 일부
 결과가 남아 있어도 검색을 중단합니다. 기존 callback의 상태 정규화도 이 owner로 이동하며 facade는
 수집 위임만 유지합니다.
+HTTP 200으로 반환된 조회 보호 오류는 `pydoll/search_response_protection.py`가 보완합니다. 단회 검색이
+시작된 뒤 공식 HTTPS host의 XHR·Fetch만 최대 64건 관측하며, 한 snapshot에서 최대 4건·본문당 256KiB·
+읽기당 2초로 제한합니다. 미완료 응답은 뒤로 보내 완결된 업무 응답을 가리지 않게 하며, 최상위 JSON
+`errCode`가 정확히 `macro_err1`일 때만 코드 소유의 보호 근거를 반환합니다. 일반 설정 JSON의 NetFunnel
+문자열이나 HTML의 자유 텍스트는 이 근거가 아닙니다. 본문·주소·requestId는 메모리에서만 처리하고
+탭 교체·검색 초기화·예약·내역 조회·종료 경계에서 폐기합니다. 기존 typed 보호 오류와 공통 보호 대기를
+사용하고 다른 경로로 재조회하지 않습니다.
 Playwright·Pydoll·sidecar·projection·query runtime consumer는 이 leaf owner들을 직접 사용합니다. Pydoll
 page-safety도 이 leaf를 직접 참조하므로 top-level automation으로 역의존하지 않습니다. 보호 문구는 모든
 browser 경로에서 같은 sanitized trigger로 닫고,
@@ -697,6 +704,12 @@ main query runtime이 만든 남은 deadline은 내부 `X-Rail-Timeout-Ms`로 si
 
 #### KORAIL 인증·조회·예약의 공통 대기
 
+`GET /api/v1/seat-status/status`도 검색에 주입한 동일한 Redis 공통 대기 owner를 확인합니다. 로그인 보호로
+열린 대기가 좌석 전용 key에 없더라도 `cooldown`과 남은 시간을 반환합니다. 저장소 판정이 불가능하면
+`source_unavailable` 대기로 닫고, 여러 대기의 남은 시간이 같으면 보호 사유를 우선합니다. 상태 조회는
+공식 로그인·검색을 실행하거나 대기 종료 시각을 갱신하지 않습니다. `ready`는 활성 대기가 없다는 뜻이며
+현재 인증이나 좌석 조회 성공을 보장하지 않습니다.
+
 v1.2.11의 `korail_sidecar/provider_cooldown.py`는 위 검색 전용 정책과 인증·예약 호출 사이의 공통
 진입 판정을 소유합니다. production은 Redis를 사용하며, 명시적으로 주입하는 `MemoryProviderCooldown`은
 테스트용입니다. Redis URL이 없으면 자동 메모리 대체로 공식 요청을 허용하지 않습니다. sidecar runtime은
@@ -712,9 +725,23 @@ production sidecar의 `/readyz`는 브라우저 준비 상태뿐 아니라 공�
 고정 key `rail-waitlist:korail:provider-admission:v1`에는 계정 정보 없이 닫힌 이유·UTC 종료 시각·실제
 로그인 5xx 횟수를 저장합니다. Lua는 Redis `TIME`으로 읽고 원자적으로 가장 늦은 종료 시각을 보존하며,
 같은 시각에는 보호 이유를 우선합니다. 실제 로그인 5xx는 최대 세 단계 300→600→900초, 조회의 공식
-서버 오류는 최소 300초, 보호·403·429는 최소 900초로 기존의 더 긴 대기를 줄이지 않습니다. 새 공식
+서버 오류는 최소 300초입니다. 보호 응답은 `SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS`(기본·최소 60초), 호출
+제한은 `SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS`(기본 300초)를 그대로 적용하며 기존의 더 긴 대기를 줄이지
+않습니다. 예전의 900초 하한은 사용하지 않습니다. 새 공식
 인증 성공은 횟수만 초기화하고 대기는 남깁니다. 조회 성공·계정 세대 변경은 둘 다 초기화하지 않습니다.
 실제 갱신 뒤 hash TTL은 1일이며 읽기는 갱신하지 않습니다.
+
+저장된 계정의 `last_auth_status=authenticated`와 현재 keepalive 결과는 구분합니다. 그 상태의 계정이
+실제 예열에서 `provider_blocked`를 받으면 session manager는 provider·credential generation·저장 auth
+revision을 기록하고, 같은 revision의 다음 로그인은 보호 backoff(900초에서 시작해 반복마다 두 배, 최대
+7200초)가 지난 뒤에만 제출합니다. 그동안 좌석 관측은 인증 대기로 멈춥니다. 자동 재시도가 성공하거나
+새로운 저장 revision·계정 세대 또는 재사용 가능한 같은 세대의 공식 양성 session이 확인되면 이 중단을
+벗어납니다. 과거 성공 이력을 다시 쓰거나 공통 대기를 삭제하지 않습니다.
+이 중단은 `rail_provider_accounts`의 halt 컬럼 쌍(정지된 credential generation과 중단 당시 revision의
+micros)으로 저장되어 API 재시작을 견디며, 재시작 후 최초 예열은 정지를 복원해 첫 보호 backoff를 먼저
+기다립니다. 정지는 저장된 행의 revision과 정확히 일치할 때만 유효하므로, 어떤 인증 쓰기든 `updated_at`을
+회전시키면 정지가 자동 만료됩니다. 공식 양성 session이 정지를 해제할 때는 정지 제거와 watch 재개가
+같은 트랜잭션에서 커밋되고, 계정 삭제 후 재등록은 새 행이므로 처음부터 무정지 상태입니다.
 
 Main query와 sidecar는 cache 이전과 실행 gate 이후에 확인하고, 인증 actor는 auth lock 이후·세션 probe
 실패 후 재인증 이전에 재확인합니다. 예약과 공식 내역 읽기도 실행 경계에서 확인합니다. 동시성은 기존
@@ -842,16 +869,19 @@ KORAIL prewarm은 같은 auth lock 안에서 기존 session을 공식 same-origi
 `last_verified`·`last_used`를 갱신합니다. 검증에 실패하거나 응답이 로그인 상태를 확정하지 못한 session은 먼저
 폐기한 뒤 같은 호출 안에서 새 로그인을 한 번 수행합니다. 즉 keepalive 불확실성 때문에 계정이 다음 주기까지
 미인증으로 남지 않습니다. 실패 backoff는 원인에 따라 나뉩니다. 운영사의 자격증명 판정인 `auth_required`는
-60초부터 최대 900초까지, 보호 응답은 처음부터 900초를 적용합니다. 반면 자격증명 확인에 도달하지도 못한
+60초부터 최대 900초까지, 보호 응답은 900초부터 최대 7200초까지 적용합니다. 코레일 탐지가 로그인 제출 간격으로
+차단하므로 보호 직후의 짧은 재시도를 피합니다. 반면 자격증명 확인에 도달하지도 못한
 어댑터·DB 실패는 5초부터 최대 60초까지만 기다려 어댑터가 살아나는 즉시 session이 복구됩니다. 저장된
 `auth_required` 상태는 같은 DB revision에서 운영사 판정 기준 최대 5회까지 복구를 시도하고, `provider_blocked`는
-반복 로그인이 차단을 키우므로 revision당 1회를 유지합니다. 어댑터 장애처럼 운영사에 닿지 못한 실패는 이
+횟수 제한 대신 보호 backoff 간격으로 계속 복구를 시도합니다. 어댑터 장애처럼 운영사에 닿지 못한 실패는 이
 복구 예산을 소비하지 않으며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
 
 갱신 임계값은 provider마다 다릅니다. KORAIL은 재사용 기한이 `last_verified_at` 기준이고 성공한 prewarm이 그
 시각을 항상 갱신하므로, `last_verified_age + local_reuse_remaining`으로 재사용 창을 정확히 역산할 수 있습니다.
 그 창의 25%를 임계값으로 쓰되 최소 120초, 최대 600초, 그리고 창의 50%를 넘지 않도록 제한합니다. 기본 설정인
 1800초 창에서는 만료 450초 전부터 갱신을 시작하므로 한 번 실패해도 만료 전에 다시 시도할 여유가 남습니다.
+`KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS` 상한인 7200초 창에서는 600초 전부터 갱신해 keepalive 로그인
+간격이 약 110분이 됩니다.
 SRT는 재사용 기한이 `last_used_at` 기준이고 session을 재사용하는 prewarm이 `last_verified_at`을 갱신하지 않아
 같은 역산이 매 tick 커집니다. 그대로 두면 예열과 DB 쓰기가 주기마다 반복되므로 SRT는 120초 고정 창을
 유지합니다. SRT까지 앞당기려면 sidecar 계약에 재사용 창 길이를 명시적 필드로 노출하는 선행 작업이 필요합니다.
@@ -909,10 +939,27 @@ global은 canonical owner로 복원됩니다.
 빈 목록의 성공 조건은 `h_msg_cd`·`h_msg_txt`가 모두 누락 또는 빈 값인 기존 응답, 또는 정확히
 `h_msg_cd=P100`·`h_msg_txt=검색된 데이터가 없습니다.`인 응답입니다. `P100`이라도 문구가 다르거나
 여정 배열이 비어 있지 않으면 인정하지 않으며, 다른 코드나 실패 결과를 빈 목록으로 바꾸지 않습니다.
+예약이 있는 목록은 `jrny_info`가 객체 배열이고 `h_msg_cd`가 누락·빈 값이거나 정보성 성공 코드
+(`I`와 영문 2자·숫자 6자리, 예: 시간표 조회 성공의 `IRG000000`)일 때만 `nonempty`로 인정하며, 안내 문구는
+문자열이면 허용합니다. 기존 조건은 항목이 있는 목록에도 빈 코드·빈 문구를 요구해서, 2026년 11월 2일 실제 예약
+직후 처음 들어온 항목 있는 응답을 `invalid_response`로 거부했습니다. 당시 어느 본문 조건에서 거부됐는지는
+기록되지 않아 확정하지 못했습니다. `nonempty`는 부재 근거를 만들지 않고, 예약 일치는 계속 렌더링된 공식
+카드로만 판단합니다.
 요청 주소·인증 자료·응답 본문은 snapshot에 저장하지 않으며 별도 목록 요청을 만들지 않습니다.
 이 근거도 목록 제목, 로딩 없음, 카드·변형 카드 0개와 연속 두 번 안정된 DOM 확인이 함께 있어야
 목록 조회 완료로 수용합니다. 인증 만료, HTTP 오류, 중복·불완전·이전 문서 응답은 빈 목록이 아닙니다.
 이는 목록 완료 판독의 보완이며, 기존 UNKNOWN의 좌석 상관 조건이나 예약 재제출 fence를 바꾸지 않습니다.
+
+완료 검증은 현재 요청 ID와 요청 시작 이후의 유한한 시각, 먼저 검증된 응답 헤더, 실제
+`loadingFinished` 이벤트를 함께 요구합니다. 완료 이벤트의 시각이 `responseReceived` 시각 이상이라는
+추가 조건은 두지 않습니다. 실제 Chrome 표본에서 callback은 헤더→완료 순서인데 완료 시각이
+414.301ms 앞선 정상 응답이 확인됐기 때문입니다. 헤더보다 먼저 처리된 완료나 요청 시작 이전의
+완료는 계속 거부합니다. 실패 진단은 `reservation_list_read_diagnostic`의 닫힌 boundary·state·failure와
+요청 관측·헤더/완료 검증·DOM 상태 boolean만 기록하고 본문·URL·request ID·계정은 포함하지 않습니다.
+본문 계약 위반의 원인은 INFO 이벤트 `reservation_list_response_rejected`가 닫힌 사유(`body_shape`,
+`payload_not_object`, `result_not_success`, `rows_not_list`, `rows_malformed`, `message_contract`)와
+결과값·형식이 맞는 메시지 코드·문구 유무·행 형태와 개수만 기록합니다. 코드나 문구가 붙은 항목 목록을
+받아들일 때는 같은 투영을 `reservation_list_response_accepted`로 남겨 실제 성공 코드를 확인할 수 있게 합니다.
 
 계정 저장과 동일 세대의 세션 재인증은 별도 계약입니다. 관리자 계정 PUT는 입력이 기존 값과 같아도
 성공한 저장마다 `credential_version`을 하나 증가시킵니다. 기존 세대를 유지하는 재인증은 정상
@@ -1056,6 +1103,18 @@ session의 submit 전 단계가 실패한 경우에만 cold session으로 한 �
 source 오류와 취소에서는 재시도하지 않고 persistent browser를 폐기합니다. non-persistent context의 exception
 metadata 전달, 반복 취소 중 cleanup과 close 시 replay manager를 active browser보다 먼저 폐기하는 순서도 같은
 owner가 유지합니다.
+
+예외적으로 `KORAIL_BROWSER_PROFILE_MODE=dedicated_manual`은 자동 재로그인 대신 adapter가 소유한 live
+Chrome에서 사용자가 직접 만든 공식 세션만 사용합니다. 현재 보유 탭에 정확한 인증 header가 없으면 같은
+browser context의 읽기 전용 공식 `loginCheck`를 한 번 확인합니다. 양성이면 그 공식 근거를 유지한 채 검색
+화면으로 복귀하고, 비인증이거나 확인할 수 없으면 로그인 페이지 이동·입력·제출 없이
+`manual_login_required`를 내부 상태로 반환합니다. sidecar HTTP 경계는 이를 기존 `auth_required`로 투영합니다.
+이때 인증 actor는 같은 credential generation의 브라우저와 보유 탭을 폐기하지 않습니다. 공식 로그인 화면이
+사용자 동작으로 새 탭을 열어도 세션은 같은 browser context에서 확인하되, adapter 자체는 새 로그인 탭이나
+새 프로세스를 만들지 않습니다. 수동 인계 상태에서는 일반 authenticated session의 TTL·최대 사용 횟수가
+지났더라도 현재 live browser를 먼저 검사합니다. generation이 바뀌면 대기 중 session을 먼저 폐기합니다.
+일반 Chrome 프로필·쿠키 import와는 별도 경계이며, 기본값 `ephemeral`의 기존 자동 로그인 동작은 바뀌지
+않습니다.
 `korail_pydoll_browser.py`는 이 owner를 직접 사용하고, top-level `korail_pydoll_search_actor.py`는 기존 공개
 40개·private 3개와 구형 pickle global을 같은 객체로 보존하는 definition-free compatibility facade입니다.
 canonical·legacy·browser import 순서와 optional Pydoll backend의 지연 import 계약도 바뀌지 않습니다.
@@ -1085,6 +1144,31 @@ navigation과 network listener를 만들지 않고 같은 options·browser start
 확인하며, 실제 listener import·부착 실패는 session의 `browser_launch` 경계에서 fail-closed 됩니다.
 재사용 direct 검색은 기존 tab에서 capture를 시작했더라도 fresh tab 교체 직후 새 network-log 길이로 capture
 offset을 다시 잡은 다음 한 번만 navigation하므로 이전 tab의 offset으로 첫 business request를 건너뛰지 않습니다.
+
+프로필 기본값은 Pydoll이 소유하고 종료 시 정리하는 임시 `user-data-dir`입니다. `dedicated_auto`와
+`dedicated_manual`은 같은 앱 전용 영속 profile 경계를 사용합니다. `chromium_lifecycle.py`가 절대 경로,
+전용 marker, symlink 부재, 읽기·쓰기 권한과 Linux의 `0700` 경계를 확인한 뒤 `--user-data-dir`을 추가합니다.
+일회성 bootstrap은 브라우저를 실행하지 않고 named volume과 marker를 초기화합니다. runtime entrypoint가
+non-blocking owner lock을 adapter 수명 동안 보유하고, 자신이 정상 종료한 Chrome의 `Singleton*` symlink만
+정리합니다. readiness probe와 공개 읽기 검색은 별도 임시 profile을 사용해 live 인증 profile을 잠그거나
+탭을 교체하지 않습니다.
+
+`dedicated_auto`는 서버에 저장된 계정으로 기존 Pydoll 로그인 driver를 실행하되, 임시 profile 대신 앱 전용
+profile을 계속 사용합니다. 비밀번호 관리자를 읽거나 일반 Chrome profile을 가져오지 않고, 보호 응답은 기존
+Redis provider cooldown으로 전파합니다. `dedicated_manual`만 자동 자격증명 제출을 비활성화하고 noVNC 수동
+인계 상태를 유지합니다.
+
+noVNC는 기본 view-only이며 `KORAIL_NOVNC_INPUT_ENABLED=true`를 명시한 `dedicated_manual` 인계에서만
+adapter 화면 입력을 허용합니다. host loopback·비밀번호·clipboard 차단 경계는 그대로 유지합니다. 실제
+KORAIL 세션은 정상 Chrome 종료·재시작 뒤 사라진 표본과 유지된 표본이 모두 있으므로 profile 복원을 계약으로
+삼지 않습니다. 기본 인증 계약은 같은 adapter의 live browser 연속 수명이며, 프로세스 재시작 뒤에는 공식
+세션 확인을 새로 통과해야 합니다.
+
+`dedicated_manual`의 수동 범위는 최초 공식 로그인뿐입니다. 인증 승격 뒤 API session manager는 재사용 기한이
+가까워지면 기존 live Chrome의 공식 세션을 자동으로 재확인합니다. 자격증명 지문이 같으면 로컬 TTL이 이미
+지났거나 저장 계정 세대가 갱신됐어도 browser를 닫지 않고 fresh evidence를 받은 뒤 새 세대에 결합합니다.
+자격증명 지문이 달라지거나 공식 확인이 음성이면 기존 세션을 재사용하지 않습니다. API가 중지된 adapter 단독
+진단에서는 이 주기 관리자가 실행되지 않으므로 장기 자동 유지 상태로 해석하지 않습니다.
 
 `korail_pydoll_browser.py`는 여기서 더 작은 정책 owner로 분해하지 않는 frozen concrete composition shell입니다.
 client는 인증·읽기 전용 검색·예약 actor를, session은 Chromium lifecycle과 로그인·검색·예약 DOM driver를
@@ -1127,10 +1211,12 @@ prewarm과 recoverable revision별 bounded 복구, 재사용 가능한 session�
 credential 없는 revision tuple·시도 횟수·완료 여부만 남기며 provider·persistence 오류 본문은 로그에 넣지
 않습니다. 시도 횟수는 시작한 시도와 운영사 판정을 분리해 세므로, 어댑터 장애 재시도가 revision의 복구
 예산을 소모하지 않으면서도 첫 즉시 재시도 이후에는 backoff를 따르게 합니다.
-실제 `provider_blocked`가 저장된 동안 관측 worker도 같은 운영사의 좌석 provider I/O를 만들지 않습니다. 로그인
-manager가 보호 backoff 뒤 현재 credential generation을 인증하고 복구 전이를 commit하면 해당 watch를 즉시 다시
-스케줄합니다. 단순 `auth_required`는 로그인 없는 공개 좌석 관측까지 막는 provider-wide 보호 신호로 사용하지
-않습니다.
+실제 `provider_blocked`가 저장된 동안, 그리고 keepalive 보호 판정이 만들어 현재 revision에 결린 영속
+halt가 살아 있는 동안 관측 worker도 같은 운영사의 좌석 provider I/O를 만들지 않습니다. 인증 이력이
+`authenticated`로 남아 있어도 halt가 유효하면 관측은 같은 AUTH_REQUIRED 대기를 유지하므로, 재시작이
+보호 판정 뒤 좌석 조회를 한 번 더 새는 구실이 되지 않습니다. 로그인 manager가 보호 backoff 뒤 현재
+credential generation을 인증하고 복구 전이를 commit하면 해당 watch를 즉시 다시 스케줄합니다. 단순
+`auth_required`는 로그인 없는 공개 좌석 관측까지 막는 provider-wide 보호 신호로 사용하지 않습니다.
 top-level `provider_runtime.py`는 기존 public 29개·private 6개 표면과 local class/function 11개의 구형
 pickle lookup을 같은 canonical 객체로 유지하는 one-way compatibility facade입니다. `main.py`는 canonical
 runtime을 직접 조립하고 production code는 legacy facade를 다시 소비하지 않습니다.

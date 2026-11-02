@@ -404,6 +404,40 @@ async def test_swipe_preserves_direction_bounds_failures_and_single_cancel_relea
         assert port.mouse_events[-1][0] == "mouseReleased"
         assert port.pressed is False
 
+    # A stalled release dispatch must not hang forever: the bounded cleanup turns
+    # the wedge into the same fail-closed signal so the actor discards the session.
+    class _StalledReleasePort(_Port):
+        async def _dispatch_mouse_event(
+            self,
+            event_type: str,
+            x: float,
+            y: float,
+            *,
+            buttons: int,
+            button: str | None = None,
+            click_count: int | None = None,
+        ) -> None:
+            if event_type == "mouseReleased":
+                self.mouse_events.append((event_type, x, y, {"buttons": buttons}))
+                await asyncio.get_running_loop().create_future()
+            await super()._dispatch_mouse_event(
+                event_type,
+                x,
+                y,
+                buttons=buttons,
+                button=button,
+                click_count=click_count,
+            )
+
+    stalled = _StalledReleasePort(viewports=[_Viewport(bounds)])
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await asyncio.wait_for(
+            owner.swipe_hour_carousel(stalled, object(), ".slick-next"),
+            timeout=owner.HOUR_CAROUSEL_RELEASE_TIMEOUT_SECONDS + 1.0,
+        )
+    assert raised.value.stage == "departure_hour_navigate"
+    assert stalled.mouse_events[-1][0] == "mouseReleased"
+
 
 @pytest.mark.asyncio
 async def test_keyboard_is_fail_closed_but_preserves_direction_and_cancellation() -> None:

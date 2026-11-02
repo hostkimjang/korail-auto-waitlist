@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import FrozenInstanceError, asdict, dataclass
+from urllib.parse import urlencode
 
 import pytest
 
 from rail_waitlist.korail_sidecar.pydoll.login_submission import (
+    LOGIN_ERR_CODE_UNRECOGNIZED,
     PydollLoginResponseUnavailable,
     PydollLoginSubmission,
+    sanitized_login_err_code,
 )
+
+
+def test_login_err_code_keeps_only_closed_code_tokens() -> None:
+    assert sanitized_login_err_code("macro_err1") == "macro_err1"
+    for value in ("로그인 차단", "free text code", "x" * 33, "", None, 1):
+        assert sanitized_login_err_code(value) == LOGIN_ERR_CODE_UNRECOGNIZED
 
 
 @dataclass
@@ -25,12 +35,16 @@ def request(
     url: str = "https://www.korail.com/dynamic-login-endpoint",
     method: str = "POST",
     resource_type: str = "XHR",
+    post_data: object = None,
 ) -> dict[str, object]:
+    request_data: dict[str, object] = {"url": url, "method": method}
+    if post_data is not None:
+        request_data["postData"] = post_data
     return {
         "params": {
             "requestId": request_id,
             "type": resource_type,
-            "request": {"url": url, "method": method},
+            "request": request_data,
         }
     }
 
@@ -51,8 +65,25 @@ def response(
     }
 
 
-def terminal(request_id: str = "login-1") -> dict[str, object]:
-    return {"params": {"requestId": request_id}}
+def terminal(
+    request_id: str = "login-1",
+    *,
+    encoded_data_length: object = 512,
+) -> dict[str, object]:
+    return {"params": {"requestId": request_id, "encodedDataLength": encoded_data_length}}
+
+
+LOGIN_PAYLOAD = {
+    "UserId": "fixture-private-account",
+    "selInputFlg": "2",
+    "hidMemberFlg": "1",
+    "txtDv": "2",
+    "encUserId": "fixture-private-encrypted-account",
+    "keyname": "fixture-private-key",
+    "encUserPwd": "fixture-private-encrypted-password",
+    "useKeySec": "N",
+    "deviceId": "fixture-private-device",
+}
 
 
 @pytest.mark.parametrize("resource_type", ["XHR", "Fetch"])
@@ -267,6 +298,58 @@ def test_second_post_response_and_completion_control_aggregate_safety(status: in
         assert owner.snapshot().failure == "http_error"
 
 
+def test_only_a_confirmed_integration_failure_can_open_independent_auth_verification() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    login_url = "https://www.korail.com/ebizweb/common/loginProcess"
+    integration_url = "https://www.korail.com/ebizweb/integrate/srCheck.do"
+    owner.on_request_will_be_sent(request(url=login_url))
+    owner.on_response_received(response(url=login_url))
+    owner.on_loading_finished(terminal())
+    owner.on_request_will_be_sent(request("integration", url=integration_url))
+    owner.on_response_received(response(500, request_id="integration", url=integration_url))
+
+    assert owner.authentication_verification_mode() == "pending"
+    owner.on_loading_finished(terminal("integration"))
+    assert owner.authentication_verification_mode() == "independent"
+    assert [row.request_role for row in owner.diagnostics()] == [
+        "login_submission",
+        "integration_check",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure_url", "expected_role"),
+    [
+        ("https://www.korail.com/ebizweb/common/loginProcess", "login_submission"),
+        ("https://www.korail.com/dynamic-login-endpoint", "unresolved"),
+    ],
+)
+def test_login_or_unresolved_failure_never_opens_independent_verification(
+    failure_url: str,
+    expected_role: str,
+) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request(url=failure_url))
+    owner.on_response_received(response(500, url=failure_url))
+    owner.on_loading_finished(terminal())
+
+    assert owner.authentication_verification_mode() == "blocked"
+    assert owner.diagnostics()[0].request_role == expected_role
+
+
+def test_integration_failure_without_a_completed_login_request_stays_blocked() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    integration_url = "https://www.korail.com/ebizweb/integrate/srCheck.do"
+    owner.on_request_will_be_sent(request(url=integration_url))
+    owner.on_response_received(response(500, url=integration_url))
+    owner.on_loading_finished(terminal())
+
+    assert owner.authentication_verification_mode() == "blocked"
+
+
 @pytest.mark.parametrize("failure", ["network", "invalid", "missing_id", "bound"])
 def test_multi_post_failure_is_sticky_and_late_success_cannot_erase_it(failure: str) -> None:
     owner = PydollLoginSubmission(10)
@@ -449,7 +532,8 @@ def test_invalid_timeout_is_rejected(value: float) -> None:
         PydollLoginSubmission(value)
 
 
-PUBLIC_BUNDLE = "https://cdn.korail.com/bundle/bundle.38e6dfeb5a3af0094a69.js"
+PUBLIC_BUNDLE_PATH = "https://cdn.korail.com/bundle/bundle.fcfd32491c1f6e0b2541.js"
+PUBLIC_BUNDLE = PUBLIC_BUNDLE_PATH + "?v=1.0.221"
 
 
 def frame(column: object = 30620, *, name: str = "handleLogin") -> dict[str, object]:
@@ -464,18 +548,27 @@ def with_initiator(event: dict[str, object], initiator: object) -> dict[str, obj
 
 
 @pytest.mark.parametrize(
-    ("path", "family"),
+    ("path", "family", "request_role"),
     [
-        ("/ebizweb/common/loginProcess", "public_login"),
-        ("/ebizweb/integrate/srCheck.do", "integration_check"),
-        ("/web_s/fixture-private-path", "business_dynamic"),
-        ("/web_s", "official_other"),
-        ("/ebizweb/common/loginProcess/extra", "official_other"),
-        ("/ebizweb/common/LoginProcess", "official_other"),
-        ("/fixture-private-path", "official_other"),
+        (
+            "/ebizweb/tour/mypage/pwd_action/pblk",
+            "public_key",
+            "conflicting",
+        ),
+        ("/ebizweb/common/loginProcess", "public_login", "login_submission"),
+        ("/ebizweb/integrate/srCheck.do", "integration_check", "conflicting"),
+        ("/web_s/fixture-private-path", "business_dynamic", "login_submission"),
+        ("/web_s", "official_other", "login_submission"),
+        ("/ebizweb/common/loginProcess/extra", "official_other", "login_submission"),
+        ("/ebizweb/common/LoginProcess", "official_other", "login_submission"),
+        ("/fixture-private-path", "official_other", "login_submission"),
     ],
 )
-def test_request_diagnostics_classify_only_path_family_and_keep_no_material(path, family) -> None:
+def test_request_diagnostics_combine_closed_path_and_callsite_without_material(
+    path: str,
+    family: str,
+    request_role: str,
+) -> None:
     owner = PydollLoginSubmission(10)
     owner.arm()
     event = with_initiator(
@@ -497,6 +590,7 @@ def test_request_diagnostics_classify_only_path_family_and_keep_no_material(path
     assert row.initiator_handle_login is True
     assert row.initiator_complete is True
     assert row.public_callsite == "login_submit"
+    assert row.request_role == request_role
     assert owner.snapshot().failure == "http_error"
     encoded = json.dumps([asdict(item) for item in rows])
     for private_value in (path, "fixture-query", "login-1", "handleLogin", PUBLIC_BUNDLE):
@@ -511,6 +605,10 @@ def test_request_diagnostics_classify_only_path_family_and_keep_no_material(path
 @pytest.mark.parametrize(
     ("column", "callsite"),
     [
+        (30053, "unresolved"),
+        (30054, "login_bootstrap"),
+        (30088, "login_bootstrap"),
+        (30089, "unresolved"),
         (30619, "unresolved"),
         (30620, "login_submit"),
         (30651, "login_submit"),
@@ -532,15 +630,22 @@ def test_exact_public_callsite_spans_use_integer_utf16_columns(column, callsite)
     )
     row = owner.diagnostics()[0]
     assert row.public_callsite == callsite
+    expected_role = {
+        "login_bootstrap": "login_bootstrap",
+        "login_submit": "login_submission",
+        "integration_check": "integration_check",
+        "unresolved": "unresolved",
+    }[callsite]
+    assert row.request_role == expected_role
     assert row.initiator_handle_login is False
-    assert owner.snapshot().state == "posted"
+    assert owner.snapshot().state == ("missing" if callsite == "login_bootstrap" else "posted")
 
 
 @pytest.mark.parametrize(
     "changes",
     [
         {"url": PUBLIC_BUNDLE + "#fixture-fragment"},
-        {"url": PUBLIC_BUNDLE.replace("38e6", "ffff")},
+        {"url": PUBLIC_BUNDLE.replace("fcfd", "ffff")},
         {"lineNumber": 3},
         {"lineNumber": "2"},
         {"lineNumber": 2.0},
@@ -569,6 +674,57 @@ def test_parent_stack_can_supply_exact_callsite_and_both_roles_remain_mixed() ->
     owner.on_request_will_be_sent(with_initiator(request(), initiator))
     assert owner.diagnostics()[0].public_callsite == "mixed"
     assert owner.diagnostics()[0].initiator_handle_login is True
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_public_key_bootstrap_cannot_authorize_probe_before_login_submission(
+    wrapped: bool,
+) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    bootstrap_url = (
+        "https://www.korail.com/fixture-protection-transport"
+        if wrapped
+        else "https://www.korail.com/ebizweb/tour/mypage/pwd_action/pblk"
+    )
+    bootstrap_method = "POST" if wrapped else "GET"
+    owner.on_request_will_be_sent(
+        with_initiator(
+            request(
+                "bootstrap",
+                url=bootstrap_url,
+                method=bootstrap_method,
+                resource_type="Fetch",
+            ),
+            {"type": "script", "stack": {"callFrames": [frame(30054, name="callApi")]}},
+        )
+    )
+    owner.on_response_received(
+        response(request_id="bootstrap", url=bootstrap_url, resource_type="Fetch")
+    )
+    owner.on_loading_finished(terminal("bootstrap"))
+    assert owner.snapshot().state == "missing"
+    assert owner.snapshot().safe_to_probe is False
+    assert owner.diagnostics()[0].request_role == "login_bootstrap"
+
+    login_url = (
+        "https://www.korail.com/fixture-protection-transport"
+        if wrapped
+        else "https://www.korail.com/ebizweb/common/loginProcess"
+    )
+    owner.on_request_will_be_sent(
+        with_initiator(
+            request("login", url=login_url, resource_type="Fetch"),
+            {"type": "script", "stack": {"callFrames": [frame(30620, name="callApi")]}},
+        )
+    )
+    owner.on_response_received(response(request_id="login", url=login_url, resource_type="Fetch"))
+    owner.on_loading_finished(terminal("login"))
+    assert owner.snapshot().safe_to_probe is True
+    assert [row.request_role for row in owner.diagnostics()] == [
+        "login_bootstrap",
+        "login_submission",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -771,7 +927,7 @@ def test_verified_source_matches_with_query_but_retains_only_query_presence(url:
         PUBLIC_BUNDLE + "#",
         PUBLIC_BUNDLE + "?fixture-query#fragment",
         "https://evil.example?source=" + PUBLIC_BUNDLE,
-        PUBLIC_BUNDLE + "/extra?fixture-query",
+        PUBLIC_BUNDLE_PATH + "/extra?fixture-query",
         PUBLIC_BUNDLE.replace("cdn.korail", "cdn.\nkorail"),
         " " + PUBLIC_BUNDLE,
         PUBLIC_BUNDLE + "?" + "x" * 16384,
@@ -858,8 +1014,34 @@ def test_public_frame_budget_across_stack_parents_is_explicit(count: int) -> Non
     owner.on_request_will_be_sent(with_initiator(request(), {"stack": stack}))
     row = owner.diagnostics()[0]
     assert len(row.initiator_public_frames) == min(count, 8)
-    assert row.initiator_complete is (count <= 8)
-    assert row.public_callsite == ("login_submit" if count <= 8 else "unresolved")
+    assert row.initiator_public_frames_truncated is (count > 8)
+    assert row.initiator_complete is True
+    assert row.initiator_completion_reason == "complete"
+    assert row.public_callsite == "login_submit"
+
+
+def test_retention_limit_does_not_hide_late_parent_callsite() -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    wrapper = {
+        **frame(name="requestWrapper"),
+        "lineNumber": 403,
+        "columnNumber": 3377,
+    }
+    stack = {
+        "callFrames": [wrapper] * 9,
+        "parent": {"callFrames": [frame(30054, name="callApi")]},
+    }
+    owner.on_request_will_be_sent(with_initiator(request(), {"stack": stack}))
+    row = owner.diagnostics()[0]
+    assert row.initiator_frame_count == 10
+    assert len(row.initiator_public_frames) == 8
+    assert row.initiator_public_frames_truncated is True
+    assert row.initiator_complete is True
+    assert row.initiator_completion_reason == "complete"
+    assert row.public_callsite == "login_bootstrap"
+    assert row.request_role == "login_bootstrap"
+    assert owner.snapshot().state == "missing"
 
 
 def test_unresolved_parent_id_preserves_only_verified_coordinate_prefix() -> None:
@@ -980,6 +1162,8 @@ def test_frame_count_is_actual_bounded_work_and_scopes_are_unique(count: int) ->
     # Oversized nodes are rejected before visiting any of their frames.
     assert row.initiator_frame_count == (64 if count == 64 else 0)
     assert row.initiator_complete is (count == 64)
+    assert row.initiator_completion_reason == ("complete" if count == 64 else "frame_limit")
+    assert row.initiator_public_frames_truncated is False
     assert row.initiator_source_scopes == (("official_cdn",) if count == 64 else ())
 
 
@@ -1053,3 +1237,269 @@ def test_response_media_is_closed_bounded_and_independent_of_http_failure(mime, 
     encoded = json.dumps(asdict(row)) + repr(vars(owner))
     assert "fixture-private-media" not in encoded
     assert "fixture-private-header" not in encoded
+
+
+@pytest.mark.parametrize(
+    "post_data",
+    [json.dumps(LOGIN_PAYLOAD), urlencode(LOGIN_PAYLOAD)],
+    ids=["json", "form"],
+)
+def test_exact_public_login_payload_signature_is_closed_and_diagnostic_only(post_data: str) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request(post_data=post_data))
+    owner.on_response_received(response(500))
+    owner.on_loading_finished(terminal())
+
+    row = owner.diagnostics()[0]
+    assert row.payload_role == "login_submission"
+    assert row.request_payload_shape == "exact_login"
+    assert row.request_role == "unresolved"
+    assert owner.authentication_verification_mode() == "blocked"
+    retained = json.dumps(asdict(row)) + repr(vars(owner))
+    for private_value in (
+        value for value in LOGIN_PAYLOAD.values() if value.startswith("fixture-private-")
+    ):
+        assert private_value not in retained
+
+
+@pytest.mark.parametrize(
+    ("post_data", "expected_shape"),
+    [
+        (None, "absent"),
+        (1, "invalid"),
+        ("not-form-data", "invalid"),
+        (
+            json.dumps({key: value for key, value in LOGIN_PAYLOAD.items() if key != "keyname"}),
+            "partial_login",
+        ),
+        (
+            json.dumps({**LOGIN_PAYLOAD, "extra": "fixture-private-extra"}),
+            "login_with_additions",
+        ),
+        (urlencode(LOGIN_PAYLOAD) + "&UserId=fixture-private-duplicate", "invalid"),
+        ('{"UserId":"first","UserId":"fixture-private-duplicate"}', "invalid"),
+        ('{"x":' + "[" * 5000 + "0" + "]" * 5000 + "}", "invalid"),
+        ("x=" + "fixture-private-oversize" * 4000, "invalid"),
+    ],
+    ids=(
+        "missing",
+        "non-string",
+        "malformed-form",
+        "missing-field",
+        "extra-field",
+        "duplicate-form-field",
+        "duplicate-json-field",
+        "excessive-json-depth",
+        "oversize",
+    ),
+)
+def test_non_exact_payload_never_claims_login_role_or_retains_values(
+    post_data: object,
+    expected_shape: str,
+) -> None:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request(post_data=post_data))
+
+    row = owner.diagnostics()[0]
+    assert row.payload_role == "unresolved"
+    assert row.request_payload_shape == expected_shape
+    retained = json.dumps(asdict(row)) + repr(vars(owner))
+    for private_value in ("fixture-private-extra", "fixture-private-duplicate", "oversize"):
+        assert private_value not in retained
+
+
+def _completed_json_login_owner(
+    *,
+    recognized: bool = True,
+    encoded_data_length: object = 512,
+) -> PydollLoginSubmission:
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(
+        request(post_data=json.dumps(LOGIN_PAYLOAD) if recognized else "{}")
+    )
+    event = response()
+    params = event["params"]
+    assert isinstance(params, dict)
+    response_data = params["response"]
+    assert isinstance(response_data, dict)
+    response_data["mimeType"] = "application/json; charset=utf-8"
+    owner.on_response_received(event)
+    owner.on_loading_finished(terminal(encoded_data_length=encoded_data_length))
+    return owner
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "recognized", "expected"),
+    [
+        pytest.param(
+            '{"strResult":"SUCC","h_msg_cd":"IRZ000001",'
+            '"hc14100En":{"strCustNo":"fixture-private-customer"}}',
+            True,
+            "accepted",
+            id="accepted",
+        ),
+        pytest.param(
+            '{"strResult":"FAIL","h_msg_cd":"fixture-private-code",'
+            '"h_msg_txt":"fixture-private-message"}',
+            True,
+            "rejected",
+            id="failed-result",
+        ),
+        pytest.param(
+            '{"strResult":"SUCC","h_msg_cd":"fixture-private-code",'
+            '"hc14100En":{"strCustNo":"fixture-private-customer"}}',
+            True,
+            "rejected",
+            id="rejected-code",
+        ),
+        pytest.param(
+            '{"strResult":"SUCC","h_msg_cd":"","S_PASSCHG_YN":"Y",'
+            '"hc14100En":{"strCustNo":"fixture-private-customer"}}',
+            True,
+            "challenge",
+            id="password-change",
+        ),
+        pytest.param(
+            '{"strResult":"SUCC","h_msg_cd":"IRZ000001",'
+            '"hc14100En":{"strNotiTpCd":"MC",'
+            '"strCustNo":"fixture-private-customer"}}',
+            True,
+            "challenge",
+            id="notification-challenge",
+        ),
+        pytest.param(
+            '{"dynaPathResultCode":"fixture-private-result",'
+            '"errCode":"macro_err1","errEngMsg":"fixture-private-english",'
+            '"errMsg":"fixture-private-message","globalFlag":"fixture-private-flag",'
+            '"requestId":"fixture-private-request"}',
+            False,
+            "protection",
+            id="macro-protection",
+        ),
+        pytest.param(
+            '{"strResult":"SUCC","h_msg_cd":""}',
+            False,
+            "not_login_result",
+            id="generic-success",
+        ),
+        pytest.param(
+            '{"strResult":"SUCC","h_msg_cd":"",'
+            '"hc14100En":{"strCustNo":"first","strCustNo":"fixture-private-duplicate"}}',
+            True,
+            "unavailable",
+            id="duplicate-key",
+        ),
+        pytest.param(
+            "fixture-private-invalid-json",
+            True,
+            "unavailable",
+            id="invalid-json",
+        ),
+        pytest.param(
+            "[" * 5000 + "0" + "]" * 5000,
+            True,
+            "unavailable",
+            id="excessive-json-depth",
+        ),
+    ],
+)
+async def test_completed_response_body_is_reduced_to_one_closed_outcome(
+    body: str,
+    recognized: bool,
+    expected: str,
+) -> None:
+    owner = _completed_json_login_owner(recognized=recognized)
+    commands: list[dict[str, object]] = []
+
+    async def execute(command: dict[str, object]) -> object:
+        commands.append(command)
+        return {"result": {"body": body, "base64Encoded": False}}
+
+    assert await owner.classify_completed_response(execute) == expected
+    assert await owner.classify_completed_response(execute) == expected
+    assert len(commands) == 1
+    row = owner.diagnostics()[0]
+    assert row.response_auth_outcome == expected
+    # Only KORAIL's closed error code survives; every other response value stays private.
+    assert row.response_err_codes == (("macro_err1",) if expected == "protection" else ())
+    assert owner.authentication_verification_mode() == "standard"
+    retained = json.dumps(asdict(row)) + repr(vars(owner))
+    for private_value in (
+        "fixture-private-customer",
+        "fixture-private-code",
+        "fixture-private-message",
+        "fixture-private-duplicate",
+        "fixture-private-invalid-json",
+        "fixture-private-result",
+        "fixture-private-english",
+        "fixture-private-request",
+    ):
+        assert private_value not in retained
+
+
+@pytest.mark.asyncio
+async def test_unknown_json_retains_only_bounded_field_shape_and_discards_values() -> None:
+    owner = _completed_json_login_owner(recognized=False)
+    body = json.dumps(
+        {
+            "alpha": "fixture-private-top-level",
+            "nested": {
+                "beta": "fixture-private-nested",
+                "gamma": 17,
+            },
+        }
+    )
+
+    async def execute(_: dict[str, object]) -> object:
+        return {"result": {"body": body, "base64Encoded": False}}
+
+    assert await owner.classify_completed_response(execute) == "not_login_result"
+    row = owner.diagnostics()[0]
+    assert row.response_schema_fields == ("alpha", "nested", "nested.beta", "nested.gamma")
+    retained = json.dumps(asdict(row)) + repr(vars(owner))
+    assert "fixture-private-top-level" not in retained
+    assert "fixture-private-nested" not in retained
+
+
+@pytest.mark.asyncio
+async def test_base64_response_body_is_classified_without_retaining_material() -> None:
+    owner = _completed_json_login_owner()
+    body = (
+        b'{"strResult":"SUCC","h_msg_cd":"","hc14100En":{"strCustNo":"fixture-private-customer"}}'
+    )
+
+    async def execute(_: dict[str, object]) -> object:
+        return {
+            "result": {
+                "body": base64.b64encode(body).decode("ascii"),
+                "base64Encoded": True,
+            }
+        }
+
+    assert await owner.classify_completed_response(execute) == "accepted"
+    assert "fixture-private-customer" not in repr(vars(owner))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "encoded_data_length",
+    [None, True, -1, 65_537, float("nan"), 10**400],
+)
+async def test_missing_invalid_or_oversize_finished_length_blocks_body_read(
+    encoded_data_length: object,
+) -> None:
+    owner = _completed_json_login_owner(encoded_data_length=encoded_data_length)
+    called = False
+
+    async def execute(_: dict[str, object]) -> object:
+        nonlocal called
+        called = True
+        raise AssertionError("ineligible response body must not be read")
+
+    assert await owner.classify_completed_response(execute) == "unavailable"
+    assert called is False
+    assert owner.diagnostics()[0].response_auth_outcome == "unavailable"

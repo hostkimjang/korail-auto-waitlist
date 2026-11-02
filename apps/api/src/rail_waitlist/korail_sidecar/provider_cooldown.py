@@ -16,6 +16,11 @@ REASONS = frozenset(
     {"provider_unavailable", "provider_access_restricted", "cooldown_store_unavailable"}
 )
 KEY = "rail-waitlist:korail:provider-admission:v1"
+# Protection holds follow SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS. The floor matches the
+# setting's own minimum so a caller can shorten the hold but never turn it into a
+# tight retry loop against the provider's protection response.
+DEFAULT_PROTECTION_SECONDS = 60
+MINIMUM_PROTECTION_SECONDS = 60
 
 
 class ProviderCooldownDeferred(Exception):
@@ -41,7 +46,7 @@ class ProviderCooldown(Protocol):
 
     async def login_failed(self, status: int | None, failure: str | None) -> None: ...
 
-    async def protection_detected(self, duration_seconds: int = 900) -> None: ...
+    async def protection_detected(self, duration_seconds: int | None = None) -> None: ...
 
     async def authentication_succeeded(self) -> None: ...
 
@@ -62,11 +67,23 @@ def _duration(seconds: int, minimum: int) -> int:
     return max(minimum, seconds)
 
 
+def _protection_setting(seconds: int) -> int:
+    if type(seconds) is not int or not MINIMUM_PROTECTION_SECONDS <= seconds <= 86400:
+        raise ValueError("invalid provider protection cooldown setting")
+    return seconds
+
+
 class MemoryProviderCooldown:
     """Explicit test adapter; production runtime must supply the persistent Redis owner."""
 
-    def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.time,
+        protection_seconds: int = DEFAULT_PROTECTION_SECONDS,
+    ) -> None:
         self._clock = clock
+        self._protection_seconds = _protection_setting(protection_seconds)
         self._deadline = 0.0
         self._reason: ProviderCooldownReason = "provider_unavailable"
         self._login_failures = 0
@@ -99,9 +116,17 @@ class MemoryProviderCooldown:
             self._login_failures = min(3, self._login_failures + 1)
             await self._open("provider_unavailable", (300, 600, 900)[self._login_failures - 1])
 
-    async def protection_detected(self, duration_seconds: int = 900) -> None:
+    def protection_duration(self, duration_seconds: int | None = None) -> int:
+        """Resolve one protection hold from the configured default and the shared floor."""
+
+        if duration_seconds is None:
+            return self._protection_seconds
+        return _duration(duration_seconds, MINIMUM_PROTECTION_SECONDS)
+
+    async def protection_detected(self, duration_seconds: int | None = None) -> None:
+        seconds = self.protection_duration(duration_seconds)
         async with self._lock:
-            await self._open("provider_access_restricted", _duration(duration_seconds, 900))
+            await self._open("provider_access_restricted", seconds)
 
     async def authentication_succeeded(self) -> None:
         # Only fresh official authentication/probe evidence resets the login sequence.
@@ -170,10 +195,16 @@ return {reason, math.max(0, math.ceil((deadline - now) / 1000)), count}
 class RedisProviderCooldown:
     """Persistent provider hold with fail-closed admission on any storage/schema error."""
 
-    def __init__(self, redis: _RedisCommands, *, owns_client: bool = False) -> None:
+    def __init__(
+        self,
+        redis: _RedisCommands,
+        *,
+        owns_client: bool = False,
+        protection_seconds: int = DEFAULT_PROTECTION_SECONDS,
+    ) -> None:
         self._redis = redis
         self._owns_client = owns_client
-        self._fallback = MemoryProviderCooldown()
+        self._fallback = MemoryProviderCooldown(protection_seconds=protection_seconds)
         self._store_failed = False
         self._lock = asyncio.Lock()
 
@@ -250,8 +281,8 @@ class RedisProviderCooldown:
             await self._fallback.login_failed(status, failure)
             await self._observe("login")
 
-    async def protection_detected(self, duration_seconds: int = 900) -> None:
-        seconds = _duration(duration_seconds, 900)
+    async def protection_detected(self, duration_seconds: int | None = None) -> None:
+        seconds = self._fallback.protection_duration(duration_seconds)
         async with self._lock:
             await self._fallback.protection_detected(seconds)
             await self._observe("protection", seconds)

@@ -42,6 +42,9 @@ from .provider_account_management.application import _mask_login_id as _mask_log
 from .provider_account_management.application import (
     _require_supported_provider as _require_supported_provider,
 )
+from .provider_account_management.application import (
+    clear_provider_protection_halt as clear_provider_protection_halt,
+)
 from .provider_account_management.application import dataclass as dataclass
 from .provider_account_management.application import datetime as datetime
 from .provider_account_management.application import (
@@ -62,6 +65,9 @@ from .provider_account_management.application import (
 )
 from .provider_account_management.application import (
     provider_account_read as provider_account_read,
+)
+from .provider_account_management.application import (
+    record_provider_protection_halt as record_provider_protection_halt,
 )
 from .provider_account_management.application import secret_box as secret_box
 from .provider_account_management.application import select as select

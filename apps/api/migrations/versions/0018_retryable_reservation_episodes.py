@@ -32,10 +32,7 @@ def upgrade() -> None:
             )
         )
 
-    op.execute(
-        "UPDATE reservation_attempts "
-        "SET episode_key = 'legacy:' || candidate_id"
-    )
+    op.execute("UPDATE reservation_attempts SET episode_key = 'legacy:' || candidate_id")
 
     with op.batch_alter_table("reservation_attempts") as batch_op:
         batch_op.alter_column("episode_key", server_default=None)

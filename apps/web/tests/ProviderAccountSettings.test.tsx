@@ -2,9 +2,90 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ProviderRuntimeStatus } from "../src/api/providerRuntime";
 import { ProviderAccountSettings } from "../src/features/settings/ProviderAccountSettings";
 
 describe("rail provider account settings", () => {
+  it.each(["KORAIL", "SRT"] as const)(
+    "%s separates saved login history from expired, missing and reusable sessions",
+    (provider) => {
+      const account = {
+        provider,
+        configured: true,
+        enabled: true,
+        loginMethod: "membership_number" as const,
+        maskedLoginId: "ra***er",
+        credentialVersion: 1,
+        lastAuthStatus: "authenticated" as const,
+        lastAuthenticatedAt: "2026-10-01T10:00:00+09:00",
+        updatedAt: "2026-10-01T10:00:00+09:00",
+      };
+      const runtime: ProviderRuntimeStatus = {
+        provider,
+        state: "stale",
+        credentialGeneration: "1",
+        createdAgeSeconds: 600,
+        lastVerifiedAgeSeconds: null,
+        lastUsedAgeSeconds: 600,
+        localReuseRemainingSeconds: null,
+        locallyReusable: false,
+        prewarmOutcome: "failed",
+      };
+      const props = { accounts: [account], onSave: vi.fn(), onDelete: vi.fn() };
+      const { rerender } = render(
+        <ProviderAccountSettings {...props} runtimeStatuses={[runtime]} />,
+      );
+      const card = within(screen.getByRole("region", { name: `${provider} 계정` }));
+      const history = card.getByText("마지막 확인: 로그인 성공");
+      expect(history.classList.contains("is-ready")).toBe(false);
+      expect(card.queryByText("로그인 확인됨")).toBeNull();
+      expect(card.getByText("재검증 예정")).toBeTruthy();
+      expect(card.getByText(/서버 로컬 재사용 창: 사용 불가/)).toBeTruthy();
+
+      rerender(<ProviderAccountSettings {...props} runtimeStatuses={[]} />);
+      expect(card.getByText("마지막 확인: 로그인 성공")).toBeTruthy();
+      expect(card.queryByText("재사용 가능")).toBeNull();
+
+      rerender(<ProviderAccountSettings {...props} runtimeStatuses={[{
+        ...runtime,
+        state: "ready",
+        locallyReusable: true,
+        lastVerifiedAgeSeconds: 5,
+        localReuseRemainingSeconds: 120,
+        prewarmOutcome: "authenticated",
+      }]} />);
+      expect(card.getByText("마지막 확인: 로그인 성공")).toBeTruthy();
+      expect(card.getByText("재사용 가능")).toBeTruthy();
+
+      rerender(<ProviderAccountSettings {...props} runtimeStatuses={[{
+        ...runtime,
+        state: "ready",
+        credentialGeneration: "2",
+        locallyReusable: true,
+        lastVerifiedAgeSeconds: 5,
+        localReuseRemainingSeconds: 120,
+        prewarmOutcome: "authenticated",
+      }]} />);
+      expect(card.getByText("계정 변경 후 재확인")).toBeTruthy();
+      expect(card.queryByText("재사용 가능")).toBeNull();
+      expect(card.getByText(/서버 로컬 재사용 창: 사용 불가/)).toBeTruthy();
+
+      rerender(<ProviderAccountSettings
+        {...props}
+        runtimeStatuses={[{
+          ...runtime,
+          state: "ready",
+          locallyReusable: true,
+        }]}
+        runtimeStatusLoadState="unavailable"
+      />);
+      expect(card.getByText("상태 확인 실패")).toBeTruthy();
+      expect(card.queryByText("재사용 가능")).toBeNull();
+      expect(card.getByText(/다시 조회될 때까지 재사용 가능으로 판단하지 않습니다/))
+        .toBeTruthy();
+    },
+  );
+
   it("saves a new account without retaining the password in the form", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(undefined);

@@ -5,14 +5,14 @@ from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..domain import Provider
 from ..security import secret_box
 from . import contracts as _account_contracts
-from .models import RailProviderAccount
+from .models import RailProviderAccount, auth_revision_micros
 from .schemas import (
     RailProviderAccountRead,
     RailProviderAccountUpsert,
@@ -226,6 +226,9 @@ async def upsert_provider_account(
         account.credential_version = verified_credential_version
         account.last_auth_status = "authenticated"
         account.last_authenticated_at = now
+        # A newly verified credential generation starts unfenced.
+        account.protection_halt_credential_version = None
+        account.protection_halt_revision_micros = None
         account.updated_at = now
     # Import locally to keep the provider-account encryption boundary independent
     # from watch/provider registry composition at import time.
@@ -300,6 +303,11 @@ async def update_provider_auth_status(
     account.last_auth_status = status
     if status == "authenticated":
         account.last_authenticated_at = now
+        # A verified session of the current generation supersedes any protection halt.
+        # The halt pair is cleared explicitly and the row revision rotates below, so
+        # neither the observation gate nor a restart can revive the old fence.
+        account.protection_halt_credential_version = None
+        account.protection_halt_revision_micros = None
     # Failure states intentionally retain the last successful authentication timestamp.
     account.updated_at = now
     if commit:
@@ -308,3 +316,103 @@ async def update_provider_auth_status(
     else:
         await session.flush()
     return provider_account_read(account)
+
+
+async def record_provider_protection_halt(
+    session: AsyncSession,
+    provider: Provider,
+    *,
+    expected_credential_version: int,
+    expected_revision_micros: int,
+    commit: bool = True,
+) -> bool:
+    """Persist the keepalive halt for exactly the account revision a protection answered.
+
+    This is a compare-and-swap on the revision that received the provider verdict. A
+    newer authentication write rotates the row revision, so a stale verdict can never
+    halt a re-authenticated account, and the halt survives an API restart instead of
+    the process spending one fresh login attempt per restart. The core update keeps
+    the column-level updated_at onupdate from rotating the revision it fences.
+    """
+    _require_supported_provider(provider)
+    expected_updated_at = await session.scalar(
+        select(RailProviderAccount.updated_at).where(
+            RailProviderAccount.provider == provider,
+            RailProviderAccount.credential_version == expected_credential_version,
+            RailProviderAccount.updated_at.is_not(None),
+        )
+    )
+    if expected_updated_at is None or auth_revision_micros(expected_updated_at) != (
+        expected_revision_micros
+    ):
+        return False
+    result = await session.execute(
+        update(RailProviderAccount)
+        .where(
+            RailProviderAccount.provider == provider,
+            RailProviderAccount.credential_version == expected_credential_version,
+            RailProviderAccount.updated_at == expected_updated_at,
+        )
+        .values(
+            protection_halt_credential_version=expected_credential_version,
+            protection_halt_revision_micros=expected_revision_micros,
+            # The halt binds to this revision, so updated_at must stay. An explicit
+            # SET value overrides the column onupdate hook for this statement.
+            updated_at=expected_updated_at,
+        )
+    )
+    # A Core UPDATE runs as a DML cursor whose rowcount is the compare-and-swap verdict.
+    rowcount: object = getattr(result, "rowcount", None)
+    recorded = isinstance(rowcount, int) and rowcount == 1
+    if commit:
+        if recorded:
+            await session.commit()
+        else:
+            await session.rollback()
+    elif recorded:
+        await session.flush()
+    return recorded
+
+
+async def clear_provider_protection_halt(
+    session: AsyncSession,
+    provider: Provider,
+    *,
+    expected_credential_version: int,
+    expected_revision_micros: int,
+    expected_updated_at: datetime,
+    commit: bool = True,
+) -> bool:
+    """Drop the active halt only for the revision an official positive session superseded.
+
+    The compare-and-swap repeats the halt conditions, so a concurrent authentication
+    write or a newer halt is never erased by an older observation.
+    """
+    _require_supported_provider(provider)
+    result = await session.execute(
+        update(RailProviderAccount)
+        .where(
+            RailProviderAccount.provider == provider,
+            RailProviderAccount.credential_version == expected_credential_version,
+            RailProviderAccount.updated_at == expected_updated_at,
+            RailProviderAccount.protection_halt_credential_version == expected_credential_version,
+            RailProviderAccount.protection_halt_revision_micros == expected_revision_micros,
+        )
+        .values(
+            protection_halt_credential_version=None,
+            protection_halt_revision_micros=None,
+            # Clearing must not rotate the revision; the positive evidence stands on
+            # this same row state, and rotation would rewrite the recovery counters.
+            updated_at=expected_updated_at,
+        )
+    )
+    rowcount: object = getattr(result, "rowcount", None)
+    cleared = isinstance(rowcount, int) and rowcount == 1
+    if commit:
+        if cleared:
+            await session.commit()
+        else:
+            await session.rollback()
+    elif cleared:
+        await session.flush()
+    return cleared

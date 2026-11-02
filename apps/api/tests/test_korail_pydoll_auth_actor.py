@@ -143,16 +143,318 @@ class _AuthContext:
         self.session.closed += 1
 
 
-def _credential() -> KorailCredentialInput:
+def _credential(version: str = "credential-v1") -> KorailCredentialInput:
     return KorailCredentialInput(
         login_id="fixture-account",
         password="fixture-password",
-        version="credential-v1",
+        version=version,
     )
 
 
 async def _finish_cleanup(awaitable: Awaitable[object]) -> None:
     await awaitable
+
+
+@pytest.mark.asyncio
+async def test_manual_session_handoff_keeps_the_same_browser_until_user_login() -> None:
+    class ManualSession(_AuthSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.user_logged_in = False
+
+        async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
+            assert credential.login_id == "fixture-account"
+            self.authentication_count += 1
+            if not self.user_logged_in:
+                raise BrowserSourceUnavailable("manual_login_required")
+            return True
+
+    session = ManualSession()
+    actor = PydollAuthenticationSessionActor[ManualSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=False,
+        session_factory=lambda *_args: _AuthContext(session),  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 10.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        retain_auth_required_session=True,
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as first_attempt:
+        await actor.verify_credentials(_credential())
+
+    assert first_attempt.value.stage == "manual_login_required"
+    assert actor.active_session is not None
+    assert actor.active_session.session is session
+    assert actor.snapshot().state is KorailSessionActorState.AUTH_REQUIRED
+    assert session.closed == 0
+
+    session.user_logged_in = True
+
+    assert await actor.verify_credentials(_credential()) is True
+    assert session.open_count == 1
+    assert session.authentication_count == 2
+    assert session.closed == 0
+    assert actor.snapshot().state is KorailSessionActorState.READY
+
+    await actor.close_locked()
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_session_handoff_keeps_live_browser_after_reuse_ttl() -> None:
+    class ManualSession(_AuthSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.user_logged_in = False
+
+        async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
+            assert credential.login_id == "fixture-account"
+            self.authentication_count += 1
+            if not self.user_logged_in:
+                raise BrowserSourceUnavailable("manual_login_required")
+            return True
+
+    now = [10.0]
+    session = ManualSession()
+    contexts: list[_AuthContext] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        context = _AuthContext(session)
+        contexts.append(context)
+        return context
+
+    actor = PydollAuthenticationSessionActor[ManualSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=False,
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=2,
+        monotonic=lambda: now[0],
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        retain_auth_required_session=True,
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as first_attempt:
+        await actor.verify_credentials(_credential())
+
+    assert first_attempt.value.stage == "manual_login_required"
+    now[0] = 71.0
+    session.user_logged_in = True
+
+    assert await actor.verify_credentials(_credential()) is True
+    assert len(contexts) == 1
+    assert session.open_count == 1
+    assert session.authentication_count == 2
+    assert session.closed == 0
+    snapshot = actor.snapshot()
+    assert snapshot.state is KorailSessionActorState.READY
+    assert snapshot.locally_reusable is True
+
+    await actor.close_locked()
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_authenticated_session_refreshes_after_reuse_ttl_without_relaunch() -> None:
+    now = [10.0]
+    session = _AuthSession()
+    contexts: list[_AuthContext] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        context = _AuthContext(session)
+        contexts.append(context)
+        return context
+
+    actor = PydollAuthenticationSessionActor[_AuthSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=False,
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: now[0],
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        retain_auth_required_session=True,
+    )
+
+    assert await actor.verify_credentials(_credential()) is True
+    now[0] = 71.0
+    assert actor.snapshot().locally_reusable is False
+
+    assert await actor.prewarm_credentials(_credential()) is True
+
+    assert len(contexts) == 1
+    assert session.open_count == 1
+    assert session.authentication_count == 2
+    assert session.closed == 0
+    snapshot = actor.snapshot()
+    assert snapshot.state is KorailSessionActorState.READY
+    assert snapshot.locally_reusable is True
+
+    await actor.close_locked()
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_authenticated_session_rebinds_same_secret_generation_without_relaunch() -> (
+    None
+):
+    session = _AuthSession()
+    contexts: list[_AuthContext] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        context = _AuthContext(session)
+        contexts.append(context)
+        return context
+
+    actor = PydollAuthenticationSessionActor[_AuthSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=False,
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 10.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        retain_auth_required_session=True,
+    )
+
+    assert await actor.verify_credentials(_credential("credential-v1")) is True
+    assert await actor.verify_credentials(_credential("credential-v2")) is True
+
+    assert len(contexts) == 1
+    assert session.open_count == 1
+    assert session.authentication_count == 2
+    assert session.closed == 0
+    snapshot = actor.snapshot()
+    assert snapshot.state is KorailSessionActorState.READY
+    assert snapshot.credential_generation == "credential-v2"
+
+    await actor.close_locked()
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_authenticated_session_relaunches_when_secret_changes() -> None:
+    contexts: list[_AuthContext] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        context = _AuthContext(_AuthSession())
+        contexts.append(context)
+        return context
+
+    actor = PydollAuthenticationSessionActor[_AuthSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=False,
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 10.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        retain_auth_required_session=True,
+    )
+
+    assert await actor.verify_credentials(_credential("credential-v1")) is True
+    changed = KorailCredentialInput(
+        login_id="fixture-account",
+        password="different-fixture-password",
+        version="credential-v2",
+    )
+    assert await actor.verify_credentials(changed) is True
+
+    assert len(contexts) == 2
+    assert contexts[0].session.closed == 1
+    assert contexts[1].session.closed == 0
+    assert actor.snapshot().credential_generation == "credential-v2"
+
+    await actor.close_locked()
+    assert contexts[1].session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_session_handoff_discards_a_pending_different_generation() -> None:
+    class ManualSession(_AuthSession):
+        async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
+            self.authentication_count += 1
+            raise BrowserSourceUnavailable("manual_login_required")
+
+    contexts: list[_AuthContext] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        context = _AuthContext(ManualSession())
+        contexts.append(context)
+        return context
+
+    actor = PydollAuthenticationSessionActor[ManualSession](
+        page_url="https://www.korail.com/ticket/search/general",
+        timeout_ms=1_000,
+        headless=False,
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+        monotonic=lambda: 10.0,
+        cleanup=_finish_cleanup,
+        response_safety_guard=lambda _snapshot, _stage: None,
+        retain_auth_required_session=True,
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as first_attempt:
+        await actor.verify_credentials(_credential("credential-v1"))
+    with pytest.raises(BrowserSourceUnavailable) as second_attempt:
+        await actor.verify_credentials(_credential("credential-v2"))
+
+    assert first_attempt.value.stage == "manual_login_required"
+    assert second_attempt.value.stage == "manual_login_required"
+    assert len(contexts) == 2
+    assert contexts[0].session.closed == 1
+    assert contexts[1].session.closed == 0
+    assert actor.snapshot().credential_generation == "credential-v2"
+
+    await actor.close_locked()
+    assert contexts[1].session.closed == 1
+
+
+@pytest.mark.parametrize("manual_session_only", [False, True])
+def test_client_reserves_the_dedicated_profile_for_authentication_only(
+    monkeypatch: pytest.MonkeyPatch,
+    manual_session_only: bool,
+) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    def factory(
+        _page_url: str,
+        _timeout_ms: int,
+        _headless: bool,
+        *,
+        auto_handle_dialogs: bool,
+        manual_session_only: bool,
+        allow_dedicated_profile: bool,
+    ) -> object:
+        assert auto_handle_dialogs is False
+        calls.append((manual_session_only, allow_dedicated_profile))
+        return object()
+
+    monkeypatch.setattr(browser_module, "_default_pydoll_session_factory", factory)
+    client = PydollKorailBrowserClient(
+        manual_session_only=manual_session_only,
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+
+    client._auth_actor._session_factory(client.page_url, client.timeout_ms, client.headless)
+    client._search_actor._session_factory(client.page_url, client.timeout_ms, client.headless)
+
+    assert calls == [(manual_session_only, True), (False, False)]
 
 
 @pytest.mark.asyncio

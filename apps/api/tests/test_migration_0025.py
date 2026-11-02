@@ -12,17 +12,16 @@ from rail_waitlist.config import get_settings
 API_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_migration_0025_adds_admin_observation_interval_preferences(
-    tmp_path, monkeypatch
-) -> None:
+def test_migration_0025_adds_admin_observation_interval_preferences(tmp_path, monkeypatch) -> None:
     database_path = tmp_path / "migration-0025.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path.as_posix()}")
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_revision(
-        "0025_admin_observation_intervals"
-    ) is not None
+    assert (
+        ScriptDirectory.from_config(config).get_revision("0025_admin_observation_intervals")
+        is not None
+    )
     command.upgrade(config, "0025_admin_observation_intervals")
 
     with sqlite3.connect(database_path) as connection:
@@ -41,8 +40,7 @@ def test_migration_0025_adds_admin_observation_interval_preferences(
     command.downgrade(config, "0024_watch_observation_speed")
     with sqlite3.connect(database_path) as connection:
         columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(admin_accounts)").fetchall()
+            row[1] for row in connection.execute("PRAGMA table_info(admin_accounts)").fetchall()
         }
         assert "balanced_observation_interval_seconds" not in columns
         assert "focused_observation_interval_seconds" not in columns

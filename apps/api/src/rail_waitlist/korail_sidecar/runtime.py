@@ -130,6 +130,14 @@ def build_browser_client(
         )
 
     from ..korail_pydoll_browser import PydollKorailBrowserClient
+    from .pydoll.chromium_lifecycle import (
+        PydollBrowserProfileMode,
+        browser_profile_mode_setting,
+        dedicated_browser_profile_directory,
+    )
+
+    profile_mode = browser_profile_mode_setting()
+    dedicated_profile = dedicated_browser_profile_directory(headless=not gui_enabled)
 
     return PydollKorailBrowserClient(
         provider_cooldown=provider_cooldown,
@@ -151,11 +159,17 @@ def build_browser_client(
                 )
             )
         ),
+        # Up to two hours so the keepalive login cadence can follow KORAIL's
+        # interval-based macro detection; the default stays at 30 minutes.
         session_reuse_ttl_seconds=integer_setting(
-            "KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS", 1800, minimum=30, maximum=1800
+            "KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS", 1800, minimum=30, maximum=7200
         ),
         session_reuse_max_searches=integer_setting(
             "KORAIL_BROWSER_SESSION_REUSE_MAX_SEARCHES", 100, minimum=2, maximum=100
+        ),
+        manual_session_only=(
+            dedicated_profile is not None
+            and profile_mode is PydollBrowserProfileMode.DEDICATED_MANUAL
         ),
     )
 
@@ -230,4 +244,10 @@ def build_provider_cooldown() -> ProviderCooldown:
         redis = Redis.from_url(url, socket_connect_timeout=3, socket_timeout=3)
     except (ValueError, TypeError):
         raise RuntimeError("KORAIL provider cooldown Redis configuration is invalid") from None
-    return RedisProviderCooldown(redis, owns_client=True)
+    return RedisProviderCooldown(
+        redis,
+        owns_client=True,
+        protection_seconds=integer_setting(
+            "SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 60, minimum=60, maximum=86400
+        ),
+    )

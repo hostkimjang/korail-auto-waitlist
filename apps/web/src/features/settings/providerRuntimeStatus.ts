@@ -1,5 +1,11 @@
 import type { ProviderRuntimeStatus } from "../../api/providerRuntime";
 
+export type ProviderRuntimeStatusLoadState =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "unavailable";
+
 export interface ProviderRuntimeStatusPresentation {
   label: string;
   tone: "ready" | "pending" | "warning" | "blocked";
@@ -7,8 +13,15 @@ export interface ProviderRuntimeStatusPresentation {
 
 export function providerRuntimeStatusPresentation(
   status: ProviderRuntimeStatus,
+  currentCredentialVersion: number | null,
 ): ProviderRuntimeStatusPresentation {
   if (status.state === "ready" && status.locallyReusable) {
+    if (currentCredentialVersion === null) {
+      return { label: "계정 연결 후 확인", tone: "warning" };
+    }
+    if (status.credentialGeneration !== String(currentCredentialVersion)) {
+      return { label: "계정 변경 후 재확인", tone: "warning" };
+    }
     return { label: "재사용 가능", tone: "ready" };
   }
   if (status.state === "authenticating") {
@@ -24,6 +37,16 @@ export function providerRuntimeStatusPresentation(
     return { label: "시작 전", tone: "pending" };
   }
   return { label: "재검증 예정", tone: "warning" };
+}
+
+export function isRuntimeReusableForCredential(
+  status: ProviderRuntimeStatus,
+  currentCredentialVersion: number | null,
+): boolean {
+  return status.state === "ready"
+    && status.locallyReusable
+    && currentCredentialVersion !== null
+    && status.credentialGeneration === String(currentCredentialVersion);
 }
 
 function formatRoundedDuration(seconds: number): string {

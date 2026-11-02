@@ -300,10 +300,49 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
             "allow_fullstack_fixture": False,
             "session_reuse_ttl_seconds": 1800,
             "session_reuse_max_searches": 100,
+            "manual_session_only": False,
         }
     ]
     asyncio.run(selected_probe())
     assert probe_calls == [True]
+
+
+@pytest.mark.parametrize(("configured", "accepted"), [("7200", True), ("7201", False)])
+def test_korail_session_reuse_ttl_allows_two_hour_login_spacing(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    accepted: bool,
+) -> None:
+    init_calls: list[dict[str, object]] = []
+
+    class FakePydollClient:
+        def __init__(self, **kwargs: object) -> None:
+            init_calls.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "rail_waitlist.korail_pydoll_browser",
+        SimpleNamespace(
+            PydollKorailBrowserClient=FakePydollClient,
+            probe_pydoll_chromium=AsyncMock(),
+        ),
+    )
+    monkeypatch.setenv("KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS", configured)
+
+    def build() -> object:
+        return adapter_service._build_browser_client(
+            KorailBrowserEngine.PYDOLL,
+            page_url=OFFICIAL_KORAIL_SEARCH_URL,
+            timeout_seconds=25,
+            allow_fullstack_fixture=False,
+        )
+
+    if accepted:
+        build()
+        assert init_calls[0]["session_reuse_ttl_seconds"] == 7200
+    else:
+        with pytest.raises(RuntimeError, match="between 30 and 7200"):
+            build()
 
 
 def test_pydoll_gui_mode_uses_headed_client_and_readiness_probe(

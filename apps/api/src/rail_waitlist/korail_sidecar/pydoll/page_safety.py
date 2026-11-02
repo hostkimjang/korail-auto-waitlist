@@ -25,6 +25,7 @@ from ..browser_service_availability import (
     provider_unavailable_trigger_from_page,
 )
 from .page_contracts import PydollPageSnapshot
+from .search_response_protection import SEARCH_RESPONSE_MACRO_PROTECTION
 
 AUTOMATION_GENERIC_PROTECTION_TRIGGERS = BROWSER_GENERIC_PROTECTION_TRIGGERS
 GENERIC_PROTECTION_TRIGGERS = AUTOMATION_GENERIC_PROTECTION_TRIGGERS
@@ -55,6 +56,10 @@ def classify_pydoll_page_block(snapshot: PydollPageSnapshot) -> PydollPageBlock 
     """Return the first blocking page evidence without logging or raising."""
 
     for status, resource_type in snapshot.network_responses:
+        if resource_type == SEARCH_RESPONSE_MACRO_PROTECTION:
+            # The official search JSON carried the exact protection code even though
+            # the page rendered an ordinary empty schedule.
+            return PydollProtectionBlock("marker_macro_err1")
         if is_rate_limit_response(status, resource_type):
             return PydollRateLimitBlock()
         trigger = protection_trigger_from_http_response(status, resource_type)

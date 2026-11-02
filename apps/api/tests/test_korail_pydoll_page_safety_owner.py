@@ -199,6 +199,7 @@ def test_owner_has_exact_import_boundary_and_one_production_consumer() -> None:
         ),
         ("dataclasses", 0, "dataclass", None),
         ("page_contracts", 1, "PydollPageSnapshot", None),
+        ("search_response_protection", 1, "SEARCH_RESPONSE_MACRO_PROTECTION", None),
         ("typing", 0, "Literal", None),
     }
     assert canonical_consumers == {

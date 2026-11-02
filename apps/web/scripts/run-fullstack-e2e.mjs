@@ -64,6 +64,7 @@ const environment = {
   AUTH_SESSION_SECRET: randomSecret(),
   SRT_PROVIDER_ADAPTER_TOKEN: randomSecret(),
   E2E_BROWSER_TOKEN: randomSecret(),
+  KORAIL_BROWSER_PROFILE_MODE: "ephemeral",
   E2E_BASE_URL: baseUrl,
   CADDY_HTTP_BIND: `127.0.0.1:${httpPort}`,
   CADDY_HTTPS_BIND: `127.0.0.1:${httpsPort}`,

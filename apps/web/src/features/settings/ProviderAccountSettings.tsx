@@ -11,13 +11,16 @@ import type {
 import {
   formatRuntimeLocalReuseWindow,
   formatRuntimeVerifiedAge,
+  isRuntimeReusableForCredential,
   providerRuntimeStatusPresentation,
+  type ProviderRuntimeStatusLoadState,
 } from "./providerRuntimeStatus";
 import "./providerRuntimeStatus.css";
 
 export interface ProviderAccountSettingsProps {
   accounts: ReadonlyArray<ProviderAccount>;
   runtimeStatuses?: ReadonlyArray<ProviderRuntimeStatus>;
+  runtimeStatusLoadState?: ProviderRuntimeStatusLoadState;
   loading?: boolean;
   pendingProvider?: RailProvider | null;
   onSave: (provider: RailProvider, input: ProviderAccountCredentialInput) => Promise<void>;
@@ -31,7 +34,7 @@ const providerLabels: Record<RailProvider, string> = {
 
 const statusLabels: Record<ProviderAccount["lastAuthStatus"], string> = {
   not_checked: "로그인 확인 전",
-  authenticated: "로그인 확인됨",
+  authenticated: "로그인 성공",
   auth_required: "로그인 정보 확인 필요",
   provider_blocked: "운영사 확인 필요",
   failed: "로그인 확인 실패",
@@ -121,11 +124,14 @@ function emptyAccount(provider: RailProvider): ProviderAccount {
 export function ProviderAccountSettings({
   accounts,
   runtimeStatuses = [],
+  runtimeStatusLoadState,
   loading = false,
   pendingProvider = null,
   onSave,
   onDelete,
 }: ProviderAccountSettingsProps) {
+  const effectiveRuntimeLoadState = runtimeStatusLoadState
+    ?? (runtimeStatuses.length > 0 ? "ready" : "idle");
   const [editing, setEditing] = useState<RailProvider | null>(null);
   const [drafts, setDrafts] = useState<Record<RailProvider, CredentialDraft>>({
     KORAIL: emptyDraft(),
@@ -194,19 +200,39 @@ export function ProviderAccountSettings({
   };
 
   return (
-    <div className="provider-account-settings" aria-busy={loading || undefined}>
+    <div
+      className="provider-account-settings"
+      aria-busy={loading || effectiveRuntimeLoadState === "loading" || undefined}
+    >
       {loading ? <p role="status">철도 계정 상태를 불러오는 중…</p> : null}
       {(["KORAIL", "SRT"] as const).map((provider) => {
         const account = accounts.find((item) => item.provider === provider) ?? emptyAccount(provider);
         const runtimeStatus = runtimeStatuses.find((item) => item.provider === provider) ?? null;
-        const runtimePresentation = runtimeStatus
-          ? providerRuntimeStatusPresentation(runtimeStatus)
+        const currentCredentialVersion = account.configured && account.enabled
+          ? account.credentialVersion
           : null;
+        const verifiedRuntimeStatus = effectiveRuntimeLoadState === "ready"
+          ? runtimeStatus
+          : null;
+        const runtimePresentation = effectiveRuntimeLoadState === "unavailable"
+          ? { label: "상태 확인 실패", tone: "warning" as const }
+          : verifiedRuntimeStatus
+            ? providerRuntimeStatusPresentation(verifiedRuntimeStatus, currentCredentialVersion)
+            : effectiveRuntimeLoadState === "loading"
+              ? { label: "상태 확인 중", tone: "pending" as const }
+              : effectiveRuntimeLoadState === "ready"
+                ? { label: "상태 정보 없음", tone: "warning" as const }
+                : { label: "상태 확인 전", tone: "pending" as const };
+        const runtimeReusable = verifiedRuntimeStatus !== null
+          && isRuntimeReusableForCredential(verifiedRuntimeStatus, currentCredentialVersion);
         const isPending = pendingProvider === provider;
         const isEditing = editing === provider || !account.configured;
         const draft = drafts[provider];
         const loginField = loginFieldContract(draft.loginMethod);
-        const statusTone = account.lastAuthStatus === "authenticated" ? "is-ready" : account.configured ? "is-warning" : "is-empty";
+        // 저장된 확인 이력은 현재 세션의 연결 여부를 보증하지 않는다.
+        const statusTone = !account.configured || account.lastAuthStatus === "authenticated"
+          ? "is-empty"
+          : "is-warning";
         return (
           <section className="provider-account-card" key={provider} aria-labelledby={`provider-account-${provider}`}>
             <header>
@@ -215,28 +241,36 @@ export function ProviderAccountSettings({
                 <h3 id={`provider-account-${provider}`}>{providerLabels[provider]} 계정</h3>
                 <span className={`provider-account-status ${statusTone}`}>
                   {account.lastAuthStatus === "authenticated" ? <CheckCircle weight="fill" aria-hidden="true" /> : <WarningCircle weight="fill" aria-hidden="true" />}
-                  {account.configured ? statusLabels[account.lastAuthStatus] : "연결 안 됨"}
+                  {account.configured ? `마지막 확인: ${statusLabels[account.lastAuthStatus]}` : "연결 안 됨"}
                 </span>
               </div>
             </header>
             <div
-              className={`provider-runtime-status${runtimePresentation ? ` is-${runtimePresentation.tone}` : ""}`}
+              className={`provider-runtime-status is-${runtimePresentation.tone}`}
               aria-live="polite"
             >
               <div className="provider-runtime-status-heading">
                 <span>상주 세션</span>
-                <strong>{runtimePresentation?.label ?? "상태 확인 중"}</strong>
+                <strong>{runtimePresentation.label}</strong>
               </div>
-              {runtimeStatus ? (
+              {effectiveRuntimeLoadState === "unavailable" ? (
                 <p className="provider-runtime-status-details">
-                  <span>최근 재검증: {formatRuntimeVerifiedAge(runtimeStatus.lastVerifiedAgeSeconds)}</span>
+                  현재 상주 세션 상태를 확인할 수 없습니다. 다시 조회될 때까지 재사용 가능으로 판단하지 않습니다.
+                </p>
+              ) : verifiedRuntimeStatus ? (
+                <p className="provider-runtime-status-details">
+                  <span>최근 재검증: {formatRuntimeVerifiedAge(verifiedRuntimeStatus.lastVerifiedAgeSeconds)}</span>
                   <span>서버 로컬 재사용 창: {formatRuntimeLocalReuseWindow(
-                    runtimeStatus.localReuseRemainingSeconds,
-                    runtimeStatus.locallyReusable,
+                    verifiedRuntimeStatus.localReuseRemainingSeconds,
+                    runtimeReusable,
                   )}</span>
                 </p>
-              ) : (
+              ) : effectiveRuntimeLoadState === "loading" ? (
                 <p className="provider-runtime-status-details">상주 세션 상태를 확인하는 중입니다.</p>
+              ) : effectiveRuntimeLoadState === "ready" ? (
+                <p className="provider-runtime-status-details">이 운영사의 상주 세션 상태 정보가 없습니다.</p>
+              ) : (
+                <p className="provider-runtime-status-details">상주 세션 상태를 아직 확인하지 않았습니다.</p>
               )}
             </div>
             {account.configured && !isEditing ? (

@@ -4,6 +4,11 @@
 
 ## 현재 우선순위
 
+- [x] 감시 중 `운행·예매 상태 관측 오류 · 재시도 예정`이 계속 남던 원인 수정: 11월 7일(토) 대전→서울 하루 KTX 계열
+  107편이 결과 모델의 100편 상한에 걸려 replay 조회가 매번 `unexpected_backend_error`로 끝남(성공 조회 5,637건의
+  최대 편수 97). 상한을 300편으로 올리고, 분류되지 않은 예외는 클래스 이름만 `error_type`으로 남김. 관련 회귀 테스트 통과
+- [ ] 재배포 뒤 운영 확인: 11월 7일 감시 두 건이 `provider_query_completed outcome=success train_count=100` 이상으로
+  관측되고 화면의 관측 오류 표시가 사라지는지 확인
 - [x] 예약 결과 확인 복구: 예약이 있는 공식 미결제 목록 응답을 `SUCC`·객체 배열·빈 코드 또는 정보성 성공
   코드(`I`와 영문 2자·숫자 6자리)일 때 `nonempty`로 인정하고, 본문 계약 위반은
   `reservation_list_response_rejected`에 닫힌 사유·투영만 기록. 빈 목록의 부재 조건은 유지. 관련 회귀 테스트 통과
@@ -66,8 +71,12 @@
   last_verified_age_seconds=301` 다음 adapter `probe completed outcome=authenticated`가 18:33~19:12에 약 5분 30초
   간격으로 8회 연속 이어졌고 그동안 로그인 제출은 없었음. `loginCheck`만으로 44분 넘게 세션이 유지돼, 같은 날
   1시간 48분 유휴 세션의 `logged_out`과 대비됨
-- [ ] 남은 운영 확인: 예약 직전 새 로그인과 하루 로그인 제출 수가 실제로 줄었는지 확인. 300초에서도
-  `outcome=logged_out`이 반복되면 `loginCheck`가 세션을 연장하지 않는 것이므로 0으로 끄고 원인 확인
+- [x] 예약 직전 새 로그인 감소 확인(11월 2일 23:52): KTX-산천 260 자동 예약이 keepalive로 유지된 세션의
+  `probe completed outcome=authenticated` 뒤 새 로그인 없이 3초 만에 `payment_required`로 끝났고, 공식 확인도
+  `confirmed_payment_required`였음. 18:27:35 로그인 뒤 다음 날 00:09까지 keepalive가 5분 30초 간격으로 계속 성공했고
+  로그인 제출은 0회(이전에는 약 2시간마다 제출)
+- [ ] 계속 볼 항목: 300초에서도 `outcome=logged_out`이 반복되면 `loginCheck`가 세션을 연장하지 않는 것이므로 0으로
+  끄고 원인 확인
 - [x] 조회 제한 대기 단축: KORAIL 공통 대기의 보호·호출 제한 900초 하한을 없애고
   `SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS`(기본 60초)·`SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS`(기본 300초)를
   sidecar·API·예약 실행 경로에 같은 값으로 연결. 계정 보호 정지는 무기한 중단 대신 60→120→240→300초

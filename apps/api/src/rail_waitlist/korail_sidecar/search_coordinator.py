@@ -589,10 +589,12 @@ class KorailBrowserAutomation:
                 "KORAIL 운영사 조회를 중단합니다 "
                 "event=provider_query_completed outcome=source_unavailable "
                 "stage=unexpected_backend_error "
-                "backoff_seconds=%s provider_call_id=%s elapsed_ms=%s",
+                "backoff_seconds=%s provider_call_id=%s elapsed_ms=%s error_type=%s",
                 backoff_seconds,
                 provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
+                # Only the class name: exception text may carry provider content.
+                type(error).__name__,
             )
             raise BrowserSourceUnavailable() from error
         finally:

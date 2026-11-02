@@ -1202,6 +1202,7 @@ async def test_provider_query_logs_unexpected_failure_without_exception_text(
         "event=provider_query_completed outcome=source_unavailable "
         "stage=unexpected_backend_error backoff_seconds=30" in caplog.text
     )
+    assert "error_type=RuntimeError" in caplog.text
     assert "raw-provider-body" not in caplog.text
 
 

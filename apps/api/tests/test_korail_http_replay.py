@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import httpx2
@@ -458,6 +458,28 @@ async def test_pagination_is_bounded_to_twenty_pages() -> None:
         with pytest.raises(HttpReplaySourceUnavailable):
             await client.search(_request(departure_from=time(14), departure_to=time(23)))
     assert calls == 20
+
+
+async def test_full_day_search_keeps_more_than_one_hundred_trains() -> None:
+    # Future dates are searched from midnight. Busy weekend routes list more than 100
+    # KTX-family trains, and dropping the whole result left those watches unobserved.
+    rows = []
+    for index in range(107):
+        departure = datetime(2026, 8, 4, 5) + timedelta(minutes=9 * index)
+        rows.append(
+            _row(
+                number=str(100 + index),
+                departure=departure.strftime("%H%M%S"),
+                arrival=(departure + timedelta(hours=1)).strftime("%H%M%S"),
+            )
+        )
+    pages = iter([_payload(*rows[:60], has_next="Y"), _payload(*rows[60:])])
+    transport = httpx2.MockTransport(lambda _request: _json_response(next(pages)))
+
+    async with KorailHttpReplayClient(_plan(), transport=transport) as client:
+        result = await client.search(_request(departure_from=time(0), departure_to=time(23, 59)))
+
+    assert len(result.trains) == 107
 
 
 @pytest.mark.parametrize(

@@ -115,7 +115,11 @@ class BrowserSeatSearchResult(AdapterModel):
     # A successful official response can legitimately contain no trains, especially
     # after the final departure of the current service day. Keep that distinct from
     # malformed/protection responses, which are rejected by the transport parser.
-    trains: list[BrowserTrainSnapshot] = Field(max_length=100)
+    # Future dates are searched for the whole service day, and busy weekend routes list
+    # more than 100 KTX-family trains (Daejeon to Seoul on 2026-11-07 listed 107). The
+    # replay page limit and the result expansion limit already bound a real search; this
+    # bound only rejects absurd payloads.
+    trains: list[BrowserTrainSnapshot] = Field(max_length=300)
 
     @field_validator("observed_at")
     @classmethod

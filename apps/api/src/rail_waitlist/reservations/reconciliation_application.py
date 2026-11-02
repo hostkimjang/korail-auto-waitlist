@@ -38,7 +38,10 @@ from .provider_confirmation.contracts import (
     ReservationConfirmationSeat,
     ReservationConfirmationTarget,
 )
-from .provider_confirmation.safety_policy import enforce_confirmation_target_safety
+from .provider_confirmation.safety_policy import (
+    enforce_confirmation_target_safety,
+    enforce_recorded_payment_deadline,
+)
 from .reconciliation_policy import (
     OFFICIAL_READ_UNAVAILABLE_MAX_RECONCILIATION_INTERVAL,
     PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
@@ -259,6 +262,13 @@ def _reservation_reconciliation_due_clause(now: datetime) -> ColumnElement[bool]
             ReservationAttempt.reconciliation_attempt_count > 0,
             ReservationAttempt.reconciliation_attempt_count
             < PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
+            # The watch deadline may belong to a newer hold on the same watch. An attempt
+            # whose own hold already ended or expired must not be read against it.
+            ReservationAttempt.post_deadline_reconciled_at.is_(None),
+            or_(
+                ReservationAttempt.payment_deadline.is_(None),
+                ReservationAttempt.payment_deadline > now,
+            ),
             or_(
                 ReservationAttempt.next_reconcile_at <= now,
                 and_(
@@ -422,6 +432,10 @@ def _reservation_reconciliation_is_due(
             ReservationConfirmationOutcome.CONFIRMED_PAID,
         }
         and 0 < attempt.reconciliation_attempt_count < PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS
+        # watch.status/payment_deadline can describe a newer attempt's hold after a re-arm,
+        # so the attempt's own hold must still be open and unexpired.
+        and attempt.post_deadline_reconciled_at is None
+        and (attempt.payment_deadline is None or _as_utc(attempt.payment_deadline) > now)
         and (
             (attempt.next_reconcile_at is not None and _as_utc(attempt.next_reconcile_at) <= now)
             or (
@@ -746,6 +760,24 @@ async def reconcile_reservation_attempt(
                 now=dependencies.now(),
             ):
                 return 0
+            if attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED:
+                deadline_checked = enforce_recorded_payment_deadline(
+                    provider=provider,
+                    recorded_payment_deadline=attempt.payment_deadline,
+                    confirmation=confirmation,
+                )
+                if deadline_checked is not confirmation:
+                    logger.warning(
+                        "Reservation confirmation rejected "
+                        "event=reservation_confirmation_payment_deadline_mismatch "
+                        "phase=worker_reconciliation provider=%s purpose=%s attempt_id=%s "
+                        "request_id=%s",
+                        provider.value,
+                        target.purpose.value,
+                        attempt_id,
+                        request_id,
+                    )
+                    confirmation = deadline_checked
             if dependencies.apply_reconciliation is not None:
                 await dependencies.apply_reconciliation(
                     session,

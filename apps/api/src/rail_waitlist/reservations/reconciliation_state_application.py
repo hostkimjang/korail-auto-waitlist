@@ -27,6 +27,7 @@ from .provider_confirmation.contracts import (
     ReservationConfirmationSeat,
     effective_reservation_confirmation_diagnostic_code,
 )
+from .provider_confirmation.safety_policy import enforce_recorded_payment_deadline
 from .reconciliation_policy import (
     PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
     RESERVATION_RECONCILIATION_INTERVAL,
@@ -251,6 +252,12 @@ async def apply_reservation_reconciliation(
         raise ReservationReconciliationNotEligible
     if confirmation.provider != watch.provider:
         raise ValueError("reservation confirmation provider does not match watch")
+    if attempt.outcome is ReservationOutcome.PAYMENT_REQUIRED:
+        confirmation = enforce_recorded_payment_deadline(
+            provider=watch.provider,
+            recorded_payment_deadline=attempt.payment_deadline,
+            confirmation=confirmation,
+        )
     reconciliation_auth_status: RailProviderAuthStatus | None
     if confirmation.outcome is ReservationConfirmationOutcome.AUTH_REQUIRED:
         reconciliation_auth_status = "auth_required"

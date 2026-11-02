@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import cast
 
 import pytest
@@ -851,6 +851,110 @@ async def test_fresh_expired_deadline_overrides_existing_future_hold_for_actiona
     assert payload["outcome"] == "payment_required"
     assert payload["payment_actionable"] is False
     assert payload["payment_deadline"] == expired_deadline.isoformat()
+
+
+def _korail_payment_hold(
+    *,
+    deadline: datetime,
+    reconciliation_count: int = 1,
+) -> tuple[Watch, WatchCandidate, ReservationAttempt]:
+    watch = make_watch(status=WatchStatus.PAYMENT_REQUIRED)
+    watch.provider = Provider.KORAIL
+    watch.payment_deadline = deadline
+    watch.official_booking_url = "https://www.korail.com/ticket/reservation/list"
+    candidate = make_candidate()
+    candidate.state = "payment_required"
+    attempt = make_attempt(
+        outcome=ReservationOutcome.PAYMENT_REQUIRED,
+        reconciliation_count=reconciliation_count,
+    )
+    attempt.payment_deadline = deadline
+    attempt.official_handoff_url = watch.official_booking_url
+    attempt.reserved_seats = [{"car_number": "1", "seat_number": "9A"}]
+    attempt.confirmation_outcome = ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    attempt.last_reconciled_at = NOW - timedelta(minutes=11)
+    return watch, candidate, attempt
+
+
+def test_payment_follow_up_is_not_due_once_the_attempts_own_hold_ended() -> None:
+    # A newer attempt's hold put the watch back into PAYMENT_REQUIRED with a later deadline.
+    watch, _candidate, attempt = _korail_payment_hold(
+        deadline=NOW + timedelta(minutes=10),
+        reconciliation_count=5,
+    )
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is True
+
+    attempt.payment_deadline = NOW - timedelta(hours=10)
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is False
+
+    attempt.payment_deadline = NOW + timedelta(minutes=10)
+    attempt.post_deadline_reconciled_at = NOW - timedelta(hours=10)
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is False
+
+
+async def test_korail_follow_up_rejects_hold_with_a_different_payment_deadline() -> None:
+    recorded_deadline = NOW + timedelta(minutes=5)
+    other_hold_deadline = NOW + timedelta(minutes=9)
+    events: list[dict[str, object]] = []
+    watch, candidate, attempt = _korail_payment_hold(deadline=recorded_deadline)
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        watch,
+        candidate,
+        attempt,
+        ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            source="korail-reservation-list",
+            observed_at=NOW,
+            payment_deadline=other_hold_deadline,
+            official_handoff_url="https://www.korail.com/ticket/reservation/list",
+        ),
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], events),
+    )
+
+    assert attempt.confirmation_outcome is ReservationConfirmationOutcome.INCONCLUSIVE
+    assert (
+        attempt.confirmation_diagnostic_code
+        is ReservationConfirmationDiagnosticCode.OFFICIAL_RECORD_AMBIGUOUS
+    )
+    assert attempt.payment_deadline == recorded_deadline
+    assert watch.payment_deadline == recorded_deadline
+    assert watch.status is WatchStatus.PAYMENT_REQUIRED
+    assert attempt.reconciliation_attempt_count == 2
+    assert attempt.next_reconcile_at == NOW + RESERVATION_RECONCILIATION_INTERVAL
+    payload = cast(dict[str, object], events[0]["payload"])
+    assert payload["confirmation_outcome"] == "inconclusive"
+    assert payload["payment_deadline"] == recorded_deadline.isoformat()
+
+
+async def test_korail_follow_up_keeps_confirming_hold_with_the_recorded_deadline() -> None:
+    recorded_deadline = NOW + timedelta(minutes=5)
+    watch, candidate, attempt = _korail_payment_hold(deadline=recorded_deadline)
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        watch,
+        candidate,
+        attempt,
+        ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            source="korail-reservation-list",
+            observed_at=NOW,
+            payment_deadline=recorded_deadline.astimezone(timezone(timedelta(hours=9))),
+            official_handoff_url="https://www.korail.com/ticket/reservation/list",
+        ),
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], []),
+    )
+
+    assert attempt.confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+    assert attempt.payment_deadline == recorded_deadline
+    assert watch.payment_deadline == recorded_deadline
+    assert attempt.reconciliation_attempt_count == 2
 
 
 async def test_positive_confirmation_restores_handoff_and_suppresses_lower_candidate() -> None:

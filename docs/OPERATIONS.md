@@ -1104,6 +1104,13 @@ reason·예외 문자열은 API, SSE, 알림과 DB attempt에 복사하지 않�
 미래 결제기한이 있는 `PAYMENT_REQUIRED`도 최초 공식 확인과 별도로 기한 전 후속 읽기를 최대 6회 수행합니다.
 첫 후속 읽기는 즉시 실행하고, 그 뒤에는 완료 횟수에 따라 30초, 30초, 2분, 5분, 10분 뒤에 실행합니다.
 여섯 번째 뒤에는 기한 전 확인을 더 예약하지 않으며 기한 경계의 final read는 별도입니다.
+기한 전 읽기는 attempt 자신의 보류가 끝나지 않았고(`post_deadline_reconciled_at` 없음) 자신의 결제기한이
+지나지 않은 경우에만 실행합니다. 재시작 뒤 새 attempt의 보류로 watch가 다시 `PAYMENT_REQUIRED`가 되어도
+이미 끝난 이전 attempt는 다시 읽지 않습니다. KORAIL 미결제 목록은 좌석을 주지 않으므로 기록된 결제기한과
+다른(또는 기한이 없는) 보류는 같은 여정의 다른 예약으로 보고 `official_record_ambiguous`로 강등하며, worker
+로그에 `event=reservation_confirmation_payment_deadline_mismatch`를 남깁니다.
+새 예약이 없는데 자기 보류에서 이 로그가 반복되면 코레일 목록의 결제기한 표기가 바뀌어 읽지 못한 것일 수 있으니
+미결제 목록 판독부터 확인합니다. 이때도 보류 상태와 재확인 간격은 바뀌지 않습니다.
 
 - `official_read_unavailable`: 공식 내역을 불러오거나 응답을 신뢰할 수 있게 완료하지 못했습니다. 재확인
   횟수를 소비하지 않으며, 다음 확인은 시도 시작 뒤 경과 시간만큼(30초~15분, 결제기한이 더 이르면 기한) 뒤로

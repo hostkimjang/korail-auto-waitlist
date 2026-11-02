@@ -805,6 +805,116 @@ async def test_elapsed_payment_hold_final_read_remains_payment_follow_up(app) ->
         assert watch.official_booking_url is None
 
 
+async def test_expired_korail_hold_does_not_adopt_newer_same_journey_hold(app) -> None:
+    """Reproduce an ended hold being re-read after a newer hold re-entered PAYMENT_REQUIRED.
+
+    The KORAIL unpaid list has no seats, so the old attempt could only match the journey
+    and would claim the newer attempt's hold together with its later deadline.
+    """
+
+    session_factory = app.state.test_session_factory
+    korail_list_url = "https://www.korail.com/ticket/reservation/list"
+    new_attempt_id = await _seed_due_payment_hold(session_factory, provider=Provider.KORAIL)
+    new_deadline = NOW + timedelta(minutes=30)
+    old_deadline = NOW - timedelta(hours=10)
+    old_hold_ended_at = old_deadline + timedelta(seconds=6)
+    async with session_factory() as session:
+        new_attempt = await session.get(ReservationAttempt, new_attempt_id)
+        assert new_attempt is not None
+        assert new_attempt.payment_deadline is not None
+        assert new_attempt.payment_deadline.replace(tzinfo=timezone.utc) == new_deadline
+        new_attempt.attempt_sequence = 2
+        new_attempt.episode_key = "manual-after-hold:old"
+        new_attempt.official_handoff_url = korail_list_url
+        new_attempt.confirmation_source = "korail-reservation-list"
+        new_attempt.reserved_seats = [{"car_number": "8", "seat_number": "7B"}]
+        watch = await session.scalar(
+            select(Watch).join(WatchCandidate).where(WatchCandidate.id == new_attempt.candidate_id)
+        )
+        assert watch is not None
+        watch.official_booking_url = korail_list_url
+        old_attempt = ReservationAttempt(
+            candidate_id=new_attempt.candidate_id,
+            attempt_sequence=1,
+            episode_key="confirmed-absent-retry:old",
+            idempotency_key="reserve:expired-korail-hold",
+            started_at=old_deadline - timedelta(minutes=10),
+            finished_at=old_deadline - timedelta(minutes=10),
+            outcome=ReservationOutcome.PAYMENT_REQUIRED,
+            payment_deadline=old_deadline,
+            official_handoff_url=korail_list_url,
+            credential_version=new_attempt.credential_version,
+            confirmation_outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            confirmation_source="korail-reservation-list",
+            confirmation_observed_at=old_hold_ended_at,
+            last_reconciled_at=old_hold_ended_at,
+            post_deadline_reconciled_at=old_hold_ended_at,
+            reconciliation_attempt_count=5,
+            next_reconcile_at=None,
+            reserved_seats=[{"car_number": "1", "seat_number": "9A"}],
+        )
+        session.add(old_attempt)
+        await session.commit()
+        old_attempt_id = old_attempt.id
+
+    events: list[str] = []
+    adapter = RecordingAdapter(
+        events,
+        reservation_once=True,
+        result=ReservationConfirmationResult(
+            provider=Provider.KORAIL,
+            outcome=ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED,
+            source="korail-reservation-list",
+            observed_at=NOW,
+            payment_deadline=new_deadline,
+            official_handoff_url=korail_list_url,
+        ),
+    )
+    adapter.provider = Provider.KORAIL
+    dependencies = _dependencies(
+        session_factory,
+        adapter,
+        RecordingLeaseService(events),
+        events,
+        apply_reconciliation=apply_reservation_reconciliation,
+        grant=replace(LEASE_GRANT, provider=Provider.KORAIL),
+    )
+
+    assert await reconcile_reservation_attempt(old_attempt_id, dependencies=dependencies) == 0
+    assert adapter.targets == []
+    async with session_factory() as session:
+        old_attempt = await session.get(ReservationAttempt, old_attempt_id)
+        assert old_attempt is not None
+        assert old_attempt.payment_deadline is not None
+        assert old_attempt.payment_deadline.replace(tzinfo=timezone.utc) == old_deadline
+        assert old_attempt.reconciliation_attempt_count == 5
+        assert old_attempt.confirmation_observed_at is not None
+        assert old_attempt.confirmation_observed_at.replace(tzinfo=timezone.utc) == (
+            old_hold_ended_at
+        )
+
+    assert (
+        await reconcile_reservation_attempt(
+            new_attempt_id,
+            dependencies=dependencies,
+            adapter=adapter,
+        )
+        == 1
+    )
+    assert [target.attempt_id for target in adapter.targets] == [new_attempt_id]
+    assert adapter.targets[0].purpose is ReservationConfirmationPurpose.PAYMENT_FOLLOW_UP
+    async with session_factory() as session:
+        new_attempt = await session.get(ReservationAttempt, new_attempt_id)
+        assert new_attempt is not None
+        assert (
+            new_attempt.confirmation_outcome
+            is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
+        )
+        assert new_attempt.reconciliation_attempt_count == 2
+        assert new_attempt.payment_deadline is not None
+        assert new_attempt.payment_deadline.replace(tzinfo=timezone.utc) == new_deadline
+
+
 @pytest.mark.parametrize("owns_adapter", [False, True])
 async def test_capability_false_preserves_state_and_respects_adapter_ownership(
     app,

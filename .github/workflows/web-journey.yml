@@ -86,6 +86,14 @@ jobs:
       - run: bash -n scripts/*.sh
       - run: bash scripts/ops.sh config
       - run: make verify-ops
+      - name: Diagnose Chromium fixture navigation
+        working-directory: apps/api
+        run: |
+          for attempt in 1 2 3; do
+            uv run --python 3.12 --frozen --extra test --extra browser pytest tests/test_korail_pydoll_browser.py -k real_browser -q --maxfail=1
+          done
+        env:
+          KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"
       - run: make verify-api
         env:
           KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"

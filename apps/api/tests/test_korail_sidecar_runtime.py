@@ -70,6 +70,7 @@ def test_build_browser_client_forwards_dialog_auto_action_setting(
 
     assert captured["auto_handle_dialogs"] is False
     assert captured["manual_session_only"] is False
+    assert captured["probe_restored_session"] is False
 
     monkeypatch.setenv("KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED", "true")
 
@@ -116,6 +117,7 @@ def test_dedicated_profile_builds_a_manual_session_only_client(
     )
 
     assert captured["manual_session_only"] is True
+    assert captured["probe_restored_session"] is False
 
 
 def test_dedicated_auto_profile_keeps_automatic_login_enabled(
@@ -151,6 +153,8 @@ def test_dedicated_auto_profile_keeps_automatic_login_enabled(
     )
 
     assert captured["manual_session_only"] is False
+    # Only the persistent automatic profile asks loginCheck before submitting again.
+    assert captured["probe_restored_session"] is True
 
 
 def test_search_timeout_setting_accepts_only_the_internal_budget_range(monkeypatch) -> None:

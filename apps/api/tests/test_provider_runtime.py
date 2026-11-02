@@ -1102,10 +1102,10 @@ async def test_authenticated_revision_paces_keepalive_after_protection_verdict(a
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
     assert await _tick(app, verifier, registry) == 1
-    # The first protection backoff waits 15 minutes and is scoped to this generation.
+    # The first protection backoff waits 30 minutes and is scoped to this generation.
     generation, _count, retry_not_before = registry.prewarm_retry_state[Provider.KORAIL]
     assert generation == 9
-    assert 890 < retry_not_before - asyncio.get_running_loop().time() <= 900
+    assert 1790 < retry_not_before - asyncio.get_running_loop().time() <= 1800
 
     # The halted revision never retries inside the backoff, whether the sidecar reports
     # the block or a cold actor, and retries once the backoff has elapsed.
@@ -1439,9 +1439,10 @@ def test_keepalive_backoff_is_generation_scoped_exponential_and_capped() -> None
 
     assert registry.begin_prewarm(Provider.KORAIL, 5, now=now - 1.0)
     # KORAIL scores login submissions by spacing, so a persistent block settles at one
-    # login every two hours instead of several per hour.
+    # login every two hours instead of several per hour. The first retry waits 30 minutes
+    # because 15-minute retries after a verdict were blocked again in operation.
     for failure_count, expected_delay in enumerate(
-        (900.0, 1_800.0, 3_600.0, 7_200.0, 7_200.0),
+        (1_800.0, 3_600.0, 7_200.0, 7_200.0),
         start=1,
     ):
         registry.finish_prewarm(

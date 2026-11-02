@@ -29,6 +29,10 @@ from rail_waitlist.korail_sidecar.pydoll.login_submission import (
     LoginSubmissionSnapshot,
     PydollLoginResponseUnavailable,
 )
+from rail_waitlist.korail_sidecar.pydoll.login_submission_pacing import (
+    admit_login_submission,
+    record_login_submission,
+)
 
 
 @pytest.mark.asyncio
@@ -439,8 +443,10 @@ def test_client_reserves_the_dedicated_profile_for_authentication_only(
         auto_handle_dialogs: bool,
         manual_session_only: bool,
         allow_dedicated_profile: bool,
+        probe_restored_session: bool = False,
     ) -> object:
         assert auto_handle_dialogs is False
+        assert probe_restored_session is False
         calls.append((manual_session_only, allow_dedicated_profile))
         return object()
 
@@ -845,3 +851,114 @@ def test_auth_actor_has_no_reverse_or_peer_actor_dependencies() -> None:
             "korail_pydoll_search_actor",
         }
     )
+
+
+class _PacedLoginSession(_AuthSession):
+    """Mirror the driver: background admission precedes the recorded submission."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.submissions = 0
+
+    async def open(self) -> PydollPageSnapshot:
+        self.open_count += 1
+        return PydollPageSnapshot("fixture search", ())
+
+    async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
+        self.authentication_count += 1
+        await admit_login_submission()
+        await record_login_submission()
+        self.submissions += 1
+        return True
+
+
+def _paced_client(
+    hold: MemoryProviderCooldown,
+    sessions: list[_PacedLoginSession],
+) -> PydollKorailBrowserClient:
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        session = _PacedLoginSession()
+        sessions.append(session)
+        return _AuthContext(session)
+
+    return PydollKorailBrowserClient(
+        session_factory=factory,
+        provider_cooldown=hold,
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_restart_prewarm_inside_submission_interval_defers_and_retires_browser() -> None:
+    now = [1_700_000_000.0]
+    hold = MemoryProviderCooldown(clock=lambda: now[0], login_submission_min_interval_seconds=1800)
+    sessions: list[_PacedLoginSession] = []
+    before_restart = _paced_client(hold, sessions)
+    assert await before_restart.verify_credentials(_credential()) is True
+    await before_restart.close()
+
+    # A restarted adapter shares the persisted ledger but not the in-memory session.
+    restarted = _paced_client(hold, sessions)
+    now[0] += 600
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await restarted.prewarm_credentials(_credential())
+
+    assert (caught.value.reason, caught.value.retry_after_seconds) == (
+        "provider_access_restricted",
+        1200,
+    )
+    snapshot = restarted.session_snapshot()
+    assert snapshot.state is KorailSessionActorState.STALE
+    assert snapshot.locally_reusable is False
+    assert restarted._auth_actor.active_session is None
+    assert sessions[1].submissions == 0
+    assert sessions[1].closed == 1
+
+    now[0] += 1200
+    assert await restarted.prewarm_credentials(_credential()) is True
+    assert sessions[2].submissions == 1
+    assert restarted.session_snapshot().state is KorailSessionActorState.READY
+    await restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_required_logins_inside_submission_interval_are_recorded_not_deferred() -> None:
+    now = [1_700_000_000.0]
+    hold = MemoryProviderCooldown(clock=lambda: now[0], login_submission_min_interval_seconds=1800)
+    sessions: list[_PacedLoginSession] = []
+    client = _paced_client(hold, sessions)
+
+    assert await client.verify_credentials(_credential()) is True
+    now[0] += 60
+    assert await client.verify_credentials(_credential()) is True
+    assert [session.submissions for session in sessions] == [1, 1]
+
+    # A reservation login reaches the actor without a background scope.
+    now[0] += 60
+    lease = await client._auth_actor.acquire_session(credential_version="credential-v2")
+    assert await client._auth_actor.ensure_authenticated_session(
+        lease.session, _credential("credential-v2")
+    )
+    assert sum(session.submissions for session in sessions) == 3
+    assert hold.login_submission_remaining() == 1800
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reservation_entry_records_in_place_login_without_deferring(monkeypatch) -> None:
+    now = [1_700_000_000.0]
+    hold = MemoryProviderCooldown(clock=lambda: now[0], login_submission_min_interval_seconds=1800)
+    await hold.record_login_submission()
+    now[0] += 30
+    client = _paced_client(hold, [])
+
+    async def reserve_with_in_place_login(_request: object) -> str:
+        await admit_login_submission()
+        await record_login_submission()
+        return "reserved"
+
+    monkeypatch.setattr(client._reservation_actor, "reserve_once", reserve_with_in_place_login)
+    assert await client.reserve_once(object()) == "reserved"
+    assert hold.login_submission_remaining() == 1800
+    await client.close()

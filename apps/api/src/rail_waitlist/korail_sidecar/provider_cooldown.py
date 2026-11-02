@@ -16,11 +16,18 @@ REASONS = frozenset(
     {"provider_unavailable", "provider_access_restricted", "cooldown_store_unavailable"}
 )
 KEY = "rail-waitlist:korail:provider-admission:v1"
+# The last official credential submission lives under its own fixed key so the admission
+# hash keeps its closed three-field schema. Redis is the restart-surviving owner.
+LOGIN_SUBMISSION_KEY = "rail-waitlist:korail:login-submission:v1"
 # Protection holds follow SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS. The floor matches the
 # setting's own minimum so a caller can shorten the hold but never turn it into a
 # tight retry loop against the provider's protection response.
 DEFAULT_PROTECTION_SECONDS = 60
 MINIMUM_PROTECTION_SECONDS = 60
+# KORAIL scores login submissions by their spacing, and an adapter restart forgets the
+# in-memory session. Only the adapter submits credentials, so it alone configures a floor
+# (KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS); 0 disables pacing for other owners.
+MAXIMUM_LOGIN_SUBMISSION_INTERVAL_SECONDS = 7200
 
 
 class ProviderCooldownDeferred(Exception):
@@ -50,6 +57,14 @@ class ProviderCooldown(Protocol):
 
     async def authentication_succeeded(self) -> None: ...
 
+    async def admit_login_submission(self) -> None:
+        """Defer a non-essential credential submission inside the configured interval."""
+        ...
+
+    async def record_login_submission(self) -> None:
+        """Remember one official credential submission, whatever its verdict."""
+        ...
+
     async def close(self) -> None: ...
 
 
@@ -73,6 +88,12 @@ def _protection_setting(seconds: int) -> int:
     return seconds
 
 
+def _login_interval_setting(seconds: int) -> int:
+    if type(seconds) is not int or not 0 <= seconds <= MAXIMUM_LOGIN_SUBMISSION_INTERVAL_SECONDS:
+        raise ValueError("invalid login submission interval setting")
+    return seconds
+
+
 class MemoryProviderCooldown:
     """Explicit test adapter; production runtime must supply the persistent Redis owner."""
 
@@ -81,12 +102,17 @@ class MemoryProviderCooldown:
         *,
         clock: Callable[[], float] = time.time,
         protection_seconds: int = DEFAULT_PROTECTION_SECONDS,
+        login_submission_min_interval_seconds: int = 0,
     ) -> None:
         self._clock = clock
         self._protection_seconds = _protection_setting(protection_seconds)
+        self._login_interval_seconds = _login_interval_setting(
+            login_submission_min_interval_seconds
+        )
         self._deadline = 0.0
         self._reason: ProviderCooldownReason = "provider_unavailable"
         self._login_failures = 0
+        self._last_login_submission: float | None = None
         self._lock = asyncio.Lock()
 
     def remaining(self) -> int:
@@ -133,6 +159,32 @@ class MemoryProviderCooldown:
         # The current outage/protection hold survives authentication success.
         async with self._lock:
             self._login_failures = 0
+
+    @property
+    def login_submission_interval_seconds(self) -> int:
+        return self._login_interval_seconds
+
+    def login_submission_remaining(self) -> int:
+        """Seconds left in the interval since this process's last submission."""
+
+        last = self._last_login_submission
+        if last is None or self._login_interval_seconds == 0:
+            return 0
+        remaining = math.ceil(last + self._login_interval_seconds - self._clock())
+        return min(self._login_interval_seconds, max(0, remaining))
+
+    def note_login_submission(self) -> None:
+        self._last_login_submission = self._clock()
+
+    async def admit_login_submission(self) -> None:
+        remaining = self.login_submission_remaining()
+        if remaining:
+            # Pacing exists only to stay clear of KORAIL's protection scoring, so the
+            # deferral reuses that closed reason instead of widening the API contract.
+            raise ProviderCooldownDeferred("provider_access_restricted", remaining)
+
+    async def record_login_submission(self) -> None:
+        self.note_login_submission()
 
     async def close(self) -> None:
         return None
@@ -191,6 +243,27 @@ end
 return {reason, math.max(0, math.ceil((deadline - now) / 1000)), count}
 """
 
+# Returns elapsed milliseconds since the recorded submission, or -1 when none is known.
+# A future timestamp (clock step) reads as zero elapsed, which keeps the floor closed.
+_LOGIN_SUBMISSION_SCRIPT = """
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+if ARGV[1] == 'record' then
+  redis.call('HSET', KEYS[1], 'submitted_at_ms', now)
+  redis.call('PEXPIRE', KEYS[1], 86400000)
+  return 0
+elseif ARGV[1] ~= 'read' then
+  return redis.error_reply('invalid login submission operation')
+end
+local raw = redis.call('HGET', KEYS[1], 'submitted_at_ms')
+if not raw then return -1 end
+local last = tonumber(raw)
+if not last or last < 0 or last % 1 ~= 0 then
+  return redis.error_reply('invalid login submission state')
+end
+return math.max(0, now - last)
+"""
+
 
 class RedisProviderCooldown:
     """Persistent provider hold with fail-closed admission on any storage/schema error."""
@@ -201,10 +274,14 @@ class RedisProviderCooldown:
         *,
         owns_client: bool = False,
         protection_seconds: int = DEFAULT_PROTECTION_SECONDS,
+        login_submission_min_interval_seconds: int = 0,
     ) -> None:
         self._redis = redis
         self._owns_client = owns_client
-        self._fallback = MemoryProviderCooldown(protection_seconds=protection_seconds)
+        self._fallback = MemoryProviderCooldown(
+            protection_seconds=protection_seconds,
+            login_submission_min_interval_seconds=login_submission_min_interval_seconds,
+        )
         self._store_failed = False
         self._lock = asyncio.Lock()
 
@@ -291,6 +368,44 @@ class RedisProviderCooldown:
         async with self._lock:
             await self._fallback.authentication_succeeded()
             await self._observe("authenticated")
+
+    async def _login_submission_command(self, operation: str) -> int:
+        row: object = await asyncio.wait_for(
+            self._redis.execute_command(
+                "EVAL", _LOGIN_SUBMISSION_SCRIPT, 1, LOGIN_SUBMISSION_KEY, operation
+            ),
+            timeout=3,
+        )
+        if type(row) is not int or row < -1:
+            raise ValueError("invalid login submission record")
+        return row
+
+    async def admit_login_submission(self) -> None:
+        interval = self._fallback.login_submission_interval_seconds
+        if interval == 0:
+            return
+        local_remaining = self._fallback.login_submission_remaining()
+        try:
+            elapsed_ms = await self._login_submission_command("read")
+        except Exception:  # noqa: BLE001 -- an unknown last submission cannot admit a login.
+            raise ProviderCooldownDeferred(
+                "cooldown_store_unavailable", max(60, local_remaining)
+            ) from None
+        shared_remaining = (
+            0 if elapsed_ms < 0 else max(0, math.ceil((interval * 1000 - elapsed_ms) / 1000))
+        )
+        remaining = min(interval, max(local_remaining, shared_remaining))
+        if remaining:
+            raise ProviderCooldownDeferred("provider_access_restricted", remaining)
+
+    async def record_login_submission(self) -> None:
+        # The submission already happened; storage failure must not hide it from the
+        # caller. This process still paces itself from the local fallback timestamp.
+        self._fallback.note_login_submission()
+        try:
+            await self._login_submission_command("record")
+        except Exception:  # noqa: BLE001 -- best-effort ledger write, details redacted.
+            return
 
     async def close(self) -> None:
         if self._owns_client:

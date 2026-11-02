@@ -9,7 +9,8 @@ printf '%s\n' 'user default on nopass ~* &* +@all' > "$acl_file"
 if [ -n "${KORAIL_PROVIDER_COOLDOWN_REDIS_PASSWORD:-}" ]; then
     password_hash=$(printf '%s' "$KORAIL_PROVIDER_COOLDOWN_REDIS_PASSWORD" | sha256sum)
     password_hash=${password_hash%% *}
-    printf '%s\n' "user korail-cooldown on #${password_hash} ~rail-waitlist:korail:provider-admission:v1 -@all +eval +time +hgetall +hget +hset +pexpire +ping +select +client|setinfo" >> "$acl_file"
+    # The second key holds only the last official login submission time (no account data).
+    printf '%s\n' "user korail-cooldown on #${password_hash} ~rail-waitlist:korail:provider-admission:v1 ~rail-waitlist:korail:login-submission:v1 -@all +eval +time +hgetall +hget +hset +pexpire +ping +select +client|setinfo" >> "$acl_file"
 fi
 unset KORAIL_PROVIDER_COOLDOWN_REDIS_PASSWORD password_hash
 exec redis-server --appendonly yes --appendfsync everysec --aclfile "$acl_file"

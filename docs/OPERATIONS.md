@@ -279,8 +279,13 @@ provider cooldown을 적용합니다.
 2026년 10월 11일 현재 Docker 표본에서는 noVNC를 시작하지 않은 상태로 adapter와 API를 재생성한 뒤
 저장 계정의 자동 로그인이 `authenticated`·`ready`·재사용 가능으로 끝났습니다. 이어 adapter만 재시작한
 검증에서도 12초 안에 `official_session=true`와 `authenticated`를 확인했습니다. 따라서 정상 운영에서는
-VNC 접속이나 최초 수동 로그인을 절차에 포함하지 않습니다. 공식 세션이 사라지면 같은 driver가 저장 계정으로
-다시 로그인하며, 보호 응답이면 재시도하지 않고 cooldown으로 닫습니다.
+VNC 접속이나 최초 수동 로그인을 절차에 포함하지 않습니다. 이 복구는 cold start의 즉시 헤더 확인이 양성일
+때만 일어났고, 11월 1~2일의 adapter 시작 6회는 모두 헤더 음성으로 공식 확인 없이 바로 로그인을 제출했습니다
+(11월 2일 12:53 KST 재생성 직후 `macro_err1`). 이제 `dedicated_auto`는 헤더가 음성이어도 로그인 화면으로 가기
+전에 공식 `loginCheck`를 한 번 확인해 profile에 복원된 세션을 재사용합니다(로그
+`stage=restored_session present=true|false`). 공식 세션이 실제로 사라졌으면 같은 driver가 저장 계정으로 다시
+로그인하되, 시작 예열·keepalive 로그인은 아래 로그인 제출 간격 하한을 지키며, 보호 응답이면 재시도하지 않고
+cooldown으로 닫습니다.
 
 화면을 직접 확인해야 하는 짧은 진단에서만 [KORAIL 브라우저 화면 진단](../apps/api/KORAIL_BROWSER_DIAGNOSTICS.md)에
 따라 noVNC overlay로 adapter 한 개를 다시 만듭니다. `--no-deps`를 유지해 이미 drain·재생성한 DB, Redis,
@@ -454,8 +459,9 @@ manager, provider worker와 sidecar를 포함해 해당 환경의 provider I/O �
 경계입니다. 이는 2026년 8월 16일 장애의 가능한 촉발 요인이지만 당시 원인으로 확정된 것은 아닙니다.
 
 예열 실패의 backoff는 실패가 어디서 났는지에 따라 다릅니다. 운영사가 자격증명을 거부한 `auth_required`는
-60초부터 최대 900초까지 지수 backoff하고, 보호 응답은 900초부터 최대 7200초까지 두 배씩 늘려 다시 시도합니다.
-코레일 탐지가 로그인 제출 간격으로 차단하므로 차단 직후 1~5분 간격 재시도는 위험만 키웁니다. 반대로
+60초부터 최대 900초까지 지수 backoff하고, 보호 응답은 1800초부터 최대 7200초까지 두 배씩 늘려 다시 시도합니다.
+코레일 탐지가 로그인 제출 간격으로 차단하므로 차단 직후 짧은 재시도는 위험만 키웁니다. 11월 1~2일 실측에서
+보호 뒤 900초 재시도는 3회 중 2회 재차단됐고 1800초 재시도는 2회 모두 통과했습니다. 반대로
 어댑터 전송 실패나 DB 반영 실패처럼 운영사의 자격증명 확인에 도달하지도 못한 결과는 5초부터 최대 60초까지만
 기다립니다. 계정을 잠글 위험이 없는 실패를 15분씩 묵히지 않기 위한 구분이며, korail-browser-adapter가 복구되면
 session도 1분 안에 되살아납니다. `auth_required`로 저장된 같은 계정 revision은 운영사 판정 기준 최대 5회까지
@@ -466,10 +472,18 @@ session도 1분 안에 되살아납니다. `auth_required`로 저장된 같은 �
 `Provider runtime prewarm completed`와 outcome을 확인할 수 있지만, 실제 철도사 계정의 장시간 유지와 sidecar
 재시작 뒤 재예열은 운영 환경에서 별도로 확인해야 합니다.
 
+시작 예열·keepalive 같은 비필수 로그인 제출은 직전 공식 로그인 제출(성공·차단 모두, 예약 실행의 로그인
+포함) 뒤 `KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS`(기본 1800초, 0~7200, 0이면 끔) 안에서는 보내지 않습니다.
+제출 시각은 Redis 고정 key `rail-waitlist:korail:login-submission:v1`에 계정 정보 없이 남아 adapter 재시작
+뒤에도 적용됩니다. 미룬 동안 adapter 로그에 `KORAIL login submission deferred reason=provider_access_restricted
+retry_after_seconds=N`이 남고 session은 `stale`로 보여 관측·예약이 그 session을 쓰지 않습니다. 예약 실행과
+사용자가 직접 요청한 계정 확인 로그인은 미루지 않습니다. 이 하한은 2시간 간격 로그인의 차단(6회 중 2회)까지
+막지는 못하며, 재시작 직후 불필요한 제출을 줄이는 주된 수단은 위의 공식 세션 재사용입니다.
+
 계정 상태가 실제 `provider_blocked`이면 같은 운영사의 좌석 관측도 sidecar 요청을 만들지 않고 인증 대기로
 전환합니다. keepalive 로그인만 보호 응답을 받아 인증 이력이 `authenticated`로 남아 있는 경우에도, 같은
 계정 revision에 결린 보호 정지가 DB에 저장되어 있어 재시작 뒤에도 좌석 관측 대기가 유지됩니다. 재시작
-직후에도 첫 보호 backoff(900초)를 먼저 기다리므로, 이 동안 계정 저장이나 컨테이너 재시작으로 반복 로그인을
+직후에도 첫 보호 backoff(1800초)를 먼저 기다리므로, 이 동안 계정 저장이나 컨테이너 재시작으로 반복 로그인을
 유도하지 마세요. 현재 credential generation의 자동 재시도가 성공하거나 재사용 가능한 공식 세션이 확인되면
 정지가 풀리고 관련 작업은 즉시
 다시 스케줄됩니다. `auth_required`만으로는 로그인이 필요 없는 공개 좌석 관측을 전역 중단하지 않습니다.
@@ -850,6 +864,9 @@ sidecar의 닫힌 `login submission unavailable at stage=login_response` 로그�
 login_err_codes=('macro_err1',)`을 남깁니다. 세션 재사용 `loginCheck` 응답에 `errCode`가 있으면
 `KORAIL login session probe response outcome=... login_err_codes=(...)`로 같은 값을 남깁니다. `errMsg`·
 `errEngMsg`·`dynaPathResultCode` 같은 다른 값과 쿠키·token은 기록하지 않습니다.
+확인 결과는 `errCode` 유무와 관계없이 `KORAIL login session probe completed outcome=...`(`authenticated`,
+`logged_out`, `source_unavailable`, `rate_limited`, `protected`)로 한 줄씩 남깁니다. 세션 재사용이 거부됐을 때
+공식 로그아웃(서버 측 만료)인지 판독 불가인지 이 로그로 구분합니다.
 요청 본문도 값과 필드 이름을 남기지 않고 부재·해석 불가·무관·부분 로그인·추가 필드 포함·
 정확 로그인이라는 형태만 기록합니다.
 
@@ -912,8 +929,11 @@ cache를 반환하기 전과 잠금·browser gate를 획득한 뒤, 세션 확�
 Redis와 KORAIL adapter만 내부 `provider-state` 망으로 연결하고 브라우저를 PostgreSQL 망에 연결하지
 않습니다. API·worker는 기존 Redis 연결을 빌려 쓰며 그 연결을 공통 대기 객체가 닫지 않습니다.
 `infra/redis/provider-admission-entrypoint.sh`는 시작할 때마다 tmpfs에 비밀번호 hash로 제한 ACL을
-재생성합니다. 이 계정은 위 key의 `EVAL/TIME/HGETALL/HGET/HSET/PEXPIRE`와 연결 확인 명령만 사용할
-수 있고 다른 key 접근은 거부합니다. Redis AOF에는 확인된 대기 상태를 보존합니다.
+재생성합니다. 이 계정은 위 key와 로그인 제출 시각 key `rail-waitlist:korail:login-submission:v1`의
+`EVAL/TIME/HGETALL/HGET/HSET/PEXPIRE`와 연결 확인 명령만 사용할 수 있고 다른 key 접근은 거부합니다. Redis
+AOF에는 확인된 대기 상태와 마지막 제출 시각을 보존합니다. ACL은 Redis 시작 때만 다시 만들어지므로 이 key가
+추가된 배포에서는 Redis 컨테이너도 재생성해야 합니다. 재생성하지 않으면 기록은 조용히 실패하고 비필수
+로그인은 `cooldown_store_unavailable`로 계속 미뤄집니다(fail-closed).
 
 production KORAIL sidecar의 `/readyz`는 매 요청마다 공통 저장소를 검사합니다. 정상 장애·보호
 대기는 저장소가 동작하는 상태이므로 200을 유지하지만 공식 요청의 대기는 그대로 적용합니다.

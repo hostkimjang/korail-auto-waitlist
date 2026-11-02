@@ -294,6 +294,7 @@ def _default_pydoll_session_factory(
     auto_handle_dialogs: bool = False,
     manual_session_only: bool = False,
     allow_dedicated_profile: bool = True,
+    probe_restored_session: bool = False,
 ) -> PydollSessionContext:
     return _PydollSessionContext(
         _PydollSession(
@@ -303,6 +304,7 @@ def _default_pydoll_session_factory(
             auto_handle_dialogs=auto_handle_dialogs,
             manual_session_only=manual_session_only,
             allow_dedicated_profile=allow_dedicated_profile,
+            probe_restored_session=probe_restored_session,
         )
     )
 
@@ -326,6 +328,7 @@ class PydollKorailBrowserClient:
         auto_handle_dialogs: bool = False,
         provider_cooldown: ProviderCooldown | None = None,
         manual_session_only: bool = False,
+        probe_restored_session: bool = False,
     ) -> None:
         if session_reuse_ttl_seconds < 0:
             raise ValueError("session_reuse_ttl_seconds must be non-negative")
@@ -343,6 +346,7 @@ class PydollKorailBrowserClient:
                 auto_handle_dialogs=auto_handle_dialogs,
                 manual_session_only=manual_session_only,
                 allow_dedicated_profile=True,
+                probe_restored_session=probe_restored_session,
             )
         )
         # The authentication actor is the only owner of the persistent profile.
@@ -506,9 +510,10 @@ class PydollKorailBrowserClient:
         on_progress: KorailReservationProgressCallback | None = None,
     ) -> KorailReservationResult:
         """Run one exact booking attempt and stop before every payment action."""
-        if on_progress is None:
-            return await self._reservation_actor.reserve_once(request)
-        return await self._reservation_actor.reserve_once(request, on_progress=on_progress)
+        with self._auth_actor.required_login_submissions():
+            if on_progress is None:
+                return await self._reservation_actor.reserve_once(request)
+            return await self._reservation_actor.reserve_once(request, on_progress=on_progress)
 
     async def _direct_search_url(
         self,
@@ -735,6 +740,7 @@ class _PydollSession:
         auto_handle_dialogs: bool = False,
         manual_session_only: bool = False,
         allow_dedicated_profile: bool = True,
+        probe_restored_session: bool = False,
     ) -> None:
         from .korail_sidecar.pydoll.search_response_protection import (
             PydollSearchResponseProtectionObserver,
@@ -789,6 +795,7 @@ class _PydollSession:
                 event_logger=logger,
             ),
             manual_session_only=manual_session_only,
+            probe_restored_session=probe_restored_session,
         )
         self._reservation_driver = PydollReservationDomDriver(
             port=self,

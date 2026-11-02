@@ -14,6 +14,10 @@ import pytest
 from rail_waitlist.korail_pydoll_browser import KorailCredentialInput, _PydollSession
 from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
 from rail_waitlist.korail_sidecar.pydoll.auth_contracts import KorailLoginMethod
+from rail_waitlist.korail_sidecar.pydoll.login_submission_pacing import (
+    LoginSubmissionPurpose,
+    login_submission_pacing,
+)
 
 
 def input_control(results: list[bool]) -> SimpleNamespace:
@@ -169,3 +173,50 @@ async def test_live_input_script_rejects_changed_or_inactive_controls(changes, e
                 control, "input", "", "login_identity_clear"
             )
     assert captured == [expected]
+
+
+class _RecordingPacer:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def admit_login_submission(self) -> None:
+        self.events.append("admit")
+
+    async def record_login_submission(self) -> None:
+        self.events.append("record")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", list(LoginSubmissionPurpose))
+async def test_every_official_submission_is_recorded_before_the_click(monkeypatch, purpose):
+    events: list[str] = []
+    session, _, controls = prepare(
+        monkeypatch, selected=True, identity=[True, True], password=[True, True]
+    )
+    controls[2].click.side_effect = lambda: events.append("click")
+    try:
+        with login_submission_pacing(_RecordingPacer(events), purpose):
+            assert await session._submit_login_form(
+                KorailCredentialInput("fixture-id", "fixture-password", "v4")
+            )
+    finally:
+        await session._login_driver.close_submission_observer()
+    # The interval admission belongs to the caller before navigation, not to the form.
+    assert events == ["record", "click"]
+
+
+@pytest.mark.asyncio
+async def test_form_stopped_before_the_post_records_no_submission(monkeypatch):
+    events: list[str] = []
+    session, _, controls = prepare(
+        monkeypatch, selected=True, identity=[True, False], password=[True]
+    )
+    with (
+        login_submission_pacing(_RecordingPacer(events), LoginSubmissionPurpose.BACKGROUND),
+        pytest.raises(BrowserSourceUnavailable),
+    ):
+        await session._submit_login_form(
+            KorailCredentialInput("fixture-id", "fixture-password", "v4")
+        )
+    controls[2].click.assert_not_awaited()
+    assert events == []

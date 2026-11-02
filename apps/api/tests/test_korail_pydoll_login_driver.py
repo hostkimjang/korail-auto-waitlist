@@ -27,9 +27,17 @@ from rail_waitlist.korail_sidecar.browser_contracts import (
     BrowserSourceUnavailable,
 )
 from rail_waitlist.korail_sidecar.browser_service_availability import BrowserProviderUnavailable
+from rail_waitlist.korail_sidecar.provider_cooldown import (
+    MemoryProviderCooldown,
+    ProviderCooldownDeferred,
+)
 from rail_waitlist.korail_sidecar.pydoll import login_submission_context as observation_module
 from rail_waitlist.korail_sidecar.pydoll.login_driver import login_step
 from rail_waitlist.korail_sidecar.pydoll.login_submission import PydollLoginResponseUnavailable
+from rail_waitlist.korail_sidecar.pydoll.login_submission_pacing import (
+    LoginSubmissionPurpose,
+    login_submission_pacing,
+)
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapshot
 
 
@@ -120,6 +128,7 @@ async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
 ) -> None:
     """Execute the production browser script with fixture fetch, without network I/O."""
 
+    caplog.set_level("INFO")
     expected_value: dict[str, object] = {"outcome": expected}
     if "errCode" in body:
         expected_value["err_code"] = "macro_err1"
@@ -201,6 +210,12 @@ async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
     else:
         assert probe_logs == []
     assert "fixture-private-message" not in caplog.text
+    completed_logs = [
+        row.getMessage()
+        for row in caplog.records
+        if "login session probe completed" in row.getMessage()
+    ]
+    assert completed_logs == [f"KORAIL login session probe completed outcome={expected}"]
 
 
 def _credential() -> KorailCredentialInput:
@@ -1871,3 +1886,133 @@ def test_login_driver_has_no_browser_or_lifecycle_actor_dependencies() -> None:
             "korail_pydoll_search_actor",
         }
     )
+
+
+def _restored_profile_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    probe: AsyncMock,
+    probe_restored_session: bool = True,
+) -> tuple[_PydollSession, AsyncMock, AsyncMock, AsyncMock]:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        False,
+        probe_restored_session=probe_restored_session,
+    )
+    go_to = AsyncMock()
+    session._tab = SimpleNamespace(go_to=go_to)
+    monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(return_value=False))
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+    submit_login_form = AsyncMock(return_value=True)
+    confirm_authenticated_search = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_submit_login_form", submit_login_form)
+    monkeypatch.setattr(session, "_wait_for_login_authentication", AsyncMock(return_value=True))
+    monkeypatch.setattr(session, "_confirm_authenticated_search", confirm_authenticated_search)
+    return session, go_to, submit_login_form, confirm_authenticated_search
+
+
+@pytest.mark.asyncio
+async def test_restored_profile_session_is_reused_before_submitting_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    probe = AsyncMock(return_value=True)
+    session, go_to, submit_login_form, confirm = _restored_profile_session(monkeypatch, probe=probe)
+
+    with caplog.at_level("INFO"):
+        assert await session.ensure_authenticated(_credential()) is True
+
+    probe.assert_awaited_once_with()
+    go_to.assert_not_awaited()
+    submit_login_form.assert_not_awaited()
+    attempt = confirm.await_args.args[0]
+    assert attempt.post_submit_check_attempted is True
+    assert attempt.post_submit_authenticated is True
+    assert "stage=restored_session present=true" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe_restored_session", "probe_result"),
+    [
+        (True, False),
+        (True, BrowserSourceUnavailable("session_keepalive")),
+        (False, True),
+    ],
+    ids=("logged-out", "probe-unavailable", "ephemeral-profile-skips-probe"),
+)
+async def test_restored_profile_probe_falls_back_to_the_existing_login(
+    monkeypatch: pytest.MonkeyPatch,
+    probe_restored_session: bool,
+    probe_result: object,
+) -> None:
+    probe = (
+        AsyncMock(side_effect=probe_result)
+        if isinstance(probe_result, Exception)
+        else AsyncMock(return_value=probe_result)
+    )
+    session, go_to, submit_login_form, _confirm = _restored_profile_session(
+        monkeypatch, probe=probe, probe_restored_session=probe_restored_session
+    )
+
+    assert await session.ensure_authenticated(_credential()) is True
+
+    assert probe.await_count == (1 if probe_restored_session else 0)
+    go_to.assert_awaited_once_with("https://www.korail.com/ticket/login", timeout=1)
+    submit_login_form.assert_awaited_once_with(_credential())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [BrowserProtectionDetected(), BrowserRateLimited()],
+    ids=("protected", "rate-limited"),
+)
+async def test_restored_profile_probe_preserves_provider_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    session, go_to, submit_login_form, _confirm = _restored_profile_session(
+        monkeypatch, probe=AsyncMock(side_effect=error)
+    )
+
+    with pytest.raises(type(error)) as raised:
+        await session.ensure_authenticated(_credential())
+
+    assert raised.value is error
+    go_to.assert_not_awaited()
+    submit_login_form.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_background_login_inside_the_submission_interval_never_opens_the_login_page(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = [1_700_000_000.0]
+    pacer = MemoryProviderCooldown(clock=lambda: now[0], login_submission_min_interval_seconds=1800)
+    await pacer.record_login_submission()
+    now[0] += 1777
+    probe = AsyncMock(return_value=False)
+    session, go_to, submit_login_form, _confirm = _restored_profile_session(
+        monkeypatch, probe=probe
+    )
+
+    with (
+        caplog.at_level("INFO"),
+        login_submission_pacing(pacer, LoginSubmissionPurpose.BACKGROUND),
+        pytest.raises(ProviderCooldownDeferred) as caught,
+    ):
+        await session.ensure_authenticated(_credential())
+
+    assert caught.value.retry_after_seconds == 23
+    # The credential-free official probe still ran; only the submission was deferred.
+    probe.assert_awaited_once_with()
+    go_to.assert_not_awaited()
+    submit_login_form.assert_not_awaited()
+    assert "login submission deferred reason=provider_access_restricted" in caplog.text
+
+    with login_submission_pacing(pacer, LoginSubmissionPurpose.REQUIRED):
+        assert await session.ensure_authenticated(_credential()) is True
+    submit_login_form.assert_awaited_once_with(_credential())

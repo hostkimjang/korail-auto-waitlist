@@ -171,6 +171,13 @@ def build_browser_client(
             dedicated_profile is not None
             and profile_mode is PydollBrowserProfileMode.DEDICATED_MANUAL
         ),
+        # A persistent automatic profile may restore the official session cookie after a
+        # restart. Ask loginCheck before submitting credentials again; an ephemeral
+        # profile starts without cookies, so the probe would only add a request.
+        probe_restored_session=(
+            dedicated_profile is not None
+            and profile_mode is PydollBrowserProfileMode.DEDICATED_AUTO
+        ),
     )
 
 
@@ -249,5 +256,10 @@ def build_provider_cooldown() -> ProviderCooldown:
         owns_client=True,
         protection_seconds=integer_setting(
             "SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS", 60, minimum=60, maximum=86400
+        ),
+        # Minimum spacing for background (keepalive/startup) credential submissions after
+        # any official login submission, kept in Redis so an adapter restart honours it.
+        login_submission_min_interval_seconds=integer_setting(
+            "KORAIL_LOGIN_SUBMISSION_MIN_INTERVAL_SECONDS", 1800, minimum=0, maximum=7200
         ),
     )

@@ -742,3 +742,6 @@
 - [x] API 소유 HTTP client·transport·예외·공개 모듈 속성과 테스트를 HTTPX2 이름으로 통일
 - [x] HTTPX2·HTTPCore2 로그를 기존 transport 로그 차단 정책에 포함하고 회귀 테스트 추가
 - [x] Python 3.12.12·HTTPX2 2.16.0에서 관련 회귀 테스트 1,145건, strict mypy 171개 파일, Ruff 0.12.12 E/F/I, format ratchet, lock 일관성과 diff 공백 검사 통과
+- [x] PR 통합 CI에서 드러난 기존 로그인 JSON 깊이 판정의 환경 차이를 명시적 64단계 상한으로 제거.
+  요청·응답의 64/65단계 경계, 문자열의 괄호·이스케이프와 비밀값 비보존을 Windows·Linux 관련 테스트
+  253건씩으로 검증하고 최신 main 통합 뒤 strict mypy 172개 파일·Ruff·format·lock 검사를 통과

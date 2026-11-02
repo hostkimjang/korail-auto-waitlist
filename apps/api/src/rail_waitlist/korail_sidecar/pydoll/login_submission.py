@@ -74,6 +74,7 @@ type LoginExecuteCommand = Callable[[dict[str, object]], Awaitable[object]]
 _PUBLIC_CALLSITE_BUNDLE_PATH = "/bundle/bundle.fcfd32491c1f6e0b2541.js"
 _PUBLIC_KEY_PATH = "/ebizweb/tour/mypage/pwd_action/pblk"
 _BODY_LIMIT = 65_536
+_JSON_DEPTH_LIMIT = 64
 _LOGIN_PAYLOAD_BASE_FIELDS = frozenset(
     {
         "UserId",
@@ -239,6 +240,32 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+def _load_bounded_json(value: str) -> object:
+    # The JSON decoder's recursion limit varies by Python build and platform. Bound
+    # provider-controlled nesting before decoding without counting quoted delimiters.
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "{[":
+            depth += 1
+            if depth > _JSON_DEPTH_LIMIT:
+                raise ValueError("JSON nesting exceeds diagnostic limit")
+        elif character in "}]":
+            depth -= 1
+    payload: object = json.loads(value, object_pairs_hook=_unique_json_object)
+    return payload
+
+
 def _bounded_payload_keys(value: object) -> frozenset[str] | None:
     """Read only a bounded field-name set and immediately discard all values."""
 
@@ -248,7 +275,7 @@ def _bounded_payload_keys(value: object) -> frozenset[str] | None:
         if len(value.encode("utf-8")) > _BODY_LIMIT:
             return None
         if value.lstrip().startswith("{"):
-            payload = json.loads(value, object_pairs_hook=_unique_json_object)
+            payload = _load_bounded_json(value)
             if not isinstance(payload, Mapping) or len(payload) > 32:
                 return None
             keys = tuple(payload)
@@ -368,7 +395,7 @@ def _response_body_outcome(
         body = base64.b64decode(raw, validate=True) if encoded else raw.encode("utf-8")
         if len(body) > _BODY_LIMIT:
             return "unavailable", (), None
-        payload = json.loads(body.decode("utf-8"), object_pairs_hook=_unique_json_object)
+        payload = _load_bounded_json(body.decode("utf-8"))
         if not isinstance(payload, Mapping):
             return "not_login_result", (), None
         schema_fields = _response_schema_fields(payload)

@@ -62,8 +62,11 @@
   BACKGROUND 로그인이 `macro_err1`로 차단돼 감시 3건이 계정 확인 대기로 바뀜. 하루 동안 차단 7회 중 3회가 약 2시간
   주기 자동 갱신, 2회가 차단 15~17분 뒤 재시도에서 남. 레츠코레일 안내의 10분 무입력 로그아웃과 현재 예매 번들에
   클라이언트 자동 로그아웃 타이머가 없다는 점을 근거로 keepalive 기본값을 900초에서 300초로 낮춤
-- [ ] 운영 확인: 재배포 뒤 api의 `session keepalive due` 다음 adapter `probe completed outcome=authenticated`가
-  5분 주기로 이어지는지, 예약 직전 새 로그인과 하루 로그인 제출 수가 줄었는지 확인. 300초에서도
+- [x] keepalive 운영 확인(11월 2일 1.2.19): 18:27:35 로그인 뒤 api `session keepalive due ...
+  last_verified_age_seconds=301` 다음 adapter `probe completed outcome=authenticated`가 18:33~19:12에 약 5분 30초
+  간격으로 8회 연속 이어졌고 그동안 로그인 제출은 없었음. `loginCheck`만으로 44분 넘게 세션이 유지돼, 같은 날
+  1시간 48분 유휴 세션의 `logged_out`과 대비됨
+- [ ] 남은 운영 확인: 예약 직전 새 로그인과 하루 로그인 제출 수가 실제로 줄었는지 확인. 300초에서도
   `outcome=logged_out`이 반복되면 `loginCheck`가 세션을 연장하지 않는 것이므로 0으로 끄고 원인 확인
 - [x] 조회 제한 대기 단축: KORAIL 공통 대기의 보호·호출 제한 900초 하한을 없애고
   `SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS`(기본 60초)·`SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS`(기본 300초)를

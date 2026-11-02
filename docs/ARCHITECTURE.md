@@ -880,6 +880,22 @@ KORAIL prewarm은 같은 auth lock 안에서 기존 session을 공식 same-origi
 횟수 제한 대신 보호 backoff 간격으로 계속 복구를 시도합니다. 어댑터 장애처럼 운영사에 닿지 못한 실패는 이
 복구 예산을 소비하지 않으며, 보호 응답과 취소는 session을 재사용하지 않고 fail-closed합니다.
 
+로컬 재사용 기한이 남았어도 코레일 서버는 유휴 로그인 세션을 먼저 만료시킵니다(11월 2일 약 1시간 반 미사용
+session의 `loginCheck`가 `logged_out`). 그래서 session manager는 KORAIL `READY` session의 마지막 공식 확인
+경과(`last_verified_age_seconds`)가 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 900초, 0이면 끔, 300~3600) 이상이고
+자동 예약 감시가 있으면 갱신 임계값과 별개로 같은 prewarm 경로를 호출합니다. 자동 예약 감시는
+`RESERVE_ONCE_BEFORE_PAYMENT` 정책의 KORAIL watch 중 `scheduled`·`watching`·`official_waitlist`·`seat_found`·
+`cooldown` 상태가 하나라도 있는지로 판단하며(`provider_account_management/session_keepalive.py`, keepalive가
+필요한 tick에만 `LIMIT 1` 조회), 조회 실패는 그 tick의 keepalive만 건너뜁니다. 이 경로의 auth actor는 자격증명을
+제출하지 않고 `loginCheck`만 호출해 양성이면 `last_verified`를 갱신하므로 재사용 기한이 계속 연장되고,
+로그아웃이거나 판독 불가면 위와 같이 session을 폐기한 뒤 아래 제출 간격 하한을 지키는 BACKGROUND 로그인으로
+넘어갑니다. manager는 마지막 공식 확인이 keepalive 간격 안에 있을 때만 이전 실패의 backoff를 지웁니다. 그래서
+keepalive가 실패해 snapshot이 여전히 `READY`로 보이거나 그 뒤 감시 조회가 실패해도 매 tick 재시도하지 않습니다.
+같은 revision에 보호 정지가 걸려 있어도 재사용 가능한 session이 정지를 먼저 풀기
+때문에 keepalive가 보호 backoff에 묶이지 않습니다. 성공한 keepalive는 기존 예열 성공과 같이 계정의
+`last_authenticated_at`을 갱신하고 인증 대기 watch 재개를 확인합니다. SRT는 재사용 prewarm이 `last_verified`를
+갱신하지 않으므로 이 keepalive 대상이 아닙니다.
+
 adapter 재시작이나 TTL 만료로 메모리 session이 없을 때 `dedicated_auto` 영속 profile은 로그인 화면으로 가기
 전에 공식 `loginCheck`를 한 번 호출합니다. 헤더는 이 응답으로 비동기 hydration되므로 cold start 직후의 즉시
 읽기로는 복원된 세션을 놓칠 수 있습니다. 양성이면 자격증명 제출 없이 그 세션을 채택하고, 음성·판독 불가면
@@ -977,6 +993,24 @@ global은 canonical owner로 복원됩니다.
 `payload_not_object`, `result_not_success`, `rows_not_list`, `rows_malformed`, `message_contract`)와
 결과값·형식이 맞는 메시지 코드·문구 유무·행 형태와 개수만 기록합니다. 코드나 문구가 붙은 항목 목록을
 받아들일 때는 같은 투영을 `reservation_list_response_accepted`로 남겨 실제 성공 코드를 확인할 수 있게 합니다.
+
+목록 판독 실패가 운영사 신호 없이 우리 판독 계약에서만 났다면 `read_reservation_detail`은 방금 인증한
+세션을 폐기하지 않습니다. 이 경우만 `BrowserSourceUnavailable`의 하위 타입 `BrowserLocalReadRejected`로
+올리며 닫힌 사유는 세 가지입니다. `body_contract_rejected`는 `strResult=SUCC`인 본문의 행·메시지 계약
+위반(`rows_not_list`, `rows_malformed`, `message_contract`)입니다. `SUCC`는 인증된 요청에만 오므로 세션
+문제의 근거가 아닙니다. `body_unavailable`은 CDP 본문 읽기·전송 디코딩 실패나 CDP 결과 형식 오류
+(`body_shape`), `dom_response_conflict`는 성공 응답의 항목과 빈 목록 DOM의 불일치입니다. 인증
+만료(`P058`), `strResult`가 성공이 아닌 본문, JSON이 아니거나 객체가 아닌 본문, 크기 상한을 넘는
+본문(내용을 읽지 않으므로 큰 로그아웃·점검 화면일 수 있음), HTTP·네트워크 오류, timeout, 예상 밖
+navigation·redirect·응답 형식, 중복 요청, 탭 변경·종료, 보호·호출 제한은 운영사 쪽 신호일 수 있어 기존처럼
+세션을 폐기합니다. 관측기 등록 실패는 요청 관측
+자체가 없어 예외 없이 DOM 판독으로 넘어가므로 이 집합에 넣지 않습니다. 사유는 실패와 같은 불변
+snapshot에 함께 저장되어 뒤이은 탭 변경·종료·timeout이 오면 함께 지워집니다. 같은 확인의 앞 단계(상세
+snapshot, 발권 목록, 인증 probe)가 이미 실패했다면 세션이 정상이라는 근거가 없으므로 같은 stage의 일반
+source 오류로 바꿔 폐기합니다. 보존해도 공개 결과는 기존과 같은 `INCONCLUSIVE / official_read_unavailable`이며
+공급자 장애 쿨다운도 열지 않습니다. 보존 사실은 `event=confirmation_session_preserved reason=...` 한 줄로만
+남기고 본문·URL·식별자는 기록하지 않습니다. 예약 실행 경로와 세션 재사용 확인 probe의 fail-closed 폐기는
+바뀌지 않습니다.
 
 계정 저장과 동일 세대의 세션 재인증은 별도 계약입니다. 관리자 계정 PUT는 입력이 기존 값과 같아도
 성공한 저장마다 `credential_version`을 하나 증가시킵니다. 기존 세대를 유지하는 재인증은 정상

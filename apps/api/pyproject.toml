@@ -74,6 +74,7 @@ files = [
   "src/rail_waitlist/provider_account_management/application.py",
   "src/rail_waitlist/provider_account_management/login_verification.py",
   "src/rail_waitlist/provider_account_management/runtime.py",
+  "src/rail_waitlist/provider_account_management/session_keepalive.py",
   "src/rail_waitlist/provider_account_management/reservation_runtime.py",
   "src/rail_waitlist/provider_schema_base.py",
   "src/rail_waitlist/schemas.py",

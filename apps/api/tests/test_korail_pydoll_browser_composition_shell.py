@@ -398,7 +398,9 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
     # only arms, drains, and resets it at the existing search/tab lifecycle boundaries.
     # Login pacing lives in the auth actor and login driver; the shell only forwards the
     # restored-profile probe flag and enters the actor's booking login scope (7 lines).
-    assert len(source.splitlines()) <= 1_564
+    # Confirmation keeps the session on a typed local read rejection: one local import
+    # name plus a single except branch that logs the closed reason and re-raises (10 lines).
+    assert len(source.splitlines()) <= 1_574
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")

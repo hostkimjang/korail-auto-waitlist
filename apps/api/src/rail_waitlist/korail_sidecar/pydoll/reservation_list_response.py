@@ -16,9 +16,11 @@ from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
 from ..browser_contracts import (
+    BrowserLocalReadRejected,
     BrowserProtectionDetected,
     BrowserRateLimited,
     BrowserSourceUnavailable,
+    LocalReadRejection,
 )
 from .chromium_lifecycle import finish_owned_cleanup
 from .page_contracts import PydollReservationListSnapshot
@@ -60,12 +62,24 @@ ReservationListDiagnosticBoundary = Literal[
 ]
 ReservationListBodyRejection = Literal[
     "body_shape",
+    "body_not_json",
     "payload_not_object",
     "result_not_success",
     "rows_not_list",
     "rows_malformed",
     "message_contract",
 ]
+# Only rejections that prove the provider sent nothing about the session keep it alive.
+# body_shape is a malformed CDP result, not provider content. The row and message
+# contracts are checked only after strResult=SUCC, which the provider returns solely to an
+# authenticated request. Non-JSON content, a non-object payload and a non-success result
+# are provider-originated and may be an error, maintenance or logout response.
+_SESSION_PRESERVING_BODY_REJECTIONS: Mapping[ReservationListBodyRejection, LocalReadRejection] = {
+    "body_shape": "body_unavailable",
+    "rows_not_list": "body_contract_rejected",
+    "rows_malformed": "body_contract_rejected",
+    "message_contract": "body_contract_rejected",
+}
 
 
 class ReservationListObservationTab(Protocol):
@@ -89,6 +103,7 @@ class ReservationListResponseSnapshot:
         "missing", "in_flight", "body_pending", "empty", "nonempty", "failed", "ambiguous"
     ] = "missing"
     failure: ReservationListResponseFailure | None = None
+    local_rejection: LocalReadRejection | None = None
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
@@ -235,6 +250,17 @@ class ReservationListResponseObserver:
     def fail(self, reason: ReservationListResponseFailure) -> None:
         self._snapshot = ReservationListResponseSnapshot("failed", reason)
 
+    def _fail_locally(
+        self, reason: ReservationListResponseFailure, rejection: LocalReadRejection
+    ) -> None:
+        """Fail closed and record that only this adapter's read contract failed.
+
+        The rejection lives in the same immutable snapshot as the failure, so any later
+        failure such as tab_changed, closed or timeout replaces it atomically.
+        """
+
+        self._snapshot = ReservationListResponseSnapshot("failed", reason, rejection)
+
     def _reject_body(
         self,
         reason: ReservationListBodyRejection,
@@ -258,7 +284,11 @@ class ReservationListResponseObserver:
             text,
             rows,
         )
-        self.fail("invalid_response")
+        rejection = _SESSION_PRESERVING_BODY_REJECTIONS.get(reason)
+        if rejection is None:
+            self.fail("invalid_response")
+        else:
+            self._fail_locally("invalid_response", rejection)
 
     def snapshot(self) -> ReservationListResponseSnapshot:
         if self._closed:
@@ -327,6 +357,10 @@ class ReservationListResponseObserver:
             )
         if self.request_observed and current.state in {"failed", "ambiguous"}:
             self.log_diagnostic("observer_rejected", dom)
+            if current.local_rejection is not None:
+                raise BrowserLocalReadRejected(
+                    current.local_rejection, "confirmation_reservation_list_response"
+                )
             raise BrowserSourceUnavailable("confirmation_reservation_list_response")
 
     def on_request(self, event: object) -> None:
@@ -455,6 +489,8 @@ class ReservationListResponseObserver:
             return
         size = _number(params.get("encodedDataLength"))
         if size is None or size > _BODY_LIMIT:
+            # Oversized provider content proves nothing about the session (a large logout
+            # or maintenance page looks the same), so it never keeps the session.
             self.fail("body_too_large")
         elif not self._response_received or self._response_timestamp is None:
             self.fail("invalid_response")
@@ -499,7 +535,14 @@ class ReservationListResponseObserver:
             if len(body) > _BODY_LIMIT:
                 self.fail("body_too_large")
                 return
-            payload = _mapping(json.loads(body, object_pairs_hook=_unique_object))
+            try:
+                decoded = json.loads(body, object_pairs_hook=_unique_object)
+            except ValueError:
+                # Non-JSON or duplicate-key content came from the provider, not from CDP.
+                # It can be an error or logout page, so it never preserves the session.
+                self._reject_body("body_not_json", None)
+                return
+            payload = _mapping(decoded)
             if payload is None:
                 self._reject_body("payload_not_object", None)
                 return
@@ -552,7 +595,8 @@ class ReservationListResponseObserver:
         except asyncio.CancelledError:
             raise
         except Exception:
-            self.fail("body_unavailable")
+            # CDP body retrieval, transfer decoding or a local defect; no provider signal.
+            self._fail_locally("body_unavailable", "body_unavailable")
         finally:
             self._reading_body = False
 
@@ -678,7 +722,11 @@ async def read_reservation_list(
                 and response_state == "nonempty"
             ):
                 owner.log_diagnostic("dom_response_conflict", last)
-                raise BrowserSourceUnavailable("confirmation_reservation_list_response")
+                # strResult=SUCC rows prove an authenticated response; only our DOM and
+                # response cross-check disagrees, so the session itself is not suspect.
+                raise BrowserLocalReadRejected(
+                    "dom_response_conflict", "confirmation_reservation_list_response"
+                )
             if (
                 response_state == "empty"
                 and _official_url(last.url, _LIST_PATH)

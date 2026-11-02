@@ -28,6 +28,7 @@ from ...reservations.provider_confirmation.korail import (
     KorailSameSessionDetailEvidence,
 )
 from ..browser_contracts import (
+    BrowserLocalReadRejected,
     BrowserProtectionDetected,
     BrowserRateLimited,
     BrowserSourceUnavailable,
@@ -227,6 +228,13 @@ async def read_korail_same_session_confirmation(
     try:
         list_snapshot = await session.read_reservation_list()
     except (BrowserProtectionDetected, BrowserRateLimited):
+        raise
+    except BrowserLocalReadRejected as error:
+        if source_unavailable_error is not None:
+            # An earlier stage of this same read already failed without a local-only
+            # cause, so the session is no longer proven healthy. Keep the list stage for
+            # diagnosis but drop the session-preserving type so the caller retires it.
+            raise BrowserSourceUnavailable(error.stage) from None
         raise
     except BrowserSourceUnavailable:
         raise

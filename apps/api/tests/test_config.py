@@ -327,3 +327,42 @@ def test_test_upstream_override_rejects_arbitrary_internal_hosts():
             environment="test",
             tago_base_url="http://untrusted-upstream:8001/tago",
         )
+
+
+def test_korail_session_keepalive_defaults_to_fifteen_minutes(monkeypatch):
+    monkeypatch.delenv("KORAIL_SESSION_KEEPALIVE_SECONDS", raising=False)
+
+    assert Settings(_env_file=None).korail_session_keepalive_seconds == 900
+
+
+@pytest.mark.parametrize("value", ["0", "300", "3600"])
+def test_korail_session_keepalive_accepts_disabled_and_documented_bounds(monkeypatch, value):
+    monkeypatch.setenv("KORAIL_SESSION_KEEPALIVE_SECONDS", value)
+
+    assert Settings(_env_file=None).korail_session_keepalive_seconds == int(value)
+
+
+@pytest.mark.parametrize("value", ["-1", "1", "299", "3601"])
+def test_korail_session_keepalive_rejects_values_outside_documented_range(monkeypatch, value):
+    monkeypatch.setenv("KORAIL_SESSION_KEEPALIVE_SECONDS", value)
+
+    with pytest.raises(ValidationError, match="korail_session_keepalive_seconds"):
+        Settings(_env_file=None)
+
+
+def test_korail_session_keepalive_default_is_synced_to_the_api_service():
+    example_values = {}
+    for line in (REPO_ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#") and "=" in line:
+            name, value = line.split("=", 1)
+            example_values[name] = value
+
+    compose = (REPO_ROOT / "compose.yml").read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    assert example_values["KORAIL_SESSION_KEEPALIVE_SECONDS"] == "900"
+    # Only the API process runs the provider session manager.
+    assert compose.count("${KORAIL_SESSION_KEEPALIVE_SECONDS:-900}") == 1
+    api_section = compose.split("\n  api:\n", 1)[1].split("\n  scheduler:\n", 1)[0]
+    assert "KORAIL_SESSION_KEEPALIVE_SECONDS: ${KORAIL_SESSION_KEEPALIVE_SECONDS:-900}" in (
+        api_section
+    )

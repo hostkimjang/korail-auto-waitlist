@@ -962,3 +962,45 @@ async def test_reservation_entry_records_in_place_login_without_deferring(monkey
     assert await client.reserve_once(object()) == "reserved"
     assert hold.login_submission_remaining() == 1800
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_keepalive_probe_logout_inside_submission_interval_defers_the_login() -> None:
+    now = [1_700_000_000.0]
+    hold = MemoryProviderCooldown(clock=lambda: now[0], login_submission_min_interval_seconds=1800)
+    sessions: list[_PacedLoginSession] = []
+
+    def factory(_page_url: str, _timeout_ms: int, _headless: bool) -> _AuthContext:
+        session = _PacedLoginSession()
+        sessions.append(session)
+        return _AuthContext(session)
+
+    client = PydollKorailBrowserClient(
+        session_factory=factory,
+        provider_cooldown=hold,
+        session_reuse_ttl_seconds=7200,
+        session_reuse_max_searches=5,
+    )
+    assert await client.verify_credentials(_credential()) is True
+
+    # A keepalive inside the submission interval only probes; a positive answer keeps
+    # the same browser and submits nothing.
+    now[0] += 600
+    assert await client.prewarm_credentials(_credential()) is True
+    assert sessions[0].probe_count == 1
+    assert [session.submissions for session in sessions] == [1]
+    assert client.session_snapshot().state is KorailSessionActorState.READY
+
+    # An official logout retires the session, and its replacement is a background login
+    # that waits out the shared interval instead of submitting 20 minutes after the last.
+    now[0] += 600
+    sessions[0].probe_result = False
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await client.prewarm_credentials(_credential())
+
+    assert caught.value.retry_after_seconds == 600
+    assert sessions[0].probe_count == 2
+    assert sessions[0].closed == 1
+    assert [session.submissions for session in sessions] == [1, 0]
+    assert client.session_snapshot().state is KorailSessionActorState.STALE
+    await client.close()

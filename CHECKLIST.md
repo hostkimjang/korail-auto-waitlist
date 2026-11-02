@@ -37,8 +37,22 @@
   정상 확인 결과가 로그에 남지 않아 미확정이라, 모든 확인 결과를 `login session probe completed outcome=...`로 기록하도록 보완
 - [x] 예약 16초 뒤 두 번째 로그인 원인 조사: 공식 확인 판독 실패(1.2.17에서 고친 목록 판독 거부) 때 확인 경로가 방금
   인증한 세션을 폐기했고 세션 관리자가 다시 로그인함
-- [ ] 공식 확인 실패 중 운영사 근거가 없는 로컬 판독 거부에서는 인증 세션을 보존하도록 폐기 범위 축소 검토
-- [ ] `login session probe completed outcome=logged_out`으로 서버 측 유휴 만료가 확인되면 예약 직전 재로그인을 줄이는 방안 검토
+- [x] 공식 확인 실패 중 운영사 근거가 없는 로컬 판독 거부에서는 인증 세션을 보존하도록 폐기 범위 축소:
+  `BrowserLocalReadRejected`(`body_contract_rejected`·`body_unavailable`·`dom_response_conflict`)만
+  세션을 유지하고 `confirmation_session_preserved` 한 줄을 남김. 인증 만료·HTTP·네트워크·timeout·navigation·
+  중복·탭 변경·보호·호출 제한, 비JSON·실패 결과·크기 상한 초과 본문과 앞 단계 실패가 겹친 경우는 기존처럼 폐기.
+  관련 회귀 테스트 통과
+- [ ] 재배포 뒤 운영 확인: 로컬 판독 거부가 자연 발생하면 `confirmation_session_preserved` 뒤 새 로그인 제출 없이
+  다음 공식 확인이 같은 세션으로 진행되는지 adapter 로그로 확인
+- [x] `login session probe completed outcome=logged_out`으로 서버 측 유휴 만료가 확인되면 예약 직전 재로그인을 줄이는 방안 검토:
+  API 세션 관리자가 KORAIL `READY` session의 마지막 공식 확인 뒤 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 900초,
+  0 또는 300~3600)가 지나면 자격증명 제출 없이 `loginCheck`로 확인해 세션을 유지. 자동 예약 감시가 활성일 때만
+  확인하고(감시 조회 실패 때는 그 tick만 건너뛰고 앞선 실패의 재시도 대기 유지), 로그아웃이면 기존처럼 제출 간격
+  하한을 지키는 BACKGROUND 로그인으로 교체. 판독 불가 시 세션 보존은
+  예약 경로와 갱신 경로의 구분 계약이 없어 이번에는 구현하지 않음. 관련 회귀 테스트 통과
+- [ ] 운영 확인: 재배포 뒤 api의 `session keepalive due` 다음 adapter `probe completed outcome=authenticated`가
+  15분 주기로 이어지는지, 예약 직전 새 로그인과 하루 로그인 제출 수가 줄었는지, keepalive 뒤에도
+  `outcome=logged_out`이 나오면 서버 만료가 900초보다 짧은지 adapter 로그로 확인
 - [x] 조회 제한 대기 단축: KORAIL 공통 대기의 보호·호출 제한 900초 하한을 없애고
   `SEAT_STATUS_PROTECTION_COOLDOWN_SECONDS`(기본 60초)·`SEAT_STATUS_RATE_LIMIT_COOLDOWN_SECONDS`(기본 300초)를
   sidecar·API·예약 실행 경로에 같은 값으로 연결. 계정 보호 정지는 무기한 중단 대신 60→120→240→300초

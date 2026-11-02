@@ -429,6 +429,19 @@ API는 시작할 때 활성 철도 계정의 로그인 session을 예열하고, 
 못하면 그 session을 폐기하고 같은 호출 안에서 곧바로 새 로그인을 한 번 시도합니다. 따라서 공식 `loginCheck`
 응답이 불확실하다는 이유만으로 계정이 다음 주기까지 미인증으로 남지 않습니다.
 
+코레일 서버는 로컬 재사용 기한(최대 7200초)보다 먼저 유휴 로그인 세션을 만료시킵니다. 11월 2일 재시작 직후
+약 1시간 반 미사용 세션의 `loginCheck`가 `outcome=logged_out`이었고, 밤사이 약 110분 주기 갱신 6회도 모두
+실제 로그인 제출로 끝났습니다. 그래서 API 세션 관리자는 `KORAIL_SESSION_KEEPALIVE_SECONDS`(기본 900초,
+0 또는 300~3600, 0이면 끔)마다 공식 `loginCheck`만으로 세션을 확인합니다. 자격증명은 제출하지 않으며, 자동
+예약(`RESERVE_ONCE_BEFORE_PAYMENT`) KORAIL 감시가 `scheduled`·`watching`·`official_waitlist`·`seat_found`·
+`cooldown` 중 하나로 있을 때만 확인합니다. 양성이면 같은 session의 재사용 기한이 늘어나 예약 직전 새 로그인이
+필요 없고, 로그아웃이면 위 갱신과 같이 새 로그인으로 바꾸되 아래 제출 간격 하한 안이면 미룹니다. api 로그의
+`Provider runtime session keepalive due provider=korail last_verified_age_seconds=N`(확인이 실제로 시작될 때만
+기록)과 adapter 로그의
+`KORAIL login session probe completed outcome=...`로 확인합니다. 서버 만료 시간 자체는 아직 측정하지 않았으므로,
+keepalive 뒤에도 `outcome=logged_out`이 반복되면 값을 300~600초로 낮춰 봅니다. 확인 요청은 세션당 시간당 약
+4회(기본값)이며 로그인 제출이 아니므로 `macro_err1` 간격 판정과는 별개로 봅니다(운영 미검증).
+
 갱신 임계값은 KORAIL과 SRT가 다릅니다. KORAIL은 재사용 기한이 `last_verified_at` 기준이고 예열이 성공할 때마다
 그 시각이 갱신되므로 남은 시간과 마지막 검증 경과로 재사용 창을 정확히 계산할 수 있습니다. 그 창의 25%를 쓰되
 최소 120초, 최대 600초, 창의 절반 이내로 제한하므로 기본 1800초 설정에서는 만료 450초 전부터 갱신합니다.
@@ -1352,6 +1365,16 @@ KORAIL 결제 뒤에도 `결제 필요`가 유지되면 `korail-browser-adapter`
 목록 판독이 `failure=invalid_response`로 끝나면 바로 앞의 `event=reservation_list_response_rejected`
 INFO 로그에서 `reason`과 `result`·`msg_code`·`msg_text`·`rows` 투영을 확인합니다. 이 로그도 문구 원문과
 행 내용은 남기지 않으며, 형식이 맞지 않는 메시지 코드는 `unrecognized`로만 기록합니다.
+목록 판독이 운영사 신호 없이 우리 판독 계약에서만 실패하면 sidecar는 인증 세션을 폐기하지 않고
+`event=confirmation_session_preserved reason=...` INFO 한 줄을 남깁니다. `reason`은
+`body_contract_rejected`(`SUCC` 본문의 행·메시지 계약 위반), `body_unavailable`(CDP 본문 읽기 실패),
+`dom_response_conflict` 중 하나입니다. 이때 공식 확인 결과는 그대로
+`INCONCLUSIVE / official_read_unavailable`이지만, 다음 확인은 새 로그인 없이 같은 세션으로 진행되어야 합니다.
+이 줄 직후에 `login submission`이나 세션 폐기가 이어지면 회귀입니다. 반대로 `P058`·HTTP·네트워크 오류·timeout·
+중복 요청·탭 변경·보호·호출 제한·본문 크기 상한 초과는 이 줄 없이 기존처럼 세션을 폐기하므로 뒤이은 재로그인은
+정상입니다.
+같은 판독 거부가 반복되면 세션 문제보다 판독 계약 변경을 먼저 의심하고 앞의
+`reservation_list_response_rejected` 투영을 확인합니다.
 새 판독기 배포만으로 기존 UNKNOWN을 해소하거나 재무장하지 않습니다. 사용자 재무장은 현재 공식
 미결제·발권 내역 확인, 기존 계정 generation과 후보 조건, 새 공식 좌석 관측 조건을 그대로 따릅니다.
 `/ticket/mypage/ticketinfo/history`는 반환을 포함한 거래 이력

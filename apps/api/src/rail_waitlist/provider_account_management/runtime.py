@@ -25,6 +25,7 @@ from .login_verification import (
 )
 from .models import RailProviderAccount, active_protection_halt_version
 from .schemas import RailProviderAuthStatus
+from .session_keepalive import has_session_keepalive_demand as _has_session_keepalive_demand
 
 LOGGER = logging.getLogger(__name__)
 PROVIDER_AUTH_RECOVERY_INTERVAL_SECONDS = 10.0
@@ -78,6 +79,8 @@ class ProviderRuntimePrewarmRegistry:
     # These outcomes do not establish a credential verdict. A failed official submission
     # has its own slower retry policy; an adapter/database failure can recover quickly.
     LOCAL_FAILURE_OUTCOMES = frozenset({"failed", "not_checked"})
+    KORAIL_SESSION_KEEPALIVE_MIN_SECONDS = 300
+    KORAIL_SESSION_KEEPALIVE_MAX_SECONDS = 3600
 
     outcomes: dict[Provider, RailProviderAuthStatus] = field(default_factory=dict)
     # provider -> (auth revision, attempts started, provider verdicts observed)
@@ -93,7 +96,26 @@ class ProviderRuntimePrewarmRegistry:
     protection_halted_revisions: dict[Provider, tuple[Provider, int, int]] = field(
         default_factory=dict
     )
+    # KORAIL expires an idle login on the server well before the local reuse deadline
+    # (a session idle about 90 minutes answered loginCheck as logged out). Probing the
+    # official session at this interval keeps it alive without a credential submission.
+    # 0 disables the probe; the API wires the configured value at startup.
+    korail_session_keepalive_seconds: int = 0
     completed: bool = False
+
+    def __post_init__(self) -> None:
+        value = self.korail_session_keepalive_seconds
+        if type(value) is not int or not (
+            value == 0
+            or self.KORAIL_SESSION_KEEPALIVE_MIN_SECONDS
+            <= value
+            <= self.KORAIL_SESSION_KEEPALIVE_MAX_SECONDS
+        ):
+            raise ValueError(
+                "KORAIL_SESSION_KEEPALIVE_SECONDS must be 0 or between "
+                f"{self.KORAIL_SESSION_KEEPALIVE_MIN_SECONDS} and "
+                f"{self.KORAIL_SESSION_KEEPALIVE_MAX_SECONDS}"
+            )
 
     def outcome_for(self, provider: Provider) -> RailProviderAuthStatus | None:
         return self.outcomes.get(provider)
@@ -159,6 +181,21 @@ class ProviderRuntimePrewarmRegistry:
             # when an operator configures an unusually short reuse TTL.
             reuse_window_seconds * self.SESSION_REFRESH_SAFETY_FRACTION,
         )
+
+    def session_keepalive_due(
+        self,
+        provider: Provider,
+        last_verified_age_seconds: float | None,
+    ) -> bool:
+        """Whether an idle KORAIL session has gone unverified for the keepalive interval."""
+
+        # Only KORAIL's prewarm probes the official session and refreshes last_verified_at;
+        # SRT would never reset the age and would prewarm on every tick.
+        if provider is not Provider.KORAIL or self.korail_session_keepalive_seconds <= 0:
+            return False
+        if last_verified_age_seconds is None:
+            return False
+        return last_verified_age_seconds >= self.korail_session_keepalive_seconds
 
     def mark_auth_revision_attempted(self, revision: tuple[Provider, int, int]) -> None:
         started, verdicts = self._auth_revision_counts(revision)
@@ -597,6 +634,8 @@ async def recover_provider_sessions_once(
                 )
             continue
 
+        # Set only when this tick admits an idle-session keepalive probe below.
+        keepalive_probe_age: int | None = None
         if recovery_attempt:
             restored = await _restore_locally_reusable_session(
                 session_factory,
@@ -658,9 +697,21 @@ async def recover_provider_sessions_once(
                     snapshot.local_reuse_remaining_seconds,
                 )
             ):
+                keepalive_age_due = registry.session_keepalive_due(
+                    provider, snapshot.last_verified_age_seconds
+                )
+                keepalive_demand = (
+                    await _has_session_keepalive_demand(session_factory, provider)
+                    if keepalive_age_due
+                    else False
+                )
                 registry.outcomes[provider] = "authenticated"
-                registry.prewarm_retry_state.pop(provider, None)
-                registry.provider_submission_failures.pop(provider, None)
+                if not keepalive_age_due:
+                    # Only an official check within the keepalive interval proves an earlier
+                    # failed probe was superseded. An idle READY snapshot proves nothing, so
+                    # neither a skipped probe nor a failed watch lookup erases its backoff.
+                    registry.prewarm_retry_state.pop(provider, None)
+                    registry.provider_submission_failures.pop(provider, None)
                 # An official positive session of this generation supersedes the halt.
                 registry.clear_protection_halt(provider)
                 if account_runtime.protection_halted:
@@ -669,7 +720,18 @@ async def recover_provider_sessions_once(
                         account_runtime,
                         revision,
                     )
-                continue
+                if keepalive_demand is not True:
+                    # No automatic booking needs this session, or the lookup failed: skip
+                    # only this tick's probe. The refresh before the reuse deadline remains.
+                    continue
+                # The session is still locally reusable but has been idle long enough for
+                # KORAIL to expire it server-side. Fall through to the ordinary prewarm: the
+                # sidecar probes loginCheck without submitting credentials, refreshes
+                # last_verified on success, and only on an official logout or unreadable
+                # probe replaces the session through the paced background login. Retry
+                # state is kept so a failed probe honours its backoff instead of re-running
+                # on every tick while the snapshot still reads READY.
+                keepalive_probe_age = int(snapshot.last_verified_age_seconds or 0)
             if registry.is_protection_halted(revision):
                 retry = registry.prewarm_retry_state.get(provider)
                 if retry is None or retry[0] != credential_version:
@@ -712,6 +774,14 @@ async def recover_provider_sessions_once(
             ),
         ):
             continue
+        if keepalive_probe_age is not None:
+            # Logged only once admitted, so a backoff or an in-flight attempt does not repeat
+            # this line on every tick.
+            LOGGER.info(
+                "Provider runtime session keepalive due provider=%s last_verified_age_seconds=%d",
+                provider.value,
+                keepalive_probe_age,
+            )
         outcome: RailProviderAuthStatus | None = None
         deferred = False
         try:

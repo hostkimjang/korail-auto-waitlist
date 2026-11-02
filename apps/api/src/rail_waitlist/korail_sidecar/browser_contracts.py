@@ -158,5 +158,28 @@ class BrowserSourceUnavailable(BrowserAdapterError):
         super().__init__("source_unavailable")
 
 
+LocalReadRejection = Literal[
+    "body_contract_rejected",
+    "body_unavailable",
+    "dom_response_conflict",
+]
+
+
+class BrowserLocalReadRejected(BrowserSourceUnavailable):
+    """Only this adapter's read contract failed; the provider sent no session signal.
+
+    The closed rejection set excludes every provider-originated failure: authentication
+    loss, HTTP or network errors, timeouts, unexpected navigation, duplicate requests,
+    tab changes, protection and rate limits. An oversized body is excluded too: its
+    content is unknown and may be a large logout or maintenance page. Callers may
+    therefore keep the authenticated session instead of forcing a fresh login. Publicly it
+    remains ``source_unavailable``.
+    """
+
+    def __init__(self, rejection: LocalReadRejection, stage: str = "unspecified") -> None:
+        self.rejection = rejection
+        super().__init__(stage)
+
+
 class BrowserClient(Protocol):
     async def search(self, request: BrowserSeatSearchRequest) -> BrowserSeatSearchResult: ...

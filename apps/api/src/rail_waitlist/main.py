@@ -175,7 +175,9 @@ def create_app(
         app.state.srt_seat_source if settings.srt_provider_adapter_enabled else None,
     )
     app.state.provider_runtime_session_factory = session_factory
-    app.state.provider_runtime_prewarm_registry = ProviderRuntimePrewarmRegistry()
+    app.state.provider_runtime_prewarm_registry = ProviderRuntimePrewarmRegistry(
+        korail_session_keepalive_seconds=settings.korail_session_keepalive_seconds
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

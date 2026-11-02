@@ -33,9 +33,11 @@ from rail_waitlist.korail_reservation_confirmation import (
 )
 from rail_waitlist.korail_reservation_contract import KorailReservationConfirmationResult
 from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserLocalReadRejected,
     BrowserProtectionDetected,
     BrowserRateLimited,
     BrowserSourceUnavailable,
+    LocalReadRejection,
 )
 from rail_waitlist.korail_sidecar.provider_cooldown import MemoryProviderCooldown
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import (
@@ -490,6 +492,103 @@ async def test_pydoll_confirmation_preserves_uncertainty_when_header_is_absent()
         "reservation_list",
         "close",
     ]
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
+
+
+def inexact_detail_snapshot() -> PydollPageSnapshot:
+    return PydollPageSnapshot(
+        body_text="KORAIL 예약 완료",
+        rows=(),
+        url="https://www.korail.com/ticket/reservation/detail",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rejection",
+    ["body_contract_rejected", "body_unavailable", "dom_response_conflict"],
+)
+async def test_pydoll_confirmation_local_read_rejection_keeps_session_for_next_read(
+    rejection: LocalReadRejection,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = BrowserLocalReadRejected(rejection, "confirmation_reservation_list_response")
+    client, session = await detail_client(
+        inexact_detail_snapshot(),
+        reservation_list_error=error,
+    )
+    provider_unavailable = AsyncMock()
+    monkeypatch.setattr(client._search_actor, "observe_provider_unavailable", provider_unavailable)
+
+    with caplog.at_level(logging.INFO, logger=pydoll_module.__name__):
+        with pytest.raises(BrowserLocalReadRejected) as captured:
+            await client.read_reservation_detail(confirmation_target())
+
+    assert captured.value is error
+    assert session.events == ["snapshot", "reservation_list"]
+    assert client._active_session is not None
+    assert client._active_session.session is session
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.READY
+    provider_unavailable.assert_not_awaited()
+    preserved = [
+        record.getMessage()
+        for record in caplog.records
+        if "confirmation_session_preserved" in record.getMessage()
+    ]
+    assert preserved == [
+        "KORAIL confirmation kept authenticated session after local read rejection "
+        f"event=confirmation_session_preserved reason={rejection}"
+    ]
+
+    session.reservation_list_error = None
+    session.events.clear()
+    evidence = await client.read_reservation_detail(confirmation_target())
+
+    assert evidence.auth_required is False
+    assert evidence.provider_blocked is False
+    assert session.events == ["snapshot", "reservation_list"]
+    assert client._active_session is not None
+    assert client._active_session.session is session
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_pydoll_confirmation_provider_read_failure_still_retires_session() -> None:
+    # auth_required(P058), HTTP and network errors, timeouts, unexpected navigation,
+    # duplicate requests and tab changes all surface as this plain source error.
+    error = BrowserSourceUnavailable("confirmation_reservation_list_response")
+    client, session = await detail_client(
+        inexact_detail_snapshot(),
+        reservation_list_error=error,
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as captured:
+        await client.read_reservation_detail(confirmation_target())
+
+    assert captured.value is error
+    assert session.events == ["snapshot", "reservation_list", "close"]
+    assert client._active_session is None
+    assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
+
+
+@pytest.mark.asyncio
+async def test_pydoll_confirmation_local_rejection_after_earlier_failure_retires_session() -> None:
+    client, session = await detail_client(
+        inexact_detail_snapshot(),
+        snapshot_error=BrowserSourceUnavailable("confirmation_detail_snapshot"),
+        reservation_list_error=BrowserLocalReadRejected(
+            "body_contract_rejected", "confirmation_reservation_list_response"
+        ),
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as captured:
+        await client.read_reservation_detail(confirmation_target())
+
+    assert type(captured.value) is BrowserSourceUnavailable
+    assert captured.value.stage == "confirmation_reservation_list_response"
+    assert session.events == ["snapshot", "reservation_list", "close"]
     assert client._active_session is None
     assert client.session_snapshot().state is pydoll_module.KorailSessionActorState.STALE
 

@@ -1836,3 +1836,199 @@ async def test_protection_halt_persistence_helpers_use_revision_compare_and_swap
     assert row is not None
     assert row.protection_halt_credential_version is None
     assert row.updated_at == stored_updated_at
+
+
+async def _seed_watch(
+    app,
+    *,
+    policy: ReservationPolicy = ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
+    status: WatchStatus = WatchStatus.WATCHING,
+    provider: Provider = Provider.KORAIL,
+) -> None:
+    now = datetime.now(UTC)
+    async with app.state.test_session_factory() as session:
+        session.add(
+            Watch(
+                provider=provider,
+                origin="서울",
+                destination="부산",
+                travel_date=(now + timedelta(days=1)).date(),
+                time_from=time(9),
+                time_to=time(12),
+                passenger_count=1,
+                mode="official",
+                reservation_policy=policy,
+                status=status,
+                dedupe_key=f"keepalive-{policy.value}-{status.value}",
+            )
+        )
+        await session.commit()
+
+
+def _idle_ready_snapshot(last_verified_age_seconds: float) -> ProviderSessionRuntimeSnapshot:
+    # A two hour local reuse window leaves far more than the 600 second refresh threshold,
+    # so only the keepalive interval can make the manager touch this session.
+    return runtime_snapshot(
+        Provider.KORAIL,
+        credential_generation="9",
+        remaining_seconds=7_200.0 - last_verified_age_seconds,
+        last_verified_age_seconds=last_verified_age_seconds,
+    )
+
+
+@pytest.mark.parametrize(
+    ("keepalive_seconds", "last_verified_age_seconds", "policy", "status", "expected_attempts"),
+    [
+        (900, 900.0, ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT, WatchStatus.WATCHING, 1),
+        (900, 1_200.0, ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT, WatchStatus.COOLDOWN, 1),
+        (900, 899.0, ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT, WatchStatus.WATCHING, 0),
+        (900, 1_200.0, ReservationPolicy.NOTIFY_ONLY, WatchStatus.WATCHING, 0),
+        (900, 1_200.0, ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT, WatchStatus.PAUSED, 0),
+        (900, 1_200.0, ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT, WatchStatus.COMPLETED, 0),
+        (0, 1_200.0, ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT, WatchStatus.WATCHING, 0),
+    ],
+)
+async def test_idle_korail_session_is_probed_only_for_auto_reservation_demand(
+    app,
+    keepalive_seconds: int,
+    last_verified_age_seconds: float,
+    policy: ReservationPolicy,
+    status: WatchStatus,
+    expected_attempts: int,
+) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    await _seed_watch(app, policy=policy, status=status)
+    verifier = StubRuntimeVerifier(
+        snapshots={Provider.KORAIL: _idle_ready_snapshot(last_verified_age_seconds)}
+    )
+    registry = ProviderRuntimePrewarmRegistry(
+        completed=True, korail_session_keepalive_seconds=keepalive_seconds
+    )
+
+    assert await _tick(app, verifier, registry) == expected_attempts
+    assert verifier.prewarm_calls == ([(Provider.KORAIL, 9)] if expected_attempts else [])
+    assert registry.outcome_for(Provider.KORAIL) == "authenticated"
+    # A positive probe resets last_verified, so the next tick leaves the session alone.
+    assert await _tick(app, verifier, registry) == 0
+    assert len(verifier.prewarm_calls) == expected_attempts
+
+
+async def test_srt_session_is_never_probed_by_the_korail_keepalive(app) -> None:
+    await _seed_account(
+        app, auth_status="authenticated", provider=Provider.SRT, login_id="0987654321"
+    )
+    await _seed_watch(app, provider=Provider.SRT)
+    verifier = StubRuntimeVerifier(
+        snapshots={
+            Provider.SRT: runtime_snapshot(
+                Provider.SRT,
+                credential_generation="9",
+                remaining_seconds=6_000.0,
+                last_verified_age_seconds=5_000.0,
+            )
+        }
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True, korail_session_keepalive_seconds=900)
+
+    assert await _tick(app, verifier, registry) == 0
+    assert verifier.prewarm_calls == []
+
+
+async def test_failed_keepalive_probe_keeps_its_backoff_while_session_reads_ready(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    await _seed_watch(app)
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.FAILED},
+        snapshots={Provider.KORAIL: _idle_ready_snapshot(1_200.0)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True, korail_session_keepalive_seconds=900)
+
+    assert await _tick(app, verifier, registry) == 1
+    # The snapshot still reads READY; the ready branch must not erase the retry clock
+    # and turn an unreachable adapter into a probe on every 10 second tick.
+    assert await _tick(app, verifier, registry) == 0
+    generation, failure_count, _retry_not_before = registry.prewarm_retry_state[Provider.KORAIL]
+    assert (generation, failure_count) == (9, 1)
+
+    _clear_backoff(registry)
+    assert await _tick(app, verifier, registry) == 1
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9), (Provider.KORAIL, 9)]
+
+
+async def test_failed_watch_lookup_keeps_the_failed_probe_backoff(
+    app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    await _seed_watch(app)
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.FAILED},
+        snapshots={Provider.KORAIL: _idle_ready_snapshot(1_200.0)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True, korail_session_keepalive_seconds=900)
+    assert await _tick(app, verifier, registry) == 1
+    failed_probe_retry = registry.prewarm_retry_state[Provider.KORAIL]
+
+    lookup = provider_runtime_module._has_session_keepalive_demand
+
+    def unavailable_database():
+        raise RuntimeError("database unavailable")
+
+    async def lookup_with_unavailable_database(_session_factory, provider):
+        return await lookup(unavailable_database, provider)
+
+    monkeypatch.setattr(
+        provider_runtime_module,
+        "_has_session_keepalive_demand",
+        lookup_with_unavailable_database,
+    )
+    # The failed lookup skips this tick's probe without erasing the failed probe's clock.
+    assert await _tick(app, verifier, registry) == 0
+    assert registry.prewarm_retry_state[Provider.KORAIL] == failed_probe_retry
+
+    monkeypatch.undo()
+    # Once the lookup recovers, the next probe still waits out that backoff.
+    assert await _tick(app, verifier, registry) == 0
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9)]
+
+
+async def test_keepalive_on_a_halted_revision_clears_the_halt_and_probes(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    assert await _tick(app, verifier, ProviderRuntimePrewarmRegistry(completed=True)) == 1
+    halted = await _halt_row(app)
+    assert halted is not None and halted.protection_halt_credential_version == 9
+
+    await _seed_watch(app)
+    verifier.outcomes[Provider.KORAIL] = ProviderLoginVerificationOutcome.AUTHENTICATED
+    verifier.snapshots[Provider.KORAIL] = _idle_ready_snapshot(1_200.0)
+    restarted = ProviderRuntimePrewarmRegistry(completed=True, korail_session_keepalive_seconds=900)
+
+    # A locally reusable session of this generation lifts the halt as before, and the due
+    # keepalive is not parked behind the protection backoff the halt would otherwise start.
+    assert await _tick(app, verifier, restarted) == 1
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9), (Provider.KORAIL, 9)]
+    assert restarted.protection_halted_revisions == {}
+    cleared = await _halt_row(app)
+    assert cleared is not None and cleared.protection_halt_credential_version is None
+
+
+@pytest.mark.parametrize("value", [-1, 1, 299, 3_601])
+def test_keepalive_interval_rejects_values_outside_documented_range(value: int) -> None:
+    with pytest.raises(ValueError, match="KORAIL_SESSION_KEEPALIVE_SECONDS"):
+        ProviderRuntimePrewarmRegistry(korail_session_keepalive_seconds=value)
+
+
+def test_keepalive_due_is_korail_scoped_and_needs_a_verified_age() -> None:
+    registry = ProviderRuntimePrewarmRegistry(korail_session_keepalive_seconds=900)
+
+    assert registry.session_keepalive_due(Provider.KORAIL, 900.0) is True
+    assert registry.session_keepalive_due(Provider.KORAIL, 899.9) is False
+    assert registry.session_keepalive_due(Provider.KORAIL, None) is False
+    assert registry.session_keepalive_due(Provider.SRT, 10_000.0) is False
+    assert (
+        ProviderRuntimePrewarmRegistry().session_keepalive_due(Provider.KORAIL, 10_000.0) is False
+    )

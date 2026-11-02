@@ -11427,6 +11427,7 @@ def test_korail_browser_contract_owner_has_exact_definitions_and_imports() -> No
         "BrowserProtectionDetected",
         "BrowserRateLimited",
         "BrowserSourceUnavailable",
+        "BrowserLocalReadRejected",
         "BrowserClient",
     }
     assert functions == set()
@@ -11435,6 +11436,7 @@ def test_korail_browser_contract_owner_has_exact_definitions_and_imports() -> No
         "KorailTrainType",
         "AdapterErrorReason",
         "ProtectionTrigger",
+        "LocalReadRejection",
         "SOURCE_NAME",
     }
 

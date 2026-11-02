@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     korail_browser_adapter_token: str | None = None
     korail_browser_adapter_cache_ttl_seconds: int = Field(default=1, ge=1, le=300)
     korail_browser_adapter_timeout_seconds: float = Field(default=600, ge=30, le=600)
+    # Idle seconds after which the API session manager probes the KORAIL login session
+    # (loginCheck, no credential submission) while an automatic-booking watch is active.
+    # 0 disables it; otherwise 300..3600.
+    korail_session_keepalive_seconds: int = 900
     webpush_vapid_private_key: str | None = None
     webpush_vapid_public_key: str | None = None
     webpush_vapid_subject: str = "mailto:admin@localhost"
@@ -87,6 +91,13 @@ class Settings(BaseSettings):
     def parse_auth_allowed_origins(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip().rstrip("/") for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("korail_session_keepalive_seconds")
+    @classmethod
+    def validate_korail_session_keepalive_seconds(cls, value: int) -> int:
+        if value != 0 and not 300 <= value <= 3600:
+            raise ValueError("korail_session_keepalive_seconds must be 0 or between 300 and 3600")
         return value
 
     @model_validator(mode="after")

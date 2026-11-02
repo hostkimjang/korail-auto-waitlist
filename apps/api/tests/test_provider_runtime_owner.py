@@ -69,6 +69,12 @@ OWNER_IMPORTS_FROM = {
     ("models", 1, "RailProviderAccount", None),
     ("models", 1, "active_protection_halt_version", None),
     ("schemas", 1, "RailProviderAuthStatus", None),
+    (
+        "session_keepalive",
+        1,
+        "has_session_keepalive_demand",
+        "_has_session_keepalive_demand",
+    ),
 }
 OWNER_DIRECT_IMPORTS = {("asyncio", None), ("logging", None)}
 OWNER_PUBLIC = {
@@ -115,7 +121,7 @@ OWNER_PRIVATE = {
     "_persist_protection_halt",
     "_clear_persisted_protection_halt",
 }
-OWNER_DEPENDENCY_PRIVATE = {"_ProviderCooldownDeferred"}
+OWNER_DEPENDENCY_PRIVATE = {"_ProviderCooldownDeferred", "_has_session_keepalive_demand"}
 PRE_MOVE_PICKLES = {
     "ProviderRuntimePrewarmRegistry": (
         "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfcnVudGltZQpQcm92aWRlclJ1bnRpbWVQcmV3YXJt"

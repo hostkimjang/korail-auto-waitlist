@@ -537,6 +537,7 @@ class PydollKorailBrowserClient:
         """Read exact hold evidence only from the target's active auth generation."""
 
         from .korail_sidecar.browser_contracts import (
+            BrowserLocalReadRejected,
             BrowserProtectionDetected,
             BrowserRateLimited,
         )
@@ -567,6 +568,15 @@ class PydollKorailBrowserClient:
             except (BrowserProtectionDetected, BrowserRateLimited):
                 await self._search_actor.observe_provider_protection()
                 await self._auth_actor.discard_with_state(KorailSessionActorState.BLOCKED)
+                raise
+            except BrowserLocalReadRejected as error:
+                # Only our read contract failed and KORAIL sent no session signal; retiring
+                # it would force a fresh login, which KORAIL flags when repeated quickly.
+                logger.info(
+                    "KORAIL confirmation kept authenticated session after local read "
+                    "rejection event=confirmation_session_preserved reason=%s",
+                    error.rejection,
+                )
                 raise
             except BrowserSourceUnavailable as error:
                 await self._search_actor.observe_provider_unavailable(error)

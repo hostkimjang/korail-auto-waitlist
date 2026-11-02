@@ -13,6 +13,7 @@ import pytest
 import rail_waitlist.korail_sidecar.pydoll.reservation_list_response as response_module
 from rail_waitlist.korail_pydoll_browser import _PydollSession
 from rail_waitlist.korail_sidecar.browser_contracts import (
+    BrowserLocalReadRejected,
     BrowserProtectionDetected,
     BrowserRateLimited,
     BrowserSourceUnavailable,
@@ -20,6 +21,7 @@ from rail_waitlist.korail_sidecar.browser_contracts import (
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollReservationListSnapshot
 from rail_waitlist.korail_sidecar.pydoll.reservation_list_response import (
     ReservationListResponseObserver,
+    ReservationListResponseSnapshot,
     observe_reservation_list_response,
     read_reservation_list,
 )
@@ -1287,3 +1289,121 @@ async def test_reader_timestamp_inversion_p100_still_requires_stable_complete_do
     ]
     assert not caplog.records
     assert tab.callbacks == {}
+
+
+LOCAL_BODY_REJECTIONS: dict[str, object] = {
+    # strResult=SUCC proves an authenticated response; only our row/message contract fails.
+    "message_contract": {**EMPTY, "h_msg_cd": "WRT300004", "jrny_infos": {"jrny_info": [{}]}},
+    "rows_malformed": {**EMPTY, "jrny_infos": {"jrny_info": [1]}},
+    "rows_not_list": {**EMPTY, "jrny_infos": {"jrny_info": None}},
+}
+PROVIDER_BODY_FAILURES: dict[str, object] = {
+    "result_fail": {"strResult": "FAIL", "h_msg_cd": "WRG000000"},
+    "auth_required": {"strResult": "FAIL", "h_msg_cd": "P058"},
+    "payload_not_object": [],
+}
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("message_contract", "body_contract_rejected"),
+        ("rows_malformed", "body_contract_rejected"),
+        ("rows_not_list", "body_contract_rejected"),
+        ("body_shape", "body_unavailable"),
+        ("cdp_error", "body_unavailable"),
+        ("too_large", None),
+        ("dom_conflict", "dom_response_conflict"),
+        ("result_fail", None),
+        ("auth_required", None),
+        ("payload_not_object", None),
+        ("not_json", None),
+        ("http_error", None),
+        ("network_error", None),
+        ("timeout", None),
+        ("duplicate", None),
+        ("redirect", None),
+        ("unexpected_mime", None),
+    ],
+)
+async def test_only_local_read_rejections_are_typed_session_preserving(
+    mode: str, expected: str | None
+) -> None:
+    clock = Clock()
+    tab = Tab()
+    payload = LOCAL_BODY_REJECTIONS.get(mode, PROVIDER_BODY_FAILURES.get(mode))
+    if payload is not None:
+        tab.body = {"result": {"body": json.dumps(payload), "base64Encoded": False}}
+    elif mode == "not_json":
+        tab.body = {"result": {"body": "<html>login</html>", "base64Encoded": False}}
+    elif mode == "body_shape":
+        tab.body = {"result": {}}
+    elif mode == "cdp_error":
+        tab.body_error = True
+    elif mode == "dom_conflict":
+        rows = {**EMPTY, "jrny_infos": {"jrny_info": [{}]}}
+        tab.body = {"result": {"body": json.dumps(rows), "base64Encoded": False}}
+    empty = PydollReservationListSnapshot(
+        LIST, page_marker_visible=True, explicit_empty_visible=True
+    )
+
+    async def navigate(url: str, *, timeout: int) -> None:
+        tab.callbacks[1](request(document=True))
+        if mode == "redirect":
+            tab.callbacks[1](request(redirectResponse={"status": 302}))
+            return
+        tab.callbacks[1](request())
+        if mode == "timeout":
+            clock.now += 2
+            return
+        status = 500 if mode == "http_error" else 200
+        mime = "text/plain" if mode == "unexpected_mime" else "application/json"
+        tab.callbacks[2](response(response={"status": status, "url": VIEW, "mimeType": mime}))
+        if mode == "network_error":
+            tab.callbacks[4]({"params": {"requestId": "list-read", "timestamp": 13.0}})
+            return
+        size = 65_537 if mode == "too_large" else 150
+        tab.callbacks[3](finished(encodedDataLength=size))
+        if mode == "duplicate":
+            tab.callbacks[1](request(requestId="second-read"))
+
+    with pytest.raises(BrowserSourceUnavailable) as error:
+        await read_reservation_list(
+            tab=tab,
+            current_tab=lambda: tab,
+            navigate=navigate,
+            snapshot=AsyncMock(return_value=empty),
+            timeout_seconds=0.5,
+            monotonic=clock,
+            wall_time=lambda: 100,
+            sleep=clock.sleep,
+        )
+
+    assert error.value.stage == "confirmation_reservation_list_response"
+    assert str(error.value) == "source_unavailable"
+    if expected is None:
+        assert type(error.value) is BrowserSourceUnavailable
+    else:
+        assert isinstance(error.value, BrowserLocalReadRejected)
+        assert error.value.rejection == expected
+    assert tab.callbacks == {}
+
+
+async def test_later_failure_replaces_local_rejection_atomically() -> None:
+    owner = armed()
+    complete(owner)
+    tab = Tab()
+    tab.body_error = True
+    await owner.read_completed_body(tab)
+    assert owner.snapshot() == ReservationListResponseSnapshot(
+        "failed", "body_unavailable", "body_unavailable"
+    )
+
+    owner.fail("tab_changed")
+    assert owner.snapshot() == ReservationListResponseSnapshot("failed", "tab_changed")
+    with pytest.raises(BrowserSourceUnavailable) as error:
+        owner.assert_read_allowed()
+    assert type(error.value) is BrowserSourceUnavailable
+
+    owner.close()
+    assert owner.snapshot() == ReservationListResponseSnapshot("failed", "closed")

@@ -1151,6 +1151,10 @@ event 해제, browser `__aexit__` → `stop` → `close` fallback을 한 번 끝
 오류·취소를 덮지 않습니다. client 전체 close는 read-only search와 authenticated owner 중 하나가 실패해도
 두 정리를 모두 cancellation-safe하게 끝낸 뒤 첫 오류를 다시 전달합니다.
 
+브라우저별 process manager는 Chromium의 미사용 stdout·stderr를 `DEVNULL`에 연결합니다. Pydoll의
+기본 미소비 pipe에 출력이 쌓여 브라우저와 CDP 응답이 함께 멈추는 일을 방지하며, 원문 브라우저 출력을
+로그로 남기지 않습니다. 실행 인자·PID와 기존 종료 소유권은 유지하고 앱의 닫힌 진단은 계속 사용합니다.
+
 구체 `_PydollSession`·`_PydollSessionContext`, session/context Protocol, 기본 factory와 DOM actor/driver 인스턴스 조립은
 기존 `korail_pydoll_browser.py` composition shell에 남습니다. `_browser`·assignable `_tab`·callback id와 network
 event ownership은 호환 property가 lifecycle owner에 위임하고, `_replace_tab`·listener·close private method도

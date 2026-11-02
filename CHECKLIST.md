@@ -745,3 +745,6 @@
 - [x] PR 통합 CI에서 드러난 기존 로그인 JSON 깊이 판정의 환경 차이를 명시적 64단계 상한으로 제거.
   요청·응답의 64/65단계 경계, 문자열의 괄호·이스케이프와 비밀값 비보존을 Windows·Linux 관련 테스트
   253건씩으로 검증하고 최신 main 통합 뒤 strict mypy 172개 파일·Ruff·format·lock 검사를 통과
+- [x] Pydoll의 미소비 출력 pipe 포화로 실제 Chromium 검색이 멈추고 동일 검색의 출력 배출만으로
+  복구되는 경로 재현. 브라우저별 stdout·stderr를 `DEVNULL`로 연결하고 Windows lifecycle·composition·
+  모듈 경계 765건, Linux 기존 실패 3건·대량 출력 회귀 1건과 strict mypy 172개 파일 통과

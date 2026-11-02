@@ -190,6 +190,46 @@ def test_lifecycle_module_is_passive_without_importing_optional_pydoll() -> None
     assert result.returncode == 0, result.stderr
 
 
+def test_runtime_process_output_cannot_block_or_escape_to_application_logs(
+    tmp_path: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    pytest.importorskip("pydoll.browser")
+    runtime = lifecycle_module._load_pydoll_runtime()
+    browser = runtime.browser_factory(options=runtime.options_factory())
+    manager = getattr(browser, "_browser_process_manager")
+    marker = tmp_path / "browser-output-completed"
+    process = manager._process_creator(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import pathlib, sys; "
+                "noise = b'fixture-private-browser-output' * 65536; "
+                "sys.stdout.buffer.write(noise); sys.stdout.flush(); "
+                "sys.stderr.buffer.write(noise); sys.stderr.flush(); "
+                "pathlib.Path(sys.argv[1]).write_text('completed', encoding='ascii')"
+            ),
+            str(marker),
+        ]
+    )
+    try:
+        # Do not consume either stream: the real browser lifecycle does not.
+        assert process.wait(timeout=10) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+
+    assert marker.read_text(encoding="ascii") == "completed"
+    captured = capfd.readouterr()
+    assert "fixture-private-browser-output" not in captured.out
+    assert "fixture-private-browser-output" not in captured.err
+
+
 @pytest.mark.parametrize(
     ("sandbox_value", "expected_sandbox"),
     [("true", True), ("yes", False)],

@@ -12097,7 +12097,12 @@ def test_pydoll_chromium_lifecycle_has_exact_top_level_dependency_boundary() -> 
         "PydollChromiumLifecycle",
         "probe_pydoll_chromium",
     }
-    assert imports == {("asyncio", None), ("logging", None), ("os", None)}
+    assert imports == {
+        ("asyncio", None),
+        ("logging", None),
+        ("os", None),
+        ("subprocess", None),
+    }
     assert imports_from == {
         ("__future__", 0, "annotations", None),
         ("collections.abc", 0, "Awaitable", None),

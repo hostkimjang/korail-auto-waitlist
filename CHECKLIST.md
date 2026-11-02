@@ -748,3 +748,6 @@
 - [x] Pydoll의 미소비 출력 pipe 포화로 실제 Chromium 검색이 멈추고 동일 검색의 출력 배출만으로
   복구되는 경로 재현. 브라우저별 stdout·stderr를 `DEVNULL`로 연결하고 Windows lifecycle·composition·
   모듈 경계 765건, Linux 기존 실패 3건·대량 출력 회귀 1건과 strict mypy 172개 파일 통과
+- [x] 같은 CDP 포트를 고른 두 Pydoll 인스턴스가 다른 브라우저에 연결·종료하는 결함을 실제 Chromium으로
+  재현. OS의 빈 loopback 포트를 명시하고 Windows 관련 766건·strict mypy 172개 파일 및 Linux의
+  점유 포트 회피 계약 검증 통과. CI의 시간 초과와 동일 원인인지는 별도 실패 시점 진단으로 확인

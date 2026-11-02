@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -191,7 +192,13 @@ def _load_pydoll_runtime() -> PydollChromiumRuntime:
         return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def create_browser(*, options: _ChromiumOptions) -> _PydollBrowser:
-        browser = Chrome(options=cast(ChromiumOptions, options))
+        # Pydoll's default chooses an unchecked port from a small fixed range and
+        # may attach to another browser. Ask the OS for a free loopback port;
+        # releasing it before Chrome binds still leaves a small allocation race.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            connection_port = reservation.getsockname()[1]
+        browser = Chrome(options=cast(ChromiumOptions, options), connection_port=connection_port)
         # The pinned Chrome constructor does not expose the base-class manager
         # argument. Replace its unused manager before starting this instance.
         browser._browser_process_manager = BrowserProcessManager(process_creator=create_process)

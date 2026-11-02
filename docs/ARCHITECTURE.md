@@ -1154,6 +1154,8 @@ event 해제, browser `__aexit__` → `stop` → `close` fallback을 한 번 끝
 브라우저별 process manager는 Chromium의 미사용 stdout·stderr를 `DEVNULL`에 연결합니다. Pydoll의
 기본 미소비 pipe에 출력이 쌓여 브라우저와 CDP 응답이 함께 멈추는 일을 방지하며, 원문 브라우저 출력을
 로그로 남기지 않습니다. 실행 인자·PID와 기존 종료 소유권은 유지하고 앱의 닫힌 진단은 계속 사용합니다.
+CDP 포트는 고정된 좁은 범위에서 무작위로 고르지 않고, 브라우저 생성 시 OS가 선택한 빈 loopback 포트를
+명시합니다. 확인용 socket은 Chrome 시작 전에 닫으므로 확인과 실제 bind 사이를 독점 예약하지는 않습니다.
 
 구체 `_PydollSession`·`_PydollSessionContext`, session/context Protocol, 기본 factory와 DOM actor/driver 인스턴스 조립은
 기존 `korail_pydoll_browser.py` composition shell에 남습니다. `_browser`·assignable `_tab`·callback id와 network

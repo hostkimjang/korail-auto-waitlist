@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import subprocess
 import sys
 from collections.abc import Callable
@@ -228,6 +229,39 @@ def test_runtime_process_output_cannot_block_or_escape_to_application_logs(
     captured = capfd.readouterr()
     assert "fixture-private-browser-output" not in captured.out
     assert "fixture-private-browser-output" not in captured.err
+
+
+def test_runtime_factory_avoids_occupied_ports_and_passes_each_selected_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pydoll_base = pytest.importorskip("pydoll.browser.chromium.base")
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as first_listener,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as second_listener,
+    ):
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        occupied_port = occupied.getsockname()[1]
+        # Force the dependency's unchecked default to collide. An explicitly
+        # selected port must reach both Chrome and its CDP connection handler.
+        monkeypatch.setattr(pydoll_base, "randint", lambda _start, _end: occupied_port)
+        runtime = lifecycle_module._load_pydoll_runtime()
+        first = runtime.browser_factory(options=runtime.options_factory())
+        first_port = getattr(first, "_connection_port")
+        assert first_port != occupied_port
+        assert getattr(first, "_connection_handler")._connection_port == first_port
+        first_listener.bind(("127.0.0.1", first_port))
+        first_listener.listen()
+
+        second = runtime.browser_factory(options=runtime.options_factory())
+        second_port = getattr(second, "_connection_port")
+        assert second_port not in {occupied_port, first_port}
+        assert getattr(second, "_connection_handler")._connection_port == second_port
+        second_listener.bind(("127.0.0.1", second_port))
+        assert getattr(first, "_browser_process_manager") is not getattr(
+            second, "_browser_process_manager"
+        )
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 import json
 import shutil
 import subprocess
@@ -65,6 +66,13 @@ from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapsho
         (200, "text/html", '{"strResult":1}', "source_unavailable", 1),
         (200, "text/html", '{"strResult":"SUCC","h_msg_cd":0}', "source_unavailable", 1),
         (200, "text/html", '{"strResult":"SUCC","h_msg_cd":{}}', "source_unavailable", 1),
+        (
+            200,
+            "text/html",
+            '{"errCode":"macro_err1","errMsg":"fixture-private-message"}',
+            "source_unavailable",
+            1,
+        ),
         (200, "text/plain", '{"strResult":"SUCC"}', "source_unavailable", 0),
         (200, "", '{"strResult":"SUCC"}', "source_unavailable", 0),
         (200, "text/html-other", '{"strResult":"SUCC"}', "source_unavailable", 0),
@@ -91,6 +99,7 @@ from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapsho
         "non-string-result",
         "numeric-message-code",
         "object-message-code",
+        "protection-error-code-is-observed",
         "unsupported-mime",
         "missing-mime",
         "mime-prefix-is-not-html",
@@ -102,6 +111,7 @@ from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapsho
 @pytest.mark.asyncio
 async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     status: int,
     mime: str,
     body: str,
@@ -110,6 +120,9 @@ async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
 ) -> None:
     """Execute the production browser script with fixture fetch, without network I/O."""
 
+    expected_value: dict[str, object] = {"outcome": expected}
+    if "errCode" in body:
+        expected_value["err_code"] = "macro_err1"
     node = shutil.which("node")
     if node is None:
         # make verify-api installs the browser extra, whose pinned Playwright
@@ -157,7 +170,7 @@ async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
             check=True,
         )
         result = json.loads(completed.stdout)
-        assert result == {"value": {"outcome": expected}, "calls": 1, "reads": body_reads}
+        assert result == {"value": expected_value, "calls": 1, "reads": body_reads}
         executions.append(expected)
         return {"result": {"result": {"value": result["value"]}}}
 
@@ -175,6 +188,19 @@ async def test_official_session_probe_executes_json_mime_and_failure_boundaries(
         with pytest.raises(error_type):
             await session._probe_official_authenticated_session()
     assert executions == [expected]
+    probe_logs = [
+        row.getMessage()
+        for row in caplog.records
+        if "login session probe response" in row.getMessage()
+    ]
+    if "err_code" in expected_value:
+        assert probe_logs == [
+            "KORAIL login session probe response outcome=source_unavailable "
+            "login_err_codes=('macro_err1',)"
+        ]
+    else:
+        assert probe_logs == []
+    assert "fixture-private-message" not in caplog.text
 
 
 def _credential() -> KorailCredentialInput:
@@ -185,14 +211,33 @@ def _credential() -> KorailCredentialInput:
     )
 
 
+def _login_post_data() -> str:
+    return json.dumps(
+        {
+            "UserId": "fixture-account",
+            "selInputFlg": "2",
+            "hidMemberFlg": "1",
+            "txtDv": "2",
+            "encUserId": "fixture-private-encrypted-account",
+            "keyname": "fixture-private-key",
+            "encUserPwd": "fixture-private-encrypted-password",
+            "useKeySec": "N",
+            "deviceId": "fixture-private-device",
+        }
+    )
+
+
 class ObservedLoginTab:
     def __init__(self) -> None:
         self.network_events_enabled = True
-        self.callbacks: dict[int, tuple[object, Callable[[dict[str, object]], None]]] = {}
+        self.callbacks: dict[int, tuple[object, Callable[[dict[str, object]], object]]] = {}
         self.removed: list[int] = []
         self.go_to = AsyncMock()
+        self.command_calls: list[dict[str, object]] = []
+        self.response_bodies: dict[str, object] = {}
+        self.stack_traces: dict[str, dict[str, object]] = {}
 
-    async def on(self, event: object, callback: Callable[[dict[str, object]], None]) -> int:
+    async def on(self, event: object, callback: Callable[[dict[str, object]], object]) -> int:
         callback_id = len(self.callbacks) + 1
         self.callbacks[callback_id] = (event, callback)
         return callback_id
@@ -204,30 +249,88 @@ class ObservedLoginTab:
     def emit(self, event: str, params: dict[str, object]) -> None:
         for binding, callback in tuple(self.callbacks.values()):
             if binding == event:
-                callback({"params": params})
+                result = callback({"params": params})
+                if asyncio.iscoroutine(result):
+                    try:
+                        result.send(None)
+                    except StopIteration:
+                        pass
+                    else:
+                        result.close()
+                        raise AssertionError("fixture callback unexpectedly suspended")
 
-    def request(self, request_id: str = "login") -> None:
+    async def emit_async(self, event: str, params: dict[str, object]) -> None:
+        for binding, callback in tuple(self.callbacks.values()):
+            if binding == event:
+                result = callback({"params": params})
+                if inspect.isawaitable(result):
+                    await result
+
+    def request(
+        self,
+        request_id: str = "login",
+        *,
+        url: str = "https://www.korail.com/dynamic-login",
+        method: str = "POST",
+        resource_type: str = "XHR",
+        post_data: object = None,
+        initiator: object = None,
+    ) -> None:
+        request_data: dict[str, object] = {"method": method, "url": url}
+        if post_data is not None:
+            request_data["postData"] = post_data
+        params: dict[str, object] = {
+            "requestId": request_id,
+            "type": resource_type,
+            "request": request_data,
+        }
+        if initiator is not None:
+            params["initiator"] = initiator
         self.emit(
             "request",
-            {
-                "requestId": request_id,
-                "type": "XHR",
-                "request": {"method": "POST", "url": "https://www.korail.com/dynamic-login"},
-            },
+            params,
         )
 
-    def response(self, status: int = 200, *, request_id: str = "login") -> None:
+    def response(
+        self,
+        status: int = 200,
+        *,
+        request_id: str = "login",
+        url: str = "https://www.korail.com/dynamic-login",
+        resource_type: str = "XHR",
+        mime: object = None,
+    ) -> None:
+        response_data: dict[str, object] = {"status": status, "url": url}
+        if mime is not None:
+            response_data["mimeType"] = mime
         self.emit(
             "response",
             {
                 "requestId": request_id,
-                "type": "XHR",
-                "response": {"status": status, "url": "https://www.korail.com/dynamic-login"},
+                "type": resource_type,
+                "response": response_data,
             },
         )
 
-    def finish(self, request_id: str = "login") -> None:
-        self.emit("finished", {"requestId": request_id})
+    def finish(self, request_id: str = "login", *, encoded_data_length: object = 512) -> None:
+        self.emit(
+            "finished",
+            {"requestId": request_id, "encodedDataLength": encoded_data_length},
+        )
+
+    async def _execute_command(self, command: dict[str, object]) -> object:
+        self.command_calls.append(command)
+        params = command.get("params")
+        stack_trace_id = params.get("stackTraceId") if isinstance(params, dict) else None
+        identifier = stack_trace_id.get("id") if isinstance(stack_trace_id, dict) else None
+        if command.get("method") == "Debugger.getStackTrace":
+            stack = self.stack_traces.get(str(identifier))
+            return {"result": {"stackTrace": stack}} if stack is not None else {"result": {}}
+        request_id = params.get("requestId") if isinstance(params, dict) else None
+        return self.response_bodies.get(
+            request_id if isinstance(request_id, str) else "",
+            {"result": {}},
+        )
 
 
 def prepare_observed_login(
@@ -272,6 +375,420 @@ def prepare_observed_login(
     )
     monkeypatch.setattr(session, "_confirm_authenticated_search", AsyncMock(return_value=True))
     return session, tab, submit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize("authenticated", [False, True])
+async def test_terminal_login_log_keeps_only_closed_request_facts(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    in_place: bool,
+    authenticated: bool,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        AsyncMock(return_value=authenticated),
+    )
+    caplog.set_level("INFO")
+
+    async def submitted() -> None:
+        url = "https://www.korail.com/ebizweb/common/loginProcess?fixture-private-query"
+        tab.request(
+            "fixture-private-request-id",
+            url=url,
+            post_data=_login_post_data(),
+        )
+        tab.response(
+            200,
+            request_id="fixture-private-request-id",
+            url=url,
+            mime="application/json",
+        )
+        tab.finish("fixture-private-request-id")
+        tab.response_bodies["fixture-private-request-id"] = {
+            "result": {
+                "body": json.dumps(
+                    {
+                        "strResult": "FAIL",
+                        "h_msg_cd": "fixture-private-response-code",
+                        "h_msg_txt": "fixture-private-response-message",
+                    }
+                ),
+                "base64Encoded": False,
+            }
+        }
+
+    submit.side_effect = submitted
+    if not authenticated:
+        ticks = iter((0.0, 0.0, 2.0))
+        session._login_driver._monotonic = lambda: next(ticks, 2.0)
+        session._login_driver._sleep = AsyncMock()
+
+    result = (
+        await session._authenticate_in_place(_credential())
+        if in_place
+        else await session.ensure_authenticated(_credential())
+    )
+
+    assert result is authenticated
+    assert tab.callbacks == {}
+    observations = [
+        row.getMessage()
+        for row in caplog.records
+        if "login submission terminal observation" in row.getMessage()
+    ]
+    assert len(observations) == 1
+    expected_outcome = "authenticated" if authenticated else "auth_required"
+    assert f"outcome={expected_outcome}" in observations[0]
+    rows = json.loads(observations[0].partition("requests=")[2])
+    assert rows[0]["request_role"] == "login_submission"
+    assert rows[0]["payload_role"] == "login_submission"
+    assert rows[0]["status"] == 200
+    assert rows[0]["terminal"] == "completed"
+    assert rows[0]["response_auth_outcome"] == ("not_observed" if authenticated else "rejected")
+    body_commands = [
+        command
+        for command in tab.command_calls
+        if command.get("method") == "Network.getResponseBody"
+    ]
+    assert len(body_commands) == (0 if authenticated else 1)
+    for private_value in (
+        "fixture-account",
+        "fixture-password",
+        "fixture-private-encrypted-account",
+        "fixture-private-encrypted-password",
+        "fixture-private-query",
+        "fixture-private-request-id",
+        "fixture-private-response-code",
+        "fixture-private-response-message",
+        "https://",
+    ):
+        assert private_value not in observations[0]
+
+
+@pytest.mark.asyncio
+async def test_public_key_bootstrap_is_not_mistaken_for_protected_login_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    probe = AsyncMock(return_value=False)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+    caplog.set_level("INFO")
+
+    async def submitted() -> None:
+        key_url = "https://www.korail.com/ebizweb/tour/mypage/pwd_action/pblk"
+        tab.request("key", url=key_url, method="GET", resource_type="Fetch")
+        tab.response(200, request_id="key", url=key_url, resource_type="Fetch")
+        tab.finish("key")
+        assert session._login_driver._submission is not None
+        assert session._login_driver._submission.snapshot().state == "missing"
+
+        bundle_url = "https://cdn.korail.com/bundle/bundle.fcfd32491c1f6e0b2541.js?v=1.0.221"
+        tab.stack_traces["bootstrap-parent"] = {
+            "callFrames": [
+                {
+                    "functionName": "callApi",
+                    "url": bundle_url,
+                    "lineNumber": 2,
+                    "columnNumber": 30054,
+                }
+            ]
+        }
+        bootstrap_url = "https://www.korail.com/fixture-bootstrap-transport"
+        await tab.emit_async(
+            "request",
+            {
+                "requestId": "bootstrap",
+                "type": "Fetch",
+                "request": {"method": "POST", "url": bootstrap_url},
+                "initiator": {
+                    "type": "script",
+                    "stack": {
+                        "callFrames": [
+                            {
+                                "functionName": "requestWrapper",
+                                "url": bundle_url,
+                                "lineNumber": 403,
+                                "columnNumber": 3377,
+                            }
+                        ]
+                        * 9,
+                        "parentId": {"id": "bootstrap-parent"},
+                    },
+                },
+            },
+        )
+        tab.response(
+            200,
+            request_id="bootstrap",
+            url=bootstrap_url,
+            resource_type="Fetch",
+            mime="application/json",
+        )
+        tab.finish("bootstrap", encoded_data_length=64)
+        assert session._login_driver._submission.snapshot().state == "missing"
+
+        tab.stack_traces["login-parent"] = {
+            "callFrames": [
+                {
+                    "functionName": "callApi",
+                    "url": bundle_url,
+                    "lineNumber": 2,
+                    "columnNumber": 30620,
+                }
+            ]
+        }
+        login_url = "https://www.korail.com/fixture-protection-transport"
+        await tab.emit_async(
+            "request",
+            {
+                "requestId": "login",
+                "type": "Fetch",
+                "request": {"method": "POST", "url": login_url},
+                "initiator": {
+                    "type": "script",
+                    "stack": {
+                        "callFrames": [
+                            {
+                                "functionName": "requestWrapper",
+                                "url": bundle_url,
+                                "lineNumber": 403,
+                                "columnNumber": 3511,
+                            }
+                        ],
+                        "parentId": {"id": "login-parent"},
+                    },
+                },
+            },
+        )
+        tab.response(
+            200,
+            request_id="login",
+            url=login_url,
+            resource_type="Fetch",
+            mime="application/json",
+        )
+        tab.finish("login", encoded_data_length=64)
+        tab.response_bodies["login"] = {
+            "result": {
+                "body": '{"transport":"fixture-private-envelope"}',
+                "base64Encoded": False,
+            }
+        }
+
+    submit.side_effect = submitted
+    ticks = iter((0.0, 0.0, 2.0))
+    session._login_driver._monotonic = lambda: next(ticks, 2.0)
+    session._login_driver._sleep = AsyncMock()
+
+    assert await session.ensure_authenticated(_credential()) is False
+    probe.assert_awaited_once()
+    observation = next(
+        row.getMessage()
+        for row in caplog.records
+        if "login submission terminal observation" in row.getMessage()
+    )
+    rows = json.loads(observation.partition("requests=")[2])
+    assert [(row["path_family"], row["request_role"]) for row in rows] == [
+        ("public_key", "login_bootstrap"),
+        ("official_other", "login_bootstrap"),
+        ("official_other", "login_submission"),
+    ]
+    assert rows[0]["response_auth_outcome"] == "not_observed"
+    assert rows[1]["response_auth_outcome"] == "not_observed"
+    assert rows[2]["response_auth_outcome"] == "not_login_result"
+    assert rows[2]["response_schema_fields"] == ["transport"]
+    assert [row["initiator_completion_reason"] for row in rows[1:]] == [
+        "complete",
+        "complete",
+    ]
+    assert rows[1]["initiator_public_frames_truncated"] is True
+    assert len(rows[1]["initiator_public_frames"]) == 8
+    assert rows[2]["initiator_public_frames_truncated"] is False
+    assert "fixture-private-envelope" not in observation
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_accepted_body_cannot_override_negative_session_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        AsyncMock(return_value=False),
+    )
+    caplog.set_level("INFO")
+
+    async def submitted() -> None:
+        url = "https://www.korail.com/ebizweb/common/loginProcess"
+        tab.request(post_data=_login_post_data(), url=url)
+        tab.response(url=url, mime="application/json")
+        tab.finish()
+        tab.response_bodies["login"] = {
+            "result": {
+                "body": json.dumps(
+                    {
+                        "strResult": "SUCC",
+                        "h_msg_cd": "IRZ000001",
+                        "hc14100En": {"strCustNo": "fixture-private-customer"},
+                    }
+                ),
+                "base64Encoded": False,
+            }
+        }
+
+    submit.side_effect = submitted
+    ticks = iter((0.0, 0.0, 2.0))
+    session._login_driver._monotonic = lambda: next(ticks, 2.0)
+    session._login_driver._sleep = AsyncMock()
+
+    assert await session.ensure_authenticated(_credential()) is False
+    observation = next(
+        row.getMessage()
+        for row in caplog.records
+        if "login submission terminal observation" in row.getMessage()
+    )
+    rows = json.loads(observation.partition("requests=")[2])
+    assert rows[0]["response_auth_outcome"] == "accepted"
+    assert [
+        command.get("method")
+        for command in tab.command_calls
+        if command.get("method") == "Network.getResponseBody"
+    ] == ["Network.getResponseBody"]
+    assert "fixture-private-customer" not in observation
+
+
+@pytest.mark.asyncio
+async def test_macro_response_is_promoted_to_provider_protection(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        AsyncMock(return_value=False),
+    )
+    caplog.set_level("INFO")
+
+    async def submitted() -> None:
+        url = "https://www.korail.com/fixture-protection-transport"
+        tab.request(post_data=_login_post_data(), url=url, resource_type="Fetch")
+        tab.response(200, url=url, resource_type="Fetch", mime="application/json")
+        tab.finish()
+        tab.response_bodies["login"] = {
+            "result": {
+                "body": json.dumps(
+                    {
+                        "dynaPathResultCode": "fixture-private-result",
+                        "errCode": "macro_err1",
+                        "errEngMsg": "fixture-private-english",
+                        "errMsg": "fixture-private-message",
+                        "globalFlag": "fixture-private-flag",
+                        "requestId": "fixture-private-request",
+                    }
+                ),
+                "base64Encoded": False,
+            }
+        }
+
+    submit.side_effect = submitted
+    ticks = iter((0.0, 0.0, 2.0))
+    session._login_driver._monotonic = lambda: next(ticks, 2.0)
+    session._login_driver._sleep = AsyncMock()
+
+    with pytest.raises(BrowserProtectionDetected) as captured:
+        await session.ensure_authenticated(_credential())
+    assert (captured.value.trigger, captured.value.stage) == (
+        "marker_macro_err1",
+        "login_response",
+    )
+    observation = next(
+        row.getMessage()
+        for row in caplog.records
+        if "login submission failure observation" in row.getMessage()
+    )
+    rows = json.loads(observation.partition("requests=")[2])
+    assert rows[0]["payload_role"] == "login_submission"
+    assert rows[0]["request_payload_shape"] == "exact_login"
+    assert rows[0]["response_auth_outcome"] == "protection"
+    # The closed error code is the only response value that may be logged.
+    assert rows[0]["response_err_codes"] == ["macro_err1"]
+    assert (
+        "KORAIL login protection response stage=login_response trigger=marker_macro_err1 "
+        "response_auth_outcome=protection login_err_codes=('macro_err1',)"
+    ) in caplog.text
+    assert rows[0]["response_schema_fields"] == [
+        "dynaPathResultCode",
+        "errCode",
+        "errEngMsg",
+        "errMsg",
+        "globalFlag",
+        "requestId",
+    ]
+    for private_value in (
+        "fixture-private-result",
+        "fixture-private-english",
+        "fixture-private-message",
+        "fixture-private-flag",
+        "fixture-private-request",
+    ):
+        assert private_value not in caplog.text
+    assert tab.callbacks == {}
+
+
+@pytest.mark.asyncio
+async def test_page_marker_protection_still_records_login_response_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    probe = AsyncMock(return_value=False)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "macro_err1", (), url="https://www.korail.com/ticket/login"
+            )
+        ),
+    )
+    session._login_driver._sleep = AsyncMock()
+    caplog.set_level("INFO")
+
+    async def submitted() -> None:
+        url = "https://www.korail.com/ebizweb/common/loginProcess"
+        tab.request(post_data=_login_post_data(), url=url)
+        tab.response(200, url=url, mime="application/json")
+        tab.finish()
+        tab.response_bodies["login"] = {
+            "result": {
+                "body": json.dumps({"errCode": "macro_err1", "errMsg": "fixture-private-message"}),
+                "base64Encoded": False,
+            }
+        }
+
+    submit.side_effect = submitted
+    with pytest.raises(BrowserProtectionDetected) as captured:
+        await session.ensure_authenticated(_credential())
+
+    # The page marker wins before any session probe, as before; only diagnostics change.
+    assert captured.value.stage == "authenticate"
+    probe.assert_not_awaited()
+    assert (
+        "KORAIL login protection response stage=authenticate "
+        f"trigger={captured.value.trigger} response_auth_outcome=protection "
+        "login_err_codes=('macro_err1',)"
+    ) in caplog.text
+    assert "fixture-private-message" not in caplog.text
+    assert tab.callbacks == {}
 
 
 @pytest.mark.asyncio
@@ -579,6 +1096,104 @@ async def test_second_login_post_failure_blocks_probe_and_cleans_callbacks(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("header_present", "probe_outcome", "expected"),
+    [
+        (True, True, "authenticated"),
+        (True, False, "unavailable"),
+        (False, True, "unavailable"),
+    ],
+)
+async def test_confirmed_integration_failure_requires_two_independent_auth_signals(
+    monkeypatch: pytest.MonkeyPatch,
+    header_present: bool,
+    probe_outcome: bool,
+    expected: str,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    header = AsyncMock(side_effect=(False, header_present))
+    probe = AsyncMock(return_value=probe_outcome)
+    monkeypatch.setattr(session, "_has_authenticated_header", header)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "통신 오류",
+                (),
+                network_responses=((500, "business_xhr"),),
+                url="https://www.korail.com/ticket/login",
+            )
+        ),
+    )
+    login_url = "https://www.korail.com/ebizweb/common/loginProcess"
+    integration_url = "https://www.korail.com/ebizweb/integrate/srCheck.do"
+
+    async def submitted() -> None:
+        tab.request(url=login_url)
+        tab.response(url=login_url)
+        tab.finish()
+        tab.request("integration", url=integration_url)
+        tab.response(500, request_id="integration", url=integration_url)
+        tab.finish("integration")
+
+    submit.side_effect = submitted
+    session._login_driver._sleep = AsyncMock()
+    ticks = iter((0.0, 0.0, 2.0))
+    session._login_driver._monotonic = lambda: next(ticks, 2.0)
+
+    if expected == "authenticated":
+        assert await session.ensure_authenticated(_credential()) is True
+        probe.assert_awaited_once()
+    else:
+        with pytest.raises(PydollLoginResponseUnavailable):
+            await session.ensure_authenticated(_credential())
+        if header_present:
+            probe.assert_awaited_once()
+        else:
+            probe.assert_not_awaited()
+    submit.assert_awaited_once()
+    assert tab.callbacks == {}
+
+
+@pytest.mark.asyncio
+async def test_confirmed_login_failure_cannot_be_overridden_by_positive_auth_signals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, tab, submit = prepare_observed_login(monkeypatch)
+    header = AsyncMock(side_effect=(False, True))
+    probe = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_has_authenticated_header", header)
+    monkeypatch.setattr(session, "_probe_official_authenticated_session", probe)
+    monkeypatch.setattr(
+        session,
+        "_snapshot",
+        AsyncMock(
+            return_value=PydollPageSnapshot(
+                "통신 오류",
+                (),
+                network_responses=((500, "business_xhr"),),
+                url="https://www.korail.com/ticket/login",
+            )
+        ),
+    )
+    login_url = "https://www.korail.com/ebizweb/common/loginProcess"
+
+    async def submitted() -> None:
+        tab.request(url=login_url)
+        tab.response(500, url=login_url)
+        tab.finish()
+
+    submit.side_effect = submitted
+    with pytest.raises(PydollLoginResponseUnavailable):
+        await session.ensure_authenticated(_credential())
+    probe.assert_not_awaited()
+    submit.assert_awaited_once()
+    assert tab.callbacks == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["http_500", "network", "missing", "incomplete_multi"])
 @pytest.mark.parametrize("in_place", [False, True])
 async def test_submission_failure_is_source_unavailable_and_never_auth_required(
@@ -722,7 +1337,7 @@ async def test_failure_log_serializes_only_verified_public_frame_coordinates(
                             {
                                 "functionName": "fixture-private-function",
                                 "url": "https://cdn.korail.com/bundle/"
-                                "bundle.38e6dfeb5a3af0094a69.js?fixture-private-script-query",
+                                "bundle.fcfd32491c1f6e0b2541.js?fixture-private-script-query",
                                 "lineNumber": 2,
                                 "columnNumber": 30620,
                             }
@@ -1014,6 +1629,187 @@ async def test_login_driver_resolves_session_monkeypatch_seams_after_constructio
     )
     submit_login_form.assert_awaited_once_with(_credential())
     wait_for_authentication.assert_awaited_once()
+    confirm_authenticated_search.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_place", [False, True])
+async def test_manual_session_mode_never_navigates_or_submits_when_logged_out(
+    monkeypatch: pytest.MonkeyPatch,
+    in_place: bool,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        False,
+        manual_session_only=True,
+    )
+    go_to = AsyncMock()
+    session._tab = SimpleNamespace(go_to=go_to)
+    has_authenticated_header = AsyncMock(return_value=False)
+    probe_authenticated_session = AsyncMock(return_value=False)
+    submit_login_form = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_has_authenticated_header", has_authenticated_header)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        probe_authenticated_session,
+    )
+    monkeypatch.setattr(session, "_submit_login_form", submit_login_form)
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        if in_place:
+            await session._authenticate_in_place(_credential())
+        else:
+            await session.ensure_authenticated(_credential())
+
+    assert raised.value.stage == "manual_login_required"
+    has_authenticated_header.assert_awaited_once_with()
+    probe_authenticated_session.assert_awaited_once_with()
+    go_to.assert_not_awaited()
+    submit_login_form.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_place", [False, True])
+async def test_manual_session_mode_accepts_official_session_from_another_tab(
+    monkeypatch: pytest.MonkeyPatch,
+    in_place: bool,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        False,
+        manual_session_only=True,
+    )
+    go_to = AsyncMock()
+    session._tab = SimpleNamespace(go_to=go_to)
+    has_authenticated_header = AsyncMock(return_value=False)
+    probe_authenticated_session = AsyncMock(return_value=True)
+    confirm_authenticated_search = AsyncMock(return_value=True)
+    submit_login_form = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_has_authenticated_header", has_authenticated_header)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        probe_authenticated_session,
+    )
+    monkeypatch.setattr(session, "_confirm_authenticated_search", confirm_authenticated_search)
+    monkeypatch.setattr(session, "_submit_login_form", submit_login_form)
+
+    if in_place:
+        assert await session._authenticate_in_place(_credential()) is True
+        confirm_authenticated_search.assert_not_awaited()
+    else:
+        assert await session.ensure_authenticated(_credential()) is True
+        confirm_authenticated_search.assert_awaited_once()
+        attempt = confirm_authenticated_search.await_args.args[0]
+        assert attempt.post_submit_check_attempted is True
+        assert attempt.post_submit_authenticated is True
+
+    has_authenticated_header.assert_awaited_once_with()
+    probe_authenticated_session.assert_awaited_once_with()
+    go_to.assert_not_awaited()
+    submit_login_form.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_place", [False, True])
+async def test_manual_session_mode_retains_handoff_when_official_probe_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    in_place: bool,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        False,
+        manual_session_only=True,
+    )
+    go_to = AsyncMock()
+    session._tab = SimpleNamespace(go_to=go_to)
+    monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(return_value=False))
+    probe_authenticated_session = AsyncMock(
+        side_effect=BrowserSourceUnavailable("session_keepalive")
+    )
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        probe_authenticated_session,
+    )
+    submit_login_form = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_submit_login_form", submit_login_form)
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        if in_place:
+            await session._authenticate_in_place(_credential())
+        else:
+            await session.ensure_authenticated(_credential())
+
+    assert raised.value.stage == "manual_login_required"
+    probe_authenticated_session.assert_awaited_once_with()
+    go_to.assert_not_awaited()
+    submit_login_form.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize(
+    "error",
+    [BrowserProtectionDetected(), BrowserRateLimited()],
+    ids=("protected", "rate-limited"),
+)
+async def test_manual_session_mode_preserves_provider_limits_from_official_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    in_place: bool,
+    error: Exception,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        False,
+        manual_session_only=True,
+    )
+    go_to = AsyncMock()
+    session._tab = SimpleNamespace(go_to=go_to)
+    monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(return_value=False))
+    probe_authenticated_session = AsyncMock(side_effect=error)
+    monkeypatch.setattr(
+        session,
+        "_probe_official_authenticated_session",
+        probe_authenticated_session,
+    )
+    submit_login_form = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_submit_login_form", submit_login_form)
+
+    with pytest.raises(type(error)) as raised:
+        if in_place:
+            await session._authenticate_in_place(_credential())
+        else:
+            await session.ensure_authenticated(_credential())
+
+    assert raised.value is error
+    probe_authenticated_session.assert_awaited_once_with()
+    go_to.assert_not_awaited()
+    submit_login_form.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_session_mode_accepts_existing_authenticated_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        False,
+        manual_session_only=True,
+    )
+    session._tab = SimpleNamespace(go_to=AsyncMock())
+    monkeypatch.setattr(session, "_has_authenticated_header", AsyncMock(return_value=True))
+    confirm_authenticated_search = AsyncMock(return_value=True)
+    monkeypatch.setattr(session, "_confirm_authenticated_search", confirm_authenticated_search)
+
+    assert await session.ensure_authenticated(_credential()) is True
+
     confirm_authenticated_search.assert_awaited_once()
 
 

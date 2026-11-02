@@ -46,6 +46,7 @@ from rail_waitlist.provider_execution_lease import (
 )
 from rail_waitlist.providers import MockProviderAdapter, SrtLiveExecutionAdapter
 from rail_waitlist.reservation_confirmation import (
+    ReservationConfirmationDiagnosticCode,
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
@@ -1128,6 +1129,163 @@ async def test_legacy_unknown_count_three_without_next_schedule_is_selected(
         assert attempt is not None
         assert attempt.reconciliation_attempt_count == 4
         assert attempt.next_reconcile_at - attempt.last_reconciled_at == timedelta(minutes=15)
+
+
+def _unreachable_official_read_adapter(now: datetime) -> ReadOnlyReconciliationAdapter:
+    return ReadOnlyReconciliationAdapter(
+        ReservationConfirmationResult(
+            provider=Provider.SRT,
+            outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+            diagnostic_code=ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE,
+            source="worker-reconciliation",
+            observed_at=now,
+        )
+    )
+
+
+async def _seed_unknown_reconciliation_attempt(
+    app,
+    db_engine,
+    monkeypatch,
+    *,
+    now: datetime,
+    dedupe_key: str,
+    **attempt_fields,
+) -> tuple[async_sessionmaker, str]:
+    lease_service = CurrentReconciliationLeaseService()
+
+    async def acquire(_provider: Provider, _now: datetime):
+        return lease_service, object()
+
+    monkeypatch.setattr(worker_module, "SessionFactory", app.state.test_session_factory)
+    monkeypatch.setattr(worker_module, "_acquire_execution_lease", acquire)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        session.add(
+            RailProviderAccount(
+                provider=Provider.SRT,
+                credentials_ciphertext="encrypted-outside-this-boundary",
+                enabled=True,
+                credential_version=9,
+                last_auth_status="authenticated",
+            )
+        )
+        watch = Watch(
+            provider=Provider.SRT,
+            origin="대전",
+            destination="부산",
+            travel_date=date(2026, 8, 4),
+            time_from=time(12),
+            time_to=time(18),
+            status=WatchStatus.SEAT_FOUND,
+            dedupe_key=dedupe_key,
+        )
+        candidate = WatchCandidate(
+            train_number="335",
+            departure_at=now + timedelta(days=1),
+            seat_class="standard",
+            priority=1,
+            state="seat_found",
+        )
+        attempt = ReservationAttempt(
+            candidate=candidate,
+            attempt_sequence=1,
+            episode_key="availability:first",
+            idempotency_key=f"reserve:{dedupe_key}",
+            outcome=ReservationOutcome.UNKNOWN,
+            credential_version=9,
+            **attempt_fields,
+        )
+        watch.candidates.append(candidate)
+        session.add(watch)
+        await session.commit()
+        return factory, attempt.id
+
+
+async def test_unreachable_official_read_is_not_replayed_on_the_next_cycle(
+    app,
+    db_engine,
+    monkeypatch,
+) -> None:
+    # 2026-11-02 incident: the first worker read of an UNKNOWN attempt could not reach the
+    # official list, left next_reconcile_at unset, and was re-selected on every cycle.
+    now = datetime.now(timezone.utc)
+    adapter = _unreachable_official_read_adapter(now)
+    factory, attempt_id = await _seed_unknown_reconciliation_attempt(
+        app,
+        db_engine,
+        monkeypatch,
+        now=now,
+        dedupe_key="unreachable-official-read-not-replayed",
+        started_at=now - timedelta(minutes=2),
+        confirmation_outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        confirmation_diagnostic_code=(
+            ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+        ),
+        confirmation_source="srtrain-reservation-list",
+        confirmation_observed_at=now - timedelta(seconds=90),
+        reconciliation_attempt_count=0,
+        next_reconcile_at=now - timedelta(seconds=1),
+    )
+
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 1
+    assert len(adapter.targets) == 1
+    async with factory() as session:
+        attempt = await session.get(ReservationAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.reconciliation_attempt_count == 0
+        assert attempt.next_reconcile_at is not None
+        assert attempt.last_reconciled_at is not None
+        assert attempt.next_reconcile_at - attempt.last_reconciled_at >= timedelta(minutes=2)
+
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == 0
+    assert len(adapter.targets) == 1
+
+
+@pytest.mark.parametrize(
+    ("last_reconciled_ago", "selected"),
+    [
+        (None, True),
+        (timedelta(minutes=5), False),
+        (timedelta(minutes=16), True),
+    ],
+)
+async def test_unscheduled_unspent_reconciliation_selection_paces_already_read_rows(
+    app,
+    db_engine,
+    monkeypatch,
+    last_reconciled_ago: timedelta | None,
+    selected: bool,
+) -> None:
+    now = datetime.now(timezone.utc)
+    adapter = _unreachable_official_read_adapter(now)
+    read_fields = (
+        {}
+        if last_reconciled_ago is None
+        else {
+            "confirmation_outcome": ReservationConfirmationOutcome.INCONCLUSIVE,
+            "confirmation_diagnostic_code": (
+                ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
+            ),
+            "confirmation_source": "worker-reconciliation",
+            "confirmation_observed_at": now - last_reconciled_ago,
+            "last_reconciled_at": now - last_reconciled_ago,
+        }
+    )
+    _factory, attempt_id = await _seed_unknown_reconciliation_attempt(
+        app,
+        db_engine,
+        monkeypatch,
+        now=now,
+        dedupe_key="unscheduled-unspent-reconciliation-selection",
+        started_at=now - timedelta(minutes=30),
+        reconciliation_attempt_count=0,
+        next_reconcile_at=None,
+        **read_fields,
+    )
+
+    assert await _run_reconciliation_application(attempt_id, adapter=adapter) == int(selected)
+    assert len(adapter.targets) == int(selected)
 
 
 async def test_legacy_expired_confirmed_hold_is_selected_and_cleared(

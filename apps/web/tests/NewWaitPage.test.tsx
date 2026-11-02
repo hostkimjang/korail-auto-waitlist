@@ -421,13 +421,13 @@ describe("NewWaitPage behavior", () => {
     await user.click(screen.getByRole("button", { name: /다음/ }));
     await user.click(screen.getByRole("button", { name: /다음/ }));
 
-    expect(await screen.findByText("선택한 날짜·시간 범위에 맞는 공식 열차가 없습니다.")).toBeTruthy();
+    expect(await screen.findByText("선택한 날짜·시간 범위에 맞는 열차가 확인되지 않았습니다.")).toBeTruthy();
     const dateGroup = screen.getByRole("group", { name: /출발일 변경/ });
     await user.click(within(dateGroup).getByRole("button", { name: /출발일:/ }));
     await user.click(screen.getByRole("button", { name: "내일" }));
 
     expect(await screen.findByRole("article", { name: "KTX NEXT" })).toBeTruthy();
-    expect(screen.queryByText("선택한 날짜·시간 범위에 맞는 공식 열차가 없습니다.")).toBeNull();
+    expect(screen.queryByText("선택한 날짜·시간 범위에 맞는 열차가 확인되지 않았습니다.")).toBeNull();
     expect(timetableRequests).toEqual([
       `${today}T12:00:00+09:00`,
       `${tomorrow}T12:00:00+09:00`,

@@ -36,9 +36,24 @@ def test_migration_0019_backfills_scheduled_identity_and_enforces_operational_pr
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "watch-before-0019", "MOCK", "서울", "부산", "2026-08-03", "09:00:00", "12:00:00",
-                "standard", 1, "[]", "[]", "official", "NOTIFY_ONLY", "WATCHING",
-                "before-0019", 0, now, now,
+                "watch-before-0019",
+                "MOCK",
+                "서울",
+                "부산",
+                "2026-08-03",
+                "09:00:00",
+                "12:00:00",
+                "standard",
+                1,
+                "[]",
+                "[]",
+                "official",
+                "NOTIFY_ONLY",
+                "WATCHING",
+                "before-0019",
+                0,
+                now,
+                now,
             ),
         )
         connection.execute(
@@ -48,8 +63,13 @@ def test_migration_0019_backfills_scheduled_identity_and_enforces_operational_pr
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "candidate-before-0019", "watch-before-0019", "MOCK-001",
-                "2026-08-03T09:30:00+00:00", "standard", 1, "observed",
+                "candidate-before-0019",
+                "watch-before-0019",
+                "MOCK-001",
+                "2026-08-03T09:30:00+00:00",
+                "standard",
+                1,
+                "observed",
             ),
         )
         connection.commit()

@@ -111,6 +111,7 @@ export function App(): ReactElement {
   const {
     accounts: providerAccounts,
     runtimeStatuses: providerRuntimeStatuses,
+    runtimeStatusLoadState: providerRuntimeStatusLoadState,
     loading: providerAccountsLoading,
     pendingProvider: pendingProviderAccount,
     saveAccount: saveRailProviderAccount,
@@ -301,7 +302,7 @@ export function App(): ReactElement {
         {activeView === "home" && <HomePage watches={activeWatches} paymentWatches={paymentWatches} watchRefreshState={watchRefreshState} onRefreshWatches={requestWatchesRefresh} onCreate={() => navigate("new")} onViewReservations={() => navigate("reservations")} onOpenRailAccounts={() => navigate("settings", "rail-accounts")} onPause={pauseWatch} onResume={resumeWatch} onCancel={async (watchId) => { await cancelWatchItem(watchId); }} onChangeReservationPolicy={changeWatchReservationPolicy} onManualReservationRearm={rearmReservation} reservationPolicyUpdatingIds={reservationPolicyUpdatingIds} watchMutationPendingIds={watchMutationPendingIds} onToast={setToast} renderSeatFoundAction={renderHomeSeatFoundAction} />}
         {activeView === "new" && <NewWaitPage demo={auth.demo} watches={watches} providerAccounts={providerAccounts} onComplete={completeWizard} onCancelWatch={cancelWatchItem} onCancel={() => navigate("home")} officialHandoffComponent={OfficialHandoff} />}
         {activeView === "reservations" && <ReservationsPage watches={reservationWatches} onCreate={() => navigate("new")} onDelete={deleteWatchRecord} />}
-        {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={onSettingsSectionChange} onLogout={signOut} initialSection={settingsInitialSection} />}
+        {activeView === "settings" && <SettingsPage channels={channels} demo={auth.demo} browserPushState={browserPushState} providerAccounts={providerAccounts} providerRuntimeStatuses={providerRuntimeStatuses} providerRuntimeStatusLoadState={providerRuntimeStatusLoadState} providerAccountsLoading={providerAccountsLoading} pendingProviderAccount={pendingProviderAccount} uiPreferences={uiPreferences} savingUiPreferences={savingUiPreferences} onSaveUiPreferences={saveUiPreferences} onSaveChannel={saveChannel} onToggleChannel={toggleChannel} onTestChannel={testChannel} onConnectWebPush={connectWebPushChannel} onSaveProviderAccount={saveRailProviderAccount} onDeleteProviderAccount={removeRailProviderAccount} onSectionChange={onSettingsSectionChange} onLogout={signOut} initialSection={settingsInitialSection} />}
       </AppShell>
     </AppAuthenticationBoundary>
   );

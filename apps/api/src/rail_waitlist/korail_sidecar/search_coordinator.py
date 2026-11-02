@@ -114,8 +114,8 @@ class KorailBrowserAutomation:
         self._protection_cooldown_seconds = protection_cooldown_seconds
         self._provider_unavailable_cooldown_seconds = provider_unavailable_cooldown_seconds
         if provider_cooldown is not None:
-            self._rate_limit_cooldown_seconds = max(900, rate_limit_cooldown_seconds)
-            self._protection_cooldown_seconds = max(900, protection_cooldown_seconds)
+            # Protection and rate-limit holds follow their configured intervals; only the
+            # outage hold keeps a floor because it also paces login failures.
             self._provider_unavailable_cooldown_seconds = max(
                 300, provider_unavailable_cooldown_seconds
             )
@@ -441,10 +441,12 @@ class KorailBrowserAutomation:
                             raise error.with_retry_after(
                                 self._provider_unavailable_cooldown_seconds
                             ) from None
-                        except (BrowserProtectionDetected, BrowserRateLimited):
+                        except (BrowserProtectionDetected, BrowserRateLimited) as error:
                             if self._provider_cooldown is not None:
                                 await self._provider_cooldown.protection_detected(
-                                    max(900, self._protection_cooldown_seconds)
+                                    self._rate_limit_cooldown_seconds
+                                    if isinstance(error, BrowserRateLimited)
+                                    else self._protection_cooldown_seconds
                                 )
                             raise
             async with self._state_lock:
@@ -610,7 +612,7 @@ class KorailBrowserAutomation:
             if provider_unavailable_trigger is not None:
                 await self._provider_cooldown.query_failed(seconds)
             elif reason in {"provider_access_restricted", "rate_limited"}:
-                await self._provider_cooldown.protection_detected(max(900, seconds))
+                await self._provider_cooldown.protection_detected(seconds)
         async with self._state_lock:
             candidate = _Cooldown(
                 reason,

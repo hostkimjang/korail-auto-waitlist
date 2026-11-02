@@ -3,10 +3,57 @@ set -Eeuo pipefail
 
 gui_enabled="${KORAIL_BROWSER_GUI_ENABLED:-false}"
 novnc_enabled="${KORAIL_NOVNC_ENABLED:-false}"
+novnc_input_enabled="${KORAIL_NOVNC_INPUT_ENABLED:-false}"
 if [[ "${novnc_enabled}" != "true" && "${novnc_enabled}" != "false" ]]; then
   echo "KORAIL_NOVNC_ENABLED must be true or false" >&2
   exit 64
 fi
+if [[ "${novnc_input_enabled}" != "true" && "${novnc_input_enabled}" != "false" ]]; then
+  echo "KORAIL_NOVNC_INPUT_ENABLED must be true or false" >&2
+  exit 64
+fi
+if [[ "${novnc_input_enabled}" == "true" && "${novnc_enabled}" != "true" ]]; then
+  echo "KORAIL_NOVNC_INPUT_ENABLED=true requires KORAIL_NOVNC_ENABLED=true" >&2
+  exit 64
+fi
+
+profile_mode="${KORAIL_BROWSER_PROFILE_MODE:-ephemeral}"
+if [[ "${profile_mode}" == "dedicated_auto" || "${profile_mode}" == "dedicated_manual" ]]; then
+  profile_dir="${KORAIL_BROWSER_PROFILE_DIR:-}"
+  marker_path="${profile_dir}/.rail-waitlist-korail-profile"
+  owner_lock_path="${profile_dir}/.rail-waitlist-korail-profile-owner.lock"
+  if [[ -z "${profile_dir}" || "${profile_dir}" != /* || -L "${profile_dir}" ]]; then
+    echo "KORAIL_BROWSER_PROFILE_DIR must be an absolute dedicated directory" >&2
+    exit 64
+  fi
+  if [[ ! -d "${profile_dir}" || ! -f "${marker_path}" || -L "${marker_path}" ]]; then
+    echo "KORAIL dedicated browser profile must be initialized first" >&2
+    exit 64
+  fi
+  if [[ "$(<"${marker_path}")" != "rail-waitlist-korail-browser-profile-v1" ]]; then
+    echo "KORAIL browser profile marker is invalid" >&2
+    exit 64
+  fi
+  exec 9>"${owner_lock_path}"
+  chmod 0600 "${owner_lock_path}"
+  if ! flock -n 9; then
+    echo "KORAIL dedicated browser profile is already in use" >&2
+    exit 73
+  fi
+  for singleton_name in SingletonLock SingletonSocket SingletonCookie; do
+    singleton_path="${profile_dir}/${singleton_name}"
+    if [[ -L "${singleton_path}" ]]; then
+      rm -- "${singleton_path}"
+    elif [[ -e "${singleton_path}" ]]; then
+      echo "KORAIL browser profile singleton is not a symbolic link" >&2
+      exit 64
+    fi
+  done
+elif [[ "${profile_mode}" != "ephemeral" ]]; then
+  echo "KORAIL_BROWSER_PROFILE_MODE must be ephemeral, dedicated_auto, or dedicated_manual" >&2
+  exit 64
+fi
+
 if [[ "${gui_enabled}" == "false" ]]; then
   if [[ "${novnc_enabled}" == "true" ]]; then
     echo "KORAIL_NOVNC_ENABLED=true requires KORAIL_BROWSER_GUI_ENABLED=true" >&2
@@ -96,8 +143,12 @@ PY
 }
 
 if [[ "${novnc_enabled}" == "true" ]]; then
+  vnc_access=(-viewonly)
+  if [[ "${novnc_input_enabled}" == "true" ]]; then
+    vnc_access=()
+  fi
   x11vnc -display "${DISPLAY}" -auth "${XAUTHORITY}" -localhost -rfbport 5900 \
-    -forever -shared -viewonly -noclipboard -nosetclipboard \
+    -forever -shared "${vnc_access[@]}" -noclipboard -nosetclipboard \
     -passwdfile "${vnc_password_file}" -quiet >"${runtime_dir}/x11vnc.log" 2>&1 &
   pids+=("$!")
   websockify --web=/usr/share/novnc 6080 127.0.0.1:5900 \

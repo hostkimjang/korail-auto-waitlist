@@ -16,7 +16,10 @@ from ..domain import (
     WatchStatus,
 )
 from ..operational import decide_operational_expiry
-from ..provider_account_management.models import RailProviderAccount
+from ..provider_account_management.models import (
+    RailProviderAccount,
+    active_protection_halt_version,
+)
 from ..provider_circuit.models import ProviderCircuit
 from ..provider_contracts import ObservationProvider
 from ..reservations.attempt_policy import (
@@ -497,15 +500,40 @@ async def _blocking_provider_account_auth_status(
     """
     if provider not in {Provider.KORAIL, Provider.SRT}:
         return None
-    auth_status = await session.scalar(
-        select(RailProviderAccount.last_auth_status).where(
-            RailProviderAccount.provider == provider,
-            RailProviderAccount.enabled.is_(True),
-            RailProviderAccount.last_auth_status.in_(ACCOUNT_AUTH_OBSERVATION_BLOCK_STATUSES),
+    row = (
+        await session.execute(
+            select(
+                RailProviderAccount.last_auth_status,
+                RailProviderAccount.credential_version,
+                RailProviderAccount.updated_at,
+                RailProviderAccount.protection_halt_credential_version,
+                RailProviderAccount.protection_halt_revision_micros,
+            ).where(
+                RailProviderAccount.provider == provider,
+                RailProviderAccount.enabled.is_(True),
+            )
         )
-    )
-    if isinstance(auth_status, str) and auth_status in ACCOUNT_AUTH_OBSERVATION_BLOCK_STATUSES:
-        return auth_status
+    ).one_or_none()
+    if row is None:
+        return None
+    if isinstance(row.last_auth_status, str) and row.last_auth_status in (
+        ACCOUNT_AUTH_OBSERVATION_BLOCK_STATUSES
+    ):
+        return row.last_auth_status
+    # A keepalive login answered by protection can leave the auth history at
+    # authenticated while the session manager keeps this exact revision halted.
+    # Observation reads the same persisted fence so the seat I/O hold survives an
+    # API restart instead of leaking one official request per process start.
+    if (
+        active_protection_halt_version(
+            credential_version=row.credential_version,
+            updated_at=row.updated_at,
+            halt_credential_version=row.protection_halt_credential_version,
+            halt_revision_micros=row.protection_halt_revision_micros,
+        )
+        is not None
+    ):
+        return "provider_blocked"
     return None
 
 
@@ -529,9 +557,9 @@ async def _defer_for_blocking_provider_account(
         WatchStatus.AUTH_REQUIRED,
         reason="provider_account_provider_blocked_before_observation",
     )
-    # The provider session manager owns the 900-second protection backoff and the
-    # generation-fenced recovery attempt. AUTH_REQUIRED is outside the due selector,
-    # so storing a second watch-local retry clock would misrepresent the real gate.
+    # The provider session manager owns the escalating protection backoff and the
+    # generation-fenced login retry that resumes this watch. AUTH_REQUIRED is outside the
+    # due selector, so a second watch-local retry clock would misrepresent the real gate.
     watch.cooldown_until = None
     watch.next_check_at = None
 

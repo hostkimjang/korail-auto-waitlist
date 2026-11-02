@@ -958,6 +958,8 @@ def create_adapter_app(
                 "KORAIL login verification unavailable at stage=%s",
                 error.stage,
             )
+            if error.stage == "manual_login_required":
+                return KorailLoginVerifyResult(outcome="auth_required")
             return KorailLoginVerifyResult(outcome="failed")
         except Exception:  # noqa: BLE001 -- external exception text may contain secrets.
             dependencies.logger.error(
@@ -1027,6 +1029,8 @@ def create_adapter_app(
             )
         except BrowserSourceUnavailable as error:
             dependencies.logger.warning("KORAIL login prewarm unavailable at stage=%s", error.stage)
+            if error.stage == "manual_login_required":
+                return KorailLoginVerifyResult(outcome="auth_required")
             return KorailLoginVerifyResult(outcome="failed")
         except Exception:  # noqa: BLE001 -- external exception text may contain secrets.
             dependencies.logger.error("KORAIL login prewarm failed with a redacted backend error")

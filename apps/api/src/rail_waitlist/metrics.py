@@ -10,9 +10,7 @@ HTTP_DURATION = Histogram(
     "HTTP request duration",
     ("method", "route"),
 )
-WORKER_RUNS = Counter(
-    "rail_waitlist_worker_runs_total", "Celery task runs", ("task", "result")
-)
+WORKER_RUNS = Counter("rail_waitlist_worker_runs_total", "Celery task runs", ("task", "result"))
 WATCH_GROUPS = Counter(
     "rail_waitlist_watch_groups_processed_total", "Deduplicated watch groups processed"
 )

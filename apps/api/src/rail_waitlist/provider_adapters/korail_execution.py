@@ -159,7 +159,9 @@ def _source_for_config(config: KorailExecutionSourceConfig) -> ManagedKorailSeat
         protection_cooldown_seconds=config.protection_cooldown_seconds,
         cooldown_store=RedisCooldownStore(redis),
         allow_fullstack_test_url=config.allow_fullstack_test_url,
-        provider_cooldown=RedisProviderCooldown(redis),
+        provider_cooldown=RedisProviderCooldown(
+            redis, protection_seconds=config.protection_cooldown_seconds
+        ),
     )
     return ManagedKorailSeatObserver(source=source, redis=redis)
 

@@ -21,12 +21,8 @@ def upgrade() -> None:
     )
     with op.batch_alter_table("reservation_attempts") as batch_op:
         batch_op.add_column(sa.Column("credential_version", sa.Integer(), nullable=True))
-        batch_op.add_column(
-            sa.Column("confirmation_outcome", confirmation_outcome, nullable=True)
-        )
-        batch_op.add_column(
-            sa.Column("confirmation_source", sa.String(length=80), nullable=True)
-        )
+        batch_op.add_column(sa.Column("confirmation_outcome", confirmation_outcome, nullable=True))
+        batch_op.add_column(sa.Column("confirmation_source", sa.String(length=80), nullable=True))
         batch_op.add_column(
             sa.Column("confirmation_observed_at", sa.DateTime(timezone=True), nullable=True)
         )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy import select
@@ -33,6 +33,7 @@ from .reconciliation_policy import (
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
     ReservationReconciliationResolution,
+    official_read_unavailable_retry_interval,
     payment_hold_reconciliation_retry_interval,
     unknown_reconciliation_retry_interval,
 )
@@ -413,6 +414,18 @@ async def apply_reservation_reconciliation(
         and confirmation.diagnostic_code
         is ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE
     )
+    attempt_age = reconciled_at - dependencies.utc_instant(attempt.started_at)
+
+    def retry_interval_after_read(scheduled_interval: timedelta | None) -> timedelta | None:
+        # The unspent budget must not turn into an immediate replay of the same read.
+        if not official_read_never_happened:
+            return scheduled_interval
+        return official_read_unavailable_retry_interval(
+            scheduled_interval,
+            completed_attempt_count=attempt.reconciliation_attempt_count,
+            attempt_age=attempt_age,
+        )
+
     if post_deadline_final_read:
         if confirmed_hold_has_usable_deadline:
             attempt.post_deadline_reconciled_at = None
@@ -462,7 +475,9 @@ async def apply_reservation_reconciliation(
         attempt.outcome is ReservationOutcome.UNKNOWN
         and confirmation.outcome is ReservationConfirmationOutcome.INCONCLUSIVE
     ):
-        retry_interval = unknown_reconciliation_retry_interval(attempt.reconciliation_attempt_count)
+        retry_interval = retry_interval_after_read(
+            unknown_reconciliation_retry_interval(attempt.reconciliation_attempt_count)
+        )
         if retry_interval is None:
             attempt.next_reconcile_at = None
         else:
@@ -495,8 +510,8 @@ async def apply_reservation_reconciliation(
             }
         )
     ):
-        retry_interval = payment_hold_reconciliation_retry_interval(
-            attempt.reconciliation_attempt_count
+        retry_interval = retry_interval_after_read(
+            payment_hold_reconciliation_retry_interval(attempt.reconciliation_attempt_count)
         )
         if retry_interval is None:
             attempt.next_reconcile_at = None
@@ -522,7 +537,10 @@ async def apply_reservation_reconciliation(
         reconciliation_anchor = attempt.last_reconciled_at
         if reconciliation_anchor is None:
             raise RuntimeError("reconciliation must persist a reconciliation timestamp")
-        attempt.next_reconcile_at = reconciliation_anchor + RESERVATION_RECONCILIATION_INTERVAL
+        retry_interval = retry_interval_after_read(RESERVATION_RECONCILIATION_INTERVAL)
+        if retry_interval is None:
+            raise RuntimeError("a scheduled reconciliation interval cannot be dropped")
+        attempt.next_reconcile_at = reconciliation_anchor + retry_interval
     elif (
         confirmation.outcome is ReservationConfirmationOutcome.CONFIRMED_PAYMENT_REQUIRED
         and confirmation.payment_deadline is not None

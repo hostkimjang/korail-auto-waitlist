@@ -16,6 +16,22 @@ from ..chromium_launch import isolated_test_chromium_arguments
 
 logger = logging.getLogger(__name__)
 
+DEDICATED_PROFILE_MARKER_FILENAME = ".rail-waitlist-korail-profile"
+DEDICATED_PROFILE_MARKER_CONTENT = "rail-waitlist-korail-browser-profile-v1\n"
+DEDICATED_PROFILE_SINGLETON_NAMES = (
+    "SingletonLock",
+    "SingletonSocket",
+    "SingletonCookie",
+)
+
+
+class PydollBrowserProfileMode(StrEnum):
+    """Choose disposable state or an app-owned persistent browser profile."""
+
+    EPHEMERAL = "ephemeral"
+    DEDICATED_AUTO = "dedicated_auto"
+    DEDICATED_MANUAL = "dedicated_manual"
+
 
 class PydollChromiumPhase(StrEnum):
     """Explicit lifecycle state for one single-use Pydoll browser session."""
@@ -27,6 +43,70 @@ class PydollChromiumPhase(StrEnum):
     CLOSING = "closing"
     FAILED = "failed"
     CLOSED = "closed"
+
+
+def browser_profile_mode_setting() -> PydollBrowserProfileMode:
+    """Read the closed profile mode without accepting browser-default directories."""
+
+    raw_value = os.environ.get(
+        "KORAIL_BROWSER_PROFILE_MODE",
+        PydollBrowserProfileMode.EPHEMERAL.value,
+    )
+    try:
+        return PydollBrowserProfileMode(raw_value.strip().lower())
+    except ValueError as error:
+        raise BrowserSourceUnavailable("browser_profile") from error
+
+
+def dedicated_browser_profile_directory(*, headless: bool) -> Path | None:
+    """Return a validated app-owned profile or keep Pydoll's temporary profile."""
+
+    if browser_profile_mode_setting() is PydollBrowserProfileMode.EPHEMERAL:
+        return None
+    if headless:
+        raise BrowserSourceUnavailable("browser_profile")
+
+    configured = os.environ.get("KORAIL_BROWSER_PROFILE_DIR", "").strip()
+    if not configured:
+        raise BrowserSourceUnavailable("browser_profile")
+    profile = Path(configured)
+    marker = profile / DEDICATED_PROFILE_MARKER_FILENAME
+    try:
+        if not profile.is_absolute() or profile.is_symlink() or not profile.is_dir():
+            raise BrowserSourceUnavailable("browser_profile")
+        resolved = profile.resolve(strict=True)
+        if marker.is_symlink() or not marker.is_file():
+            raise BrowserSourceUnavailable("browser_profile")
+        if marker.read_text(encoding="ascii") != DEDICATED_PROFILE_MARKER_CONTENT:
+            raise BrowserSourceUnavailable("browser_profile")
+        if not os.access(resolved, os.R_OK | os.W_OK | os.X_OK):
+            raise BrowserSourceUnavailable("browser_profile")
+        if os.name != "nt" and resolved.stat().st_mode & 0o077:
+            raise BrowserSourceUnavailable("browser_profile")
+    except BrowserSourceUnavailable:
+        raise
+    except (OSError, UnicodeError) as error:
+        raise BrowserSourceUnavailable("browser_profile") from error
+    return resolved
+
+
+def cleanup_dedicated_profile_singletons(*, headless: bool) -> None:
+    """Remove only stale Chrome symlinks after this owner has stopped its process."""
+
+    profile = dedicated_browser_profile_directory(headless=headless)
+    if profile is None:
+        return
+    try:
+        for name in DEDICATED_PROFILE_SINGLETON_NAMES:
+            singleton = profile / name
+            if singleton.is_symlink():
+                singleton.unlink()
+            elif singleton.exists():
+                raise BrowserSourceUnavailable("browser_profile")
+    except BrowserSourceUnavailable:
+        raise
+    except OSError as error:
+        raise BrowserSourceUnavailable("browser_profile") from error
 
 
 class _ChromiumOptions(Protocol):
@@ -129,7 +209,12 @@ def set_chromium_binary(options: object) -> None:
         chromium_options.binary_location = str(candidates[0])
 
 
-def configure_chromium_options(options: object, *, headless: bool) -> None:
+def configure_chromium_options(
+    options: object,
+    *,
+    headless: bool,
+    allow_dedicated_profile: bool = True,
+) -> None:
     """Apply the shared safe Chromium defaults used by probe and real sessions."""
     chromium_options = cast(_ChromiumOptions, options)
     chromium_options.headless = headless
@@ -139,6 +224,14 @@ def configure_chromium_options(options: object, *, headless: bool) -> None:
         "profile.password_manager_leak_detection": False,
     }
     chromium_options.add_argument("--disable-save-password-bubble")
+    profile = (
+        dedicated_browser_profile_directory(headless=headless) if allow_dedicated_profile else None
+    )
+    if profile is not None:
+        chromium_options.add_argument(f"--user-data-dir={profile}")
+        chromium_options.add_argument("--profile-directory=Default")
+        chromium_options.add_argument("--disable-sync")
+        chromium_options.add_argument("--restore-last-session")
     for argument in isolated_test_chromium_arguments():
         chromium_options.add_argument(argument)
     set_chromium_binary(chromium_options)
@@ -194,6 +287,7 @@ class PydollChromiumLifecycle:
         runtime_loader: PydollRuntimeLoader | None = None,
         response_event_loader: PydollResponseEventLoader | None = None,
         options_configurer: _ChromiumOptionsConfigurer = configure_chromium_options,
+        owns_dedicated_profile: bool = True,
         event_logger: logging.Logger = logger,
     ) -> None:
         if attach_network_listener and on_response is None:
@@ -204,6 +298,7 @@ class PydollChromiumLifecycle:
         self._runtime_loader = runtime_loader or _load_pydoll_runtime
         self._response_event_loader = response_event_loader or _load_response_received_event
         self._options_configurer = options_configurer
+        self._owns_dedicated_profile = owns_dedicated_profile
         self._event_logger = event_logger
         self._phase = PydollChromiumPhase.NEW
         self._browser: _PydollBrowser | None = None
@@ -369,6 +464,8 @@ class PydollChromiumLifecycle:
             )
             await self._retry_retired_tabs()
             browser_closed = browser is None or await self._close_browser(browser)
+            if browser_closed and self._owns_dedicated_profile:
+                cleanup_dedicated_profile_singletons(headless=self._headless)
         except BaseException:
             self._phase = PydollChromiumPhase.FAILED
             raise
@@ -460,11 +557,17 @@ class PydollChromiumLifecycle:
 
 
 async def probe_pydoll_chromium(*, headless: bool = True) -> None:
-    """Start and close Pydoll Chromium without navigation or listener attachment."""
+    """Probe an isolated Chromium without locking the operator's live auth profile."""
     lifecycle = PydollChromiumLifecycle(
         headless=headless,
         on_response=None,
         attach_network_listener=False,
+        owns_dedicated_profile=False,
+        options_configurer=lambda options, *, headless: configure_chromium_options(
+            options,
+            headless=headless,
+            allow_dedicated_profile=False,
+        ),
     )
     primary_error: BaseException | None = None
     try:

@@ -18,9 +18,9 @@ def test_migration_0024_adds_bounded_per_watch_observation_speed(tmp_path, monke
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_revision(
-        "0024_watch_observation_speed"
-    ) is not None
+    assert (
+        ScriptDirectory.from_config(config).get_revision("0024_watch_observation_speed") is not None
+    )
     command.upgrade(config, "0024_watch_observation_speed")
 
     with sqlite3.connect(database_path) as connection:
@@ -37,9 +37,7 @@ def test_migration_0024_adds_bounded_per_watch_observation_speed(tmp_path, monke
 
     command.downgrade(config, "0023_extend_unknown_reconcile")
     with sqlite3.connect(database_path) as connection:
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(watches)").fetchall()
-        }
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(watches)").fetchall()}
         assert "seat_observation_mode" not in columns
         assert "focused_observation_interval_seconds" not in columns
 

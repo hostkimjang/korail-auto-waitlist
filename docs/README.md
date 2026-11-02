@@ -19,6 +19,7 @@
 
 ## 개발에 참여하는 분
 
+- [최근 이슈 분석과 개발 계획](DEVELOPMENT_PLAN.md): 채팅 인계, 수정·배포 결과, 현재 보호 경계와 안전한 재개 조건
 - [시스템 구조](ARCHITECTURE.md): 서비스 구성과 데이터 흐름
 - [코드 작성 규칙](CODE_CONVENTIONS.md): TypeScript·Python·테스트 기준
 - [기여 가이드](../CONTRIBUTING.md): 개발 환경과 Pull Request 절차

@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import math
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -25,6 +26,13 @@ from .page_contracts import PydollReservationListSnapshot
 _LIST_PATH = "/ticket/reservation/list"
 _VIEW_PATH = "/classes/com.korail.mobile.reservation.ReservationView"
 _BODY_LIMIT = 65_536
+# KORAIL message codes are short upper-case identifiers such as P100 or IRG000000. Only
+# this closed shape may reach a log line; any other value is projected as unrecognized.
+_MESSAGE_CODE_SHAPE = re.compile(r"[A-Z]{1,4}[0-9]{3,9}")
+# Informational success codes (the official timetable GET answers IRG000000) may
+# accompany a list that carries reservations. They never attest absence; only the
+# closed empty-array contracts below can do that.
+_INFORMATIONAL_SUCCESS_CODE = re.compile(r"I[A-Z]{2}[0-9]{6}")
 _logger = logging.getLogger(__name__)
 ReservationListResponseFailure = Literal[
     "observer_unavailable",
@@ -41,6 +49,22 @@ ReservationListResponseFailure = Literal[
     "ambiguous",
     "rate_limited",
     "protection",
+]
+ReservationListDiagnosticBoundary = Literal[
+    "observer_rejected",
+    "dom_response_conflict",
+    "tab_changed",
+    "auth_redirect",
+    "dom_protection",
+    "read_incomplete",
+]
+ReservationListBodyRejection = Literal[
+    "body_shape",
+    "payload_not_object",
+    "result_not_success",
+    "rows_not_list",
+    "rows_malformed",
+    "message_contract",
 ]
 
 
@@ -114,6 +138,52 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+def _result_projection(value: object) -> str:
+    if value is None:
+        return "absent"
+    return value if isinstance(value, str) and value in {"SUCC", "FAIL"} else "unrecognized"
+
+
+def _code_projection(value: object) -> str:
+    if value is None:
+        return "absent"
+    if value == "":
+        return "empty"
+    if isinstance(value, str) and _MESSAGE_CODE_SHAPE.fullmatch(value) is not None:
+        return value
+    return "unrecognized"
+
+
+def _text_projection(value: object) -> str:
+    if value is None:
+        return "absent"
+    if value == "":
+        return "empty"
+    return "present" if isinstance(value, str) else "unrecognized"
+
+
+def _rows_projection(value: object) -> str:
+    if value is None:
+        return "absent"
+    if isinstance(value, list):
+        return f"list:{len(value)}"
+    return "object" if isinstance(value, Mapping) else "unrecognized"
+
+
+def _body_projection(payload: Mapping[str, object] | None) -> tuple[str, str, str, str]:
+    """Project result, message code, message presence and row shape; never row content."""
+
+    if payload is None:
+        return ("absent", "absent", "absent", "absent")
+    journeys = _mapping(payload.get("jrny_infos"))
+    return (
+        _result_projection(payload.get("strResult")),
+        _code_projection(payload.get("h_msg_cd")),
+        _text_projection(payload.get("h_msg_txt")),
+        _rows_projection(journeys.get("jrny_info") if journeys is not None else None),
+    )
+
+
 class ReservationListResponseObserver:
     """Keep transient CDP correlation identifiers, never request or response material."""
 
@@ -142,6 +212,7 @@ class ReservationListResponseObserver:
         self._document_request: str | None = None
         self._reading_body = False
         self._response_received = False
+        self._response_completed = False
         self._closed = False
         self._snapshot = ReservationListResponseSnapshot()
 
@@ -163,6 +234,31 @@ class ReservationListResponseObserver:
 
     def fail(self, reason: ReservationListResponseFailure) -> None:
         self._snapshot = ReservationListResponseSnapshot("failed", reason)
+
+    def _reject_body(
+        self,
+        reason: ReservationListBodyRejection,
+        payload: Mapping[str, object] | None,
+    ) -> None:
+        """Record which closed body contract failed, then fail without retaining the body.
+
+        The read-level warning diagnostic stays the single failure record. This detail line
+        only names the broken contract and closed projections so a new official response
+        shape can be identified from logs without any reservation or account material.
+        """
+
+        result, code, text, rows = _body_projection(payload)
+        _logger.info(
+            "KORAIL reservation list response rejected "
+            "event=reservation_list_response_rejected reason=%s result=%s msg_code=%s "
+            "msg_text=%s rows=%s",
+            reason,
+            result,
+            code,
+            text,
+            rows,
+        )
+        self.fail("invalid_response")
 
     def snapshot(self) -> ReservationListResponseSnapshot:
         if self._closed:
@@ -186,15 +282,51 @@ class ReservationListResponseObserver:
     def request_observed(self) -> bool:
         return self._request_observed
 
-    def assert_read_allowed(self) -> None:
+    def log_diagnostic(
+        self,
+        boundary: ReservationListDiagnosticBoundary,
+        dom: PydollReservationListSnapshot | None = None,
+    ) -> None:
+        """Project only code-owned states and booleans, never provider material.
+
+        response_received means headers passed the existing response checks;
+        response_completed means loadingFinished passed the existing completion checks.
+        Neither flag attests a successful JSON body or official reservation absence.
+        """
+
+        current = self.snapshot()
+        _logger.warning(
+            "KORAIL reservation list read diagnostic event=reservation_list_read_diagnostic "
+            "boundary=%s state=%s failure=%s request_observed=%s "
+            "response_received=%s response_completed=%s dom_observed=%s "
+            "dom_render_complete=%s dom_empty=%s dom_rows_present=%s "
+            "dom_loading=%s dom_malformed=%s",
+            boundary,
+            current.state,
+            current.failure or "none",
+            self.request_observed,
+            self._response_received,
+            self._response_completed,
+            dom is not None,
+            dom.render_complete if dom is not None else False,
+            dom.explicit_empty_visible if dom is not None else False,
+            bool(dom.rendered_card_count or dom.reservation_rows) if dom is not None else False,
+            dom.loading_visible if dom is not None else False,
+            bool(dom.malformed_card_count) if dom is not None else False,
+        )
+
+    def assert_read_allowed(self, dom: PydollReservationListSnapshot | None = None) -> None:
         current = self.snapshot()
         if current.failure == "rate_limited":
+            self.log_diagnostic("observer_rejected", dom)
             raise BrowserRateLimited()
         if current.failure == "protection":
+            self.log_diagnostic("observer_rejected", dom)
             raise BrowserProtectionDetected(
                 "http_403_subresource", "confirmation_reservation_list_response"
             )
         if self.request_observed and current.state in {"failed", "ambiguous"}:
+            self.log_diagnostic("observer_rejected", dom)
             raise BrowserSourceUnavailable("confirmation_reservation_list_response")
 
     def on_request(self, event: object) -> None:
@@ -324,13 +456,14 @@ class ReservationListResponseObserver:
         size = _number(params.get("encodedDataLength"))
         if size is None or size > _BODY_LIMIT:
             self.fail("body_too_large")
-        elif (
-            not self._response_received
-            or self._response_timestamp is None
-            or (_number(params.get("timestamp")) or 0) < self._response_timestamp
-        ):
+        elif not self._response_received or self._response_timestamp is None:
             self.fail("invalid_response")
         else:
+            # A responseReceived callback already processed here can carry a timestamp
+            # later than the actual transfer completion. Require validated headers first,
+            # not finish >= responseReceived time. _matching still fences completion to
+            # this request id and a finite timestamp at or after its own request start.
+            self._response_completed = True
             self._snapshot = ReservationListResponseSnapshot("body_pending")
 
     def on_failed(self, event: object) -> None:
@@ -357,7 +490,7 @@ class ReservationListResponseObserver:
             raw = result.get("body") if result is not None else None
             encoded = result.get("base64Encoded") if result is not None else None
             if not isinstance(raw, str) or not isinstance(encoded, bool):
-                self.fail("invalid_response")
+                self._reject_body("body_shape", None)
                 return
             if len(raw) > _BODY_LIMIT * 4 // 3 + 4:
                 self.fail("body_too_large")
@@ -368,27 +501,54 @@ class ReservationListResponseObserver:
                 return
             payload = _mapping(json.loads(body, object_pairs_hook=_unique_object))
             if payload is None:
-                self.fail("invalid_response")
+                self._reject_body("payload_not_object", None)
                 return
             if payload.get("h_msg_cd") == "P058":
                 self.fail("auth_required")
                 return
             code = payload.get("h_msg_cd")
             if payload.get("strResult") != "SUCC":
-                self.fail("invalid_response")
+                self._reject_body("result_not_success", payload)
                 return
             journeys = _mapping(payload.get("jrny_infos"))
             rows = journeys.get("jrny_info") if journeys is not None else None
             if not isinstance(rows, list):
-                self.fail("invalid_response")
+                self._reject_body("rows_not_list", payload)
                 return
             message = payload.get("h_msg_txt")
-            ordinary_success = (code is None or code == "") and (message is None or message == "")
-            explicit_empty = code == "P100" and message == "검색된 데이터가 없습니다." and not rows
-            if not ordinary_success and not explicit_empty:
-                self.fail("invalid_response")
+            if rows:
+                if not all(isinstance(row, Mapping) for row in rows):
+                    self._reject_body("rows_malformed", payload)
+                    return
+                # Rows are affirmative data, so a plain notice or an informational success
+                # code may accompany them. The reservation itself is still matched only
+                # from the rendered official cards, and this state never attests absence.
+                informational = isinstance(code, str) and (
+                    code == "" or _INFORMATIONAL_SUCCESS_CODE.fullmatch(code) is not None
+                )
+                if not (code is None or informational) or not (
+                    message is None or isinstance(message, str)
+                ):
+                    self._reject_body("message_contract", payload)
+                    return
+                if code not in (None, "") or message not in (None, ""):
+                    _, code_projection, text_projection, rows_projection = _body_projection(payload)
+                    _logger.info(
+                        "KORAIL reservation list response accepted "
+                        "event=reservation_list_response_accepted state=nonempty "
+                        "msg_code=%s msg_text=%s rows=%s",
+                        code_projection,
+                        text_projection,
+                        rows_projection,
+                    )
+                self._snapshot = ReservationListResponseSnapshot("nonempty")
                 return
-            self._snapshot = ReservationListResponseSnapshot("empty" if not rows else "nonempty")
+            ordinary_success = (code is None or code == "") and (message is None or message == "")
+            explicit_empty = code == "P100" and message == "검색된 데이터가 없습니다."
+            if not ordinary_success and not explicit_empty:
+                self._reject_body("message_contract", payload)
+                return
+            self._snapshot = ReservationListResponseSnapshot("empty")
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -497,21 +657,27 @@ async def read_reservation_list(
         while monotonic() < deadline:
             if current_tab() is not tab:
                 owner.fail("tab_changed")
+                owner.log_diagnostic("tab_changed", last)
                 return last
             path = urlsplit(last.url).path.rstrip("/")
             if path == "/ticket/login" or last.protection_detected:
+                owner.log_diagnostic(
+                    "auth_redirect" if path == "/ticket/login" else "dom_protection", last
+                )
                 return last
             await owner.read_completed_body(tab)
             if current_tab() is not tab:
                 owner.fail("tab_changed")
+                owner.log_diagnostic("tab_changed", last)
                 return last
-            owner.assert_read_allowed()
+            owner.assert_read_allowed(last)
             response_state = owner.snapshot().state
             if (
                 owner.request_observed
                 and last.explicit_empty_visible
                 and response_state == "nonempty"
             ):
+                owner.log_diagnostic("dom_response_conflict", last)
                 raise BrowserSourceUnavailable("confirmation_reservation_list_response")
             if (
                 response_state == "empty"
@@ -538,4 +704,5 @@ async def read_reservation_list(
                 stable = None
             await sleep(0.2)
             last = await snapshot()
+        owner.log_diagnostic("read_incomplete", last)
         return last

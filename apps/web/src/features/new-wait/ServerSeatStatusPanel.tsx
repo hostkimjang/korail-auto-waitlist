@@ -70,7 +70,7 @@ function panelContent(summary: ServerSeatStatusSummary): { title: string; descri
   if (summary.state === "empty") {
     return {
       title: "좌석 상태 자동 조회 완료",
-      description: "선택한 날짜·시간대에 표시할 열차가 없습니다.",
+      description: "선택한 날짜·시간대에 서버가 확인한 열차가 없습니다. 공식 앱이나 홈페이지에서는 열차가 보일 수 있습니다.",
     };
   }
   if (summary.state === "restricted") {

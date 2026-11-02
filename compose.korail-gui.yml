@@ -3,6 +3,7 @@ services:
     environment:
       KORAIL_BROWSER_GUI_ENABLED: "true"
       KORAIL_NOVNC_ENABLED: "true"
+      KORAIL_NOVNC_INPUT_ENABLED: "${KORAIL_NOVNC_INPUT_ENABLED:-false}"
       KORAIL_NOVNC_PASSWORD_FILE: /run/secrets/korail_novnc_password
       KORAIL_VNC_GEOMETRY: ${KORAIL_VNC_GEOMETRY:-1440x1000}
       DISPLAY: :99
@@ -11,6 +12,27 @@ services:
       - "127.0.0.1:${KORAIL_NOVNC_PORT:-6080}:6080"
     secrets:
       - korail_novnc_password
+
+  korail-browser-profile-bootstrap:
+    image: rail-waitlist-korail-browser-adapter:local
+    profiles: ["korail-profile-bootstrap"]
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.browser
+    restart: "no"
+    init: true
+    read_only: true
+    user: pwuser
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      KORAIL_BROWSER_PROFILE_DIR: /var/lib/rail-waitlist/korail-browser-profile
+    volumes:
+      - korail_browser_profile:/var/lib/rail-waitlist/korail-browser-profile
+    network_mode: none
+    command: ["/usr/local/bin/start-korail-browser-profile-bootstrap"]
 
 secrets:
   korail_novnc_password:

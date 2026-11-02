@@ -32,7 +32,7 @@ class ResultSnapshotDriver:
 
 @pytest.mark.asyncio
 async def test_direct_navigation_load_signal_timeout_keeps_the_verifiable_result_dom() -> None:
-    session = object.__new__(_PydollSession)
+    session = _PydollSession("https://www.korail.com/ticket/search/general", 25_000, True)
     expected = PydollPageSnapshot(
         body_text="열차 조회 결과",
         rows=(),
@@ -43,7 +43,7 @@ async def test_direct_navigation_load_signal_timeout_keeps_the_verifiable_result
     session._search_driver = driver
     session.timeout_ms = 25_000
     session._submitted = False
-    session._network_responses = []
+    session._network_responses = {}
 
     direct_url = build_korail_general_search_url(
         origin=KorailStationIdentity("0010", "대전"),

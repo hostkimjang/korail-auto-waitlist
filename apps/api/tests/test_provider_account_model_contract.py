@@ -53,6 +53,18 @@ def test_provider_account_preserves_mapper_columns_and_metadata() -> None:
         ("credential_version", "INTEGER", False, False, None, None, True, True, False),
         ("last_auth_status", "VARCHAR(32)", False, False, None, None, True, True, False),
         ("last_authenticated_at", "DATETIME", True, False, None, None, False, False, False),
+        (
+            "protection_halt_credential_version",
+            "INTEGER",
+            True,
+            False,
+            None,
+            None,
+            False,
+            False,
+            False,
+        ),
+        ("protection_halt_revision_micros", "BIGINT", True, False, None, None, False, False, False),
         ("created_at", "DATETIME", False, False, None, None, True, False, False),
         ("updated_at", "DATETIME", False, False, None, None, True, False, True),
     ]
@@ -80,6 +92,11 @@ def test_provider_account_preserves_checks_index_and_enum_storage() -> None:
             "ck_rail_provider_account_auth_status_allowed",
             "last_auth_status IN ('not_checked', 'authenticated', 'auth_required', "
             "'provider_blocked', 'failed')",
+        ),
+        (
+            "ck_rail_provider_account_protection_halt_pair",
+            "(protection_halt_credential_version IS NULL) = "
+            "(protection_halt_revision_micros IS NULL)",
         ),
     }
     assert {
@@ -163,6 +180,8 @@ print(json.dumps({
             "credential_version",
             "last_auth_status",
             "last_authenticated_at",
+            "protection_halt_credential_version",
+            "protection_halt_revision_micros",
             "created_at",
             "updated_at",
         ],

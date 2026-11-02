@@ -1404,6 +1404,85 @@ async def test_seat_status_source_status_uses_the_longest_active_korail_hold(app
     assert 120 < korail["retry_after_seconds"] <= 300
 
 
+async def test_seat_status_includes_login_hold_and_expires_without_provider_io(app, client):
+    from rail_waitlist.korail_sidecar.provider_cooldown import MemoryProviderCooldown
+    from rail_waitlist.seat_status_cooldown import MemoryCooldownStore
+
+    now = 100.0
+    admission = MemoryProviderCooldown(clock=lambda: now)
+    await admission.protection_detected()
+    app.state.korail_provider_cooldown = admission
+    app.state.korail_browser_seat_source.enabled = True
+    app.state.seat_status_cooldown_store = MemoryCooldownStore(lambda: now)
+
+    first = await client.get("/api/v1/seat-status/status")
+    now += 30
+    second = await client.get("/api/v1/seat-status/status")
+    now += 30
+    expired = await client.get("/api/v1/seat-status/status")
+
+    assert first.json()[0] == {
+        "provider": "korail",
+        "source": "korail_browser",
+        "state": "cooldown",
+        "cause": "provider_access_restricted",
+        "retry_after_seconds": 60,
+    }
+    assert second.json()[0]["retry_after_seconds"] == 30
+    assert expired.json()[0]["state"] == "ready"
+    assert expired.json()[0]["retry_after_seconds"] is None
+    assert first.json()[1]["state"] == "ready"
+
+
+@pytest.mark.parametrize(
+    ("legacy_seconds", "expected_cause", "expected_seconds"),
+    [
+        (30, "provider_access_restricted", 60),
+        (60, "provider_access_restricted", 60),
+        (1200, "source_unavailable", 1200),
+    ],
+)
+async def test_seat_status_uses_longest_hold_and_prefers_protection_on_tie(
+    app, client, legacy_seconds, expected_cause, expected_seconds
+):
+    from rail_waitlist.korail_sidecar.provider_cooldown import MemoryProviderCooldown
+    from rail_waitlist.seat_status_cooldown import MemoryCooldownStore
+
+    admission = MemoryProviderCooldown(clock=lambda: 100.0)
+    await admission.protection_detected()
+    legacy = MemoryCooldownStore(lambda: 100.0)
+    await legacy.set("korail-browser-outage", "source_unavailable", legacy_seconds)
+    app.state.korail_provider_cooldown = admission
+    app.state.korail_browser_seat_source.enabled = True
+    app.state.seat_status_cooldown_store = legacy
+
+    response = await client.get("/api/v1/seat-status/status")
+
+    assert response.json()[0]["cause"] == expected_cause
+    assert response.json()[0]["retry_after_seconds"] == expected_seconds
+
+
+@pytest.mark.parametrize("reason", ["provider_unavailable", "cooldown_store_unavailable"])
+async def test_seat_status_never_reports_ready_when_admission_denies_io(app, client, reason):
+    from rail_waitlist.korail_sidecar.provider_cooldown import ProviderCooldownDeferred
+    from rail_waitlist.seat_status_cooldown import MemoryCooldownStore
+
+    class UnavailableAdmission:
+        async def check(self):
+            raise ProviderCooldownDeferred(reason, 60)
+
+    app.state.korail_provider_cooldown = UnavailableAdmission()
+    app.state.korail_browser_seat_source.enabled = True
+    app.state.seat_status_cooldown_store = MemoryCooldownStore()
+
+    response = await client.get("/api/v1/seat-status/status")
+
+    assert response.status_code == 200
+    assert response.json()[0]["state"] == "cooldown"
+    assert response.json()[0]["cause"] == "source_unavailable"
+    assert response.json()[0]["retry_after_seconds"] == 60
+
+
 async def test_timetable_rejects_invalid_passenger_count(client):
     response = await client.get(
         "/api/v1/timetables",

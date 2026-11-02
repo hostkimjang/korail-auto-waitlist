@@ -30,9 +30,7 @@ def isolate_test_origin():
         "korail_seat_monitoring_enabled",
         "korail_reservation_once_enabled",
     )
-    previous_feature_flags = {
-        name: getattr(settings, name) for name in feature_flag_names
-    }
+    previous_feature_flags = {name: getattr(settings, name) for name in feature_flag_names}
     settings.auth_allowed_origins = ["http://localhost:3000"]
     for name in feature_flag_names:
         setattr(settings, name, False)

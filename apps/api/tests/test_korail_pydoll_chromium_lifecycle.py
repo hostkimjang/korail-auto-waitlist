@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -12,9 +13,13 @@ import rail_waitlist.korail_pydoll_browser as browser_facade
 import rail_waitlist.korail_sidecar.pydoll.chromium_lifecycle as lifecycle_module
 from rail_waitlist.korail_sidecar.browser_contracts import BrowserSourceUnavailable
 from rail_waitlist.korail_sidecar.pydoll.chromium_lifecycle import (
+    DEDICATED_PROFILE_MARKER_CONTENT,
+    DEDICATED_PROFILE_MARKER_FILENAME,
+    DEDICATED_PROFILE_SINGLETON_NAMES,
     PydollChromiumLifecycle,
     PydollChromiumPhase,
     PydollChromiumRuntime,
+    cleanup_dedicated_profile_singletons,
     configure_chromium_options,
     finish_owned_cleanup,
     probe_pydoll_chromium,
@@ -196,6 +201,8 @@ def test_canonical_options_preserve_gui_and_explicit_sandbox_policy(
 ) -> None:
     monkeypatch.setenv("KORAIL_BROWSER_TEST_DISABLE_SANDBOX", sandbox_value)
     monkeypatch.delenv("KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH", raising=False)
+    monkeypatch.delenv("KORAIL_BROWSER_PROFILE_MODE", raising=False)
+    monkeypatch.delenv("KORAIL_BROWSER_PROFILE_DIR", raising=False)
     options = _Options()
 
     configure_chromium_options(options, headless=False)
@@ -203,10 +210,165 @@ def test_canonical_options_preserve_gui_and_explicit_sandbox_policy(
     assert options.headless is False
     assert ("--no-sandbox" in options.arguments) is expected_sandbox
     assert options.arguments.count("--disable-save-password-bubble") == 1
+    assert not any(argument.startswith("--user-data-dir=") for argument in options.arguments)
     assert browser_facade._configure_chromium_options is configure_chromium_options
     assert browser_facade._set_chromium_binary is set_chromium_binary
     assert browser_facade._finish_owned_cleanup is finish_owned_cleanup
     assert browser_facade.probe_pydoll_chromium is probe_pydoll_chromium
+
+
+def _dedicated_profile(tmp_path: Path) -> Path:
+    profile = tmp_path / "korail-browser-profile"
+    profile.mkdir(mode=0o700)
+    marker = profile / DEDICATED_PROFILE_MARKER_FILENAME
+    marker.write_text(DEDICATED_PROFILE_MARKER_CONTENT, encoding="ascii")
+    marker.chmod(0o600)
+    profile.chmod(0o700)
+    return profile
+
+
+def test_dedicated_manual_profile_is_explicit_marked_and_non_headless(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = _dedicated_profile(tmp_path)
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_manual")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+    monkeypatch.delenv("KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH", raising=False)
+    options = _Options()
+
+    configure_chromium_options(options, headless=False)
+
+    assert f"--user-data-dir={profile.resolve()}" in options.arguments
+    assert "--profile-directory=Default" in options.arguments
+    assert "--disable-sync" in options.arguments
+    assert "--restore-last-session" in options.arguments
+
+
+def test_dedicated_auto_profile_uses_the_same_isolated_persistent_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = _dedicated_profile(tmp_path)
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_auto")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+    options = _Options()
+
+    configure_chromium_options(options, headless=False)
+
+    assert f"--user-data-dir={profile.resolve()}" in options.arguments
+    assert "--profile-directory=Default" in options.arguments
+    assert "--restore-last-session" in options.arguments
+
+
+def test_isolated_probe_and_public_search_can_skip_the_live_manual_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = _dedicated_profile(tmp_path)
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_manual")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+    monkeypatch.delenv("KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH", raising=False)
+    options = _Options()
+
+    configure_chromium_options(
+        options,
+        headless=False,
+        allow_dedicated_profile=False,
+    )
+
+    assert not any(argument.startswith("--user-data-dir=") for argument in options.arguments)
+    assert "--profile-directory=Default" not in options.arguments
+    assert "--restore-last-session" not in options.arguments
+
+
+def test_dedicated_profile_cleanup_removes_only_chrome_singleton_symlinks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = _dedicated_profile(tmp_path)
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_manual")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+    try:
+        for name in DEDICATED_PROFILE_SINGLETON_NAMES:
+            (profile / name).symlink_to(f"retired-{name}")
+    except OSError:
+        pytest.skip("symbolic link creation is unavailable on this host")
+
+    cleanup_dedicated_profile_singletons(headless=False)
+
+    assert all(not (profile / name).exists() for name in DEDICATED_PROFILE_SINGLETON_NAMES)
+
+
+def test_dedicated_profile_cleanup_refuses_a_non_symlink_singleton(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    profile = _dedicated_profile(tmp_path)
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_manual")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+    (profile / "SingletonLock").write_text("unexpected", encoding="ascii")
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        cleanup_dedicated_profile_singletons(headless=False)
+
+    assert raised.value.stage == "browser_profile"
+
+
+def test_dedicated_profile_arguments_do_not_duplicate_pydoll_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("pydoll.browser")
+    profile = _dedicated_profile(tmp_path)
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_manual")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+    monkeypatch.delenv("KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH", raising=False)
+    runtime = lifecycle_module._load_pydoll_runtime()
+    options = runtime.options_factory()
+
+    configure_chromium_options(options, headless=False)
+    browser = runtime.browser_factory(options=options)
+
+    assert browser is not None
+
+
+@pytest.mark.parametrize("mode", ["unknown", "dedicated-manual"])
+def test_profile_mode_rejects_noncanonical_values(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", mode)
+    options = _Options()
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        configure_chromium_options(options, headless=False)
+
+    assert raised.value.stage == "browser_profile"
+
+
+@pytest.mark.parametrize("headless", [True, False])
+def test_dedicated_profile_fails_closed_without_valid_marker_or_gui(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    headless: bool,
+) -> None:
+    profile = tmp_path / "korail-browser-profile"
+    profile.mkdir(mode=0o700)
+    profile.chmod(0o700)
+    if headless:
+        (profile / DEDICATED_PROFILE_MARKER_FILENAME).write_text(
+            DEDICATED_PROFILE_MARKER_CONTENT,
+            encoding="ascii",
+        )
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_MODE", "dedicated_manual")
+    monkeypatch.setenv("KORAIL_BROWSER_PROFILE_DIR", str(profile))
+    options = _Options()
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        configure_chromium_options(options, headless=headless)
+
+    assert raised.value.stage == "browser_profile"
 
 
 @pytest.mark.asyncio

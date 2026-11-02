@@ -12,7 +12,9 @@ from ..domain import Provider
 from ..korail_sidecar.provider_cooldown import ProviderCooldownDeferred as _ProviderCooldownDeferred
 from .application import (
     SUPPORTED_ACCOUNT_PROVIDERS,
+    clear_provider_protection_halt,
     get_enabled_provider_credentials,
+    record_provider_protection_halt,
     update_provider_auth_status,
 )
 from .contracts import ProviderCredentials
@@ -21,7 +23,7 @@ from .login_verification import (
     ProviderLoginVerifier,
     ProviderSessionRuntimeState,
 )
-from .models import RailProviderAccount
+from .models import RailProviderAccount, active_protection_halt_version
 from .schemas import RailProviderAuthStatus
 
 LOGGER = logging.getLogger(__name__)
@@ -37,6 +39,7 @@ class _EnabledAccountRuntime:
     credentials: ProviderCredentials
     auth_status: RailProviderAuthStatus
     updated_at: datetime
+    protection_halted: bool = False
 
     @property
     def recovery_revision(self) -> tuple[Provider, int, int]:
@@ -60,6 +63,14 @@ class ProviderRuntimePrewarmRegistry:
     SESSION_REFRESH_MAX_SECONDS = 600.0
     PREWARM_INITIAL_BACKOFF_SECONDS = 60.0
     PREWARM_MAX_BACKOFF_SECONDS = 900.0
+    # Protection verdicts retry on an escalating schedule instead of stopping the account
+    # until a human re-verifies it. KORAIL's macro detection scores login submissions by
+    # their spacing: logins about 23 minutes apart were blocked half the time, while gaps
+    # of two hours or more passed. Retrying 1-5 minutes after a verdict only raises that
+    # score, so the first retry waits 15 minutes and doubling caps a persistent block at
+    # one login every two hours (900 -> 1800 -> 3600 -> 7200 seconds).
+    PROTECTION_INITIAL_BACKOFF_SECONDS = 900.0
+    PROTECTION_MAX_BACKOFF_SECONDS = 7200.0
     LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS = 5.0
     LOCAL_FAILURE_MAX_BACKOFF_SECONDS = 60.0
     AUTH_RECOVERY_MAX_ATTEMPTS = 5
@@ -77,6 +88,10 @@ class ProviderRuntimePrewarmRegistry:
     # provider -> (credential generation, minimum official-submission retry interval)
     provider_submission_failures: dict[Provider, tuple[int, int]] = field(default_factory=dict)
     provider_deferred_until: dict[Provider, float] = field(default_factory=dict)
+    # provider -> persisted auth revision whose own keepalive login got a protection verdict
+    protection_halted_revisions: dict[Provider, tuple[Provider, int, int]] = field(
+        default_factory=dict
+    )
     completed: bool = False
 
     def outcome_for(self, provider: Provider) -> RailProviderAuthStatus | None:
@@ -98,15 +113,17 @@ class ProviderRuntimePrewarmRegistry:
 
         return self._auth_revision_counts(revision)[1]
 
-    def max_recovery_attempts(self, auth_status: RailProviderAuthStatus) -> int:
+    def recovery_attempt_allowed(
+        self, auth_status: RailProviderAuthStatus, verdicts_observed: int
+    ) -> bool:
         """Bound automatic recovery per persisted auth revision by its failure meaning."""
 
-        # A protection verdict keeps its single attempt: logging in repeatedly under
-        # provider protection is what escalates a block. Credential expiry instead needs a
-        # retry budget so one adapter outage cannot strand the account until a human acts.
+        # Protection recovery is paced by the escalating protection backoff rather than a
+        # count, so a temporary block lifts on its own. Credential rejection keeps a count
+        # budget because repeated wrong-password logins can lock the provider account.
         if auth_status == "provider_blocked":
-            return 1
-        return self.AUTH_RECOVERY_MAX_ATTEMPTS
+            return True
+        return verdicts_observed < self.AUTH_RECOVERY_MAX_ATTEMPTS
 
     def consumes_recovery_budget(self, outcome: RailProviderAuthStatus | None) -> bool:
         """Spend a revision's recovery budget only on a real provider verdict."""
@@ -151,6 +168,20 @@ class ProviderRuntimePrewarmRegistry:
 
         started, verdicts = self._auth_revision_counts(revision)
         self.auth_revision_attempts[revision[0]] = (revision, started + 1, verdicts)
+
+    def halt_after_protection_verdict(self, revision: tuple[Provider, int, int]) -> None:
+        """Fence a revision the provider answered with protection until a login succeeds."""
+
+        # The persisted status may still read authenticated. The fence keeps observation
+        # parked and makes every keepalive for this revision wait out the escalating
+        # protection backoff, including the first one after a restart.
+        self.protection_halted_revisions[revision[0]] = revision
+
+    def is_protection_halted(self, revision: tuple[Provider, int, int]) -> bool:
+        return self.protection_halted_revisions.get(revision[0]) == revision
+
+    def clear_protection_halt(self, provider: Provider) -> None:
+        self.protection_halted_revisions.pop(provider, None)
 
     def begin_prewarm(
         self,
@@ -216,9 +247,9 @@ class ProviderRuntimePrewarmRegistry:
         """Separate a provider's credential verdict from this deployment's own outage."""
 
         if outcome == "provider_blocked":
-            # Protection responses use the safest interval from the first failure.
-            return self.PREWARM_MAX_BACKOFF_SECONDS
-        if outcome in self.LOCAL_FAILURE_OUTCOMES:
+            initial = self.PROTECTION_INITIAL_BACKOFF_SECONDS
+            ceiling = self.PROTECTION_MAX_BACKOFF_SECONDS
+        elif outcome in self.LOCAL_FAILURE_OUTCOMES:
             initial = self.LOCAL_FAILURE_INITIAL_BACKOFF_SECONDS
             ceiling = self.LOCAL_FAILURE_MAX_BACKOFF_SECONDS
         else:
@@ -272,6 +303,7 @@ class ProviderRuntimePrewarmRegistry:
         self.prewarm_retry_state.pop(provider, None)
         self.provider_submission_failures.pop(provider, None)
         self.auth_revision_attempts.pop(provider, None)
+        self.protection_halted_revisions.pop(provider, None)
 
 
 async def _load_enabled_account_runtime(
@@ -284,6 +316,8 @@ async def _load_enabled_account_runtime(
                 RailProviderAccount.credential_version,
                 RailProviderAccount.last_auth_status,
                 RailProviderAccount.updated_at,
+                RailProviderAccount.protection_halt_credential_version,
+                RailProviderAccount.protection_halt_revision_micros,
             )
             .where(
                 RailProviderAccount.provider == provider,
@@ -302,6 +336,13 @@ async def _load_enabled_account_runtime(
         credentials=credentials,
         auth_status=row.last_auth_status,
         updated_at=row.updated_at,
+        protection_halted=active_protection_halt_version(
+            credential_version=row.credential_version,
+            updated_at=row.updated_at,
+            halt_credential_version=row.protection_halt_credential_version,
+            halt_revision_micros=row.protection_halt_revision_micros,
+        )
+        is not None,
     )
 
 
@@ -529,10 +570,16 @@ async def recover_provider_sessions_once(
 
         recoverable = account_runtime.auth_status in RECOVERABLE_PROVIDER_AUTH_STATUSES
         revision = account_runtime.recovery_revision
+        if account_runtime.protection_halted:
+            # Rehydrate the persisted fence before any decision: a restart must wait out
+            # the protection backoff before logging in again on a revision the provider
+            # already answered with protection. A successful login, a newer revision, or
+            # an official positive session (which clears the persisted pair) lifts it.
+            registry.halt_after_protection_verdict(revision)
         recovery_started = registry.auth_revision_started_count(revision)
         recovery_verdicts = registry.auth_revision_attempt_count(revision)
-        recovery_attempt = recoverable and recovery_verdicts < registry.max_recovery_attempts(
-            account_runtime.auth_status
+        recovery_attempt = recoverable and registry.recovery_attempt_allowed(
+            account_runtime.auth_status, recovery_verdicts
         )
         if recoverable and not recovery_attempt:
             # Still observe the sanitized process state every tick, but stop retrying a
@@ -613,7 +660,29 @@ async def recover_provider_sessions_once(
                 registry.outcomes[provider] = "authenticated"
                 registry.prewarm_retry_state.pop(provider, None)
                 registry.provider_submission_failures.pop(provider, None)
+                # An official positive session of this generation supersedes the halt.
+                registry.clear_protection_halt(provider)
+                if account_runtime.protection_halted:
+                    await _clear_persisted_protection_halt(
+                        session_factory,
+                        account_runtime,
+                        revision,
+                    )
                 continue
+            if registry.is_protection_halted(revision):
+                retry = registry.prewarm_retry_state.get(provider)
+                if retry is None or retry[0] != credential_version:
+                    # A halt rehydrated after a restart has no retry clock yet. Start the
+                    # protection backoff instead of logging in immediately.
+                    registry.finish_prewarm(
+                        provider,
+                        credential_version,
+                        outcome="provider_blocked",
+                        now=now,
+                    )
+                    continue
+                # Otherwise begin_prewarm below admits the retry once the escalating
+                # protection backoff has elapsed.
 
         credential_version = account_runtime.credentials.credential_version
         loop = asyncio.get_running_loop()
@@ -622,8 +691,8 @@ async def recover_provider_sessions_once(
             retry = registry.prewarm_retry_state.get(provider)
             if retry is None or retry[0] != credential_version:
                 # A protection revision may be persisted by a reservation outside this
-                # manager. Observe the full protection cooldown before the revision's
-                # single recovery attempt instead of immediately logging in again.
+                # manager. Observe the protection backoff before the next recovery
+                # attempt instead of immediately logging in again.
                 registry.finish_prewarm(
                     provider,
                     credential_version,
@@ -673,6 +742,9 @@ async def recover_provider_sessions_once(
                 # adapter outage never reached the credential check, so it must not
                 # exhaust recovery before the adapter is reachable again.
                 registry.mark_auth_revision_attempted(revision)
+            if not recovery_attempt and outcome == "provider_blocked":
+                registry.halt_after_protection_verdict(revision)
+                await _persist_protection_halt(session_factory, account_runtime, revision)
     return attempted
 
 
@@ -720,3 +792,78 @@ async def run_provider_session_manager(
         registry,
         interval_seconds=interval_seconds,
     )
+
+
+async def _persist_protection_halt(
+    session_factory: async_sessionmaker[AsyncSession],
+    account_runtime: _EnabledAccountRuntime,
+    revision: tuple[Provider, int, int],
+) -> None:
+    """Persist the halt for the revision a keepalive login saw protection on.
+
+    A failed write stays fail-closed: the process-local fence already stops this
+    revision, so a database error only costs durability until the next verdict.
+    """
+    try:
+        async with session_factory() as session:
+            await record_provider_protection_halt(
+                session,
+                account_runtime.provider,
+                expected_credential_version=revision[1],
+                expected_revision_micros=revision[2],
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 -- database details stay redacted.
+        LOGGER.warning(
+            "Provider runtime protection-halt persistence failed provider=%s",
+            account_runtime.provider.value,
+        )
+
+
+async def _clear_persisted_protection_halt(
+    session_factory: async_sessionmaker[AsyncSession],
+    account_runtime: _EnabledAccountRuntime,
+    revision: tuple[Provider, int, int],
+) -> None:
+    """Drop the persisted halt that an official positive session superseded.
+
+    The compare-and-swap binds to the halted revision, so a stale clear can never
+    erase a newer fence. If the write fails, the halt stays active and the next
+    positive session retries it, which keeps the fail-closed side safe.
+    """
+    verified_at = datetime.now(UTC)
+    try:
+        async with session_factory() as session:
+            cleared = await clear_provider_protection_halt(
+                session,
+                account_runtime.provider,
+                expected_credential_version=revision[1],
+                expected_revision_micros=revision[2],
+                expected_updated_at=account_runtime.updated_at,
+                commit=False,
+            )
+            if not cleared:
+                await session.rollback()
+                return
+            # Watches deferred while the halt was active parked themselves outside
+            # the due selector with no retry clock. The official positive session
+            # is the verification event that releases them, exactly as a fresh
+            # successful login would, so resume in the same transaction that
+            # clears the fence.
+            from .auth_recovery_runtime import resume_watches_after_verified_provider_login
+
+            await resume_watches_after_verified_provider_login(
+                session,
+                account_runtime.provider,
+                verified_at,
+                credential_version=revision[1],
+            )
+            await session.commit()
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 -- database details stay redacted.
+        LOGGER.warning(
+            "Provider runtime protection-halt clear failed provider=%s",
+            account_runtime.provider.value,
+        )

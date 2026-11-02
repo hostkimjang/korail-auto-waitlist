@@ -58,7 +58,7 @@ async def test_observed_login_sequence_only_grows_on_http_5xx_and_success_keeps_
 async def test_protection_max_deadline_is_not_shortened_by_queries_or_login() -> None:
     now = [1_700_000_000.0]
     hold = MemoryProviderCooldown(clock=lambda: now[0])
-    await hold.protection_detected(60)
+    await hold.protection_detected(900)
     now[0] += 10
     await asyncio.gather(hold.query_failed(300), hold.login_failed(500, "http_error"))
     with pytest.raises(ProviderCooldownDeferred) as caught:
@@ -69,6 +69,32 @@ async def test_protection_max_deadline_is_not_shortened_by_queries_or_login() ->
     )
     now[0] += 890
     await hold.check()
+
+
+async def test_protection_hold_uses_configured_seconds_without_a_fifteen_minute_floor() -> None:
+    now = [1_700_000_000.0]
+    hold = MemoryProviderCooldown(clock=lambda: now[0], protection_seconds=90)
+    await hold.protection_detected()
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await hold.check()
+    assert (caught.value.reason, caught.value.retry_after_seconds) == (
+        "provider_access_restricted",
+        90,
+    )
+    now[0] += 90
+    await hold.check()
+
+    # An explicit caller interval may be shorter than the default but never below 60s.
+    await hold.protection_detected(5)
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await hold.check()
+    assert caught.value.retry_after_seconds == 60
+
+
+@pytest.mark.parametrize("seconds", [59, 86401, True, 60.0])
+def test_protection_setting_rejects_out_of_range_values(seconds) -> None:
+    with pytest.raises(ValueError):
+        MemoryProviderCooldown(protection_seconds=seconds)
 
 
 class _RedisFixture:
@@ -132,6 +158,17 @@ async def test_new_redis_owner_reads_persisted_hold_and_login_sequence() -> None
         await RedisProviderCooldown(redis).check()
     assert caught.value.retry_after_seconds == 600
     assert redis.operations == ["login", "read", "login", "read"]
+
+
+async def test_redis_protection_hold_persists_the_configured_interval() -> None:
+    redis = _RedisFixture()
+    await RedisProviderCooldown(redis, protection_seconds=120).protection_detected()
+    with pytest.raises(ProviderCooldownDeferred) as caught:
+        await RedisProviderCooldown(redis).check()
+    assert (caught.value.reason, caught.value.retry_after_seconds) == (
+        "provider_access_restricted",
+        120,
+    )
 
 
 async def test_redis_read_failure_defers_without_observation_or_writes() -> None:

@@ -166,6 +166,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         response_safety_guard: ResponseSafetyGuard,
         fingerprint: CredentialFingerprint = credential_fingerprint,
         provider_cooldown: ProviderCooldown | None = None,
+        retain_auth_required_session: bool = False,
     ) -> None:
         self._page_url = page_url
         self._timeout_ms = timeout_ms
@@ -178,6 +179,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         self._response_safety_guard = response_safety_guard
         self._fingerprint = fingerprint
         self._provider_cooldown = provider_cooldown
+        self._retain_auth_required_session = retain_auth_required_session
         self._lock = asyncio.Lock()
         self._active_session: ActivePydollAuthenticationSession[AuthSession] | None = None
         self._state = KorailSessionActorState.COLD
@@ -275,6 +277,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         self,
         *,
         credential_version: str | None = None,
+        preserve_active_session: bool = False,
     ) -> PydollAuthenticationSessionLease[AuthSession]:
         if not self.reuse_enabled:
             created_at = self._monotonic()
@@ -293,10 +296,14 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         now = self._monotonic()
         active = self._active_session
         reuse_until = self._active_reuse_until(active) if active is not None else None
-        if active is not None and (
-            reuse_until is None
-            or now >= reuse_until
-            or active.searches_started >= self._session_reuse_max_searches
+        if (
+            active is not None
+            and not preserve_active_session
+            and (
+                reuse_until is None
+                or now >= reuse_until
+                or active.searches_started >= self._session_reuse_max_searches
+            )
         ):
             if active.authenticated_credential_version is not None:
                 self._state = KorailSessionActorState.STALE
@@ -322,7 +329,8 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
             active.credential_version = credential_version
             self._generation = credential_version
             self._created_at = active.created_at
-        active.searches_started += 1
+        if not (preserve_active_session and reused):
+            active.searches_started += 1
         active.last_used_at = now
         if credential_version is not None:
             self._last_used_at = now
@@ -340,6 +348,8 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
         self,
         session: AuthSession,
         credential: KorailCredentialInput,
+        *,
+        require_fresh_evidence: bool = False,
     ) -> bool:
         """Authenticate once per exact credential generation and in-memory digest."""
 
@@ -364,7 +374,8 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
             return authenticated
         fingerprint = self._fingerprint(credential)
         if (
-            active.authenticated_credential_version == credential.version
+            not require_fresh_evidence
+            and active.authenticated_credential_version == credential.version
             and active.authenticated_credential_fingerprint == fingerprint
         ):
             active.last_used_at = self._monotonic()
@@ -378,6 +389,7 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
             await self.discard_active_session()
             self._state = KorailSessionActorState.AUTH_REQUIRED
             return False
+        active.credential_version = credential.version
         active.authenticated_credential_version = credential.version
         active.authenticated_credential_fingerprint = fingerprint
         active.last_used_at = self._monotonic()
@@ -476,19 +488,53 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
 
         await self.check_provider_cooldown()
 
-        if self._active_session is not None:
+        active = self._active_session
+        fingerprint = self._fingerprint(credential)
+        resume_manual_handoff = (
+            self._retain_auth_required_session
+            and active is not None
+            and self._state is KorailSessionActorState.AUTH_REQUIRED
+            and active.credential_version == credential.version
+            and active.authenticated_credential_version is None
+        )
+        reverify_manual_session = (
+            self._retain_auth_required_session
+            and active is not None
+            and self._state in {KorailSessionActorState.READY, KorailSessionActorState.STALE}
+            and active.authenticated_credential_version is not None
+            and active.authenticated_credential_fingerprint == fingerprint
+        )
+        preserve_active_session = resume_manual_handoff or reverify_manual_session
+        if active is not None and not preserve_active_session:
             self._state = KorailSessionActorState.STALE
-        await self.discard_active_session()
+            await self.discard_active_session()
 
         lease: PydollAuthenticationSessionLease[AuthSession] | None = None
         stage = "browser_launch"
         try:
-            lease = await self.acquire_session(credential_version=credential.version)
+            # A user may complete the explicit noVNC handoff after the normal
+            # authenticated-session TTL. Inspect that same live browser first;
+            # replacing it here could discard a non-persistent login cookie.
+            lease = await self.acquire_session(
+                credential_version=credential.version,
+                preserve_active_session=preserve_active_session,
+            )
             session = lease.session
-            stage = "load_page"
-            self._response_safety_guard(await session.open(), stage)
+            resume_retained_tab = (
+                preserve_active_session
+                and lease.reused
+                and active is not None
+                and session is active.session
+            )
+            if not resume_retained_tab:
+                stage = "load_page"
+                self._response_safety_guard(await session.open(), stage)
             stage = "authenticate"
-            return await self.ensure_authenticated_session(session, credential)
+            return await self.ensure_authenticated_session(
+                session,
+                credential,
+                require_fresh_evidence=reverify_manual_session,
+            )
         except asyncio.CancelledError:
             await self.discard_active_session()
             self._state = KorailSessionActorState.STALE
@@ -505,6 +551,21 @@ class PydollAuthenticationSessionActor[AuthSession: PydollAuthenticationSession]
                 and self._provider_cooldown is not None
             ):
                 await self._provider_cooldown.query_failed()
+            if (
+                self._retain_auth_required_session
+                and error.stage == "manual_login_required"
+                and lease is not None
+                and lease.persistent
+                and self._active_session is not None
+                and self._active_session.session is lease.session
+            ):
+                retained = self._active_session
+                retained.credential_version = credential.version
+                retained.authenticated_credential_version = None
+                retained.authenticated_credential_fingerprint = None
+                self._generation = credential.version
+                self._state = KorailSessionActorState.AUTH_REQUIRED
+                raise
             await self.discard_active_session()
             self._state = KorailSessionActorState.STALE
             if error.stage == "unspecified":

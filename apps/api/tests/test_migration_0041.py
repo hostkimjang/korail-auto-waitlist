@@ -32,7 +32,7 @@ def test_migration_0041_updates_only_the_station_cache_default(
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_current_head() == "0041_station_cache_v4"
+    assert scripts.get_current_head() == "0042_protection_halt"
     assert scripts.get_revision("0041_station_cache_v4") is not None
 
     command.upgrade(config, "0040_legacy_failed_unknown")

@@ -29,6 +29,7 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 import { StatusPill } from "../../shared/ui/StatusPill";
 import { NotificationChannelSettings } from "./NotificationChannelSettings";
 import { ProviderAccountSettings } from "./ProviderAccountSettings";
+import type { ProviderRuntimeStatusLoadState } from "./providerRuntimeStatus";
 import { SystemStatusDashboard } from "./SystemStatusDashboard";
 import { TimetableRefreshSettings } from "./TimetableRefreshSettings";
 
@@ -45,6 +46,7 @@ export interface SettingsPageProps {
   browserPushState?: BrowserPushState;
   providerAccounts?: ReadonlyArray<ProviderAccount>;
   providerRuntimeStatuses?: ReadonlyArray<ProviderRuntimeStatus>;
+  providerRuntimeStatusLoadState?: ProviderRuntimeStatusLoadState;
   providerAccountsLoading?: boolean;
   pendingProviderAccount?: RailProvider | null;
   uiPreferences: UiPreferences;
@@ -92,6 +94,7 @@ export function SettingsPage({
   browserPushState = defaultBrowserPushState,
   providerAccounts = [],
   providerRuntimeStatuses = [],
+  providerRuntimeStatusLoadState = providerRuntimeStatuses.length > 0 ? "ready" : "idle",
   providerAccountsLoading = false,
   pendingProviderAccount = null,
   uiPreferences,
@@ -142,6 +145,7 @@ export function SettingsPage({
               <ProviderAccountSettings
                 accounts={providerAccounts}
                 runtimeStatuses={providerRuntimeStatuses}
+                runtimeStatusLoadState={providerRuntimeStatusLoadState}
                 loading={providerAccountsLoading}
                 pendingProvider={pendingProviderAccount}
                 onSave={onSaveProviderAccount}

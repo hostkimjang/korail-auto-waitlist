@@ -39,8 +39,7 @@ class RecordingReservationExecutor:
             observed_at=now,
             payment_deadline=now + timedelta(minutes=15),
             official_handoff_url=(
-                "https://etk.srail.kr/hpg/hra/02/"
-                "selectReservationList.do?pageId=TK0102010000"
+                "https://etk.srail.kr/hpg/hra/02/selectReservationList.do?pageId=TK0102010000"
             ),
         )
 

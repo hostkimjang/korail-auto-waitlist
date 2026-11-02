@@ -22,7 +22,11 @@ tests/*
 !tests/test_korail_browser_mode_smoke.py
 !tests/test_korail_chromium_launch.py
 !tests/test_korail_direct_cdp.py
+!tests/test_korail_login_failure_transport.py
+!tests/test_korail_pydoll_auth_actor.py
 !tests/test_korail_pydoll_browser.py
+!tests/test_korail_pydoll_chromium_lifecycle.py
+!tests/test_korail_pydoll_login_driver.py
 !tests/test_korail_sidecar_runtime.py
 !tests/fixtures/
 tests/fixtures/*

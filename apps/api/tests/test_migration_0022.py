@@ -26,9 +26,7 @@ def test_migration_0022_adds_one_shot_post_deadline_marker(tmp_path, monkeypatch
             row[1]: row for row in connection.execute("PRAGMA table_info(reservation_attempts)")
         }
         assert "post_deadline_reconciled_at" in columns
-        indexes = {
-            row[1] for row in connection.execute("PRAGMA index_list(reservation_attempts)")
-        }
+        indexes = {row[1] for row in connection.execute("PRAGMA index_list(reservation_attempts)")}
         assert "ix_reservation_attempts_post_deadline_reconciled_at" in indexes
 
     get_settings.cache_clear()

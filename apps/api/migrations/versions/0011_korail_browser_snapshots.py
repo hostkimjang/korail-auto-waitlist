@@ -100,8 +100,7 @@ def upgrade() -> None:
             name="ck_korail_browser_snapshot_seat_class",
         ),
         sa.CheckConstraint(
-            "status IN ('AVAILABLE', 'LIMITED', 'SOLD_OUT', "
-            "'WAITLIST_AVAILABLE', 'NOT_OFFERED')",
+            "status IN ('AVAILABLE', 'LIMITED', 'SOLD_OUT', 'WAITLIST_AVAILABLE', 'NOT_OFFERED')",
             name="ck_korail_browser_snapshot_status",
         ),
     )
@@ -111,9 +110,7 @@ def upgrade() -> None:
         ["train_number", "departure_at", "seat_class"],
     )
     with op.batch_alter_table("timetable_seat_evidence") as batch_op:
-        batch_op.drop_constraint(
-            "ck_timetable_seat_evidence_provenance_kind", type_="check"
-        )
+        batch_op.drop_constraint("ck_timetable_seat_evidence_provenance_kind", type_="check")
         batch_op.create_check_constraint(
             "ck_timetable_seat_evidence_provenance_kind",
             "provenance_kind IN ('not_observed', 'official_provider', "
@@ -129,12 +126,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("timetable_seat_evidence") as batch_op:
-        batch_op.drop_constraint(
-            "ck_timetable_seat_evidence_browser_companion", type_="check"
-        )
-        batch_op.drop_constraint(
-            "ck_timetable_seat_evidence_provenance_kind", type_="check"
-        )
+        batch_op.drop_constraint("ck_timetable_seat_evidence_browser_companion", type_="check")
+        batch_op.drop_constraint("ck_timetable_seat_evidence_provenance_kind", type_="check")
         batch_op.create_check_constraint(
             "ck_timetable_seat_evidence_provenance_kind",
             "provenance_kind IN ('not_observed', 'official_provider', "

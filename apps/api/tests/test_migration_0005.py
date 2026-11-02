@@ -17,9 +17,7 @@ def table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
 
 
-def test_migration_0005_upgrades_existing_rows_and_round_trips_sqlite(
-    tmp_path, monkeypatch
-):
+def test_migration_0005_upgrades_existing_rows_and_round_trips_sqlite(tmp_path, monkeypatch):
     database_path = tmp_path / "migration-0005.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path.as_posix()}")
     get_settings.cache_clear()
@@ -126,8 +124,7 @@ def test_migration_0005_upgrades_existing_rows_and_round_trips_sqlite(
             "WHERE id = 'candidate-before-0005'"
         ).fetchone() == ("active", None)
         assert connection.execute(
-            "SELECT state FROM watch_candidates "
-            "WHERE id = 'legacy-attempted-candidate'"
+            "SELECT state FROM watch_candidates WHERE id = 'legacy-attempted-candidate'"
         ).fetchone() == ("failed",)
         legacy_attempt = connection.execute(
             "SELECT candidate_id, outcome, payment_deadline, official_handoff_url "
@@ -141,8 +138,7 @@ def test_migration_0005_upgrades_existing_rows_and_round_trips_sqlite(
             None,
         )
         assert connection.execute(
-            "SELECT status, next_check_at FROM watches "
-            "WHERE id = 'legacy-attempted-watch'"
+            "SELECT status, next_check_at FROM watches WHERE id = 'legacy-attempted-watch'"
         ).fetchone() == ("AUTH_REQUIRED", None)
         assert connection.execute(
             "SELECT from_status, to_status, reason FROM watch_transition_history "
@@ -167,26 +163,21 @@ def test_migration_0005_upgrades_existing_rows_and_round_trips_sqlite(
         }.issubset(
             {
                 row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
             }
         )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
-                "UPDATE watch_candidates SET state = 'invalid' "
-                "WHERE id = 'candidate-before-0005'"
+                "UPDATE watch_candidates SET state = 'invalid' WHERE id = 'candidate-before-0005'"
             )
 
     command.downgrade(config, "0004_watch_candidates")
     with sqlite3.connect(database_path) as connection:
         assert "unchanged_runs" not in table_columns(connection, "watches")
         assert "state" not in table_columns(connection, "watch_candidates")
-        assert "suppressed_by_candidate_id" not in table_columns(
-            connection, "watch_candidates"
+        assert "suppressed_by_candidate_id" not in table_columns(connection, "watch_candidates")
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0004_watch_candidates",
         )
-        assert connection.execute(
-            "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0004_watch_candidates",)
 
     get_settings.cache_clear()

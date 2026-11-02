@@ -13,9 +13,7 @@ from rail_waitlist.config import get_settings
 API_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_migration_0017_adds_provider_accounts_and_reservation_policy(
-    tmp_path, monkeypatch
-):
+def test_migration_0017_adds_provider_accounts_and_reservation_policy(tmp_path, monkeypatch):
     database_path = tmp_path / "migration-0017.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path.as_posix()}")
     get_settings.cache_clear()
@@ -67,8 +65,7 @@ def test_migration_0017_adds_provider_accounts_and_reservation_policy(
             )
 
         account_columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(rail_provider_accounts)")
+            row[1] for row in connection.execute("PRAGMA table_info(rail_provider_accounts)")
         }
         assert account_columns == {
             "id",
@@ -78,6 +75,8 @@ def test_migration_0017_adds_provider_accounts_and_reservation_policy(
             "credential_version",
             "last_auth_status",
             "last_authenticated_at",
+            "protection_halt_credential_version",
+            "protection_halt_revision_micros",
             "created_at",
             "updated_at",
         }
@@ -113,9 +112,7 @@ def test_migration_0017_adds_provider_accounts_and_reservation_policy(
 
     command.downgrade(config, "0016_admin_ui_preferences")
     with sqlite3.connect(database_path) as connection:
-        watch_columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(watches)")
-        }
+        watch_columns = {row[1] for row in connection.execute("PRAGMA table_info(watches)")}
         assert "reservation_policy" not in watch_columns
         account_table = connection.execute(
             "SELECT name FROM sqlite_master "

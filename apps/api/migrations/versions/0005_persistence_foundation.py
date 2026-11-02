@@ -90,9 +90,7 @@ def upgrade() -> None:
                 server_default=sa.text("'active'"),
             )
         )
-        batch_op.add_column(
-            sa.Column("suppressed_by_candidate_id", sa.String(36), nullable=True)
-        )
+        batch_op.add_column(sa.Column("suppressed_by_candidate_id", sa.String(36), nullable=True))
         batch_op.create_foreign_key(
             "fk_watch_candidates_suppressed_by_candidate_id",
             "watch_candidates",
@@ -113,9 +111,7 @@ def upgrade() -> None:
             "ix_watch_candidates_suppressed_by_candidate_id",
             ["suppressed_by_candidate_id"],
         )
-        batch_op.create_index(
-            "ix_watch_candidates_watch_state", ["watch_id", "state"]
-        )
+        batch_op.create_index("ix_watch_candidates_watch_state", ["watch_id", "state"])
 
     op.create_table(
         "seat_observations",
@@ -131,9 +127,7 @@ def upgrade() -> None:
         sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("fresh_until", sa.DateTime(timezone=True), nullable=False),
         sa.Column("error_category", sa.String(80)),
-        sa.CheckConstraint(
-            "length(trim(source)) > 0", name="ck_seat_observation_source_nonempty"
-        ),
+        sa.CheckConstraint("length(trim(source)) > 0", name="ck_seat_observation_source_nonempty"),
         sa.CheckConstraint(
             "fresh_until >= observed_at", name="ck_seat_observation_freshness_order"
         ),
@@ -192,12 +186,8 @@ def upgrade() -> None:
             "'AUTH_REQUIRED', 'PROVIDER_BLOCKED', 'FAILED', 'UNKNOWN')",
             name="ck_reservation_attempt_outcome_allowed",
         ),
-        sa.UniqueConstraint(
-            "candidate_id", name="uq_reservation_attempt_candidate_id"
-        ),
-        sa.UniqueConstraint(
-            "idempotency_key", name="uq_reservation_attempt_idempotency_key"
-        ),
+        sa.UniqueConstraint("candidate_id", name="uq_reservation_attempt_candidate_id"),
+        sa.UniqueConstraint("idempotency_key", name="uq_reservation_attempt_idempotency_key"),
     )
     op.create_index(
         "ix_reservation_attempts_outcome_started_at",
@@ -256,12 +246,8 @@ def upgrade() -> None:
             sa.ForeignKey("seat_observations.id", ondelete="SET NULL"),
         ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint(
-            "from_status <> to_status", name="ck_watch_transition_status_changed"
-        ),
-        sa.CheckConstraint(
-            "length(trim(reason)) > 0", name="ck_watch_transition_reason_nonempty"
-        ),
+        sa.CheckConstraint("from_status <> to_status", name="ck_watch_transition_status_changed"),
+        sa.CheckConstraint("length(trim(reason)) > 0", name="ck_watch_transition_reason_nonempty"),
     )
     op.create_index(
         "ix_watch_transition_history_observation_id",
@@ -351,9 +337,7 @@ def upgrade() -> None:
             "cooldown_until IS NULL OR opened_at IS NULL OR cooldown_until >= opened_at",
             name="ck_provider_circuit_cooldown_order",
         ),
-        sa.CheckConstraint(
-            "generation >= 0", name="ck_provider_circuit_generation_nonnegative"
-        ),
+        sa.CheckConstraint("generation >= 0", name="ck_provider_circuit_generation_nonnegative"),
         sa.CheckConstraint(
             "provider IN ('KORAIL', 'SRT', 'MOCK')",
             name="ck_provider_circuit_provider_allowed",
@@ -380,9 +364,7 @@ def downgrade() -> None:
     with op.batch_alter_table("watch_candidates") as batch_op:
         batch_op.drop_index("ix_watch_candidates_watch_state")
         batch_op.drop_index("ix_watch_candidates_suppressed_by_candidate_id")
-        batch_op.drop_constraint(
-            "ck_watch_candidate_not_self_suppressed", type_="check"
-        )
+        batch_op.drop_constraint("ck_watch_candidate_not_self_suppressed", type_="check")
         batch_op.drop_constraint("ck_watch_candidate_state_allowed", type_="check")
         batch_op.drop_constraint(
             "fk_watch_candidates_suppressed_by_candidate_id", type_="foreignkey"
@@ -391,7 +373,5 @@ def downgrade() -> None:
         batch_op.drop_column("state")
 
     with op.batch_alter_table("watches") as batch_op:
-        batch_op.drop_constraint(
-            "ck_watch_unchanged_runs_nonnegative", type_="check"
-        )
+        batch_op.drop_constraint("ck_watch_unchanged_runs_nonnegative", type_="check")
         batch_op.drop_column("unchanged_runs")

@@ -11,6 +11,11 @@ from sqlalchemy import select
 import rail_waitlist.provider_account_management.runtime as provider_runtime_module
 from rail_waitlist.domain import Provider, ReservationPolicy, WatchStatus
 from rail_waitlist.models import RailProviderAccount, Watch, WatchTransitionHistory
+from rail_waitlist.provider_account_management.application import (
+    clear_provider_protection_halt,
+    record_provider_protection_halt,
+)
+from rail_waitlist.provider_account_management.models import auth_revision_micros
 from rail_waitlist.provider_account_management.runtime import (
     ProviderRuntimePrewarmRegistry,
     maintain_provider_sessions,
@@ -1048,7 +1053,7 @@ async def test_recovered_login_resumes_before_the_budget_is_exhausted(app) -> No
         assert account.last_auth_status == "authenticated"
 
 
-async def test_blocked_revision_keeps_a_single_recovery_attempt(app) -> None:
+async def test_blocked_revision_retries_after_each_protection_backoff(app) -> None:
     await _seed_account(app, auth_status="provider_blocked")
 
     verifier = StubRuntimeVerifier(
@@ -1057,7 +1062,7 @@ async def test_blocked_revision_keeps_a_single_recovery_attempt(app) -> None:
     )
     registry = ProviderRuntimePrewarmRegistry(completed=True)
 
-    # The protection cooldown is observed before the revision's single login attempt.
+    # The protection backoff is observed before the first recovery login.
     assert (
         await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
         == 0
@@ -1070,12 +1075,130 @@ async def test_blocked_revision_keeps_a_single_recovery_attempt(app) -> None:
         == 1
     )
 
-    _clear_backoff(registry)
+    # A repeated verdict waits again instead of retrying on the next tick ...
     assert (
         await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
         == 0
     )
-    assert verifier.prewarm_calls == [(Provider.KORAIL, 9)]
+    # ... and retries once that backoff has elapsed instead of stopping for good.
+    _clear_backoff(registry)
+    assert (
+        await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+        == 1
+    )
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9), (Provider.KORAIL, 9)]
+
+
+async def _tick(app, verifier, registry) -> int:
+    return await recover_provider_sessions_once(app.state.test_session_factory, verifier, registry)
+
+
+async def test_authenticated_revision_paces_keepalive_after_protection_verdict(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert await _tick(app, verifier, registry) == 1
+    # The first protection backoff waits 15 minutes and is scoped to this generation.
+    generation, _count, retry_not_before = registry.prewarm_retry_state[Provider.KORAIL]
+    assert generation == 9
+    assert 890 < retry_not_before - asyncio.get_running_loop().time() <= 900
+
+    # The halted revision never retries inside the backoff, whether the sidecar reports
+    # the block or a cold actor, and retries once the backoff has elapsed.
+    for snapshot in (
+        runtime_snapshot(
+            Provider.KORAIL,
+            state=ProviderSessionRuntimeState.BLOCKED,
+            remaining_seconds=None,
+            locally_reusable=False,
+        ),
+        _cold_snapshot(Provider.KORAIL),
+    ):
+        verifier.snapshots[Provider.KORAIL] = snapshot
+        assert await _tick(app, verifier, registry) == 0
+        _clear_backoff(registry)
+        assert await _tick(app, verifier, registry) == 1
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9)] * 3
+    # Each repeated verdict escalates the wait toward the protection ceiling.
+    _generation, failure_count, _retry = registry.prewarm_retry_state[Provider.KORAIL]
+    assert failure_count == 3
+
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(select(RailProviderAccount))
+        assert account is not None
+        assert account.last_auth_status == "authenticated"
+
+
+@pytest.mark.parametrize("change", ["credential_generation", "auth_revision"])
+async def test_protection_halt_lifts_on_new_generation_or_revision(app, change: str) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, registry) == 1
+
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(select(RailProviderAccount))
+        assert account is not None
+        if change == "credential_generation":
+            account.credential_version = 10
+        else:
+            account.updated_at = datetime.now(UTC)
+        await session.commit()
+    expected_version = 10 if change == "credential_generation" else 9
+    _clear_backoff(registry, credential_version=expected_version)
+
+    assert await _tick(app, verifier, registry) == 1
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9), (Provider.KORAIL, expected_version)]
+
+
+async def test_positive_sidecar_session_lifts_protection_halt(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, registry) == 1
+
+    verifier.snapshots[Provider.KORAIL] = runtime_snapshot(
+        Provider.KORAIL, credential_generation="9", remaining_seconds=1_500.0
+    )
+    assert await _tick(app, verifier, registry) == 0
+    assert registry.outcome_for(Provider.KORAIL) == "authenticated"
+    assert registry.protection_halted_revisions == {}
+
+    # Once the official session lapses, ordinary keepalive recovery resumes.
+    verifier.snapshots[Provider.KORAIL] = _cold_snapshot(Provider.KORAIL)
+    verifier.outcomes[Provider.KORAIL] = ProviderLoginVerificationOutcome.AUTHENTICATED
+    assert await _tick(app, verifier, registry) == 1
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9), (Provider.KORAIL, 9)]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [ProviderLoginVerificationOutcome.FAILED, ProviderLoginVerificationOutcome.AUTH_REQUIRED],
+)
+async def test_non_protection_keepalive_failures_keep_retrying(
+    app, outcome: ProviderLoginVerificationOutcome
+) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: outcome},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+
+    assert await _tick(app, verifier, registry) == 1
+    _clear_backoff(registry)
+    assert await _tick(app, verifier, registry) == 1
+    assert registry.protection_halted_revisions == {}
 
 
 async def test_authenticated_account_recovers_cold_sidecar_session(app) -> None:
@@ -1315,13 +1438,24 @@ def test_keepalive_backoff_is_generation_scoped_exponential_and_capped() -> None
         now += expected_delay
 
     assert registry.begin_prewarm(Provider.KORAIL, 5, now=now - 1.0)
-    registry.finish_prewarm(
-        Provider.KORAIL,
-        5,
-        outcome="provider_blocked",
-        now=now,
-    )
-    assert registry.prewarm_retry_state[Provider.KORAIL] == (5, 1, now + 900.0)
+    # KORAIL scores login submissions by spacing, so a persistent block settles at one
+    # login every two hours instead of several per hour.
+    for failure_count, expected_delay in enumerate(
+        (900.0, 1_800.0, 3_600.0, 7_200.0, 7_200.0),
+        start=1,
+    ):
+        registry.finish_prewarm(
+            Provider.KORAIL,
+            5,
+            outcome="provider_blocked",
+            now=now,
+        )
+        assert registry.prewarm_retry_state[Provider.KORAIL] == (
+            5,
+            failure_count,
+            now + expected_delay,
+        )
+        now += expected_delay
 
 
 def test_local_failure_backoff_is_short_and_separately_capped() -> None:
@@ -1356,6 +1490,9 @@ def test_session_refresh_threshold_is_korail_scoped() -> None:
     # attempt still leaves room to retry before the session is gone.
     assert registry.session_refresh_threshold_seconds(Provider.KORAIL, 1_350.0, 450.0) == 450.0
     assert registry.session_refresh_threshold_seconds(Provider.KORAIL, 0.0, 10_000.0) == 600.0
+    # The two hour maximum window refreshes 10 minutes before expiry, so keepalive logins
+    # stay about 110 minutes apart.
+    assert registry.session_refresh_threshold_seconds(Provider.KORAIL, 6_600.0, 600.0) == 600.0
     assert registry.session_refresh_threshold_seconds(Provider.KORAIL, None, 450.0) == 120.0
     # An unusually short configured window must not produce a threshold that refreshes on
     # every tick.
@@ -1456,3 +1593,245 @@ async def test_runtime_status_api_is_secret_free_and_reports_local_reuse(
     assert "password" not in serialized
     assert "cookie" not in serialized
     assert "token" not in serialized
+
+
+async def _halt_row(app):
+    async with app.state.test_session_factory() as session:
+        return (
+            await session.execute(
+                select(
+                    RailProviderAccount.credential_version,
+                    RailProviderAccount.updated_at,
+                    RailProviderAccount.last_auth_status,
+                    RailProviderAccount.protection_halt_credential_version,
+                    RailProviderAccount.protection_halt_revision_micros,
+                ).where(RailProviderAccount.provider == Provider.KORAIL)
+            )
+        ).first()
+
+
+async def test_keepalive_protection_verdict_persists_halt_across_restart(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, registry) == 1
+
+    row = await _halt_row(app)
+    assert row is not None
+    assert row.last_auth_status == "authenticated"
+    assert row.protection_halt_credential_version == 9
+    assert row.protection_halt_revision_micros is not None
+
+    # A fresh process (empty registry) must rehydrate the persisted fence and wait out
+    # the protection backoff before its next login on the same revision.
+    restarted = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, restarted) == 0
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9)]
+    _clear_backoff(restarted)
+    assert await _tick(app, verifier, restarted) == 1
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9), (Provider.KORAIL, 9)]
+
+    row = await _halt_row(app)
+    assert row is not None
+    assert row.protection_halt_credential_version == 9
+    assert row.last_auth_status == "authenticated"
+
+
+async def test_halted_keepalive_retry_success_lifts_halt_and_resumes_watch(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, registry) == 1
+
+    now = datetime.now(UTC)
+    async with app.state.test_session_factory() as session:
+        watch = Watch(
+            provider=Provider.KORAIL,
+            origin="서울",
+            destination="부산",
+            travel_date=(now + timedelta(days=1)).date(),
+            time_from=time(9),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.NOTIFY_ONLY,
+            status=WatchStatus.AUTH_REQUIRED,
+            dedupe_key="halt-retry-resume",
+        )
+        watch.transition_history.append(
+            WatchTransitionHistory(
+                from_status=WatchStatus.WATCHING,
+                to_status=WatchStatus.AUTH_REQUIRED,
+                reason="provider_account_provider_blocked_before_observation",
+                created_at=now - timedelta(minutes=1),
+            )
+        )
+        session.add(watch)
+        await session.commit()
+        watch_id = watch.id
+
+    # Once the protection backoff elapses, the automatic retry logs in successfully.
+    verifier.outcomes[Provider.KORAIL] = ProviderLoginVerificationOutcome.AUTHENTICATED
+    _clear_backoff(registry)
+    assert await _tick(app, verifier, registry) == 1
+    assert registry.outcome_for(Provider.KORAIL) == "authenticated"
+
+    row = await _halt_row(app)
+    assert row is not None
+    assert row.protection_halt_credential_version is None
+    assert row.protection_halt_revision_micros is None
+    async with app.state.test_session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.status is WatchStatus.SCHEDULED
+
+
+async def test_official_positive_session_clears_persisted_halt(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, registry) == 1
+    before = await _halt_row(app)
+    assert before is not None and before.protection_halt_credential_version == 9
+
+    # A watch parked by the pre-observation hold must resume with the clear.
+    now = datetime.now(UTC)
+    async with app.state.test_session_factory() as session:
+        watch = Watch(
+            provider=Provider.KORAIL,
+            origin="서울",
+            destination="부산",
+            travel_date=(now + timedelta(days=1)).date(),
+            time_from=time(9),
+            time_to=time(12),
+            passenger_count=1,
+            mode="official",
+            reservation_policy=ReservationPolicy.NOTIFY_ONLY,
+            status=WatchStatus.AUTH_REQUIRED,
+            dedupe_key="halt-clear-resume",
+        )
+        watch.transition_history.append(
+            WatchTransitionHistory(
+                from_status=WatchStatus.WATCHING,
+                to_status=WatchStatus.AUTH_REQUIRED,
+                reason="provider_account_provider_blocked_before_observation",
+                created_at=now - timedelta(minutes=1),
+            )
+        )
+        session.add(watch)
+        await session.commit()
+        watch_id = watch.id
+
+    restarted = ProviderRuntimePrewarmRegistry(completed=True)
+    verifier.snapshots[Provider.KORAIL] = runtime_snapshot(
+        Provider.KORAIL,
+        credential_generation="9",
+        remaining_seconds=1_500.0,
+    )
+    assert await _tick(app, verifier, restarted) == 0
+    assert restarted.outcome_for(Provider.KORAIL) == "authenticated"
+
+    after = await _halt_row(app)
+    assert after is not None
+    assert after.protection_halt_credential_version is None
+    assert after.protection_halt_revision_micros is None
+    # The positive evidence stands on the same revision; clearing must not rotate it.
+    assert after.updated_at == before.updated_at
+    assert after.last_auth_status == "authenticated"
+    async with app.state.test_session_factory() as session:
+        watch = await session.get(Watch, watch_id)
+        assert watch is not None
+        assert watch.status is WatchStatus.SCHEDULED
+
+
+async def test_persisted_halt_expires_when_row_revision_rotates(app) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    verifier = StubRuntimeVerifier(
+        outcomes={Provider.KORAIL: ProviderLoginVerificationOutcome.PROVIDER_BLOCKED},
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, registry) == 1
+    row = await _halt_row(app)
+    assert row is not None and row.protection_halt_revision_micros is not None
+
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
+        )
+        assert account is not None
+        account.updated_at = datetime.now(UTC) + timedelta(seconds=1)
+        await session.commit()
+
+    restarted = ProviderRuntimePrewarmRegistry(completed=True)
+    assert await _tick(app, verifier, restarted) == 1
+    assert verifier.prewarm_calls == [(Provider.KORAIL, 9), (Provider.KORAIL, 9)]
+
+
+async def test_protection_halt_persistence_helpers_use_revision_compare_and_swap(
+    app,
+) -> None:
+    await _seed_account(app, auth_status="authenticated")
+    async with app.state.test_session_factory() as session:
+        account = await session.scalar(
+            select(RailProviderAccount).where(RailProviderAccount.provider == Provider.KORAIL)
+        )
+        assert account is not None
+        stored_updated_at = account.updated_at
+
+    stale_micros = auth_revision_micros(stored_updated_at) - 1
+    async with app.state.test_session_factory() as session:
+        recorded = await record_provider_protection_halt(
+            session,
+            Provider.KORAIL,
+            expected_credential_version=9,
+            expected_revision_micros=stale_micros,
+        )
+    assert recorded is False
+    row = await _halt_row(app)
+    assert row is not None and row.protection_halt_credential_version is None
+
+    async with app.state.test_session_factory() as session:
+        recorded = await record_provider_protection_halt(
+            session,
+            Provider.KORAIL,
+            expected_credential_version=9,
+            expected_revision_micros=auth_revision_micros(stored_updated_at),
+        )
+    assert recorded is True
+    row = await _halt_row(app)
+    assert row is not None
+    assert row.protection_halt_credential_version == 9
+    assert row.updated_at == stored_updated_at
+
+    async with app.state.test_session_factory() as session:
+        cleared = await clear_provider_protection_halt(
+            session,
+            Provider.KORAIL,
+            expected_credential_version=9,
+            expected_revision_micros=auth_revision_micros(stored_updated_at) + 1,
+            expected_updated_at=stored_updated_at,
+        )
+    assert cleared is False
+    async with app.state.test_session_factory() as session:
+        cleared = await clear_provider_protection_halt(
+            session,
+            Provider.KORAIL,
+            expected_credential_version=9,
+            expected_revision_micros=auth_revision_micros(stored_updated_at),
+            expected_updated_at=stored_updated_at,
+        )
+    assert cleared is True
+    row = await _halt_row(app)
+    assert row is not None
+    assert row.protection_halt_credential_version is None
+    assert row.updated_at == stored_updated_at

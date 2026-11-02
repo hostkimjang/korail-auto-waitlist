@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock
@@ -288,6 +289,124 @@ async def test_nonempty_response_keeps_no_private_rows() -> None:
     assert "unretained" not in repr(vars(owner))
 
 
+def _log_fields(record: logging.LogRecord) -> dict[str, str]:
+    return dict(part.split("=", 1) for part in record.getMessage().split() if "=" in part)
+
+
+NONEMPTY_WITH_NOTICE: dict[str, object] = {
+    "strResult": "SUCC",
+    "h_msg_cd": "IRG000000",
+    "h_msg_txt": "fixture-private-notice",
+    "jrny_infos": {"jrny_info": [{"fixture_marker": "fixture-private-row"}]},
+}
+
+
+@pytest.mark.parametrize(
+    ("code", "message", "logged"),
+    [
+        ("IRG000000", None, {"msg_code": "IRG000000", "msg_text": "absent"}),
+        ("IRZ000001", "fixture-private-notice", {"msg_code": "IRZ000001", "msg_text": "present"}),
+        ("", "fixture-private-notice", {"msg_code": "empty", "msg_text": "present"}),
+        (None, "", None),
+    ],
+)
+async def test_nonempty_response_accepts_informational_notice_without_retention(
+    code: str | None,
+    message: str | None,
+    logged: dict[str, str] | None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    owner = armed()
+    complete(owner)
+    tab = Tab()
+    payload = {**NONEMPTY_WITH_NOTICE, "h_msg_cd": code, "h_msg_txt": message}
+    tab.body = {"result": {"body": json.dumps(payload), "base64Encoded": False}}
+
+    with caplog.at_level("INFO", logger=response_module.__name__):
+        await owner.read_completed_body(tab)
+
+    assert owner.snapshot().state == "nonempty"
+    assert owner.snapshot().failure is None
+    retained = repr(vars(owner))
+    assert "fixture-private" not in retained
+    assert "jrny_infos" not in retained
+    assert not code or code not in retained
+    assert "fixture-private" not in caplog.text
+    records = [record for record in caplog.records if record.name == response_module.__name__]
+    if logged is None:
+        assert not records
+        return
+    assert len(records) == 1
+    fields = _log_fields(records[0])
+    assert fields["event"] == "reservation_list_response_accepted"
+    assert fields["state"] == "nonempty"
+    assert fields["rows"] == "list:1"
+    for key, value in logged.items():
+        assert fields[key] == value
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason", "projection"),
+    [
+        ({"h_msg_cd": "P100"}, "message_contract", {"msg_code": "P100"}),
+        ({"h_msg_cd": "WRT300004"}, "message_contract", {"msg_code": "WRT300004"}),
+        ({"h_msg_cd": "IRG00000"}, "message_contract", {"msg_code": "IRG00000"}),
+        ({"h_msg_cd": "irg000000"}, "message_contract", {"msg_code": "unrecognized"}),
+        ({"h_msg_cd": "fixture-private-code"}, "message_contract", {"msg_code": "unrecognized"}),
+        ({"h_msg_cd": ["IRG000000"]}, "message_contract", {"msg_code": "unrecognized"}),
+        (
+            {"h_msg_txt": ["fixture-private-notice"]},
+            "message_contract",
+            {"msg_text": "unrecognized"},
+        ),
+        (
+            {"jrny_infos": {"jrny_info": ["fixture-private-row"]}},
+            "rows_malformed",
+            {"rows": "list:1"},
+        ),
+        (
+            {"jrny_infos": {"jrny_info": {"row": "fixture-private-row"}}},
+            "rows_not_list",
+            {"rows": "object"},
+        ),
+        (
+            {"strResult": "fixture-private-result"},
+            "result_not_success",
+            {"result": "unrecognized"},
+        ),
+        ({"strResult": ["SUCC"]}, "result_not_success", {"result": "unrecognized"}),
+    ],
+)
+async def test_nonempty_contract_rejection_logs_closed_projection_only(
+    mutation: dict[str, object],
+    reason: str,
+    projection: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    owner = armed()
+    complete(owner)
+    tab = Tab()
+    tab.body = {
+        "result": {"body": json.dumps({**NONEMPTY_WITH_NOTICE, **mutation}), "base64Encoded": False}
+    }
+
+    with caplog.at_level("INFO", logger=response_module.__name__):
+        await owner.read_completed_body(tab)
+
+    assert owner.snapshot().state == "failed"
+    assert owner.snapshot().failure == "invalid_response"
+    records = [record for record in caplog.records if record.name == response_module.__name__]
+    assert len(records) == 1
+    fields = _log_fields(records[0])
+    assert fields["event"] == "reservation_list_response_rejected"
+    assert fields["reason"] == reason
+    for key, value in projection.items():
+        assert fields[key] == value
+    assert "fixture-private" not in caplog.text
+    assert "jrny_infos" not in caplog.text
+    assert "fixture-private" not in repr(vars(owner))
+
+
 @pytest.mark.parametrize("status", [403, 429, 500])
 async def test_http_failure_does_not_read_body(status: int) -> None:
     owner = armed()
@@ -379,7 +498,7 @@ async def test_invalid_or_cached_response_is_closed(mutation: dict[str, object])
         ({"encodedDataLength": None}, "body_too_large"),
         ({"encodedDataLength": -1}, "body_too_large"),
         ({"encodedDataLength": 65537}, "body_too_large"),
-        ({"timestamp": 11.5}, "invalid_response"),
+        ({"timestamp": 10.5}, "invalid_response"),
     ],
 )
 async def test_invalid_finish_never_reads_body(mutation: dict[str, object], expected: str) -> None:
@@ -865,3 +984,306 @@ def test_response_empty_provenance_rejects_contradictory_cards_and_unknown_sourc
         )
     with pytest.raises(ValueError, match="provenance is invalid"):
         PydollReservationListSnapshot(LIST, empty_response_provenance="guessed")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("mode", "boundary", "state", "failure", "completed"),
+    [
+        ("invalid_body", "observer_rejected", "failed", "invalid_response", True),
+        ("body_unavailable", "observer_rejected", "failed", "body_unavailable", True),
+        ("http_error", "observer_rejected", "failed", "http_error", False),
+        ("network_error", "observer_rejected", "failed", "network_error", False),
+        ("auth_required", "observer_rejected", "failed", "auth_required", True),
+        ("duplicate", "observer_rejected", "ambiguous", "ambiguous", True),
+        ("dom_conflict", "dom_response_conflict", "nonempty", "none", True),
+        ("dom_rows", "observer_rejected", "failed", "invalid_response", True),
+        ("protection", "observer_rejected", "failed", "protection", False),
+        ("rate_limited", "observer_rejected", "failed", "rate_limited", False),
+        ("pending", "read_incomplete", "in_flight", "none", False),
+        ("loading", "read_incomplete", "empty", "none", True),
+        ("missing_marker", "read_incomplete", "empty", "none", True),
+        ("tab_changed", "tab_changed", "failed", "tab_changed", True),
+        ("auth_redirect", "auth_redirect", "body_pending", "none", True),
+        ("dom_protection", "dom_protection", "body_pending", "none", True),
+    ],
+)
+async def test_normal_failure_path_logs_only_closed_projection_once(
+    mode: str,
+    boundary: str,
+    state: str,
+    failure: str,
+    completed: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = Clock()
+    tab = Tab()
+    selected = [tab]
+    private = (
+        "fixture-private-account-346",
+        "fixture-private-cookie-348",
+        "fixture-private-body-346",
+        "fixture-private-request-348",
+        "fixture-private-url-value-346",
+        "fixture-private-error",
+    )
+    account, cookie, body_marker, request_id, url_marker, _error = private
+    private_url = VIEW + "?account=" + account + "&value=" + url_marker
+    payload: dict[str, object] = {
+        **EMPTY,
+        "fixture_private": {"account": account, "cookie": cookie, "body": body_marker},
+    }
+    if mode in {"invalid_body", "dom_rows"}:
+        payload["strResult"] = account
+    elif mode == "auth_required":
+        payload.update(strResult="FAIL", h_msg_cd="P058")
+    elif mode == "dom_conflict":
+        payload["jrny_infos"] = {"jrny_info": [{"private_row": body_marker}]}
+    tab.body = {"result": {"body": json.dumps(payload), "base64Encoded": False}}
+    if mode == "body_unavailable":
+        tab.body_error = True
+    elif mode == "tab_changed":
+        tab.body_hook = lambda: selected.__setitem__(0, Tab())
+
+    rows_present = mode == "dom_rows"
+    dom = PydollReservationListSnapshot(
+        "https://www.korail.com/ticket/login" if mode == "auth_redirect" else LIST,
+        reservation_rows=(account + cookie + body_marker,) if rows_present else (),
+        rendered_card_count=1 if rows_present else 0,
+        page_marker_visible=mode != "missing_marker",
+        explicit_empty_visible=mode
+        not in {"loading", "missing_marker", "dom_rows", "auth_redirect", "dom_protection"},
+        loading_visible=mode == "loading",
+        protection_detected=mode == "dom_protection",
+    )
+
+    async def navigate(url: str, *, timeout: int) -> None:
+        tab.callbacks[1](request(document=True))
+        tab.callbacks[1](
+            request(
+                requestId=request_id,
+                request={
+                    "method": "GET",
+                    "url": private_url,
+                    "headers": {"Cookie": cookie, "Authorization": account},
+                },
+            )
+        )
+        status = {"http_error": 500, "protection": 403, "rate_limited": 429}.get(mode, 200)
+        tab.callbacks[2](
+            response(
+                requestId=request_id,
+                response={
+                    "status": status,
+                    "url": private_url,
+                    "mimeType": "application/json",
+                    "headers": {"Set-Cookie": cookie},
+                },
+            )
+        )
+        if mode == "network_error":
+            tab.callbacks[4](
+                {
+                    "params": {
+                        "requestId": request_id,
+                        "timestamp": 13.0,
+                        "errorText": account + cookie + body_marker,
+                    }
+                }
+            )
+        elif mode != "pending":
+            tab.callbacks[3](finished(requestId=request_id))
+        if mode == "duplicate":
+            tab.callbacks[1](request(requestId="fixture-private-second-request"))
+
+    async def read() -> PydollReservationListSnapshot:
+        return await read_reservation_list(
+            tab=tab,
+            current_tab=lambda: selected[0],
+            navigate=navigate,
+            snapshot=AsyncMock(return_value=dom),
+            timeout_seconds=0.5,
+            monotonic=clock,
+            wall_time=lambda: 100,
+            sleep=clock.sleep,
+        )
+
+    with caplog.at_level("WARNING", logger=response_module.__name__):
+        if boundary in {"observer_rejected", "dom_response_conflict"}:
+            error_type = {
+                "protection": BrowserProtectionDetected,
+                "rate_limited": BrowserRateLimited,
+            }.get(mode, BrowserSourceUnavailable)
+            with pytest.raises(error_type):
+                await read()
+        else:
+            result = await read()
+            assert not result.official_read_completed
+
+    records = [record for record in caplog.records if record.name == response_module.__name__]
+    assert len(records) == 1
+    record = records[0]
+    assert record.exc_info is None
+    fields = dict(part.split("=", 1) for part in record.getMessage().split() if "=" in part)
+    assert set(fields) == {
+        "event",
+        "boundary",
+        "state",
+        "failure",
+        "request_observed",
+        "response_received",
+        "response_completed",
+        "dom_observed",
+        "dom_render_complete",
+        "dom_empty",
+        "dom_rows_present",
+        "dom_loading",
+        "dom_malformed",
+    }
+    assert fields["event"] == "reservation_list_read_diagnostic"
+    assert fields["boundary"] == boundary
+    assert fields["state"] == state
+    assert fields["failure"] == failure
+    assert fields["request_observed"] == "True"
+    assert fields["response_completed"] == str(completed)
+    assert fields["dom_observed"] == "True"
+    assert fields["dom_render_complete"] == str(dom.render_complete)
+    assert fields["dom_empty"] == str(dom.explicit_empty_visible)
+    assert fields["dom_rows_present"] == str(rows_present)
+    assert fields["dom_loading"] == str(dom.loading_visible)
+    assert fields["dom_malformed"] == "False"
+    boolean_fields = set(fields) - {"event", "boundary", "state", "failure"}
+    assert all(fields[key] in {"True", "False"} for key in boolean_fields)
+    for forbidden in (
+        *private,
+        "fixture-private-second-request",
+        LIST,
+        VIEW,
+        private_url,
+        "https://",
+        "jrny_infos",
+        "strResult",
+        "Cookie",
+        "Authorization",
+        "P058",
+    ):
+        assert forbidden not in caplog.text
+    assert tab.callbacks == {}
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_completed_read_and_existing_dom_fallback_emit_no_failure_diagnostic(
+    unavailable: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = Clock()
+    tab = Tab()
+    tab.fail_on = 1 if unavailable else None
+    dom = PydollReservationListSnapshot(LIST, page_marker_visible=True, explicit_empty_visible=True)
+
+    async def navigate(url: str, *, timeout: int) -> None:
+        if not unavailable:
+            tab.emit_cycle()
+
+    with caplog.at_level("WARNING", logger=response_module.__name__):
+        result = await read_reservation_list(
+            tab=tab,
+            current_tab=lambda: tab,
+            navigate=navigate,
+            snapshot=AsyncMock(return_value=dom),
+            timeout_seconds=0.5,
+            monotonic=clock,
+            wall_time=lambda: 100,
+            sleep=clock.sleep,
+        )
+
+    assert result.official_read_completed
+    assert not caplog.records
+    assert tab.callbacks == {}
+
+
+@pytest.mark.parametrize("finish_timestamp", [11.0, 11.5, 11.585699, 12.0])
+@pytest.mark.parametrize("payload", [EMPTY, P100_EMPTY])
+async def test_completed_response_accepts_timestamp_inversion_after_valid_headers(
+    finish_timestamp: float,
+    payload: dict[str, object],
+) -> None:
+    owner = armed()
+    owner.on_request(request())  # request timestamp = 11.0
+    owner.on_response(response())  # responseReceived processed first, timestamp = 12.0
+    owner.on_finished(finished(timestamp=finish_timestamp))
+    tab = Tab()
+    tab.body = {"result": {"body": json.dumps(payload), "base64Encoded": False}}
+
+    assert owner.snapshot().state == "body_pending"
+    await owner.read_completed_body(tab)
+
+    assert owner.snapshot().state == "empty"
+    assert owner.snapshot().failure is None
+    assert tab.commands == [
+        {"method": "Network.getResponseBody", "params": {"requestId": "list-read"}}
+    ]
+
+
+@pytest.mark.parametrize("finish_timestamp", [11.585699, 13.0])
+async def test_finish_before_response_processing_cannot_be_repaired_by_late_headers(
+    finish_timestamp: float,
+) -> None:
+    owner = armed()
+    owner.on_request(request())
+    owner.on_finished(finished(timestamp=finish_timestamp))
+    owner.on_response(response())
+    tab = Tab()
+
+    await owner.read_completed_body(tab)
+
+    assert owner.snapshot().failure == "invalid_response"
+    assert tab.commands == []
+
+
+@pytest.mark.parametrize("base64_encoded", [False, True])
+async def test_reader_timestamp_inversion_p100_still_requires_stable_complete_dom(
+    base64_encoded: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = Clock()
+    tab = Tab()
+    raw = json.dumps(P100_EMPTY)
+    tab.body = {
+        "result": {
+            "body": base64.b64encode(raw.encode()).decode() if base64_encoded else raw,
+            "base64Encoded": base64_encoded,
+        }
+    }
+    loading = PydollReservationListSnapshot(LIST, page_marker_visible=True, loading_visible=True)
+    empty = PydollReservationListSnapshot(LIST, page_marker_visible=True)
+    snapshots = AsyncMock(side_effect=[loading, empty, empty])
+
+    async def navigate(url: str, *, timeout: int) -> None:
+        tab.callbacks[1](request(document=True))
+        tab.callbacks[1](request())
+        tab.callbacks[2](response())
+        # Natural CDP sample: callback order is response -> finish, but finish's
+        # event timestamp precedes responseReceived by 414.301 milliseconds.
+        tab.callbacks[3](finished(timestamp=11.585699))
+
+    with caplog.at_level("WARNING", logger=response_module.__name__):
+        result = await read_reservation_list(
+            tab=tab,
+            current_tab=lambda: tab,
+            navigate=navigate,
+            snapshot=snapshots,
+            timeout_seconds=1,
+            monotonic=clock,
+            wall_time=lambda: 100,
+            sleep=clock.sleep,
+        )
+
+    assert result.empty_response_provenance == "official_response"
+    assert result.official_read_completed
+    assert snapshots.await_count == 3
+    assert [command["method"] for command in tab.commands] == [
+        "Page.getFrameTree",
+        "Network.getResponseBody",
+    ]
+    assert not caplog.records
+    assert tab.callbacks == {}

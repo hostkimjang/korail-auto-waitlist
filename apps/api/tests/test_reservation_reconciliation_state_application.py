@@ -26,12 +26,18 @@ from rail_waitlist.reservations.attempt_result_application import (
     record_reservation_confirmation,
 )
 from rail_waitlist.reservations.payment_hold_application import _utc_instant
+from rail_waitlist.reservations.reconciliation_application import (
+    _reservation_reconciliation_is_due,
+)
 from rail_waitlist.reservations.reconciliation_policy import (
+    OFFICIAL_READ_UNAVAILABLE_MAX_RECONCILIATION_INTERVAL,
     PAYMENT_HOLD_RECONCILIATION_MAX_ATTEMPTS,
     RESERVATION_RECONCILIATION_INTERVAL,
     RESERVATION_RECONCILIATION_MAX_ATTEMPTS,
     UNKNOWN_RECONCILIATION_MAX_ATTEMPTS,
     ReservationReconciliationResolution,
+    official_read_unavailable_backoff,
+    official_read_unavailable_retry_interval,
     payment_hold_reconciliation_retry_interval,
     unknown_reconciliation_retry_interval,
 )
@@ -333,6 +339,177 @@ async def test_unreached_official_read_does_not_spend_a_bounded_attempt() -> Non
     assert attempt.reconciliation_attempt_count == 2
     assert attempt.last_reconciled_at == NOW
     assert attempt.reconciliation_resolution is None
+    # The one-minute-old attempt waits its age, which is longer than the 30s budget slot.
+    assert attempt.next_reconcile_at == NOW + timedelta(minutes=1)
+
+
+def _unreachable_official_read(observed_at: datetime) -> ReservationConfirmationResult:
+    return ReservationConfirmationResult(
+        provider=Provider.SRT,
+        outcome=ReservationConfirmationOutcome.INCONCLUSIVE,
+        diagnostic_code=ReservationConfirmationDiagnosticCode.OFFICIAL_READ_UNAVAILABLE,
+        source="srt.owner-test",
+        observed_at=observed_at,
+    )
+
+
+@pytest.mark.parametrize(
+    ("attempt_age", "expected"),
+    [
+        (timedelta(seconds=-5), timedelta(seconds=30)),
+        (timedelta(seconds=10), timedelta(seconds=30)),
+        (timedelta(minutes=2), timedelta(minutes=2)),
+        (timedelta(hours=1), timedelta(minutes=15)),
+    ],
+)
+def test_unreachable_official_read_backoff_is_clamped_attempt_age(
+    attempt_age: timedelta,
+    expected: timedelta,
+) -> None:
+    assert official_read_unavailable_backoff(attempt_age) == expected
+    assert OFFICIAL_READ_UNAVAILABLE_MAX_RECONCILIATION_INTERVAL == timedelta(minutes=15)
+
+
+@pytest.mark.parametrize(
+    ("completed_count", "scheduled_interval", "expected"),
+    [
+        (0, None, timedelta(minutes=10)),
+        (0, timedelta(seconds=30), timedelta(minutes=10)),
+        (2, timedelta(seconds=30), timedelta(minutes=10)),
+        (5, timedelta(minutes=60), timedelta(minutes=60)),
+        (6, None, None),
+    ],
+)
+def test_unreachable_official_read_keeps_the_longer_budget_schedule(
+    completed_count: int,
+    scheduled_interval: timedelta | None,
+    expected: timedelta | None,
+) -> None:
+    assert (
+        official_read_unavailable_retry_interval(
+            scheduled_interval,
+            completed_attempt_count=completed_count,
+            attempt_age=timedelta(minutes=10),
+        )
+        == expected
+    )
+
+
+async def test_first_unreachable_unknown_read_is_scheduled_instead_of_replayed() -> None:
+    # 2026-11-02 incident: a count-0 UNKNOWN read that never reached the official list left
+    # next_reconcile_at unset, so the due check treated it as never reconciled and replayed
+    # the official-list read on every observation cycle.
+    watch = make_watch()
+    attempt = make_attempt()
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is True
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        watch,
+        make_candidate(),
+        attempt,
+        _unreachable_official_read(NOW),
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], []),
+    )
+
+    assert attempt.reconciliation_attempt_count == 0
+    assert attempt.reconciliation_resolution is None
+    assert attempt.last_reconciled_at == NOW
+    assert attempt.next_reconcile_at == NOW + timedelta(minutes=1)
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is False
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW + timedelta(seconds=59)) is False
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW + timedelta(minutes=1)) is True
+
+
+async def test_repeated_unreachable_unknown_reads_back_off_to_the_ceiling() -> None:
+    watch = make_watch()
+    attempt = make_attempt()
+    reconciled_at = NOW
+    intervals: list[timedelta] = []
+
+    for _ in range(6):
+        await apply_reservation_reconciliation_application(
+            cast(AsyncSession, StateSession()),
+            watch,
+            make_candidate(),
+            attempt,
+            _unreachable_official_read(reconciled_at),
+            reconciled_at=reconciled_at,
+            dependencies=make_dependencies([], []),
+        )
+        assert attempt.next_reconcile_at is not None
+        intervals.append(attempt.next_reconcile_at - reconciled_at)
+        reconciled_at = attempt.next_reconcile_at
+
+    assert attempt.reconciliation_attempt_count == 0
+    assert attempt.reconciliation_resolution is None
+    assert intervals == [
+        timedelta(minutes=1),
+        timedelta(minutes=2),
+        timedelta(minutes=4),
+        timedelta(minutes=8),
+        timedelta(minutes=15),
+        timedelta(minutes=15),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("deadline_offset", "expected_next_offset"),
+    [
+        (timedelta(hours=1), timedelta(minutes=1)),
+        (timedelta(seconds=20), timedelta(seconds=20)),
+    ],
+)
+async def test_first_unreachable_payment_hold_read_is_scheduled_within_deadline(
+    deadline_offset: timedelta,
+    expected_next_offset: timedelta,
+) -> None:
+    events: list[dict[str, object]] = []
+    watch = make_watch(status=WatchStatus.PAYMENT_REQUIRED)
+    watch.payment_deadline = NOW + deadline_offset
+    candidate = make_candidate()
+    candidate.state = "payment_required"
+    attempt = make_attempt(outcome=ReservationOutcome.PAYMENT_REQUIRED)
+    attempt.payment_deadline = watch.payment_deadline
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is True
+
+    await apply_reservation_reconciliation_application(
+        cast(AsyncSession, StateSession()),
+        watch,
+        candidate,
+        attempt,
+        _unreachable_official_read(NOW),
+        reconciled_at=NOW,
+        dependencies=make_dependencies([], events),
+    )
+
+    assert attempt.reconciliation_attempt_count == 0
+    assert attempt.next_reconcile_at == NOW + expected_next_offset
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is False
+    assert watch.status is WatchStatus.PAYMENT_REQUIRED
+    payload = cast(dict[str, object], events[0]["payload"])
+    assert payload["payment_actionable"] is True
+
+
+@pytest.mark.parametrize("payment_hold", [False, True])
+def test_unscheduled_unspent_reconciliation_is_paced_from_the_last_read(
+    payment_hold: bool,
+) -> None:
+    # Rows written before unreachable reads were scheduled: count 0, no next read, but a
+    # completed read. Only a never-reconciled attempt may be due immediately.
+    watch = make_watch()
+    attempt = make_attempt()
+    if payment_hold:
+        watch.status = WatchStatus.PAYMENT_REQUIRED
+        watch.payment_deadline = NOW + timedelta(hours=1)
+        attempt.outcome = ReservationOutcome.PAYMENT_REQUIRED
+    record_reservation_confirmation(attempt, _unreachable_official_read(NOW), reconciled_at=NOW)
+    attempt.next_reconcile_at = None
+
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW) is False
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW + timedelta(seconds=59)) is False
+    assert _reservation_reconciliation_is_due(attempt, watch, NOW + timedelta(minutes=1)) is True
 
 
 async def test_insufficient_official_evidence_still_spends_a_bounded_attempt() -> None:

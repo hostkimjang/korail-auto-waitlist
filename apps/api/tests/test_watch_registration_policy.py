@@ -58,9 +58,7 @@ def timetable_item() -> TimetableItem:
 def test_disabled_monitoring_preserves_status_but_removes_watch_registration() -> None:
     source = timetable_item()
 
-    result = apply_watch_registration_capability(
-        [source], seat_monitoring_enabled=False
-    )[0]
+    result = apply_watch_registration_capability([source], seat_monitoring_enabled=False)[0]
 
     standard, first = result.seat_classes
     assert standard.status == "sold_out"
@@ -75,9 +73,7 @@ def test_enabled_monitoring_preserves_watch_registration_identity() -> None:
     source = timetable_item()
     items = [source]
 
-    result = apply_watch_registration_capability(
-        items, seat_monitoring_enabled=True
-    )
+    result = apply_watch_registration_capability(items, seat_monitoring_enabled=True)
 
     assert result is items
     assert result[0] is source

@@ -27,9 +27,7 @@ async def test_initial_registration_is_disabled_by_default(app):
     assert status.json()["configured"] is False
     assert status.json()["registration_allowed"] is False
     assert registration.status_code == 403
-    assert registration.json() == {
-        "detail": "initial administrator registration is disabled"
-    }
+    assert registration.json() == {"detail": "initial administrator registration is disabled"}
 
 
 async def test_register_persists_single_admin_and_authenticates(public_client, app):
@@ -107,9 +105,7 @@ async def test_logout_login_and_csrf(public_client):
     assert (await public_client.post("/api/v1/auth/logout")).status_code == 403
 
     csrf = public_client.cookies.get("rail_csrf")
-    logout = await public_client.post(
-        "/api/v1/auth/logout", headers={"X-CSRF-Token": csrf}
-    )
+    logout = await public_client.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
     assert logout.status_code == 204
     assert (await public_client.get("/api/v1/providers")).status_code == 401
 
@@ -136,9 +132,9 @@ async def test_wrong_and_unknown_credentials_return_same_generic_error(public_cl
     )
 
     assert wrong_password.status_code == unknown_user.status_code == 401
-    assert wrong_password.json() == unknown_user.json() == {
-        "detail": "invalid username or password"
-    }
+    assert (
+        wrong_password.json() == unknown_user.json() == {"detail": "invalid username or password"}
+    )
 
 
 async def test_unconfigured_login_uses_generic_unauthorized_response(public_client):

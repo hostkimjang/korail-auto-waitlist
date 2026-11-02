@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   deleteProviderAccount,
@@ -17,6 +17,7 @@ import {
   demoProviderAccounts,
   demoProviderRuntimeStatuses,
 } from "../../fixtures/demoData";
+import type { ProviderRuntimeStatusLoadState } from "./providerRuntimeStatus";
 
 export type ProviderAccountsLoader = () => Promise<ReadonlyArray<ProviderAccount>>;
 export type ProviderRuntimeStatusesLoader = () => Promise<
@@ -43,6 +44,7 @@ export interface UseProviderAccountSettingsOptions {
 export interface ProviderAccountSettingsController {
   accounts: ReadonlyArray<ProviderAccount>;
   runtimeStatuses: ReadonlyArray<ProviderRuntimeStatus>;
+  runtimeStatusLoadState: ProviderRuntimeStatusLoadState;
   loading: boolean;
   pendingProvider: RailProvider | null;
   saveAccount: (
@@ -90,68 +92,148 @@ export function useProviderAccountSettings({
   const [runtimeStatuses, setRuntimeStatuses] = useState<
     ReadonlyArray<ProviderRuntimeStatus>
   >(() => demo ? demoProviderRuntimeStatuses : []);
+  const [runtimeStatusLoadState, setRuntimeStatusLoadState] =
+    useState<ProviderRuntimeStatusLoadState>(demo ? "ready" : "idle");
   const [loaded, setLoaded] = useState(demo);
   const [loading, setLoading] = useState(false);
   const [pendingProvider, setPendingProvider] = useState<RailProvider | null>(null);
+  const mountedRef = useRef(true);
+  const lifecycleRevisionRef = useRef(0);
+  const accountRequestRevisionRef = useRef(0);
+  const runtimeRequestRevisionRef = useRef(0);
+  const runtimePollingEnabledRef = useRef(runtimePollingEnabled);
 
-  const refreshRuntimeStatuses = useCallback(async (): Promise<void> => {
+  useEffect(() => {
+    runtimePollingEnabledRef.current = runtimePollingEnabled;
+  }, [runtimePollingEnabled]);
+
+  useEffect(() => {
+    // React StrictMode replays effect setup/cleanup in development. Restore the
+    // mounted marker on every setup while invalidating requests on each cleanup.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      lifecycleRevisionRef.current += 1;
+      accountRequestRevisionRef.current += 1;
+      runtimeRequestRevisionRef.current += 1;
+    };
+  }, []);
+
+  const invalidateRuntimeStatuses = useCallback((): void => {
+    runtimeRequestRevisionRef.current += 1;
+    if (!mountedRef.current) return;
+    setRuntimeStatuses([]);
+    setRuntimeStatusLoadState("idle");
+  }, []);
+
+  const refreshRuntimeStatuses = useCallback(async (
+    callerIsActive: () => boolean = () => true,
+  ): Promise<void> => {
     if (demo) {
-      setRuntimeStatuses(demoProviderRuntimeStatuses);
+      if (mountedRef.current && callerIsActive()) {
+        setRuntimeStatuses(demoProviderRuntimeStatuses);
+        setRuntimeStatusLoadState("ready");
+      }
       return;
     }
-    setRuntimeStatuses(await loadRuntimeStatuses());
+    const requestRevision = runtimeRequestRevisionRef.current + 1;
+    runtimeRequestRevisionRef.current = requestRevision;
+    const lifecycleRevision = lifecycleRevisionRef.current;
+    const canCommit = (): boolean => mountedRef.current
+      && callerIsActive()
+      && lifecycleRevisionRef.current === lifecycleRevision
+      && runtimeRequestRevisionRef.current === requestRevision;
+    if (canCommit()) {
+      setRuntimeStatusLoadState((current) => current === "ready" ? current : "loading");
+    }
+    try {
+      const statuses = await loadRuntimeStatuses();
+      if (!canCommit()) return;
+      setRuntimeStatuses(statuses);
+      setRuntimeStatusLoadState("ready");
+    } catch (reason: unknown) {
+      if (canCommit()) {
+        setRuntimeStatuses([]);
+        setRuntimeStatusLoadState("unavailable");
+      }
+      throw reason;
+    }
   }, [demo, loadRuntimeStatuses]);
 
   const onProviderAuthenticationTransition = useCallback((): void => {
     if (demo) return;
+    const requestRevision = accountRequestRevisionRef.current + 1;
+    accountRequestRevisionRef.current = requestRevision;
+    const lifecycleRevision = lifecycleRevisionRef.current;
+    const canCommit = (): boolean => mountedRef.current
+      && lifecycleRevisionRef.current === lifecycleRevision
+      && accountRequestRevisionRef.current === requestRevision;
+    invalidateRuntimeStatuses();
     setLoaded(false);
+    setLoading(false);
     void loadAccounts().then((items) => {
+      if (!canCommit()) return;
       setAccounts(items);
       setLoaded(true);
-      return refreshRuntimeStatuses();
+      if (!runtimePollingEnabledRef.current) {
+        return refreshRuntimeStatuses(canCommit);
+      }
+      return undefined;
     }).catch(() => {
       // Keep account-derived actions fail-closed until a no-store account read succeeds.
     });
-  }, [demo, loadAccounts, refreshRuntimeStatuses]);
+  }, [demo, invalidateRuntimeStatuses, loadAccounts, refreshRuntimeStatuses]);
 
   useEffect(() => {
     if (!authenticated) return undefined;
     if (demo) return undefined;
     let active = true;
+    const requestRevision = accountRequestRevisionRef.current + 1;
+    accountRequestRevisionRef.current = requestRevision;
+    const lifecycleRevision = lifecycleRevisionRef.current;
+    const canCommit = (): boolean => active
+      && mountedRef.current
+      && lifecycleRevisionRef.current === lifecycleRevision
+      && accountRequestRevisionRef.current === requestRevision;
     void Promise.resolve().then(() => {
-      if (!active) return;
+      if (!canCommit()) return;
       setLoading(true);
       setLoaded(false);
       void loadAccounts().then((items) => {
-        if (active) {
+        if (canCommit()) {
           setAccounts(items);
           setLoaded(true);
-          void refreshRuntimeStatuses().catch(() => {
-            // Preserve the latest known runtime state when this supplemental read fails.
-          });
+          if (!runtimePollingEnabledRef.current) {
+            void refreshRuntimeStatuses(canCommit).catch(() => {
+              // The runtime state is cleared and marked unavailable by the shared boundary.
+            });
+          }
         }
       }).catch((reason: unknown) => {
-        if (active) pushToast(errorMessage(reason, "철도 계정 상태를 불러오지 못했습니다."));
+        if (canCommit()) pushToast(errorMessage(reason, "철도 계정 상태를 불러오지 못했습니다."));
       }).finally(() => {
-        if (active) setLoading(false);
+        if (canCommit()) setLoading(false);
       });
     });
     return () => {
       active = false;
+      accountRequestRevisionRef.current += 1;
     };
   }, [authenticated, demo, loadAccounts, pushToast, refreshRuntimeStatuses]);
 
   useEffect(() => {
-    if (!authenticated || demo || !runtimePollingEnabled) return undefined;
+    if (!authenticated || demo || !loaded || !runtimePollingEnabled) return undefined;
+    let active = true;
+    let pollingGeneration = 0;
     const poll = (): void => {
-      void loadRuntimeStatuses().then((statuses) => {
-        setRuntimeStatuses(statuses);
-      }).catch(() => {
-        // A polling failure must not erase a previously confirmed status or interrupt settings.
+      const generation = pollingGeneration;
+      void refreshRuntimeStatuses(() => active && pollingGeneration === generation).catch(() => {
+        // A polling failure is represented by the fail-closed unavailable state.
       });
     };
     let timer: number | null = null;
     const stopPolling = (): void => {
+      pollingGeneration += 1;
       if (timer !== null) window.clearInterval(timer);
       timer = null;
     };
@@ -168,10 +250,11 @@ export function useProviderAccountSettings({
     document.addEventListener("visibilitychange", handleVisibilityChange);
     startPolling();
     return () => {
+      active = false;
       stopPolling();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [authenticated, demo, loadRuntimeStatuses, runtimePollingEnabled]);
+  }, [authenticated, demo, loaded, refreshRuntimeStatuses, runtimePollingEnabled]);
 
   const saveAccount = useCallback(async (
     provider: RailProvider,
@@ -191,8 +274,9 @@ export function useProviderAccountSettings({
         ...items.filter((item) => item.provider !== provider),
       ]);
       setLoaded(true);
+      invalidateRuntimeStatuses();
       void refreshRuntimeStatuses().catch(() => {
-        // The saved account remains valid if its supplemental runtime read is unavailable.
+        // The saved account remains valid while runtime reuse stays fail-closed.
       });
       pushToast(`${provider} 철도 계정을 저장했습니다.`);
     } catch (reason: unknown) {
@@ -201,7 +285,7 @@ export function useProviderAccountSettings({
     } finally {
       setPendingProvider(null);
     }
-  }, [demo, now, persistAccount, pushToast, refreshRuntimeStatuses]);
+  }, [demo, invalidateRuntimeStatuses, now, persistAccount, pushToast, refreshRuntimeStatuses]);
 
   const deleteAccount = useCallback(async (provider: RailProvider): Promise<void> => {
     setPendingProvider(provider);
@@ -218,8 +302,9 @@ export function useProviderAccountSettings({
         updatedAt: null,
       } : item));
       setLoaded(true);
+      invalidateRuntimeStatuses();
       void refreshRuntimeStatuses().catch(() => {
-        // Preserve the prior status instead of replacing it with an unverified value.
+        // The disconnected account remains valid while runtime reuse stays fail-closed.
       });
       pushToast(`${provider} 철도 계정 연결을 해제했습니다.`);
     } catch (reason: unknown) {
@@ -228,7 +313,7 @@ export function useProviderAccountSettings({
     } finally {
       setPendingProvider(null);
     }
-  }, [demo, pushToast, refreshRuntimeStatuses, removeAccount]);
+  }, [demo, invalidateRuntimeStatuses, pushToast, refreshRuntimeStatuses, removeAccount]);
 
   const accountAuthStatusFor = useCallback((provider: string): ProviderAuthStatus | null => {
     if (!loaded || (provider !== "KORAIL" && provider !== "SRT")) return null;
@@ -237,8 +322,12 @@ export function useProviderAccountSettings({
   }, [accounts, loaded]);
 
   const reset = useCallback((): void => {
+    lifecycleRevisionRef.current += 1;
+    accountRequestRevisionRef.current += 1;
+    runtimeRequestRevisionRef.current += 1;
     setAccounts([]);
     setRuntimeStatuses([]);
+    setRuntimeStatusLoadState("idle");
     setLoaded(false);
     setLoading(false);
     setPendingProvider(null);
@@ -247,6 +336,7 @@ export function useProviderAccountSettings({
   return {
     accounts,
     runtimeStatuses,
+    runtimeStatusLoadState,
     loading,
     pendingProvider,
     saveAccount,

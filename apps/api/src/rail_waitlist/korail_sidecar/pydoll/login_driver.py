@@ -104,6 +104,10 @@ class LoginExecuteScript(Protocol):
     ) -> Awaitable[object]: ...
 
 
+class _LoginExecuteCommand(Protocol):
+    def __call__(self, command: dict[str, object]) -> Awaitable[object]: ...
+
+
 class VisibleElements(Protocol):
     async def __call__(self, selector: str, *, scope: object = None) -> list[Any]: ...
 
@@ -132,6 +136,9 @@ async def login_step(stage: str, awaitable: Awaitable[Any]) -> Any:
 class PydollLoginDomDriver:
     """Own bounded login navigation, controls, and official session confirmation."""
 
+    # Bounded 0.1 second polls for a protection-path body read to see loadingFinished.
+    PROTECTION_RESPONSE_SETTLE_POLLS = 10
+
     def __init__(
         self,
         *,
@@ -141,6 +148,7 @@ class PydollLoginDomDriver:
         timeout_seconds: float,
         go_to: LoginGoTo,
         execute_script: LoginExecuteScript,
+        execute_command: _LoginExecuteCommand,
         snapshot: SnapshotReader,
         visible_elements: VisibleElements,
         has_exact_visible: ExactVisibleReader,
@@ -153,6 +161,7 @@ class PydollLoginDomDriver:
         observe_submission: Callable[
             [], _contextlib.AbstractAsyncContextManager[_submission_owner.PydollLoginSubmission]
         ],
+        manual_session_only: bool = False,
     ) -> None:
         self._port = port
         self._page_url = page_url
@@ -160,6 +169,7 @@ class PydollLoginDomDriver:
         self._timeout_seconds = timeout_seconds
         self._go_to = go_to
         self._execute_script = execute_script
+        self._execute_command = execute_command
         self._snapshot = snapshot
         self._visible_elements = visible_elements
         self._has_exact_visible = has_exact_visible
@@ -170,6 +180,7 @@ class PydollLoginDomDriver:
         self._sleep = sleep
         self._event_logger = event_logger
         self._observe_submission = observe_submission
+        self._manual_session_only = manual_session_only
         self._submission_context: (
             _contextlib.AbstractAsyncContextManager[_submission_owner.PydollLoginSubmission] | None
         ) = None
@@ -177,17 +188,26 @@ class PydollLoginDomDriver:
 
     async def ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         try:
-            return await self._ensure_authenticated(credential)
+            authenticated = await self._ensure_authenticated(credential)
+            diagnostics = self._terminal_submission_diagnostics(self._submission)
+            await self.close_submission_observer()
+            self._log_submission_terminal(authenticated, diagnostics)
+            return authenticated
         except _submission_owner.PydollLoginResponseUnavailable:
             await self._observe_submission_failure()
+            raise
+        except (BrowserProtectionDetected, BrowserRateLimited) as error:
+            await self._observe_submission_failure(error)
             raise
         finally:
             await self.close_submission_observer()
 
-    async def _observe_submission_failure(self) -> None:
+    async def _observe_submission_failure(self, error: Exception | None = None) -> None:
         owner = self._submission
         if owner is None:
             return
+        if isinstance(error, BrowserProtectionDetected):
+            await self._observe_protection_response(owner, error)
         header = "unavailable"
         try:
             # The actor closes this tab on failure. Read its existing DOM before
@@ -204,6 +224,59 @@ class PydollLoginDomDriver:
             json.dumps([asdict(row) for row in owner.diagnostics()], sort_keys=True),
         )
 
+    async def _observe_protection_response(
+        self,
+        owner: _submission_owner.PydollLoginSubmission,
+        error: BrowserProtectionDetected,
+    ) -> None:
+        """Record the login response's own error code after a protection verdict.
+
+        A page marker can raise before the completed login body is ever read, which left
+        KORAIL's exact ``errCode`` unrecorded. This reads only the already received body
+        through CDP, sends no provider request, and never changes the protection verdict.
+        """
+
+        outcome: str = "unavailable"
+        try:
+            # The marker can render before this observer handles loadingFinished.
+            for _ in range(self.PROTECTION_RESPONSE_SETTLE_POLLS):
+                if owner.snapshot().state not in {"posted", "in_flight"}:
+                    break
+                await self._sleep(0.1)
+            async with asyncio.timeout(min(2.0, self._timeout_seconds)):
+                outcome = await owner.classify_completed_response(self._execute_command)
+        except Exception:  # noqa: BLE001 -- diagnostics preserve the original verdict.
+            outcome = "unavailable"
+        self._event_logger.warning(
+            "KORAIL login protection response stage=%s trigger=%s "
+            "response_auth_outcome=%s login_err_codes=%s",
+            error.stage,
+            error.trigger,
+            outcome,
+            owner.observed_err_codes(),
+        )
+
+    def _log_submission_terminal(
+        self,
+        authenticated: bool,
+        diagnostics: list[dict[str, Any]] | None,
+    ) -> None:
+        if diagnostics is None:
+            return
+        self._event_logger.info(
+            "KORAIL login submission terminal observation outcome=%s requests=%s",
+            "authenticated" if authenticated else "auth_required",
+            json.dumps(diagnostics, sort_keys=True),
+        )
+
+    @staticmethod
+    def _terminal_submission_diagnostics(
+        owner: _submission_owner.PydollLoginSubmission | None,
+    ) -> list[dict[str, Any]] | None:
+        if owner is None:
+            return None
+        return [asdict(row) for row in owner.diagnostics()]
+
     async def _ensure_authenticated(self, credential: KorailCredentialInput) -> bool:
         attempt = _LocalLoginAttemptState()
         if await self._port._login_step(
@@ -211,6 +284,12 @@ class PydollLoginDomDriver:
             self._port._has_authenticated_header(),
         ):
             return await self._port._confirm_authenticated_search(attempt)
+        if self._manual_session_only:
+            if await self._manual_session_is_authenticated():
+                attempt.post_submit_check_attempted = True
+                attempt.post_submit_authenticated = True
+                return await self._port._confirm_authenticated_search(attempt)
+            raise BrowserSourceUnavailable("manual_login_required")
         await self._port._login_step(
             "login_page_navigate",
             self._go_to(
@@ -222,8 +301,11 @@ class PydollLoginDomDriver:
             return False
         if not await self._port._wait_for_login_authentication(attempt):
             return False
+        diagnostics = self._terminal_submission_diagnostics(self._submission)
         await self.close_submission_observer()
-        return await self._port._confirm_authenticated_search(attempt)
+        authenticated = await self._port._confirm_authenticated_search(attempt)
+        self._log_submission_terminal(authenticated, diagnostics)
+        return authenticated
 
     async def authenticate_in_place(
         self,
@@ -231,9 +313,16 @@ class PydollLoginDomDriver:
         attempt: LoginAttemptState | None = None,
     ) -> bool:
         try:
-            return await self._authenticate_in_place(credential, attempt)
+            authenticated = await self._authenticate_in_place(credential, attempt)
+            diagnostics = self._terminal_submission_diagnostics(self._submission)
+            await self.close_submission_observer()
+            self._log_submission_terminal(authenticated, diagnostics)
+            return authenticated
         except _submission_owner.PydollLoginResponseUnavailable:
             await self._observe_submission_failure()
+            raise
+        except (BrowserProtectionDetected, BrowserRateLimited) as error:
+            await self._observe_submission_failure(error)
             raise
         finally:
             await self.close_submission_observer()
@@ -248,9 +337,36 @@ class PydollLoginDomDriver:
             self._port._has_authenticated_header(),
         ):
             return True
+        if self._manual_session_only:
+            if await self._manual_session_is_authenticated():
+                return True
+            raise BrowserSourceUnavailable("manual_login_required")
         if not await self._port._submit_login_form(credential):
             return False
         return await self._port._wait_for_login_authentication(attempt)
+
+    async def _manual_session_is_authenticated(self) -> bool:
+        """Accept a shared live session even when the retained tab DOM is stale."""
+
+        try:
+            authenticated = bool(
+                await self._port._login_step(
+                    "manual_login_session_check",
+                    self._port._probe_official_authenticated_session(),
+                )
+            )
+            self._event_logger.info(
+                "KORAIL manual login session marker stage=official_session present=%s",
+                str(authenticated).lower(),
+            )
+            return authenticated
+        except BrowserSourceUnavailable:
+            # The user may still be completing login in another tab. Keep the
+            # dedicated browser alive and report the existing handoff state.
+            self._event_logger.info(
+                "KORAIL manual login session marker stage=official_session outcome=unavailable"
+            )
+            return False
 
     async def submit_login_form(self, credential: KorailCredentialInput) -> bool:
         tab = await self._port._login_step(
@@ -356,7 +472,13 @@ class PydollLoginDomDriver:
         probe_revision: int | None = None
         while self._monotonic() < deadline:
             snapshot = await self._observed_login_step("login_result_snapshot", self._snapshot())
-            submission = self._submission.snapshot() if self._submission is not None else None
+            observed_submission = self._submission
+            submission = observed_submission.snapshot() if observed_submission is not None else None
+            verification_mode = (
+                observed_submission.authentication_verification_mode()
+                if observed_submission is not None
+                else "blocked"
+            )
             try:
                 self._response_safety_guard(snapshot, "authenticate")
             except _BrowserProviderUnavailable as error:
@@ -367,8 +489,15 @@ class PydollLoginDomDriver:
                     and 500 <= submission.status <= 599
                     and error.trigger == "business_server_error"
                 ):
-                    raise self._login_response_failure(submission) from None
-                raise
+                    if verification_mode == "pending":
+                        await self._sleep(0.1)
+                        continue
+                    if verification_mode == "independent":
+                        pass
+                    else:
+                        raise self._login_response_failure(submission) from None
+                else:
+                    raise
             if submission is None:
                 raise BrowserSourceUnavailable("login_response")
             if submission.status == 429:
@@ -376,11 +505,14 @@ class PydollLoginDomDriver:
             if submission.status == 403:
                 raise BrowserProtectionDetected(stage="login_response")
             if submission.state in {"failed", "ambiguous"}:
-                raise self._login_response_failure(submission)
-            if not submission.safe_to_probe:
+                if verification_mode == "pending":
+                    await self._sleep(0.1)
+                    continue
+                if verification_mode != "independent":
+                    raise self._login_response_failure(submission) from None
+            elif not submission.safe_to_probe:
                 await self._sleep(0.1)
                 continue
-            observed_submission = self._submission
             if observed_submission is None:
                 raise BrowserSourceUnavailable("login_response")
             group_revision = observed_submission.group_revision
@@ -390,9 +522,44 @@ class PydollLoginDomDriver:
             )
             # A further UI request may arrive while the header read yields control.
             # Its completion is required before any session probe or success return.
-            if not self._same_submission_group(observed_submission, group_revision):
+            if not self._same_submission_group(
+                observed_submission, group_revision, verification_mode
+            ):
                 await self._sleep(0.1)
                 continue
+            if verification_mode == "independent":
+                if not authenticated_header:
+                    await self._sleep(0.1)
+                    continue
+                if attempt.post_submit_check_attempted:
+                    await self._sleep(0.1)
+                    continue
+                attempt.post_submit_check_attempted = True
+                try:
+                    probe_authenticated = bool(
+                        await self._observed_login_step(
+                            "login_page_session_check",
+                            self._port._probe_official_authenticated_session(),
+                        )
+                    )
+                except BrowserSourceUnavailable:
+                    raise self._login_response_failure(submission) from None
+                if not self._same_submission_group(
+                    observed_submission, group_revision, verification_mode
+                ):
+                    official_session_unavailable = True
+                    await self._sleep(0.1)
+                    continue
+                attempt.post_submit_authenticated = probe_authenticated
+                probe_owner, probe_revision = observed_submission, group_revision
+                self._event_logger.info(
+                    "KORAIL login session marker stage=integration_failure_confirmation "
+                    "header=true official_session=%s",
+                    str(probe_authenticated).lower(),
+                )
+                if probe_authenticated:
+                    return True
+                raise self._login_response_failure(submission)
             if authenticated_header:
                 self._event_logger.info("KORAIL login session marker stage=login_page present=true")
                 return True
@@ -405,9 +572,23 @@ class PydollLoginDomDriver:
                             self._port._probe_official_authenticated_session(),
                         )
                     )
-                    if self._same_submission_group(observed_submission, group_revision):
+                    if self._same_submission_group(
+                        observed_submission, group_revision, verification_mode
+                    ):
                         attempt.post_submit_authenticated = probe_authenticated
                         probe_owner, probe_revision = observed_submission, group_revision
+                        if not probe_authenticated:
+                            body_outcome = await observed_submission.classify_completed_response(
+                                self._execute_command
+                            )
+                            if body_outcome == "protection":
+                                raise BrowserProtectionDetected(
+                                    "marker_macro_err1", "login_response"
+                                )
+                            if not self._same_submission_group(
+                                observed_submission, group_revision, verification_mode
+                            ):
+                                official_session_unavailable = True
                     else:
                         # A later POST invalidates either probe outcome, even if that
                         # request already finished. Keep the one-probe budget and await
@@ -429,7 +610,7 @@ class PydollLoginDomDriver:
                     str(attempt.post_submit_authenticated).lower(),
                 )
                 if attempt.post_submit_authenticated and self._same_submission_group(
-                    observed_submission, group_revision
+                    observed_submission, group_revision, verification_mode
                 ):
                     return True
             await self._sleep(0.1)
@@ -447,7 +628,7 @@ class PydollLoginDomDriver:
             official_session_unavailable
             or probe_owner is None
             or probe_revision is None
-            or not self._same_submission_group(probe_owner, probe_revision)
+            or not self._same_submission_group(probe_owner, probe_revision, "standard")
         ):
             raise self._login_response_failure(submission)
         return False
@@ -456,11 +637,12 @@ class PydollLoginDomDriver:
         self,
         owner: _submission_owner.PydollLoginSubmission,
         revision: int,
+        verification_mode: _submission_owner.LoginAuthenticationVerificationMode,
     ) -> bool:
         return (
             self._submission is owner
             and owner.group_revision == revision
-            and owner.snapshot().safe_to_probe
+            and owner.authentication_verification_mode() == verification_mode
         )
 
     @staticmethod
@@ -565,16 +747,26 @@ class PydollLoginDomDriver:
                 }
                 try {
                   const payload = await response.json();
+                  const observed = payload && typeof payload === 'object'
+                      && !Array.isArray(payload)
+                      && Object.prototype.hasOwnProperty.call(payload, 'errCode')
+                    ? {
+                        err_code: typeof payload.errCode === 'string'
+                          ? payload.errCode.slice(0, 64)
+                          : null,
+                      }
+                    : {};
                   if (!payload || typeof payload !== 'object' || Array.isArray(payload)
                       || typeof payload.strResult !== 'string'
                       || (payload.h_msg_cd != null && typeof payload.h_msg_cd !== 'string')) {
-                    return { outcome: 'source_unavailable' };
+                    return { outcome: 'source_unavailable', ...observed };
                   }
                   return {
                     outcome:
                       payload?.strResult === 'SUCC' && !payload?.h_msg_cd
                         ? 'authenticated'
                         : 'logged_out',
+                    ...observed,
                   };
                 } catch (_) {
                   return { outcome: 'source_unavailable' };
@@ -602,6 +794,15 @@ class PydollLoginDomDriver:
         if not isinstance(value, Mapping):
             raise BrowserSourceUnavailable("session_keepalive")
         outcome = value.get("outcome")
+        if "err_code" in value:
+            # Only a code-shaped errCode is retained; the probe body itself stays in-page.
+            self._event_logger.warning(
+                "KORAIL login session probe response outcome=%s login_err_codes=%s",
+                outcome
+                if outcome in {"authenticated", "logged_out", "source_unavailable"}
+                else "invalid",
+                (_submission_owner.sanitized_login_err_code(value.get("err_code")),),
+            )
         if outcome == "authenticated":
             return True
         if outcome == "logged_out":

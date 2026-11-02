@@ -41,6 +41,14 @@ class FailedLogin:
         return await self.verify_credentials(credential)
 
 
+class ManualLoginRequired:
+    async def verify_credentials(self, _credential: object) -> bool:
+        raise BrowserSourceUnavailable("manual_login_required")
+
+    async def prewarm_credentials(self, credential: object) -> bool:
+        return await self.verify_credentials(credential)
+
+
 async def ready() -> None:
     return
 
@@ -75,6 +83,32 @@ def test_login_failure_keeps_submission_retry_metadata(path: str, submitted: boo
     else:
         assert response.json() == {"outcome": "failed"}
         assert "retry-after" not in response.headers
+    assert "fixture-account" not in response.text
+    assert "fixture-password" not in response.text
+
+
+@pytest.mark.parametrize("path", ["/v1/verify-login", "/v1/prewarm-login"])
+def test_manual_profile_without_session_reports_auth_required(path: str) -> None:
+    app = create_adapter_app(
+        token=TOKEN,
+        readiness_probe=ready,
+        reservation_client=ManualLoginRequired(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            path,
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={
+                "credential": {
+                    "login_id": "fixture-account",
+                    "password": "fixture-password",
+                    "version": "fixture-v1",
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "auth_required"}
     assert "fixture-account" not in response.text
     assert "fixture-password" not in response.text
 

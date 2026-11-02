@@ -18,9 +18,10 @@ def test_migration_0023_extends_unknown_reconciliation_bound(tmp_path, monkeypat
     get_settings.cache_clear()
     config = Config(str(API_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(API_ROOT / "migrations"))
-    assert ScriptDirectory.from_config(config).get_revision(
-        "0023_extend_unknown_reconcile"
-    ) is not None
+    assert (
+        ScriptDirectory.from_config(config).get_revision("0023_extend_unknown_reconcile")
+        is not None
+    )
     command.upgrade(config, "0023_extend_unknown_reconcile")
 
     with sqlite3.connect(database_path) as connection:

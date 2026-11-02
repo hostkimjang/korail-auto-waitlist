@@ -59,7 +59,5 @@ def downgrade() -> None:
             "ck_admin_account_focused_observation_interval_seconds",
             "focused_observation_interval_seconds BETWEEN 20 AND 30",
         )
-        batch_op.drop_constraint(
-            "ck_admin_account_observation_interval_seconds", type_="check"
-        )
+        batch_op.drop_constraint("ck_admin_account_observation_interval_seconds", type_="check")
         batch_op.drop_column("observation_interval_seconds")

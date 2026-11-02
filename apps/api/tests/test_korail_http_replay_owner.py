@@ -68,7 +68,7 @@ PUBLIC_SYMBOLS = {
     "date",
     "datetime",
     "field",
-    "httpx",
+    "httpx2",
     "inspect",
     "json",
     "logging",
@@ -230,8 +230,8 @@ modules = {
     "search_actor": "rail_waitlist.korail_pydoll_search_actor",
     "manager": "rail_waitlist.korail_sidecar.pydoll.http_replay",
 }
-logging.getLogger("httpx").setLevel(logging.INFO)
-logging.getLogger("httpcore").setLevel(logging.INFO)
+logging.getLogger("httpx2").setLevel(logging.INFO)
+logging.getLogger("httpcore2").setLevel(logging.INFO)
 importlib.import_module(modules[sys.argv[1]])
 legacy_loaded_before = "rail_waitlist.korail_http_replay" in sys.modules
 
@@ -247,8 +247,8 @@ print(json.dumps({
         is legacy.KorailHttpReplayClient
         is owner.KorailHttpReplayClient
     ),
-    "httpcore_level": logging.getLogger("httpcore").level,
-    "httpx_level": logging.getLogger("httpx").level,
+    "httpcore_level": logging.getLogger("httpcore2").level,
+    "httpx_level": logging.getLogger("httpx2").level,
     "legacy_loaded_before": legacy_loaded_before,
     "module": owner.KorailHttpReplayClient.__module__,
     "plan_identity": (

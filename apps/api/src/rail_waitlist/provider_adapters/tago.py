@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import httpx
+import httpx2
 
 from ..config import Settings, get_settings
 from ..domain import Provider
@@ -35,7 +35,7 @@ STATION_CITY_HINTS = {
 
 class TagoClient:
     def __init__(
-        self, settings: Settings | None = None, http_client: httpx.AsyncClient | None = None
+        self, settings: Settings | None = None, http_client: httpx2.AsyncClient | None = None
     ) -> None:
         self.settings = settings or get_settings()
         self.http_client = http_client
@@ -93,7 +93,7 @@ class TagoClient:
         if not service_key:
             raise ProviderUnavailable("TAGO service key is not configured")
         owns_client = self.http_client is None
-        client = self.http_client or httpx.AsyncClient(timeout=15, follow_redirects=False)
+        client = self.http_client or httpx2.AsyncClient(timeout=15, follow_redirects=False)
         try:
             response = await client.get(
                 f"{self.settings.tago_base_url}/{operation}",
@@ -117,7 +117,7 @@ class TagoClient:
                 # without pagination fields. Other operations remain fail-closed.
                 allow_unpaginated=operation == "GetCtyCodeList",
             )
-        except (httpx.HTTPError, ValueError, KeyError) as error:
+        except (httpx2.HTTPError, ValueError, KeyError) as error:
             raise ProviderUnavailable(f"TAGO request failed: {type(error).__name__}") from None
         finally:
             if owns_client:

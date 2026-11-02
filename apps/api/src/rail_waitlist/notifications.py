@@ -8,7 +8,7 @@ import socket
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-import httpx
+import httpx2
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from py_vapid import VapidException
@@ -261,7 +261,7 @@ async def deliver_notification(
     kind: NotificationKind,
     config: dict[str, Any],
     message: dict[str, Any],
-    client: httpx.AsyncClient | None = None,
+    client: httpx2.AsyncClient | None = None,
 ) -> None:
     if kind in {NotificationKind.ANDROID_FCM, NotificationKind.IOS_APNS}:
         # These enum values and possible persisted rows are retained only for migration
@@ -304,7 +304,7 @@ async def deliver_notification(
         return
 
     owns_client = client is None
-    client = client or httpx.AsyncClient(timeout=10, follow_redirects=False)
+    client = client or httpx2.AsyncClient(timeout=10, follow_redirects=False)
     try:
         if kind == NotificationKind.TELEGRAM:
             response = await client.post(
@@ -337,7 +337,7 @@ async def deliver_notification(
         response.raise_for_status()
     except NotificationDeliveryError:
         raise
-    except (httpx.HTTPError, KeyError, ValueError) as error:
+    except (httpx2.HTTPError, KeyError, ValueError) as error:
         raise NotificationDeliveryError(type(error).__name__) from error
     finally:
         if owns_client:

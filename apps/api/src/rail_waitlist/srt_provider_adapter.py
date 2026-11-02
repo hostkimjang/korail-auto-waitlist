@@ -38,6 +38,6 @@ SrtTimetableTrain = _client.SrtTimetableTrain
 TimetableItem = _client.TimetableItem
 ValidationError = _client.ValidationError
 datetime = _client.datetime
-httpx = _client.httpx
+httpx2 = _client.httpx2
 urlsplit = _client.urlsplit
 validate_srt_provider_adapter_url = _client.validate_srt_provider_adapter_url

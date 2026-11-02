@@ -23,6 +23,7 @@ DOMAIN_FORBIDDEN_IMPORT_ROOTS = frozenset(
         "celery",
         "fastapi",
         "httpx",
+        "httpx2",
         "korail2",
         "pydantic",
         "pydoll",
@@ -878,6 +879,7 @@ BOUNDARY_RULES = (
                 "database",
                 "fastapi",
                 "httpx",
+                "httpx2",
                 "korail_browser_automation",
                 "korail_pydoll_browser",
                 "korail_pydoll_confirmation_reader",
@@ -1424,6 +1426,7 @@ BOUNDARY_RULES = (
                 "fastapi",
                 "http",
                 "httpx",
+                "httpx2",
                 "main",
                 "metrics",
                 "models",
@@ -1452,6 +1455,7 @@ BOUNDARY_RULES = (
                 "fastapi",
                 "http",
                 "httpx",
+                "httpx2",
                 "main",
                 "metrics",
                 "models",
@@ -1551,6 +1555,7 @@ BOUNDARY_RULES = (
                 "database",
                 "fastapi",
                 "httpx",
+                "httpx2",
                 "metrics",
                 "models",
                 "outbox",
@@ -1574,6 +1579,7 @@ BOUNDARY_RULES = (
                 "database",
                 "fastapi",
                 "httpx",
+                "httpx2",
                 "korail_pydoll_browser",
                 "metrics",
                 "models",
@@ -10296,7 +10302,7 @@ SRT_CLIENT_COMPATIBILITY_SYMBOLS = {
     "TimetableItem",
     "ValidationError",
     "datetime",
-    "httpx",
+    "httpx2",
     "urlsplit",
     "validate_srt_provider_adapter_url",
 }
@@ -12091,7 +12097,13 @@ def test_pydoll_chromium_lifecycle_has_exact_top_level_dependency_boundary() -> 
         "PydollChromiumLifecycle",
         "probe_pydoll_chromium",
     }
-    assert imports == {("asyncio", None), ("logging", None), ("os", None)}
+    assert imports == {
+        ("asyncio", None),
+        ("logging", None),
+        ("os", None),
+        ("socket", None),
+        ("subprocess", None),
+    }
     assert imports_from == {
         ("__future__", 0, "annotations", None),
         ("collections.abc", 0, "Awaitable", None),

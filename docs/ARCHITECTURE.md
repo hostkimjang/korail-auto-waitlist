@@ -147,6 +147,9 @@ KORAIL 로그인 DOM 드라이버는 입력과 화면 전이를, `pydoll/login_s
 메모리에 보관하고 동적 주소·본문·쿠키는 저장하지 않습니다. 버튼 한 번의 제출 창에서 공식 업무 POST를
 최대 8건까지 구분하며 모두 정상 응답과 `loadingFinished`를 확인하기 전에는 추가 인증 확인을
 보내지 않으며, 실제 제출 뒤 실패와 자체 관측 준비 실패를 구분합니다.
+제출 진단용 JSON 요청과 완료 응답은 64 KiB와 중첩 64단계를 상한으로 파싱합니다. 문자열 안의 괄호와
+이스케이프는 중첩으로 세지 않으며, Python·OS별 JSON 파서의 재귀 허용량에 의존하지 않습니다.
+깊이 초과는 요청의 `invalid`, 응답의 `unavailable`로 닫고 원문 값은 보관하지 않습니다.
 헤더·공식 세션 응답을 기다리는 동안 요청 그룹이 바뀌면 내부 revision으로 이전 결과를 폐기합니다.
 추가 요청이 해당 await 안에서 완료돼도 이전 양성·음성을 재사용하지 않으며 세션 확인 1회 제한을
 유지합니다. revision은 로그나 공개 응답에 내보내지 않습니다.
@@ -1147,6 +1150,12 @@ event 해제, browser `__aexit__` → `stop` → `close` fallback을 한 번 끝
 경로에서는 actor가 현재 exception metadata를 context exit에 전달해 같은 정리를 끝내되 cleanup 오류가 원래
 오류·취소를 덮지 않습니다. client 전체 close는 read-only search와 authenticated owner 중 하나가 실패해도
 두 정리를 모두 cancellation-safe하게 끝낸 뒤 첫 오류를 다시 전달합니다.
+
+브라우저별 process manager는 Chromium의 미사용 stdout·stderr를 `DEVNULL`에 연결합니다. Pydoll의
+기본 미소비 pipe에 출력이 쌓여 브라우저와 CDP 응답이 함께 멈추는 일을 방지하며, 원문 브라우저 출력을
+로그로 남기지 않습니다. 실행 인자·PID와 기존 종료 소유권은 유지하고 앱의 닫힌 진단은 계속 사용합니다.
+CDP 포트는 고정된 좁은 범위에서 무작위로 고르지 않고, 브라우저 생성 시 OS가 선택한 빈 loopback 포트를
+명시합니다. 확인용 socket은 Chrome 시작 전에 닫으므로 확인과 실제 bind 사이를 독점 예약하지는 않습니다.
 
 구체 `_PydollSession`·`_PydollSessionContext`, session/context Protocol, 기본 factory와 DOM actor/driver 인스턴스 조립은
 기존 `korail_pydoll_browser.py` composition shell에 남습니다. `_browser`·assignable `_tab`·callback id와 network

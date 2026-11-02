@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -178,11 +180,32 @@ PydollResponseCallback = Callable[[dict[str, Any]], None]
 def _load_pydoll_runtime() -> PydollChromiumRuntime:
     try:
         from pydoll.browser import Chrome
+        from pydoll.browser.managers import BrowserProcessManager
         from pydoll.browser.options import ChromiumOptions
     except ImportError as error:
         raise BrowserSourceUnavailable("browser_import") from error
+
+    def create_process(command: list[str]) -> subprocess.Popen[bytes]:
+        # Pydoll 2.23.1 captures both streams but never drains them. Chromium can
+        # block on a full stderr pipe before answering CDP. Raw browser output
+        # is not an application diagnostic and may contain provider material.
+        return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def create_browser(*, options: _ChromiumOptions) -> _PydollBrowser:
+        # Pydoll's default chooses an unchecked port from a small fixed range and
+        # may attach to another browser. Ask the OS for a free loopback port;
+        # releasing it before Chrome binds still leaves a small allocation race.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            connection_port = reservation.getsockname()[1]
+        browser = Chrome(options=cast(ChromiumOptions, options), connection_port=connection_port)
+        # The pinned Chrome constructor does not expose the base-class manager
+        # argument. Replace its unused manager before starting this instance.
+        browser._browser_process_manager = BrowserProcessManager(process_creator=create_process)
+        return cast(_PydollBrowser, browser)
+
     return PydollChromiumRuntime(
-        browser_factory=cast(_PydollBrowserFactory, Chrome),
+        browser_factory=create_browser,
         options_factory=cast(Callable[[], _ChromiumOptions], ChromiumOptions),
     )
 

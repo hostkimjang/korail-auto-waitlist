@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist.config import Settings
@@ -98,11 +98,11 @@ async def test_reviewed_identity_is_sent_as_the_exact_tago_timetable_node(
     destination_node_id: str,
     train_type: str,
 ) -> None:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "response": {
@@ -136,7 +136,7 @@ async def test_reviewed_identity_is_sent_as_the_exact_tago_timetable_node(
     )
     retrieved_at = datetime.now(UTC)
     settings = Settings(tago_service_key="test-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         client = TagoClient(settings, http_client)
         client.hydrate_station_catalog(
             stations,

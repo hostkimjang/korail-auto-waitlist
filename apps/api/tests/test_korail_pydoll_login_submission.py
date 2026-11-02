@@ -1241,8 +1241,17 @@ def test_response_media_is_closed_bounded_and_independent_of_http_failure(mime, 
 
 @pytest.mark.parametrize(
     "post_data",
-    [json.dumps(LOGIN_PAYLOAD), urlencode(LOGIN_PAYLOAD)],
-    ids=["json", "form"],
+    [
+        json.dumps(LOGIN_PAYLOAD),
+        urlencode(LOGIN_PAYLOAD),
+        json.dumps(
+            {
+                **LOGIN_PAYLOAD,
+                "UserId": "fixture-private-quoted-" + '[{"\\' * 100,
+            }
+        ),
+    ],
+    ids=["json", "form", "json-quoted-delimiters"],
 )
 def test_exact_public_login_payload_signature_is_closed_and_diagnostic_only(post_data: str) -> None:
     owner = PydollLoginSubmission(10)
@@ -1261,6 +1270,36 @@ def test_exact_public_login_payload_signature_is_closed_and_diagnostic_only(post
         value for value in LOGIN_PAYLOAD.values() if value.startswith("fixture-private-")
     ):
         assert private_value not in retained
+    assert "fixture-private-quoted" not in retained
+
+
+@pytest.mark.parametrize(
+    ("opener", "closer"),
+    [("[", "]"), ('{"nested":', "}")],
+    ids=["array", "object"],
+)
+@pytest.mark.parametrize(
+    ("depth", "expected_shape"),
+    [(64, "unrelated"), (65, "invalid")],
+)
+def test_json_request_nesting_has_a_platform_independent_limit(
+    opener: str,
+    closer: str,
+    depth: int,
+    expected_shape: str,
+) -> None:
+    post_data = (
+        '{"x":' + opener * (depth - 1) + '"fixture-private-nested"' + closer * (depth - 1) + "}"
+    )
+    owner = PydollLoginSubmission(10)
+    owner.arm()
+    owner.on_request_will_be_sent(request(post_data=post_data))
+
+    row = owner.diagnostics()[0]
+    assert row.payload_role == "unresolved"
+    assert row.request_payload_shape == expected_shape
+    retained = json.dumps(asdict(row)) + repr(vars(owner))
+    assert "fixture-private-nested" not in retained
 
 
 @pytest.mark.parametrize(
@@ -1341,6 +1380,19 @@ def _completed_json_login_owner(
             True,
             "accepted",
             id="accepted",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "strResult": "SUCC",
+                    "h_msg_cd": "IRZ000001",
+                    "hc14100En": {"strCustNo": "fixture-private-customer"},
+                    "h_msg_txt": "fixture-private-quoted-" + '[{"\\' * 100,
+                }
+            ),
+            True,
+            "accepted",
+            id="quoted-delimiters",
         ),
         pytest.param(
             '{"strResult":"FAIL","h_msg_cd":"fixture-private-code",'
@@ -1437,8 +1489,46 @@ async def test_completed_response_body_is_reduced_to_one_closed_outcome(
         "fixture-private-result",
         "fixture-private-english",
         "fixture-private-request",
+        "fixture-private-quoted",
     ):
         assert private_value not in retained
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("opener", "closer"),
+    [("[", "]"), ('{"nested":', "}")],
+    ids=["array", "object"],
+)
+@pytest.mark.parametrize(
+    ("depth", "expected"),
+    [(64, "accepted"), (65, "unavailable")],
+)
+async def test_json_response_nesting_has_a_platform_independent_limit(
+    opener: str,
+    closer: str,
+    depth: int,
+    expected: str,
+) -> None:
+    body = (
+        '{"strResult":"SUCC","h_msg_cd":"IRZ000001",'
+        '"hc14100En":{"strCustNo":"fixture-private-customer"},"extra":'
+        + opener * (depth - 1)
+        + '"fixture-private-nested"'
+        + closer * (depth - 1)
+        + "}"
+    )
+    owner = _completed_json_login_owner()
+
+    async def execute(_command: dict[str, object]) -> object:
+        return {"result": {"body": body, "base64Encoded": False}}
+
+    assert await owner.classify_completed_response(execute) == expected
+    row = owner.diagnostics()[0]
+    assert row.response_auth_outcome == expected
+    retained = json.dumps(asdict(row)) + repr(vars(owner))
+    assert "fixture-private-customer" not in retained
+    assert "fixture-private-nested" not in retained
 
 
 @pytest.mark.asyncio

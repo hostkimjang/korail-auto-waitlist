@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 from pydantic import ValidationError
 
 from ..provider_call_context import (
@@ -97,7 +97,7 @@ class _AdapterFailure(RuntimeError):
 
 class HttpBrowserAdapterTransport:
     @staticmethod
-    def _deferred_response(response: httpx.Response) -> ProviderCooldownDeferred | None:
+    def _deferred_response(response: httpx2.Response) -> ProviderCooldownDeferred | None:
         if response.status_code != 503:
             return None
         retry = response.headers.get("retry-after")
@@ -158,9 +158,9 @@ class HttpBrowserAdapterTransport:
         headers = {"Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        self._client = httpx.AsyncClient(
+        self._client = httpx2.AsyncClient(
             base_url=base_url.rstrip("/"),
-            timeout=httpx.Timeout(timeout_seconds),
+            timeout=httpx2.Timeout(timeout_seconds),
             follow_redirects=False,
             trust_env=False,
             headers=headers,
@@ -261,7 +261,7 @@ class HttpBrowserAdapterTransport:
                 return IDLE_SEARCH_PROGRESS
             payload: object = response.json()
             return SearchProgress.model_validate(payload)
-        except (httpx.HTTPError, ValueError):
+        except (httpx2.HTTPError, ValueError):
             pass
         return IDLE_SEARCH_PROGRESS
 
@@ -296,7 +296,7 @@ class HttpBrowserAdapterTransport:
                 json=request.model_dump(mode="json"),
                 headers=headers,
             )
-        except httpx.TimeoutException as error:
+        except httpx2.TimeoutException as error:
             _LOGGER.warning(
                 "Provider sidecar request failed event=provider_sidecar_request_failed "
                 "provider=KORAIL operation=seat_snapshot "
@@ -304,7 +304,7 @@ class HttpBrowserAdapterTransport:
                 request_id,
             )
             raise _AdapterFailure("source_unavailable", deadline_exceeded=True) from error
-        except httpx.TransportError as error:
+        except httpx2.TransportError as error:
             _LOGGER.warning(
                 "Provider sidecar request failed event=provider_sidecar_request_failed "
                 "provider=KORAIL operation=seat_snapshot "
@@ -391,10 +391,10 @@ class HttpBrowserAdapterTransport:
                 json=payload,
                 headers={REQUEST_ID_HEADER: request_id},
             )
-        except httpx.TimeoutException as error:
+        except httpx2.TimeoutException as error:
             self._log_correlated_failure(operation, request_id, "timeout")
             raise _AdapterFailure("source_unavailable") from error
-        except httpx.TransportError as error:
+        except httpx2.TransportError as error:
             self._log_correlated_failure(operation, request_id, "transport_error")
             raise _AdapterFailure("source_unavailable") from error
         if response.status_code != 200:
@@ -482,14 +482,14 @@ class HttpBrowserAdapterTransport:
                         raise ValueError("unknown reservation stream frame")
         except _AdapterFailure:
             raise
-        except httpx.TimeoutException as error:
+        except httpx2.TimeoutException as error:
             self._log_correlated_failure(operation, request_id, "timeout")
             raise _AdapterFailure(
                 "source_unavailable",
                 reservation_command_uncertain=True,
                 progress_stages=tuple(progress),
             ) from error
-        except httpx.TransportError as error:
+        except httpx2.TransportError as error:
             self._log_correlated_failure(operation, request_id, "transport_error")
             raise _AdapterFailure(
                 "source_unavailable",
@@ -553,7 +553,7 @@ class HttpBrowserAdapterTransport:
         }
         try:
             response = await self._client.post(path, json=payload)
-        except (httpx.TimeoutException, httpx.TransportError) as error:
+        except (httpx2.TimeoutException, httpx2.TransportError) as error:
             raise _AdapterFailure("source_unavailable") from error
         if response.status_code == 429:
             raise _AdapterFailure("provider_access_restricted", rate_limited=True)
@@ -569,7 +569,7 @@ class HttpBrowserAdapterTransport:
     async def session_state(self) -> KorailSessionStateResult:
         try:
             response = await self._client.get("/v1/session-state")
-        except (httpx.TimeoutException, httpx.TransportError) as error:
+        except (httpx2.TimeoutException, httpx2.TransportError) as error:
             raise _AdapterFailure("source_unavailable") from error
         if response.status_code != 200:
             raise _AdapterFailure("source_unavailable")
@@ -590,10 +590,10 @@ class HttpBrowserAdapterTransport:
                 json=request.model_dump(mode="json"),
                 headers={REQUEST_ID_HEADER: request_id},
             )
-        except httpx.TimeoutException as error:
+        except httpx2.TimeoutException as error:
             self._log_correlated_failure(operation, request_id, "timeout")
             raise _AdapterFailure("source_unavailable") from error
-        except httpx.TransportError as error:
+        except httpx2.TransportError as error:
             self._log_correlated_failure(operation, request_id, "transport_error")
             raise _AdapterFailure("source_unavailable") from error
         if response.status_code != 200:

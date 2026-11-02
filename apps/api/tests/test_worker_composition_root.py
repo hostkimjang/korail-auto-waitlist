@@ -346,6 +346,7 @@ def test_worker_does_not_reclaim_sql_http_or_provider_transport_policy() -> None
         "aiohttp",
         "fastapi",
         "httpx",
+        "httpx2",
         "playwright",
         "pydoll",
         "requests",

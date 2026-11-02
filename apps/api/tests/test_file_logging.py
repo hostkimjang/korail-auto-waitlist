@@ -2,7 +2,7 @@ import json
 import logging
 from io import StringIO
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist.file_logging import (
@@ -196,7 +196,9 @@ def test_configure_service_console_logging_is_sanitized_and_idempotent(monkeypat
     assert "token=[REDACTED]" in payload["message"]
 
 
-@pytest.mark.parametrize("logger_name", ["httpx", "httpcore.connection"])
+@pytest.mark.parametrize(
+    "logger_name", ["httpx", "httpcore.connection", "httpx2", "httpcore2.connection"]
+)
 def test_transport_records_are_excluded_while_application_logs_are_preserved(
     tmp_path,
     monkeypatch,
@@ -234,11 +236,11 @@ def test_transport_records_are_excluded_while_application_logs_are_preserved(
     sensitive_url = f"https://example.invalid/hooks/{synthetic_path_credential}"
 
     def emit_transport_info() -> None:
-        if logger_name == "httpx":
-            transport = httpx.MockTransport(
-                lambda request: httpx.Response(204, request=request),
+        if logger_name == "httpx2":
+            transport = httpx2.MockTransport(
+                lambda request: httpx2.Response(204, request=request),
             )
-            with httpx.Client(transport=transport) as client:
+            with httpx2.Client(transport=transport) as client:
                 client.post(sensitive_url)
         else:
             logger.info(

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import MappingProxyType
 
-import httpx
+import httpx2
 
 from ..config import OFFICIAL_KORAIL_STATION_DATA_URL
 from ..provider_contracts import ProviderUnavailable
@@ -19,7 +19,7 @@ from .station_names import (
 KORAIL_STATION_DATA_URL = OFFICIAL_KORAIL_STATION_DATA_URL
 MIN_KORAIL_ROSTER_COUNT = 250
 MAX_KORAIL_ROSTER_COUNT = 400
-REQUEST_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+REQUEST_TIMEOUT = httpx2.Timeout(10.0, connect=5.0)
 
 # Compatibility export. The pure equivalence policy has one canonical owner.
 STATION_NAME_ALIASES: Mapping[str, str] = KORAIL_STATION_NAME_ALIASES
@@ -101,7 +101,7 @@ class KorailStationVisibility:
 
     def __init__(
         self,
-        http_client: httpx.AsyncClient | None = None,
+        http_client: httpx2.AsyncClient | None = None,
         *,
         url: str = KORAIL_STATION_DATA_URL,
     ) -> None:
@@ -110,7 +110,7 @@ class KorailStationVisibility:
 
     async def load_roster(self) -> StationVisibilityRoster:
         owns_client = self._http_client is None
-        client = self._http_client or httpx.AsyncClient(
+        client = self._http_client or httpx2.AsyncClient(
             timeout=REQUEST_TIMEOUT,
             follow_redirects=False,
         )
@@ -121,12 +121,12 @@ class KorailStationVisibility:
                     follow_redirects=False,
                     timeout=REQUEST_TIMEOUT,
                 )
-            except (httpx.TimeoutException, httpx.TransportError) as error:
+            except (httpx2.TimeoutException, httpx2.TransportError) as error:
                 raise StationVisibilityUnavailable(
                     "KORAIL station visibility roster is unavailable"
                 ) from error
 
-            if response.status_code != httpx.codes.OK:
+            if response.status_code != httpx2.codes.OK:
                 raise StationVisibilityUnavailable(
                     "KORAIL station visibility roster returned an invalid status"
                 )

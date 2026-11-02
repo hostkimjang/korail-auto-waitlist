@@ -64,7 +64,7 @@ _SLACK_WEBHOOK_PATH = re.compile(
     r"(?P<prefix>/services/)T[a-z0-9]{8,}/B[a-z0-9]{8,}/[a-z0-9_-]{20,}",
     re.IGNORECASE,
 )
-_HTTP_TRANSPORT_LOGGERS = ("httpx", "httpcore")
+_HTTP_TRANSPORT_LOGGERS = ("httpx", "httpcore", "httpx2", "httpcore2")
 _STRUCTURED_EVENT = re.compile(r"(?:^|\s)event=(?P<value>[a-z][a-z0-9_]{0,63})(?:\s|$)")
 _STRUCTURED_LOG_ID = {
     name: re.compile(rf"(?:^|\s){name}=(?P<value>[0-9a-f]{{32}})(?:\s|$)")

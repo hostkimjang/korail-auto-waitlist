@@ -12,7 +12,7 @@ from typing import Any, Literal, Self
 from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
-import httpx
+import httpx2
 
 from .browser_contracts import (
     BrowserSeatSearchRequest,
@@ -36,8 +36,8 @@ KST = ZoneInfo("Asia/Seoul")
 
 # HTTPX normally logs the full request URL at INFO. The official business path is
 # ephemeral replay material, so keep transport diagnostics at warning-or-higher.
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx2").setLevel(logging.WARNING)
+logging.getLogger("httpcore2").setLevel(logging.WARNING)
 
 _REQUIRED_FIELDS = frozenset({"txtGoStart", "txtGoEnd", "txtGoAbrdDt", "txtGoHour", "txtPsgFlg_1"})
 _SESSION_MARKERS = (
@@ -228,8 +228,8 @@ class KorailHttpReplayPlan:
         if _normalize_station(request.destination) != self.destination:
             raise KorailHttpReplayInvalidCapture()
 
-    def _cookie_jar(self) -> httpx.Cookies:
-        jar = httpx.Cookies()
+    def _cookie_jar(self) -> httpx2.Cookies:
+        jar = httpx2.Cookies()
         for cookie in self._cookies:
             jar.set(cookie.name, cookie.value, domain=cookie.domain, path=cookie.path)
         return jar
@@ -336,11 +336,11 @@ class KorailHttpReplayClient:
         timeout_seconds: float = 25.0,
         *,
         lease_is_current: LeaseValidator | None = None,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
         self._plan = plan
         self._lease_is_current = lease_is_current
-        self._client = httpx.AsyncClient(
+        self._client = httpx2.AsyncClient(
             cookies=plan._cookie_jar(),
             follow_redirects=False,
             trust_env=False,
@@ -458,7 +458,7 @@ class KorailHttpReplayClient:
                     body.extend(chunk)
         except KorailHttpReplayError:
             raise
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             raise KorailHttpReplaySourceUnavailable("transport") from None
         unavailable_trigger = provider_unavailable_trigger_from_page(
             str(response.url),
@@ -877,7 +877,7 @@ def _session_marker(body: bytes, content_type: str) -> bool:
     )
 
 
-def _is_session_redirect(response: httpx.Response) -> bool:
+def _is_session_redirect(response: httpx2.Response) -> bool:
     location = response.headers.get("location")
     if not location:
         return False

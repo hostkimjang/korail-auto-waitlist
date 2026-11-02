@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from rail_waitlist.config import get_settings

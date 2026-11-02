@@ -4,7 +4,7 @@ import asyncio
 from datetime import date, time
 from urllib.parse import parse_qsl, urlsplit
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist.provider_adapters.korail_search_bootstrap import (
@@ -113,12 +113,12 @@ async def test_station_resolver_uses_one_fetch_until_ttl_expires() -> None:
     requests = 0
     now = 10.0
 
-    async def handler(request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal requests
         requests += 1
-        return httpx.Response(200, json=station_payload())
+        return httpx2.Response(200, json=station_payload())
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         resolver = KorailStationIdentityResolver(
             http_client=client, ttl_seconds=30, monotonic=lambda: now
         )
@@ -138,13 +138,13 @@ async def test_station_resolver_uses_one_fetch_until_ttl_expires() -> None:
 async def test_station_resolver_coalesces_concurrent_cold_fetches() -> None:
     requests = 0
 
-    async def handler(request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal requests
         requests += 1
         await asyncio.sleep(0)
-        return httpx.Response(200, json=station_payload())
+        return httpx2.Response(200, json=station_payload())
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         resolver = KorailStationIdentityResolver(http_client=client)
         results = await asyncio.gather(
             resolver.resolve_pair("대전", "서울"),
@@ -159,14 +159,14 @@ async def test_station_resolver_coalesces_concurrent_cold_fetches() -> None:
 async def test_station_resolver_does_not_cache_failed_refresh() -> None:
     requests = 0
 
-    async def handler(request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal requests
         requests += 1
         if requests == 1:
-            return httpx.Response(503)
-        return httpx.Response(200, json=station_payload())
+            return httpx2.Response(503)
+        return httpx2.Response(200, json=station_payload())
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         resolver = KorailStationIdentityResolver(http_client=client)
         with pytest.raises(KorailStationIdentityUnavailable):
             await resolver.resolve_pair("대전", "서울")

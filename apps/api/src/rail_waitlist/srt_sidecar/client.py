@@ -7,7 +7,7 @@ from typing import Literal as _Literal
 from typing import TypeVar as _TypeVar
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 from pydantic import BaseModel as _BaseModel
 from pydantic import ValidationError
 from SRT import SRTError  # type: ignore[import-untyped]
@@ -101,7 +101,7 @@ class SrtProviderAdapterClient:
         timeout_seconds: float,
         token: str | None,
         *,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
         read_only_drain_timeout_seconds: float = _READ_ONLY_DRAIN_TIMEOUT_SECONDS,
     ) -> None:
         base_url = validate_srt_provider_adapter_url(base_url)
@@ -109,9 +109,9 @@ class SrtProviderAdapterClient:
             raise ValueError("SRT provider adapter token must be at least 32 UTF-8 bytes")
         if read_only_drain_timeout_seconds <= 0:
             raise ValueError("read-only drain timeout must be positive")
-        self._client = httpx.AsyncClient(
+        self._client = httpx2.AsyncClient(
             base_url=base_url,
-            timeout=httpx.Timeout(timeout_seconds),
+            timeout=httpx2.Timeout(timeout_seconds),
             follow_redirects=False,
             trust_env=False,
             headers={
@@ -346,7 +346,7 @@ class SrtProviderAdapterClient:
                 json=payload,
                 headers=request_headers,
             )
-        except httpx.TimeoutException as error:
+        except httpx2.TimeoutException as error:
             _LOGGER.warning(
                 "Provider sidecar request failed event=provider_sidecar_request_failed "
                 "provider=SRT operation=%s "
@@ -355,7 +355,7 @@ class SrtProviderAdapterClient:
                 request_id,
             )
             raise SrtProviderAdapterUnavailable("SRT provider adapter is unavailable") from error
-        except httpx.TransportError as error:
+        except httpx2.TransportError as error:
             _LOGGER.warning(
                 "Provider sidecar request failed event=provider_sidecar_request_failed "
                 "provider=SRT operation=%s "
@@ -461,7 +461,7 @@ class SrtProviderAdapterClient:
                 params=params,
                 headers={REQUEST_ID_HEADER: new_log_id()},
             )
-        except (httpx.TimeoutException, httpx.TransportError) as error:
+        except (httpx2.TimeoutException, httpx2.TransportError) as error:
             raise SrtProviderAdapterUnavailable(
                 "SRT provider adapter lifecycle status is unavailable"
             ) from error

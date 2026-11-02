@@ -5,7 +5,7 @@ import logging
 from datetime import date, time
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist.korail_browser_automation import BrowserSeatSearchRequest
@@ -28,8 +28,8 @@ BOUNDARY = "----rail-waitlist-boundary"
 
 
 def test_http_transport_info_logs_are_disabled_for_ephemeral_paths() -> None:
-    assert logging.getLogger("httpx").isEnabledFor(logging.INFO) is False
-    assert logging.getLogger("httpcore").isEnabledFor(logging.INFO) is False
+    assert logging.getLogger("httpx2").isEnabledFor(logging.INFO) is False
+    assert logging.getLogger("httpcore2").isEnabledFor(logging.INFO) is False
 
 
 def _multipart(
@@ -154,13 +154,13 @@ def _payload(*rows: dict[str, str], has_next: str = "N") -> dict[str, Any]:
     }
 
 
-def _json_response(payload: dict[str, Any], status: int = 200) -> httpx.Response:
-    return httpx.Response(status, json=payload)
+def _json_response(payload: dict[str, Any], status: int = 200) -> httpx2.Response:
+    return httpx2.Response(status, json=payload)
 
 
 @pytest.mark.asyncio
 async def test_http_replay_preserves_exact_expected_departure_delay() -> None:
-    transport = httpx.MockTransport(
+    transport = httpx2.MockTransport(
         lambda _request: _json_response(_payload(_row(expected_delay_minutes="13")))
     )
 
@@ -172,7 +172,7 @@ async def test_http_replay_preserves_exact_expected_departure_delay() -> None:
 
 @pytest.mark.asyncio
 async def test_http_replay_preserves_primary_timetable_fields_and_overnight_arrival() -> None:
-    transport = httpx.MockTransport(
+    transport = httpx2.MockTransport(
         lambda _request: _json_response(
             _payload(
                 _row(
@@ -201,7 +201,7 @@ async def test_http_replay_preserves_primary_timetable_fields_and_overnight_arri
 
 @pytest.mark.asyncio
 async def test_http_replay_omits_ambiguous_fare_instead_of_guessing() -> None:
-    transport = httpx.MockTransport(
+    transport = httpx2.MockTransport(
         lambda _request: _json_response(
             _payload(_row(standard="예약 가능 성인 59,800원 어린이 29,900원"))
         )
@@ -226,7 +226,7 @@ async def test_http_replay_rejects_non_future_or_malformed_arrival(
     arrival_date: str,
     arrival: str,
 ) -> None:
-    transport = httpx.MockTransport(
+    transport = httpx2.MockTransport(
         lambda _request: _json_response(_payload(_row(arrival_date=arrival_date, arrival=arrival)))
     )
 
@@ -390,7 +390,7 @@ async def test_parser_maps_each_seat_class_and_filters_non_ktx_and_exact_window(
         _row(number="23", departure="180100"),
         _row(number="25", departure="153000", kind="ITX-새마을"),
     )
-    transport = httpx.MockTransport(lambda _request: _json_response(response))
+    transport = httpx2.MockTransport(lambda _request: _json_response(response))
 
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         result = await client.search(_request())
@@ -409,7 +409,7 @@ async def test_parser_maps_each_seat_class_and_filters_non_ktx_and_exact_window(
 
 
 async def test_successful_empty_service_day_is_not_treated_as_source_failure() -> None:
-    transport = httpx.MockTransport(lambda _request: _json_response(_payload()))
+    transport = httpx2.MockTransport(lambda _request: _json_response(_payload()))
 
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         result = await client.search(_request())
@@ -419,7 +419,7 @@ async def test_successful_empty_service_day_is_not_treated_as_source_failure() -
 
 
 async def test_unknown_seat_label_is_typed_invalid_response() -> None:
-    transport = httpx.MockTransport(
+    transport = httpx2.MockTransport(
         lambda _request: _json_response(_payload(_row(standard="알 수 없는 신규 상태")))
     )
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
@@ -430,14 +430,14 @@ async def test_unknown_seat_label_is_typed_invalid_response() -> None:
 async def test_pagination_uses_last_response_departure_plus_one_minute() -> None:
     request_bodies: list[bytes] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         request_bodies.append(request.content)
         assert request.headers["cookie"] == "SESSION_SECRET=cookie-secret-value"
         if len(request_bodies) == 1:
             return _json_response(_payload(_row(departure="150000"), has_next="Y"))
         return _json_response(_payload(_row(number="19", departure="160000")))
 
-    async with KorailHttpReplayClient(_plan(), transport=httpx.MockTransport(handler)) as client:
+    async with KorailHttpReplayClient(_plan(), transport=httpx2.MockTransport(handler)) as client:
         result = await client.search(_request())
 
     assert len(result.trains) == 2
@@ -448,13 +448,13 @@ async def test_pagination_uses_last_response_departure_plus_one_minute() -> None
 async def test_pagination_is_bounded_to_twenty_pages() -> None:
     calls = 0
 
-    def handler(_request: httpx.Request) -> httpx.Response:
+    def handler(_request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
         departure = f"{14 + (calls // 60):02d}{calls % 60:02d}00"
         return _json_response(_payload(_row(departure=departure), has_next="Y"))
 
-    async with KorailHttpReplayClient(_plan(), transport=httpx.MockTransport(handler)) as client:
+    async with KorailHttpReplayClient(_plan(), transport=httpx2.MockTransport(handler)) as client:
         with pytest.raises(HttpReplaySourceUnavailable):
             await client.search(_request(departure_from=time(14), departure_to=time(23)))
     assert calls == 20
@@ -473,8 +473,8 @@ async def test_pagination_is_bounded_to_twenty_pages() -> None:
 async def test_http_statuses_are_classified_without_response_content(
     status: int, error_type: type[Exception]
 ) -> None:
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(status, headers={"location": "https://evil.example"})
+    transport = httpx2.MockTransport(
+        lambda _request: httpx2.Response(status, headers={"location": "https://evil.example"})
     )
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(error_type) as raised:
@@ -499,7 +499,7 @@ async def test_source_unavailable_reports_a_sanitized_operator_detail(
     expected_detail: str,
 ) -> None:
     headers = {"location": location} if location is not None else {}
-    transport = httpx.MockTransport(lambda _request: httpx.Response(status, headers=headers))
+    transport = httpx2.MockTransport(lambda _request: httpx2.Response(status, headers=headers))
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(HttpReplaySourceUnavailable) as raised:
             await client.search(_request())
@@ -510,10 +510,10 @@ async def test_source_unavailable_reports_a_sanitized_operator_detail(
 
 
 async def test_transport_failure_is_reported_as_a_transport_detail() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("boom")
+    def handler(_request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("boom")
 
-    transport = httpx.MockTransport(handler)
+    transport = httpx2.MockTransport(handler)
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(HttpReplaySourceUnavailable) as raised:
             await client.search(_request())
@@ -535,8 +535,8 @@ async def test_only_clear_same_origin_session_redirects_trigger_cold_reinit(
     location: str,
     error_type: type[Exception],
 ) -> None:
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(302, headers={"location": location})
+    transport = httpx2.MockTransport(
+        lambda _request: httpx2.Response(302, headers={"location": location})
     )
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(error_type):
@@ -544,8 +544,8 @@ async def test_only_clear_same_origin_session_redirects_trigger_cold_reinit(
 
 
 async def test_official_maintenance_redirect_is_provider_unavailable() -> None:
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(
+    transport = httpx2.MockTransport(
+        lambda _request: httpx2.Response(
             302,
             headers={"location": "/rejectservice_job.html"},
         )
@@ -559,8 +559,8 @@ async def test_official_maintenance_redirect_is_provider_unavailable() -> None:
 
 async def test_official_maintenance_html_is_provider_unavailable() -> None:
     body = "서비스를 일시중지합니다. 승차권 예약 및 발매서비스".encode()
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(
+    transport = httpx2.MockTransport(
+        lambda _request: httpx2.Response(
             200,
             headers={"content-type": "text/html; charset=utf-8"},
             content=body,
@@ -575,8 +575,8 @@ async def test_official_maintenance_html_is_provider_unavailable() -> None:
 
 async def test_official_service_unavailable_html_is_provider_unavailable() -> None:
     body = "서비스를 일시중지합니다. 승차권 예약 및 발매서비스".encode("cp949")
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(
+    transport = httpx2.MockTransport(
+        lambda _request: httpx2.Response(
             503,
             headers={"content-type": "text/html; charset=euc-kr"},
             content=body,
@@ -590,7 +590,7 @@ async def test_official_service_unavailable_html_is_provider_unavailable() -> No
 
 
 async def test_unmarked_service_unavailable_response_stays_query_local() -> None:
-    transport = httpx.MockTransport(lambda _request: httpx.Response(503, content=b"unavailable"))
+    transport = httpx2.MockTransport(lambda _request: httpx2.Response(503, content=b"unavailable"))
 
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(HttpReplaySourceUnavailable):
@@ -599,8 +599,8 @@ async def test_unmarked_service_unavailable_response_stays_query_local() -> None
 
 async def test_login_html_is_classified_as_an_expired_session() -> None:
     login_html = b"<!doctype html><html><form id='login'><input type='password'></form></html>"
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(
+    transport = httpx2.MockTransport(
+        lambda _request: httpx2.Response(
             200,
             headers={"content-type": "text/html; charset=utf-8"},
             content=login_html,
@@ -614,7 +614,7 @@ async def test_login_html_is_classified_as_an_expired_session() -> None:
 async def test_json_text_mentioning_login_does_not_trigger_cold_reinit() -> None:
     payload = _payload(_row())
     payload["notice"] = "login optional"
-    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    transport = httpx2.MockTransport(lambda _request: httpx2.Response(200, json=payload))
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         result = await client.search(_request())
     assert len(result.trains) == 1
@@ -635,7 +635,7 @@ async def test_json_text_mentioning_login_does_not_trigger_cold_reinit() -> None
     ],
 )
 async def test_body_protection_markers_are_separate_typed_errors(marker: str) -> None:
-    transport = httpx.MockTransport(lambda _request: httpx.Response(200, content=marker.encode()))
+    transport = httpx2.MockTransport(lambda _request: httpx2.Response(200, content=marker.encode()))
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(HttpReplayProtectionDetected) as raised:
             await client.search(_request())
@@ -646,13 +646,13 @@ async def test_body_protection_markers_are_separate_typed_errors(marker: str) ->
 async def test_lease_is_checked_before_any_network_request() -> None:
     calls = 0
 
-    def handler(_request: httpx.Request) -> httpx.Response:
+    def handler(_request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
         return _json_response(_payload(_row()))
 
     async with KorailHttpReplayClient(
-        _plan(), lease_is_current=lambda: False, transport=httpx.MockTransport(handler)
+        _plan(), lease_is_current=lambda: False, transport=httpx2.MockTransport(handler)
     ) as client:
         with pytest.raises(HttpReplayLeaseInvalid):
             await client.search(_request())
@@ -662,11 +662,11 @@ async def test_lease_is_checked_before_any_network_request() -> None:
 async def test_non_json_and_schema_failures_are_ordinary_invalid() -> None:
     responses = iter(
         [
-            httpx.Response(200, content=b"not-json"),
+            httpx2.Response(200, content=b"not-json"),
             _json_response({"strResult": "SUCC"}),
         ]
     )
-    transport = httpx.MockTransport(lambda _request: next(responses))
+    transport = httpx2.MockTransport(lambda _request: next(responses))
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(HttpReplayInvalidResponse):
             await client.search(_request())
@@ -675,32 +675,32 @@ async def test_non_json_and_schema_failures_are_ordinary_invalid() -> None:
 
 
 async def test_response_size_cap_fails_closed() -> None:
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(200, content=b"x" * (MAX_RESPONSE_BYTES + 1))
+    transport = httpx2.MockTransport(
+        lambda _request: httpx2.Response(200, content=b"x" * (MAX_RESPONSE_BYTES + 1))
     )
     async with KorailHttpReplayClient(_plan(), transport=transport) as client:
         with pytest.raises(HttpReplaySourceUnavailable):
             await client.search(_request())
 
 
-class _ClosingTransport(httpx.AsyncBaseTransport):
+class _ClosingTransport(httpx2.AsyncBaseTransport):
     def __init__(self) -> None:
         self.closed = False
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         return _json_response(_payload(_row()))
 
     async def aclose(self) -> None:
         self.closed = True
 
 
-class _BlockingClosingTransport(httpx.AsyncBaseTransport):
+class _BlockingClosingTransport(httpx2.AsyncBaseTransport):
     def __init__(self) -> None:
         self.close_started = asyncio.Event()
         self.release_close = asyncio.Event()
         self.closed = False
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         return _json_response(_payload(_row()))
 
     async def aclose(self) -> None:

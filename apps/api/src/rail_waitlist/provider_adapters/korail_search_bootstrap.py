@@ -7,7 +7,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 
 from ..config import OFFICIAL_KORAIL_STATION_DATA_URL as OFFICIAL_KORAIL_STATION_DATA_URL
 from ..provider_registry.korail_search_contracts import (
@@ -20,7 +20,7 @@ from ..timetable_management.station_names import (
 
 MIN_STATION_COUNT = 250
 MAX_STATION_COUNT = 400
-STATION_REQUEST_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+STATION_REQUEST_TIMEOUT = httpx2.Timeout(10.0, connect=5.0)
 _STATION_ALIASES = KORAIL_STATION_NAME_ALIASES
 
 
@@ -91,7 +91,7 @@ class KorailStationIdentityResolver:
         *,
         url: str = OFFICIAL_KORAIL_STATION_DATA_URL,
         ttl_seconds: float = 86_400,
-        http_client: httpx.AsyncClient | None = None,
+        http_client: httpx2.AsyncClient | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if ttl_seconds <= 0:
@@ -123,7 +123,7 @@ class KorailStationIdentityResolver:
             if self._catalog is not None and now < self._expires_at:
                 return self._catalog
             owns_client = self._http_client is None
-            client = self._http_client or httpx.AsyncClient(
+            client = self._http_client or httpx2.AsyncClient(
                 timeout=STATION_REQUEST_TIMEOUT, follow_redirects=False
             )
             try:
@@ -131,11 +131,11 @@ class KorailStationIdentityResolver:
                     response = await client.get(
                         self.url, timeout=STATION_REQUEST_TIMEOUT, follow_redirects=False
                     )
-                except (httpx.TimeoutException, httpx.TransportError) as error:
+                except (httpx2.TimeoutException, httpx2.TransportError) as error:
                     raise KorailStationIdentityUnavailable(
                         "official station identity source is unavailable"
                     ) from error
-                if response.status_code != httpx.codes.OK:
+                if response.status_code != httpx2.codes.OK:
                     raise KorailStationIdentityUnavailable(
                         "official station identity source returned an invalid status"
                     )

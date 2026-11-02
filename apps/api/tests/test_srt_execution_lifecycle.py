@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,23 +90,23 @@ async def test_watch_group_keeps_execution_lease_until_srt_sidecar_drain_finishe
     request_id = "5790e635307c4549a7728d01455bf92c"
     status_calls = 0
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         nonlocal status_calls
         if request.url.path == "/v1/read-only-call-register":
             registration = json.loads(request.content)
             assert registration["request_id"] == request_id
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"accepted": True, "instance_id": instance_id},
             )
         if request.url.path == "/v1/observe":
-            return httpx.Response(200, json={"observations": []})
+            return httpx2.Response(200, json={"observations": []})
         if request.url.path == "/v1/read-only-call-status":
             status_calls += 1
             if status_calls == 1:
-                raise httpx.ConnectError("temporary status failure", request=request)
+                raise httpx2.ConnectError("temporary status failure", request=request)
             pending_status_polled.set()
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "state": "terminal" if provider_terminal.is_set() else "pending",
@@ -119,7 +119,7 @@ async def test_watch_group_keeps_execution_lease_until_srt_sidecar_drain_finishe
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(respond),
+        transport=httpx2.MockTransport(respond),
     )
     grant = ExecutionLeaseGrant(
         provider=Provider.SRT,

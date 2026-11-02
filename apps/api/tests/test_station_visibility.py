@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist.timetable_management.schemas import StationItem
@@ -105,11 +105,11 @@ def test_only_reviewed_station_name_equivalences_share_one_normalized_key(
 
 
 async def test_live_roster_names_replace_tago_aliases_without_changing_node_identity():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"stns": {"stn": roster_rows()}})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"stns": {"stn": roster_rows()}})
 
     raw = [station("울산", "NATH13717"), station("진부", "NATN10787")]
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         displayed = await KorailStationVisibility(http_client).filter_stations(raw)
 
     assert [(item.node_id, item.name) for item in displayed] == [
@@ -139,14 +139,14 @@ def test_filter_rejects_alias_and_canonical_name_collision_fail_closed():
 
 
 async def test_load_roster_uses_exact_https_url_does_not_follow_redirects():
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(302, headers={"location": "https://example.invalid/roster"})
+        return httpx2.Response(302, headers={"location": "https://example.invalid/roster"})
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), follow_redirects=True
+    async with httpx2.AsyncClient(
+        transport=httpx2.MockTransport(handler), follow_redirects=True
     ) as http_client:
         with pytest.raises(StationVisibilityUnavailable, match="invalid status"):
             await KorailStationVisibility(http_client).load_roster()
@@ -155,14 +155,14 @@ async def test_load_roster_uses_exact_https_url_does_not_follow_redirects():
 
 
 async def test_load_roster_validates_schema_sentinels_and_metadata():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200,
             json={"stns": {"stn": roster_rows()}},
             headers={"etag": '"station-v1"', "last-modified": "Wed, 29 Jul 2026 00:00:00 GMT"},
         )
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         roster = await KorailStationVisibility(http_client).load_roster()
 
     assert {"서울", "수서", "대전", "부산"}.issubset(roster.names)
@@ -178,10 +178,10 @@ async def test_load_roster_validates_schema_sentinels_and_metadata():
 
 @pytest.mark.parametrize("count", [MIN_KORAIL_ROSTER_COUNT, MAX_KORAIL_ROSTER_COUNT])
 async def test_load_roster_accepts_inclusive_count_boundaries(count: int):
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"stns": {"stn": roster_rows(count=count)}})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"stns": {"stn": roster_rows(count=count)}})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         roster = await KorailStationVisibility(http_client).load_roster()
 
     assert len(roster.names) == count - 6
@@ -189,13 +189,13 @@ async def test_load_roster_accepts_inclusive_count_boundaries(count: int):
 
 async def test_custom_fixture_url_is_public_and_used_for_the_exact_request():
     custom_url = "http://fixture.internal/station_data.json"
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(200, json={"stns": {"stn": roster_rows()}})
+        return httpx2.Response(200, json={"stns": {"stn": roster_rows()}})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         visibility = KorailStationVisibility(http_client, url=custom_url)
         await visibility.load_roster()
 
@@ -234,25 +234,25 @@ def test_request_timeout_contract_is_preserved():
     ],
 )
 async def test_corrupt_or_out_of_bounds_roster_fails_closed(payload: object):
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=payload)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=payload)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         with pytest.raises(StationVisibilityUnavailable):
             await KorailStationVisibility(http_client).load_roster()
 
 
 @pytest.mark.parametrize("failure", ["status", "json", "timeout"])
 async def test_upstream_failures_raise_without_returning_raw_tago_items(failure: str):
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if failure == "status":
-            return httpx.Response(503, text="upstream details must not be exposed")
+            return httpx2.Response(503, text="upstream details must not be exposed")
         if failure == "json":
-            return httpx.Response(200, content=b"not-json")
-        raise httpx.ReadTimeout("secret upstream timeout detail", request=request)
+            return httpx2.Response(200, content=b"not-json")
+        raise httpx2.ReadTimeout("secret upstream timeout detail", request=request)
 
     raw = [station("서울", "TAGO-SEOUL")]
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         with pytest.raises(StationVisibilityUnavailable) as raised:
             await KorailStationVisibility(http_client).filter_stations(raw)
 

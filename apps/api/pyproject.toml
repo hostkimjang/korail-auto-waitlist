@@ -15,7 +15,6 @@ dependencies = [
   "celery[redis]>=5.4,<6",
   "cryptography>=46,<50",
   "fastapi>=0.115,<1",
-  "httpx>=0.28,<1",
   "korail2==0.4.0",
   "pydantic-settings>=2.7,<3",
   "prometheus-client>=0.21,<1",
@@ -24,6 +23,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0.36,<3",
   "SRTrain==2.6.7",
   "uvicorn[standard]>=0.34,<1",
+  "httpx2>=2.16.0",
 ]
 
 [project.optional-dependencies]

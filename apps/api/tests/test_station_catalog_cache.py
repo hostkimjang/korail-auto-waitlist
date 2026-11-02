@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -235,12 +235,12 @@ async def test_fresh_snapshot_survives_restart_and_hydrates_l1_without_http(db_e
     )
     http_calls = 0
 
-    def reject_http(request: httpx.Request) -> httpx.Response:
+    def reject_http(request: httpx2.Request) -> httpx2.Response:
         nonlocal http_calls
         http_calls += 1
         raise AssertionError(f"unexpected HTTP request: {request.url.path}")
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(reject_http)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(reject_http)) as http_client:
         tago = TagoClient(Settings(tago_service_key="test-key"), http_client)
         visibility = FakeStationVisibility()
         service = StationCatalogService(factory, tago, visibility)

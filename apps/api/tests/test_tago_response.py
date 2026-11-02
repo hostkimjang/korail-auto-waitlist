@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist import providers
@@ -220,10 +220,10 @@ async def test_request_page_preserves_runtime_parser_patch_seam_and_city_only_ex
         return tago_response.TagoPage([], 0, requested_page, requested_num_rows)
 
     monkeypatch.setattr(tago, "response_page", parser)
-    transport = httpx.MockTransport(
-        lambda request: httpx.Response(200, json={"ignored": True}, request=request)
+    transport = httpx2.MockTransport(
+        lambda request: httpx2.Response(200, json={"ignored": True}, request=request)
     )
-    async with httpx.AsyncClient(transport=transport) as http_client:
+    async with httpx2.AsyncClient(transport=transport) as http_client:
         client = tago.TagoClient(Settings(tago_service_key="decoded-key"), http_client)
         await client._request_page("GetCtyCodeList", {}, 1, 100)
         await client._request_page("getTrainAcctoSttnList", {}, 2, 50)
@@ -238,11 +238,11 @@ async def test_unpaginated_http_response_is_accepted_only_for_city_codes() -> No
         include_pagination=False,
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         operations.append(request.url.path.rsplit("/", 1)[-1])
-        return httpx.Response(200, json=payload, request=request)
+        return httpx2.Response(200, json=payload, request=request)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         client = tago.TagoClient(Settings(tago_service_key="decoded-key"), http_client)
         assert await client.city_codes() == [{"citycode": "11", "cityname": "서울특별시"}]
         with pytest.raises(ProviderUnavailable) as caught:
@@ -255,14 +255,14 @@ async def test_unpaginated_http_response_is_accepted_only_for_city_codes() -> No
 async def test_malformed_city_row_is_rejected_before_cache_or_projection() -> None:
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
         rows: list[object] = [42] if calls == 1 else [{"citycode": "11", "cityname": "서울특별시"}]
         payload = valid_payload(items={"item": rows}, include_pagination=False)
-        return httpx.Response(200, json=payload, request=request)
+        return httpx2.Response(200, json=payload, request=request)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         client = tago.TagoClient(Settings(tago_service_key="decoded-key"), http_client)
         with pytest.raises(ProviderUnavailable) as caught:
             await client.city_codes()
@@ -276,7 +276,7 @@ async def test_malformed_city_row_is_rejected_before_cache_or_projection() -> No
 async def test_malformed_timetable_row_is_not_cached_and_normal_retry_succeeds() -> None:
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
         rows: list[object] = [42]
@@ -291,7 +291,7 @@ async def test_malformed_timetable_row_is_not_cached_and_normal_retry_succeeds()
                     "arrplacename": "서울",
                 }
             ]
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=valid_payload(items={"item": rows}),
             request=request,
@@ -300,7 +300,7 @@ async def test_malformed_timetable_row_is_not_cached_and_normal_retry_succeeds()
     now = datetime.now(UTC)
     departure = datetime(2026, 8, 1, 8, tzinfo=ZoneInfo("Asia/Seoul"))
     cache_key = "timetable:raw:N1:N2:20260801"
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         client = tago.TagoClient(Settings(tago_service_key="decoded-key"), http_client)
         client.hydrate_station_catalog(
             [

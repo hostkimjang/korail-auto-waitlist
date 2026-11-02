@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta, timezone
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist.config import Settings
@@ -182,11 +182,11 @@ def tago_response(items, **metadata):
 async def test_official_tago_adapter_resolves_stations_filters_provider_and_caches():
     calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         calls.append(request.url.path)
         assert request.url.params["serviceKey"] == "decoded-key"
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [
@@ -197,7 +197,7 @@ async def test_official_tago_adapter_resolves_stations_filters_provider_and_cach
             )
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
             city = request.url.params["cityCode"]
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [{"nodeid": "N1", "nodename": "서울"}, {"nodeid": "N2", "nodename": "수서"}]
@@ -207,7 +207,7 @@ async def test_official_tago_adapter_resolves_stations_filters_provider_and_cach
             )
         assert request.url.params["depPlaceId"] == "N1"
         assert request.url.params["arrPlaceId"] == "N3"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 [
@@ -241,7 +241,7 @@ async def test_official_tago_adapter_resolves_stations_filters_provider_and_cach
         )
 
     settings = Settings(tago_service_key="decoded-key", tago_cache_ttl_seconds=300)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         tago = TagoClient(settings, http_client)
         adapter = OfficialTimetableAdapter(Provider.KORAIL, settings, tago)
         first = await adapter.timetable("서울역", "부산", datetime(2026, 8, 1, 8), "N1", "N3")
@@ -274,14 +274,14 @@ async def test_official_tago_adapter_resolves_stations_filters_provider_and_cach
 async def test_official_timetable_collects_every_page_and_filters_cached_raw_day_by_window():
     timetable_pages: list[int] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response([{"citycode": "11", "cityname": "서울특별시"}]),
             )
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [
@@ -317,7 +317,7 @@ async def test_official_timetable_collects_every_page_and_filters_cached_raw_day
                 }
             ]
         )
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 rows,
@@ -328,7 +328,7 @@ async def test_official_timetable_collects_every_page_and_filters_cached_raw_day
         )
 
     settings = Settings(tago_service_key="decoded-key", tago_cache_ttl_seconds=300)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         adapter = OfficialTimetableAdapter(
             Provider.KORAIL,
             settings,
@@ -357,14 +357,14 @@ async def test_official_timetable_collects_every_page_and_filters_cached_raw_day
 
 
 async def test_official_timetable_includes_both_exact_departure_window_boundaries():
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response([{"citycode": "11", "cityname": "서울특별시"}]),
             )
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [
@@ -389,10 +389,10 @@ async def test_official_timetable_includes_both_exact_departure_window_boundarie
                 ("AFTER", "20260801120001", "20260801143001"),
             ]
         ]
-        return httpx.Response(200, json=tago_response(rows))
+        return httpx2.Response(200, json=tago_response(rows))
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         items = await OfficialTimetableAdapter(
             Provider.KORAIL,
             settings,
@@ -412,14 +412,14 @@ async def test_official_timetable_includes_both_exact_departure_window_boundarie
 async def test_official_timetable_does_not_reuse_raw_cache_across_service_dates():
     requested_service_dates: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response([{"citycode": "11", "cityname": "서울특별시"}]),
             )
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [
@@ -430,7 +430,7 @@ async def test_official_timetable_does_not_reuse_raw_cache_across_service_dates(
             )
         service_date = request.url.params["depPlandTime"]
         requested_service_dates.append(service_date)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 [
@@ -447,7 +447,7 @@ async def test_official_timetable_does_not_reuse_raw_cache_across_service_dates(
         )
 
     settings = Settings(tago_service_key="decoded-key", tago_cache_ttl_seconds=300)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         adapter = OfficialTimetableAdapter(
             Provider.KORAIL,
             settings,
@@ -505,10 +505,10 @@ async def test_official_adapter_without_service_key_fails_instead_of_synthesizin
 async def test_official_station_catalog_is_cached_and_does_not_infer_provider_membership():
     calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         calls.append(request.url.path)
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [
@@ -518,7 +518,7 @@ async def test_official_station_catalog_is_cached_and_does_not_infer_provider_me
                 ),
             )
         city = request.url.params["cityCode"]
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 [
@@ -532,7 +532,7 @@ async def test_official_station_catalog_is_cached_and_does_not_infer_provider_me
         )
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         tago = TagoClient(settings, http_client)
         korail, srt = await asyncio.gather(
             OfficialTimetableAdapter(Provider.KORAIL, settings, tago).stations(),
@@ -595,11 +595,11 @@ def test_tago_page_accepts_explicitly_unpaginated_city_catalog():
 
 
 async def test_empty_tago_city_catalog_is_not_cached():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=tago_response([]))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=tago_response([]))
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         tago = TagoClient(settings, http_client)
         with pytest.raises(ProviderUnavailable, match="city catalog is empty"):
             await tago.station_catalog(Provider.KORAIL)
@@ -607,19 +607,19 @@ async def test_empty_tago_city_catalog_is_not_cached():
 
 
 async def test_station_catalog_retrieved_at_preserves_oldest_source_fetch_time():
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response([{"citycode": "11", "cityname": "서울특별시"}]),
             )
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response([{"nodeid": "N1", "nodename": "서울"}]),
         )
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         tago = TagoClient(settings, http_client)
         await tago.city_codes()
         city_retrieved_at = tago._cache_retrieved_at("cities")
@@ -632,7 +632,7 @@ async def test_station_catalog_retrieved_at_preserves_oldest_source_fetch_time()
 async def test_station_catalog_collects_all_tago_city_and_station_pages():
     calls: list[tuple[str, int, str | None]] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         page = int(request.url.params["pageNo"])
         city = request.url.params.get("cityCode")
         calls.append((request.url.path, page, city))
@@ -642,12 +642,12 @@ async def test_station_catalog_collects_all_tago_city_and_station_pages():
                 if page == 1
                 else [{"citycode": "26", "cityname": "부산광역시"}]
             )
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(rows, totalCount=2, numOfRows=1, pageNo=page),
             )
         node_number = 1 if page == 1 else 2
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 [{"nodeid": f"{city}-N{node_number}", "nodename": f"역-{city}-{node_number}"}],
@@ -658,7 +658,7 @@ async def test_station_catalog_collects_all_tago_city_and_station_pages():
         )
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         catalog = await TagoClient(settings, http_client).station_catalog(Provider.KORAIL)
 
     assert len(catalog.stations) == 4
@@ -675,15 +675,15 @@ async def test_station_catalog_collects_all_tago_city_and_station_pages():
 async def test_station_node_pairs_are_validated_and_skip_name_resolution():
     calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         calls.append(request.url.path)
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response([{"citycode": "11", "cityname": "서울특별시"}]),
             )
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [
@@ -695,7 +695,7 @@ async def test_station_node_pairs_are_validated_and_skip_name_resolution():
             )
         departure = request.url.params["depPlaceId"]
         grade = "SRT" if departure == "N1" else "KTX"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 [
@@ -712,7 +712,7 @@ async def test_station_node_pairs_are_validated_and_skip_name_resolution():
         )
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         tago = TagoClient(settings, http_client)
 
         async def fail_if_name_resolution_runs(station_name: str):
@@ -733,13 +733,13 @@ async def test_station_node_pairs_are_validated_and_skip_name_resolution():
 
 
 async def test_station_node_pair_rejects_mismatch_partial_and_same_node():
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response([{"citycode": "11", "cityname": "서울특별시"}]),
             )
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 [
@@ -752,7 +752,7 @@ async def test_station_node_pair_rejects_mismatch_partial_and_same_node():
     from rail_waitlist.providers import RouteValidationError
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         adapter = OfficialTimetableAdapter(
             Provider.KORAIL, settings, TagoClient(settings, http_client)
         )
@@ -785,15 +785,15 @@ async def test_srt_unsupported_route_keeps_basic_station_identity_validation():
 async def test_korail_and_srt_share_raw_timetable_single_flight():
     timetable_calls = 0
 
-    async def handler(request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal timetable_calls
         if request.url.path.endswith("GetCtyCodeList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response([{"citycode": "11", "cityname": "서울특별시"}]),
             )
         if request.url.path.endswith("GetCtyAcctoTrainSttnList"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json=tago_response(
                     [
@@ -804,7 +804,7 @@ async def test_korail_and_srt_share_raw_timetable_single_flight():
             )
         timetable_calls += 1
         await asyncio.sleep(0.02)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json=tago_response(
                 [
@@ -829,7 +829,7 @@ async def test_korail_and_srt_share_raw_timetable_single_flight():
         )
 
     settings = Settings(tago_service_key="decoded-key")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http_client:
         tago = TagoClient(settings, http_client)
         korail, srt = await asyncio.gather(
             OfficialTimetableAdapter(Provider.KORAIL, settings, tago).timetable(

@@ -44,6 +44,7 @@ TRANSACTION_PRIMITIVES = {
 EXTERNAL_TRANSPORT_ROOTS = {
     "aiohttp",
     "httpx",
+    "httpx2",
     "playwright",
     "pydoll",
     "requests",

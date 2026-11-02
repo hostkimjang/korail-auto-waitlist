@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Self
 
-import httpx
+import httpx2
 import pytest
 
 from rail_waitlist import korail_browser_seat_source as legacy
@@ -228,7 +228,7 @@ def test_transport_leaf_has_exact_legacy_aliases_and_import_boundary() -> None:
         assert canonical.__module__ == "rail_waitlist.korail_sidecar.client"
     assert legacy.Protocol is owner.Protocol
     assert legacy.urlsplit is owner.urlsplit
-    assert legacy.httpx is owner.httpx
+    assert legacy.httpx2 is owner.httpx2
 
     legacy_path = API_ROOT / "src" / "rail_waitlist" / "korail_browser_seat_source.py"
     legacy_tree = ast.parse(legacy_path.read_text(encoding="utf-8"), filename=str(legacy_path))
@@ -375,7 +375,7 @@ async def test_transport_constructor_keeps_exact_internal_origin_and_http_policy
         captured.append(kwargs)
         return ClientStub()
 
-    monkeypatch.setattr(owner.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(owner.httpx2, "AsyncClient", client_factory)
     production = owner.HttpBrowserAdapterTransport(
         "http://korail-browser-adapter:8001",
         30,
@@ -429,7 +429,7 @@ async def test_search_transport_preserves_failure_classification() -> None:
         assert captured.value.rate_limited is rate_limited
         assert captured.value.protection is protection
 
-    timeout = transport_with(FakeHttpClient(error=httpx.ReadTimeout("timeout")))
+    timeout = transport_with(FakeHttpClient(error=httpx2.ReadTimeout("timeout")))
     with pytest.raises(owner._AdapterFailure) as captured:
         await timeout.search(search_request())
     assert captured.value.reason == "source_unavailable"
@@ -516,12 +516,12 @@ async def test_search_transport_skips_sidecar_when_ambient_deadline_is_exhausted
 @pytest.mark.parametrize(
     ("error", "outcome"),
     [
-        (httpx.ReadTimeout("timeout"), "timeout"),
-        (httpx.ConnectError("offline"), "transport_error"),
+        (httpx2.ReadTimeout("timeout"), "timeout"),
+        (httpx2.ConnectError("offline"), "transport_error"),
     ],
 )
 async def test_search_transport_logs_closed_transport_outcomes(
-    error: httpx.HTTPError,
+    error: httpx2.HTTPError,
     outcome: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:

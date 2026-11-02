@@ -4,7 +4,7 @@ import base64
 import json
 import socket
 
-import httpx
+import httpx2
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -55,9 +55,9 @@ async def test_webhook_redirect_is_not_followed():
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(302, headers={"Location": "http://127.0.0.1/private"})
+        return httpx2.Response(302, headers={"Location": "http://127.0.0.1/private"})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         with pytest.raises(NotificationDeliveryError, match="redirect"):
             await deliver_notification(
                 NotificationKind.GENERIC_WEBHOOK,
@@ -159,17 +159,17 @@ async def test_web_push_delivery_normalizes_in_memory_pem_before_sender(monkeypa
     ],
 )
 async def test_chat_channels_preserve_the_detailed_korean_message(kind, config, expected_field):
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(204)
+        return httpx2.Response(204)
 
     message = (
         "SRT · SRT-305 · 2026년 8월 5일 (수) · 수서 12:30 → 부산 14:55 · 일반실 · 2명\n"
         "예매 시점에 좌석을 확보하지 못해 감시를 계속합니다."
     )
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         await deliver_notification(kind, config, {"message": message}, client)
 
     assert len(requests) == 1

@@ -558,7 +558,7 @@ docker compose -f compose.yml logs -f --tail=200 api worker maintenance-worker n
 두 값은 운영 추적 전용 임시 UUID이므로 metric label이나 인증·lease 식별자로 사용하지 않습니다.
 
 알림 전달에 사용하는 URL은 path 자체에 자격정보가 포함될 수 있습니다. 애플리케이션이 관리하는 파일 로그와
-container console에서는 `httpx`·`httpcore` 요청 레코드를 내보내지 않고, 닫힌 전달 성공·실패 분류만
+container console에서는 `httpx`·`httpcore`·`httpx2`·`httpcore2` 요청 레코드를 내보내지 않고, 닫힌 전달 성공·실패 분류만
 기록합니다. 원시 URL 노출이 의심되면 다음 순서로 대응합니다.
 
 1. 영향받은 Telegram·Discord·일반 webhook 자격정보를 공급자에서 먼저 회전합니다.
@@ -1538,6 +1538,23 @@ v1.2.7은 일반 검색 폼의 역 선택 직전에도 현재 공지를 처리�
 | --- | --- |
 | `bash ./scripts/ops.sh verify` | `./scripts/ops.ps1 verify` |
 
-GitHub Actions에서는 Ubuntu에서 Bash 구문, `ops.sh config`, 운영 명령의 stop 순서·실패 복구·profile·복원 무파괴 계약 테스트, API, 웹, PostgreSQL 경합 계약을 확인하고 KORAIL Chromium 컨테이너 검증은 별도 workflow로 분리합니다. 핵심 검증은 Web의 Node Playwright와 API의 Python Playwright가 잠근 서로 다른 Chromium revision과 OS 의존성을 각각 설치하며, 한쪽의 `npx playwright install` 결과를 다른 쪽에서 재사용하지 않습니다. `experimental-browser-verify`는 `linux/amd64`에서 외부 요청 없이 고정 fixture로 실제 Chromium 실행 경계를 확인합니다. `linux/arm64` 이미지 빌드 계약, OCI ARM64 네이티브 non-headless 실행과 배포 sidecar의 실제 읽기 조회는 별도 검증으로 완료했습니다. 핵심 API의 loopback fixture direct-CDP 테스트는 일회용 GitHub-hosted VM의 해당 검증 step에서만 정확한 test opt-in으로 Chromium 내부 sandbox를 끕니다. 실험 브라우저 테스트 이미지와 격리 full-stack E2E는 Chromium 내부 sandbox를 끄는 대신 비루트 사용자, 읽기 전용 루트, capability 제거와 권한 상승 금지 경계를 유지하고 전용 fixture 네트워크만 사용합니다. 운영 Chromium 서비스에는 이 실행 래퍼와 opt-in 환경값을 적용하지 않습니다.
+GitHub Actions에서는 Ubuntu에서 Bash 구문, `ops.sh config`, 운영 명령의 stop 순서·실패 복구·profile·복원 무파괴 계약 테스트, API, 웹, PostgreSQL 경합 계약을 확인하고 KORAIL Chromium 컨테이너 검증은 별도 workflow로 분리합니다. 핵심 검증은 Web의 Node Playwright와 API의 Python Playwright가 잠근 서로 다른 Chromium revision과 OS 의존성을 각각 설치하며, 한쪽의 `npx playwright install` 결과를 다른 쪽에서 재사용하지 않습니다. Pydoll fixture는 운영 `Dockerfile.browser`와 같은 Google Chrome stable을 사용하며, CI에서 실행 파일과 버전을 확인한 뒤 경로를 명시합니다. Chrome이 없으면 실패하고 bundled Chromium으로 대체하지 않습니다. Python Playwright의 잠긴 Chromium 설치와 직접 CDP 검증은 그대로 유지합니다. `experimental-browser-verify`는 `linux/amd64`에서 외부 요청 없이 고정 fixture로 실제 Chromium 실행 경계를 확인합니다. `linux/arm64` 이미지 빌드 계약, OCI ARM64 네이티브 non-headless 실행과 배포 sidecar의 실제 읽기 조회는 별도 검증으로 완료했습니다. 핵심 API의 loopback fixture direct-CDP 테스트는 일회용 GitHub-hosted VM의 해당 검증 step에서만 정확한 test opt-in으로 Chromium 내부 sandbox를 끕니다. 실험 브라우저 테스트 이미지와 격리 full-stack E2E는 Chromium 내부 sandbox를 끄는 대신 비루트 사용자, 읽기 전용 루트, capability 제거와 권한 상승 금지 경계를 유지하고 전용 fixture 네트워크만 사용합니다. 운영 Chromium 서비스에는 이 실행 래퍼와 opt-in 환경값을 적용하지 않습니다.
 
 실제 외부 알림 채널, 공개 도메인, 철도사 계정, 실기기 동작은 자동 테스트와 별도로 확인합니다. Windows Chrome·Edge와 Android PWA를 각각 연결한 뒤 전체 활성 기기 수와 한 상태 변화의 세 기기 동시 수신은 아직 운영 환경에서 확인해야 합니다. Android에서는 PWA를 제거·재설치한 뒤 마스커블 런처 아이콘의 여백과 이전 아이콘 캐시를 먼저 확인합니다. 이어서 알림창 수신, 화면 위 팝업, 실행 중 PWA 포커스, 종료된 PWA 열기와 캐시된 첫 화면 표시 시간, 접속 중 `실시간 알림`을 확인합니다. 공식 인계는 기본 HTTPS 새 창 동작을 KORAIL·SRT 각각 확인하고, 코레일+ booking·ticket과 SRT main·ticket은 별도 QA 문서의 경로별 ADB·목적 화면·설치/미설치 브라우저 행렬을 통과하기 전까지 활성화하지 않습니다. SRT main과 고정 extra `btnNo=2` ticket을 서로 다른 목적지로 확인합니다. iPhone·iPad에서는 16.4 이상 홈 화면 설치, 사용자 탭에서의 권한 요청, foreground 간략 팝업, background 알림센터 수신, 알림 클릭 뒤 기존 PWA 포커스와 미실행 PWA 열기를 각각 확인합니다. Apple banner·Focus 결과는 foreground 팝업 검증과 구분합니다.
+
+
+## HTTP 클라이언트 마이그레이션
+
+API 소유 HTTP 클라이언트와 테스트 transport는 HTTPX2 2.16.0으로 전환했습니다.
+임포트, 타입 참조와 공개 모듈 속성은 `httpx2` 이름을 직접 사용합니다.
+기존 호환 모듈의 `httpx` 속성에 접근하던 호출자는 `httpx2` 속성으로 변경해야 합니다.
+주입하는 client, transport, response와 예외도 모두 `httpx2`에서 생성해야 합니다.
+프로세스 전체 import를 바꾸는 `alias_httpx()`는 사용하지 않습니다.
+의존성에서 사용하는 기존 `httpx`·`httpcore`와 새 `httpx2`·`httpcore2`의 원시 요청 로그를 모두 차단합니다.
+
+HTTPX2는 기본 TLS 검증에 운영체제 인증서 저장소를 사용합니다.
+사용자 지정 CA와 프록시는 실제 운영 환경에서 별도로 검증해야 합니다.
+기본 User-Agent도 `python-httpx2/<version>`으로 바뀝니다.
+기존 timeout, redirect, 쿠키와 provider 안전 정책은 유지합니다.
+
+참고: [HTTPX2 공식 마이그레이션 문서](https://pydantic.dev/docs/httpx2/get-started/migration/).

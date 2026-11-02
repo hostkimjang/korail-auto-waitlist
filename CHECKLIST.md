@@ -735,3 +735,24 @@
 - 완료한 검증만 `[x]`로 표시합니다.
 - 외부 서비스나 실기기에서 확인하지 않은 항목은 운영 확인으로 남깁니다.
 - 기능, 상태, 환경변수, 운영 절차 또는 안전 경계가 바뀌면 관련 문서도 함께 고칩니다.
+
+
+## HTTPX2 마이그레이션
+
+- [x] API 소유 HTTP client·transport·예외·공개 모듈 속성과 테스트를 HTTPX2 이름으로 통일
+- [x] HTTPX2·HTTPCore2 로그를 기존 transport 로그 차단 정책에 포함하고 회귀 테스트 추가
+- [x] Python 3.12.12·HTTPX2 2.16.0에서 관련 회귀 테스트 1,145건, strict mypy 171개 파일, Ruff 0.12.12 E/F/I, format ratchet, lock 일관성과 diff 공백 검사 통과
+- [x] PR 통합 CI에서 드러난 기존 로그인 JSON 깊이 판정의 환경 차이를 명시적 64단계 상한으로 제거.
+  요청·응답의 64/65단계 경계, 문자열의 괄호·이스케이프와 비밀값 비보존을 Windows·Linux 관련 테스트
+  253건씩으로 검증하고 최신 main 통합 뒤 strict mypy 172개 파일·Ruff·format·lock 검사를 통과
+- [x] Pydoll의 미소비 출력 pipe 포화로 실제 Chromium 검색이 멈추고 동일 검색의 출력 배출만으로
+  복구되는 경로 재현. 브라우저별 stdout·stderr를 `DEVNULL`로 연결하고 Windows lifecycle·composition·
+  모듈 경계 765건, Linux 기존 실패 3건·대량 출력 회귀 1건과 strict mypy 172개 파일 통과
+- [x] 같은 CDP 포트를 고른 두 Pydoll 인스턴스가 다른 브라우저에 연결·종료하는 결함을 실제 Chromium으로
+  재현. OS의 빈 loopback 포트를 명시하고 Windows 관련 766건·strict mypy 172개 파일 및 Linux의
+  점유 포트 회피 계약 검증 통과. 실제 Chromium 2개의 PID·포트·target 분리와 한쪽 종료 후 다른 쪽의
+  CDP 응답 유지, 최종 프로세스·listener 정리 확인. CI 시간 초과와의 직접 인과관계는 미확정
+
+Pydoll CI는 운영 이미지와 같은 Google Chrome stable을 사용합니다. 이전 bundled Chromium 140의
+간헐적 초기 navigation 정지는 해당 PID·포트 일치, CDP reader 연결 유지, fixture HTTP 요청 0건까지
+관측했으며 원인은 미확정입니다. 동일 Pydoll fixture 전체와 Python Playwright의 직접 CDP 검증은 유지합니다.

@@ -11,7 +11,7 @@ from typing import Protocol as Protocol
 from urllib.parse import urlsplit as urlsplit
 from zoneinfo import ZoneInfo
 
-import httpx as httpx
+import httpx2 as httpx2
 from pydantic import ValidationError
 
 from .domain import Provider as Provider

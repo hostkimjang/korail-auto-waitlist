@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-import httpx
+import httpx2
 
 from rail_waitlist.config import Settings
 from rail_waitlist.domain import Provider
@@ -53,7 +53,7 @@ async def audit() -> int:
         )
         return 2
 
-    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as http_client:
+    async with httpx2.AsyncClient(timeout=20, follow_redirects=False) as http_client:
         tago_client = TagoClient(settings, http_client)
         visibility = KorailStationVisibility(http_client)
         tago_catalog, korail_roster = await asyncio.gather(

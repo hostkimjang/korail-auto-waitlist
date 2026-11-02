@@ -115,7 +115,7 @@ CLIENT_SYMBOLS = {
     "TimetableItem",
     "ValidationError",
     "datetime",
-    "httpx",
+    "httpx2",
     "urlsplit",
     "validate_srt_provider_adapter_url",
 }

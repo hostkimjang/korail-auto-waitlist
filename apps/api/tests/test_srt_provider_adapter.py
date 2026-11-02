@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 
-import httpx
+import httpx2
 import pytest
 from pydantic import ValidationError
 
@@ -266,7 +266,7 @@ async def test_sidecar_client_contract_reuses_process_owned_source_and_session(
         token=TOKEN,
         monotonic=lambda: 20.0,
     )
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx2.ASGITransport(app=app)
 
     async with app.router.lifespan_context(app):
         client = SrtProviderAdapterClient(
@@ -423,7 +423,7 @@ async def test_srt_inconclusive_wire_and_logs_preserve_closed_diagnostic(
             SRT_PROVIDER_ADAPTER_ORIGIN,
             10,
             TOKEN,
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx2.ASGITransport(app=app),
         )
         with caplog.at_level(logging.INFO), bind_request_id(request_id):
             result = await client.confirm_reservation(
@@ -465,7 +465,7 @@ async def test_srt_confirmation_exception_log_is_correlated_and_secret_free(
             SRT_PROVIDER_ADAPTER_ORIGIN,
             10,
             TOKEN,
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx2.ASGITransport(app=app),
         )
         with caplog.at_level(logging.INFO), bind_request_id(request_id):
             with pytest.raises(SrtProviderAdapterUnavailable):
@@ -492,20 +492,20 @@ async def test_client_drain_waits_for_only_its_pending_read_only_request() -> No
     status_calls = 0
     terminal = asyncio.Event()
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         nonlocal registered_call_id, status_calls
         if request.url.path == "/v1/read-only-call-register":
             registration = json.loads(request.content)
             assert registration["request_id"] == request_id
             registered_call_id = registration["call_id"]
             assert request.headers[REQUEST_ID_HEADER] != request_id
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"accepted": True, "instance_id": instance_id},
             )
         if request.url.path == "/v1/observe":
             assert request.headers[READ_ONLY_CALL_ID_HEADER] == registered_call_id
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"observations": []},
                 headers={REQUEST_ID_HEADER: request_id},
@@ -514,7 +514,7 @@ async def test_client_drain_waits_for_only_its_pending_read_only_request() -> No
             status_calls += 1
             assert request.headers[REQUEST_ID_HEADER] != request_id
             assert request.url.params["call_id"] == registered_call_id
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "state": "terminal" if terminal.is_set() else "pending",
@@ -527,7 +527,7 @@ async def test_client_drain_waits_for_only_its_pending_read_only_request() -> No
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(respond),
+        transport=httpx2.MockTransport(respond),
     )
     with bind_request_id(request_id):
         await client.observe(observation_request(), origin="수서", destination="부산")
@@ -553,39 +553,39 @@ async def test_client_drain_retries_unknown_status_failures(failure: str) -> Non
     failure_sent = False
     status_calls = 0
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         nonlocal failure_sent, status_calls
         if request.url.path == "/v1/read-only-call-register":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"accepted": True, "instance_id": instance_id},
             )
         if request.url.path == "/v1/observe":
             observed.set()
-            return httpx.Response(200, json={"observations": []})
+            return httpx2.Response(200, json={"observations": []})
         if request.url.path == "/v1/read-only-call-status":
             status_calls += 1
             if not observed.is_set():
-                return httpx.Response(
+                return httpx2.Response(
                     200,
                     json={"state": "pending", "instance_id": instance_id},
                 )
             if not failure_sent:
                 failure_sent = True
                 if failure == "transport":
-                    raise httpx.ConnectError("temporary status failure", request=request)
+                    raise httpx2.ConnectError("temporary status failure", request=request)
                 if failure == "http":
-                    return httpx.Response(503, json={})
+                    return httpx2.Response(503, json={})
                 if failure == "unknown":
-                    return httpx.Response(
+                    return httpx2.Response(
                         200,
                         json={"state": "unknown", "instance_id": instance_id},
                     )
-                return httpx.Response(
+                return httpx2.Response(
                     200,
                     json={"state": "invalid", "instance_id": instance_id},
                 )
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"state": "terminal", "instance_id": instance_id},
             )
@@ -595,7 +595,7 @@ async def test_client_drain_retries_unknown_status_failures(failure: str) -> Non
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(respond),
+        transport=httpx2.MockTransport(respond),
     )
     with bind_request_id(request_id):
         await client.observe(observation_request(), origin="수서", destination="부산")
@@ -617,16 +617,16 @@ async def test_client_read_only_drain_deadline_fences_all_later_requests(
     instance_id = "768e0ce66bce4cc2af9ef152ea25d831"
     request_paths: list[str] = []
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         request_paths.append(request.url.path)
         if request.url.path == "/v1/read-only-call-register":
-            return httpx.Response(200, json={"accepted": True, "instance_id": instance_id})
+            return httpx2.Response(200, json={"accepted": True, "instance_id": instance_id})
         if request.url.path == "/v1/observe":
-            return httpx.Response(200, json={"observations": []})
+            return httpx2.Response(200, json={"observations": []})
         if request.url.path == "/v1/read-only-call-status":
             if status_mode == "transport_error":
-                raise httpx.ConnectError("persistent status failure", request=request)
-            return httpx.Response(
+                raise httpx2.ConnectError("persistent status failure", request=request)
+            return httpx2.Response(
                 200,
                 json={"state": status_mode, "instance_id": instance_id},
             )
@@ -636,7 +636,7 @@ async def test_client_read_only_drain_deadline_fences_all_later_requests(
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(respond),
+        transport=httpx2.MockTransport(respond),
         read_only_drain_timeout_seconds=0.03,
     )
     with bind_request_id(request_id):
@@ -665,17 +665,17 @@ async def test_outer_read_timeout_still_drains_the_pre_registered_call() -> None
     registered = asyncio.Event()
     terminal = asyncio.Event()
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/v1/read-only-call-register":
             registered.set()
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"accepted": True, "instance_id": instance_id},
             )
         if request.url.path == "/v1/observe":
-            raise httpx.ReadTimeout("outer timeout", request=request)
+            raise httpx2.ReadTimeout("outer timeout", request=request)
         if request.url.path == "/v1/read-only-call-status":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "state": "terminal" if terminal.is_set() else "pending",
@@ -688,7 +688,7 @@ async def test_outer_read_timeout_still_drains_the_pre_registered_call() -> None
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(respond),
+        transport=httpx2.MockTransport(respond),
     )
     with bind_request_id(request_id), pytest.raises(SrtProviderAdapterUnavailable):
         await client.observe(observation_request(), origin="수서", destination="부산")
@@ -713,9 +713,9 @@ async def test_status_rpc_is_authenticated_and_does_not_track_itself() -> None:
 
     async with (
         app.router.lifespan_context(app),
-        httpx.AsyncClient(
+        httpx2.AsyncClient(
             base_url=SRT_PROVIDER_ADAPTER_ORIGIN,
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx2.ASGITransport(app=app),
             trust_env=False,
         ) as client,
     ):
@@ -824,12 +824,12 @@ async def test_sidecar_token_auth_and_validation_errors_never_echo_credentials()
         executor=FakeExecutor(),
         token=TOKEN,
     )
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx2.ASGITransport(app=app)
     raw_secret = "credential-must-never-be-returned"
 
     async with (
         app.router.lifespan_context(app),
-        httpx.AsyncClient(
+        httpx2.AsyncClient(
             base_url=SRT_PROVIDER_ADAPTER_ORIGIN,
             transport=transport,
             trust_env=False,
@@ -879,9 +879,9 @@ async def test_srt_sidecar_validates_echoes_and_resets_internal_request_id(
     with caplog.at_level(logging.INFO):
         async with (
             app.router.lifespan_context(app),
-            httpx.AsyncClient(
+            httpx2.AsyncClient(
                 base_url=SRT_PROVIDER_ADAPTER_ORIGIN,
-                transport=httpx.ASGITransport(app=app),
+                transport=httpx2.ASGITransport(app=app),
                 trust_env=False,
                 follow_redirects=False,
             ) as client,
@@ -950,9 +950,9 @@ async def test_legacy_login_exception_reassignment_keeps_outcome_mapping(
 
     async with (
         app.router.lifespan_context(app),
-        httpx.AsyncClient(
+        httpx2.AsyncClient(
             base_url=SRT_PROVIDER_ADAPTER_ORIGIN,
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx2.ASGITransport(app=app),
             trust_env=False,
             follow_redirects=False,
         ) as client,
@@ -1064,14 +1064,14 @@ def test_timetable_search_contract_is_strict_and_timezone_aware() -> None:
 
 @pytest.mark.asyncio
 async def test_client_does_not_follow_redirects_or_accept_unvalidated_responses() -> None:
-    async def redirect(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(307, headers={"Location": "http://example.invalid/secret"})
+    async def redirect(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(307, headers={"Location": "http://example.invalid/secret"})
 
     client = SrtProviderAdapterClient(
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(redirect),
+        transport=httpx2.MockTransport(redirect),
     )
     with pytest.raises(SrtProviderAdapterUnavailable, match="HTTP 307"):
         await client.session_status()
@@ -1083,11 +1083,11 @@ async def test_srt_client_propagates_request_id_and_logs_closed_lifecycle(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     request_id = "5790e635307c4549a7728d01455bf92c"
-    captured_headers: list[httpx.Headers] = []
+    captured_headers: list[httpx2.Headers] = []
 
-    async def success(request: httpx.Request) -> httpx.Response:
+    async def success(request: httpx2.Request) -> httpx2.Response:
         captured_headers.append(request.headers)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={"state": "cold", "locally_reusable": False},
         )
@@ -1096,7 +1096,7 @@ async def test_srt_client_propagates_request_id_and_logs_closed_lifecycle(
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(success),
+        transport=httpx2.MockTransport(success),
     )
     with caplog.at_level(logging.INFO), bind_request_id(request_id):
         result = await client.session_status()
@@ -1118,11 +1118,11 @@ async def test_srt_client_propagates_request_id_and_logs_closed_lifecycle(
 
 @pytest.mark.asyncio
 async def test_srt_client_generates_a_new_request_id_for_each_unbound_call() -> None:
-    captured_headers: list[httpx.Headers] = []
+    captured_headers: list[httpx2.Headers] = []
 
-    async def success(request: httpx.Request) -> httpx.Response:
+    async def success(request: httpx2.Request) -> httpx2.Response:
         captured_headers.append(request.headers)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={"state": "cold", "locally_reusable": False},
         )
@@ -1131,7 +1131,7 @@ async def test_srt_client_generates_a_new_request_id_for_each_unbound_call() -> 
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(success),
+        transport=httpx2.MockTransport(success),
     )
     await client.session_status()
     await client.session_status()
@@ -1146,16 +1146,16 @@ async def test_srt_client_generates_a_new_request_id_for_each_unbound_call() -> 
 @pytest.mark.parametrize(
     ("error", "outcome"),
     [
-        (httpx.ReadTimeout("timeout"), "timeout"),
-        (httpx.ConnectError("offline"), "transport_error"),
+        (httpx2.ReadTimeout("timeout"), "timeout"),
+        (httpx2.ConnectError("offline"), "transport_error"),
     ],
 )
 async def test_srt_client_logs_closed_transport_failure(
-    error: httpx.HTTPError,
+    error: httpx2.HTTPError,
     outcome: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async def fail(request: httpx.Request) -> httpx.Response:
+    async def fail(request: httpx2.Request) -> httpx2.Response:
         error.request = request
         raise error
 
@@ -1163,7 +1163,7 @@ async def test_srt_client_logs_closed_transport_failure(
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(fail),
+        transport=httpx2.MockTransport(fail),
     )
     with (
         caplog.at_level(logging.WARNING),
@@ -1190,14 +1190,14 @@ async def test_srt_client_logs_closed_response_failures(
     outcome: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async def respond(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status_code, json=payload)
+    async def respond(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(status_code, json=payload)
 
     client = SrtProviderAdapterClient(
         SRT_PROVIDER_ADAPTER_ORIGIN,
         10,
         TOKEN,
-        transport=httpx.MockTransport(respond),
+        transport=httpx2.MockTransport(respond),
     )
     with caplog.at_level(logging.WARNING), pytest.raises(SrtProviderAdapterUnavailable):
         await client.session_status()

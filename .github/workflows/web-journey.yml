@@ -67,33 +67,33 @@ jobs:
         working-directory: apps/web
       - run: uv run --python 3.12 --frozen --extra browser playwright install --with-deps chromium
         working-directory: apps/api
-      - name: Select installed Chromium for API fixture tests
+      - name: Select runtime Chrome for Pydoll fixture tests
         working-directory: apps/api
         run: |
           uv run --python 3.12 --frozen --extra browser python - <<'PY'
           import os
+          import shutil
+          import subprocess
           from pathlib import Path
-          from playwright.sync_api import sync_playwright
 
-          with sync_playwright() as playwright:
-              binary = Path(playwright.chromium.executable_path)
-          if not binary.is_file():
-              raise RuntimeError("Installed fixture Chromium is unavailable")
+          installed = shutil.which("google-chrome")
+          if installed is None:
+              raise RuntimeError("Runtime Google Chrome is unavailable")
+          binary = Path(installed)
+          if not binary.is_file() or not os.access(binary, os.X_OK):
+              raise RuntimeError("Runtime Google Chrome is not executable")
+          version = subprocess.run(
+              [str(binary), "--version"], check=True, capture_output=True, text=True, timeout=10
+          ).stdout.strip()
+          if not version.startswith("Google Chrome "):
+              raise RuntimeError("Unexpected runtime browser family")
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
               environment.write(f"KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH={binary}\n")
-          print("Installed fixture Chromium selected")
+          print(f"Pydoll runtime browser: {version}")
           PY
       - run: bash -n scripts/*.sh
       - run: bash scripts/ops.sh config
       - run: make verify-ops
-      - name: Diagnose Chromium fixture navigation
-        working-directory: apps/api
-        run: |
-          for attempt in 1 2 3; do
-            uv run --python 3.12 --frozen --extra test --extra browser pytest tests/test_korail_pydoll_browser.py -k real_browser -q --maxfail=1
-          done
-        env:
-          KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"
       - run: make verify-api
         env:
           KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"

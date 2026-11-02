@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import threading
@@ -9,7 +8,6 @@ from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from html import unescape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from itertools import islice
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Self
@@ -199,125 +197,9 @@ def test_pydoll_snapshot_preserves_overnight_arrival_and_only_one_fare() -> None
 
 @contextmanager
 def serve_pydoll_fixture(monkeypatch: pytest.MonkeyPatch):
-    from pydoll.browser.managers.browser_process_manager import BrowserProcessManager
-    from pydoll.connection.connection_handler import ConnectionHandler
-    from pydoll.exceptions import CommandExecutionTimeout
-
     fixture_directory = Path(__file__).parent / "fixtures"
-    request_counts = {"started": 0, "completed": 0}
-    request_lock = threading.Lock()
-    processes = []
-    original_start = BrowserProcessManager.start_browser_process
-    original_execute = ConnectionHandler.execute_command
-
-    def start_process(manager, binary_location, port, arguments):
-        process = original_start(manager, binary_location, port, arguments)
-        processes.append((port, process))
-        return process
-
-    def task_state(task):
-        if task is None:
-            return None
-        return {
-            "done": task.done(),
-            "cancelled": task.cancelled(),
-            "stack": [frame.f_code.co_name for frame in task.get_stack(limit=3)],
-        }
-
-    def listener_owners(port):
-        # Linux-only, bounded metadata inspection; never read process arguments or URLs.
-        proc_root = Path("/proc")
-        if not proc_root.is_dir() or not isinstance(port, int):
-            return None
-        inodes = set()
-        for name in ("tcp", "tcp6"):
-            try:
-                rows = (proc_root / "net" / name).read_text().splitlines()[1:]
-            except OSError:
-                continue
-            for row in rows:
-                fields = row.split()
-                address, hex_port = fields[1].split(":")
-                if (
-                    int(hex_port, 16) == port
-                    and fields[3] == "0A"
-                    and address in {"0100007F", "00000000000000000000000001000000"}
-                ):
-                    inodes.add(f"socket:[{fields[9]}]")
-        if not inodes:
-            return []
-        owners = []
-        for directory in islice((p for p in proc_root.iterdir() if p.name.isdigit()), 1024):
-            try:
-                for descriptor in islice((directory / "fd").iterdir(), 1024):
-                    try:
-                        if str(descriptor.readlink()) in inodes:
-                            owners.append(int(directory.name))
-                            break
-                    except OSError:
-                        continue
-            except OSError:
-                continue
-            if len(owners) >= 16:
-                break
-        return owners
-
-    async def execute_command(handler, command, timeout=60):
-        try:
-            return await original_execute(handler, command, timeout)
-        except CommandExecutionTimeout:
-            if command.get("method") == "Page.navigate":
-                try:
-                    process_states = []
-                    for port, process in processes[-8:]:
-                        try:
-                            wchan = Path(f"/proc/{process.pid}/wchan").read_text().strip()[:80]
-                        except OSError:
-                            wchan = None
-                        process_states.append(
-                            {
-                                "pid": process.pid,
-                                "port": port,
-                                "returncode": process.poll(),
-                                "wchan": wchan,
-                            }
-                        )
-                    with request_lock:
-                        http_counts = dict(request_counts)
-                    ws = handler._ws_connection
-                    diagnostic = {
-                        "port": handler._connection_port,
-                        "page_target": handler._page_id is not None,
-                        "ws_state": ws.state.name if ws is not None else None,
-                        "reader": task_state(handler._receive_task),
-                        "event_worker": task_state(handler._events_handler._worker_task),
-                        "pending_commands": len(handler._command_manager._pending_commands),
-                        "queued_events": handler._events_handler._event_queue.qsize(),
-                        "processes": process_states,
-                        "listener_pids": listener_owners(handler._connection_port),
-                        "http_get": http_counts,
-                    }
-                    logging.getLogger(__name__).warning(
-                        "fixture_navigation_timeout %s", json.dumps(diagnostic, sort_keys=True)
-                    )
-                except Exception:  # noqa: BLE001 - preserve the original navigation timeout
-                    # Diagnostics must never replace the original browser failure.
-                    logging.getLogger(__name__).warning("fixture_navigation_timeout unavailable")
-            raise
-
-    monkeypatch.setattr(BrowserProcessManager, "start_browser_process", start_process)
-    monkeypatch.setattr(ConnectionHandler, "execute_command", execute_command)
 
     class QuietHandler(SimpleHTTPRequestHandler):
-        def do_GET(self) -> None:
-            with request_lock:
-                request_counts["started"] += 1
-            try:
-                super().do_GET()
-            finally:
-                with request_lock:
-                    request_counts["completed"] += 1
-
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -331,39 +213,6 @@ def serve_pydoll_fixture(monkeypatch: pytest.MonkeyPatch):
         server.shutdown()
         thread.join(timeout=2)
         server.server_close()
-
-
-@pytest.mark.asyncio
-async def test_fixture_navigation_timeout_diagnostic_preserves_error_without_payload(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    pytest.importorskip("pydoll")
-    from pydoll.connection.connection_handler import ConnectionHandler
-    from pydoll.exceptions import CommandExecutionTimeout
-
-    original_error = CommandExecutionTimeout()
-
-    async def fail_navigation(handler, command, timeout):
-        assert timeout == 7
-        raise original_error
-
-    monkeypatch.setattr(ConnectionHandler, "execute_command", fail_navigation)
-    with serve_pydoll_fixture(monkeypatch):
-        handler = ConnectionHandler(connection_port=None, page_id="synthetic-private-target")
-        with pytest.raises(CommandExecutionTimeout) as raised:
-            await handler.execute_command(
-                {"method": "Page.navigate", "params": {"url": "synthetic-private-payload"}},
-                timeout=7,
-            )
-
-    assert raised.value is original_error
-    records = [r.message for r in caplog.records if "fixture_navigation_timeout " in r.message]
-    assert len(records) == 1
-    diagnostic = json.loads(records[0].split(" ", 1)[1])
-    assert diagnostic["http_get"] == {"started": 0, "completed": 0}
-    assert diagnostic["processes"] == []
-    assert diagnostic["page_target"] is True
-    assert "synthetic-private" not in records[0]
 
 
 class FixtureSession:

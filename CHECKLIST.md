@@ -750,4 +750,9 @@
   모듈 경계 765건, Linux 기존 실패 3건·대량 출력 회귀 1건과 strict mypy 172개 파일 통과
 - [x] 같은 CDP 포트를 고른 두 Pydoll 인스턴스가 다른 브라우저에 연결·종료하는 결함을 실제 Chromium으로
   재현. OS의 빈 loopback 포트를 명시하고 Windows 관련 766건·strict mypy 172개 파일 및 Linux의
-  점유 포트 회피 계약 검증 통과. CI의 시간 초과와 동일 원인인지는 별도 실패 시점 진단으로 확인
+  점유 포트 회피 계약 검증 통과. 실제 Chromium 2개의 PID·포트·target 분리와 한쪽 종료 후 다른 쪽의
+  CDP 응답 유지, 최종 프로세스·listener 정리 확인. CI 시간 초과와의 직접 인과관계는 미확정
+
+Pydoll CI는 운영 이미지와 같은 Google Chrome stable을 사용합니다. 이전 bundled Chromium 140의
+간헐적 초기 navigation 정지는 해당 PID·포트 일치, CDP reader 연결 유지, fixture HTTP 요청 0건까지
+관측했으며 원인은 미확정입니다. 동일 Pydoll fixture 전체와 Python Playwright의 직접 CDP 검증은 유지합니다.

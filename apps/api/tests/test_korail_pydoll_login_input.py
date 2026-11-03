@@ -66,9 +66,9 @@ async def test_fresh_form_preserves_inputs_and_submits_once(monkeypatch, login_m
         assert method.click.await_count == (0 if selected else 1)
         controls[0].clear.assert_not_awaited()
         controls[1].clear.assert_not_awaited()
-        controls[0].type_text.assert_awaited_once_with(credential.login_id)
-        controls[1].type_text.assert_awaited_once_with(credential.password)
-        controls[2].click.assert_awaited_once()
+        controls[0].type_text.assert_awaited_once_with(credential.login_id, humanize=True)
+        controls[1].type_text.assert_awaited_once_with(credential.password, humanize=True)
+        controls[2].click.assert_awaited_once_with(humanize=True)
     finally:
         await session._login_driver.close_submission_observer()
 
@@ -193,7 +193,7 @@ async def test_every_official_submission_is_recorded_before_the_click(monkeypatc
     session, _, controls = prepare(
         monkeypatch, selected=True, identity=[True, True], password=[True, True]
     )
-    controls[2].click.side_effect = lambda: events.append("click")
+    controls[2].click.side_effect = lambda **_kwargs: events.append("click")
     try:
         with login_submission_pacing(_RecordingPacer(events), purpose):
             assert await session._submit_login_form(

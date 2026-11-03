@@ -30,6 +30,15 @@ def test_browser_image_selects_official_chrome_package_for_supported_architectur
     assert "KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome" in dockerfile
 
 
+def test_browser_image_keeps_korean_fonts_and_browser_language() -> None:
+    dockerfile = _dockerfile_text()
+
+    # Without CJK fonts KORAIL's Hangul pages fall back to Chinese/Japanese glyphs,
+    # and Linux Chrome derives navigator.languages from LANGUAGE (en-US otherwise).
+    assert re.search(r"^\s+fonts-noto-cjk \\$", dockerfile, flags=re.MULTILINE)
+    assert re.search(r"^\s+LANGUAGE=ko_KR:ko \\$", dockerfile, flags=re.MULTILINE)
+
+
 def test_browser_image_rejects_unsupported_architectures() -> None:
     dockerfile = _dockerfile_text()
     architecture_case = re.search(

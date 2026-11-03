@@ -377,7 +377,13 @@ def prepare_observed_login(
     monkeypatch.setattr(
         session,
         "_wait_for_login_controls",
-        AsyncMock(return_value=(input_control, input_control, SimpleNamespace(click=submit))),
+        AsyncMock(
+            return_value=(
+                input_control,
+                input_control,
+                SimpleNamespace(click=lambda **_kwargs: submit()),
+            )
+        ),
     )
     monkeypatch.setattr(
         session,

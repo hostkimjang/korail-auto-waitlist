@@ -158,6 +158,11 @@
   5분 이상 간격으로 수행. 입력 일치와 UI 클릭은 확인했지만 인증은 0회였고, 두 번째 표본의 공식 POST
   1건은 2xx·`other`로만 닫혀 DynaPath 로그인 역할을 배제하지 못함. 조회·예약 0회와 소유 자원 정리 뒤
   보호 대기 900초를 다시 열고 Firefox·WebKit·표식 은폐·사용자 profile 재사용은 실행하지 않음
+- [x] 1.2.22에서 브라우저 이미지에 `fonts-noto-cjk`와 `LANGUAGE=ko_KR:ko`를 추가하고 이미지 계약
+  테스트를 넣었다. 실측: 컨테이너는 한글 폰트(WenQuanYi)만, `navigator.languages`가 en-US였고 호스트
+  Chrome은 ko-KR·맑은 고딕이었다. 로그인 driver의 type_text·click에 Pydoll humanize를 적용해 클릭 전
+  mousemove 0회·고정 54ms 키 간격(실측)을 궤적 이동·지터가 있는 입력으로 교체했다. 관련 pytest 542건·
+  ruff·mypy 통과, 배포 후 실제 로그인 표본 확인은 미완료
 - [x] Windows 호스트 Chrome 154의 새 임시 profile에서 앞선 actionability 시간 초과를 CDP
   `Debugger.enable` 계측 충돌로 분리. 계측 제거 뒤 문자별 키 입력·exact 값·버튼 actionability·일반 클릭과
   공식 제출까지 통과했지만 HTTP 200 JSON `macro_err1` 보호 응답으로 끝남. 조회·예약 0회, 공유 대기

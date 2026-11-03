@@ -164,7 +164,7 @@ class FakeElement:
             raise LookupError(selector)
         return value
 
-    async def click(self) -> None:
+    async def click(self, **_kwargs: object) -> None:
         self.clicks += 1
 
     async def clear(self) -> None:

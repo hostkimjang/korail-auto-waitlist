@@ -4,6 +4,7 @@ ARG TARGETARCH
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    LANGUAGE=ko_KR:ko \
     KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome
 
 # The working host-side Pydoll PoC runs against the installed stable Google
@@ -14,6 +15,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        fonts-noto-cjk \
         novnc \
         openbox \
         scrot \

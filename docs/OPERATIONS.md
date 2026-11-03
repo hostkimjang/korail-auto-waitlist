@@ -828,8 +828,10 @@ v1.2.4부터 Pydoll의 실제 공식 검색 XHR·Fetch에서 확인한 HTTP 500~
 호스트 비교의 초기 `submit_actionability` 시간 초과는 별도 CDP 세션의 `Debugger.enable` 직후
 Playwright DOM 명령이 멈춘 진단 충돌이었습니다. `Network.enable`만 사용하면 동일 버튼은 빈 폼·더미 입력·
 실제 입력 모두 actionability를 통과했습니다. 이 중간 실패를 공식 버튼 가림이나 KORAIL 보호 판정으로
-해석하지 않습니다. 사용자 profile·쿠키 복사, `navigator.webdriver` 은폐, OS 입력 흉내 또는 엔진 순차
-변경으로 보호 조건을 탐색하지 않습니다.
+해석하지 않습니다. 사용자 profile·쿠키 복사, `navigator.webdriver` 은폐 또는 엔진 순차
+변경으로 보호 조건을 탐색하지 않습니다. 1.2.22부터 앱이 소유한 브라우저 이미지에 한국어 폰트와
+브라우저 언어를 추가하고, Pydoll 내장 humanize로 로그인 키 간격과 마우스 경로를 사람 입력 범위에
+가깝게 맞춥니다. 외부 입력 흉내 도구나 다른 브라우저 엔진으로는 탐색하지 않습니다.
 
 로그인 결과의 `auth_required`만으로 비밀번호가 틀렸다고 판단하지 않습니다. 2026년 10월 1일 실제
 입력 일치·버튼 가림 없음·준비 GET의 정상 JSON 응답 뒤 로그인 POST 500이 서버·로컬 Docker·Windows Chrome에서

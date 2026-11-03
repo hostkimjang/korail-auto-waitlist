@@ -441,12 +441,12 @@ class PydollLoginDomDriver:
         await self._require_input_value(login_id, identity_selector, "", "login_identity_clear")
         await self._port._login_step(
             "login_identity_input",
-            login_id.type_text(credential.login_id),
+            login_id.type_text(credential.login_id, humanize=True),
         )
         await self._require_input_value(password, password_selector, "", "login_password_clear")
         await self._port._login_step(
             "login_password_input",
-            password.type_text(credential.password),
+            password.type_text(credential.password, humanize=True),
         )
         await self._require_input_value(
             login_id, identity_selector, credential.login_id, "login_input_mismatch"
@@ -462,7 +462,7 @@ class PydollLoginDomDriver:
         try:
             submission.arm()
             await _pacing.record_login_submission()
-            await self._port._login_step("login_submit", submit.click())
+            await self._port._login_step("login_submit", submit.click(humanize=True))
         except BaseException:
             await self.close_submission_observer()
             raise

@@ -237,7 +237,12 @@
   전환됨을 확인. 재생성 1분 안에 Redis heartbeat key 2개가 TTL 120으로 갱신되는 것도 확인. 같은 화면 실조작으로
   대전→서울 공식 조회가 설문형 공지를 `search_notice_dismissed count=1`로 닫고 열차 7편·좌석 14개를 반환,
   228편 일반실 `자동 예매` 등록 뒤 6초 만에 `PAYMENT_REQUIRED`·`confirmed_payment_required` 완료, 결제 없이
-  22:46에 결제보류 자동 만료 뒤 `WATCHING` 복구까지 확인. 서비스 12개 healthy·migration 종료 0. Oracle 배포는 아직 미실행
+  22:46에 결제보류 자동 만료 뒤 `WATCHING` 복구까지 확인. 서비스 12개 healthy·migration 종료 0
+- [x] Oracle 배포(11월 11일 00:25~00:37 KST): 커밋 `3ad7d6b` push 뒤 서버 checkout을 fast-forward하고
+  `ops.sh experimental`로 프로필 전체 재빌드·재생성. 12개 healthy·migration 종료 0·`/healthz` 200·Redis
+  heartbeat key 2개 TTL 갱신·API에 heartbeat 모듈 설치 확인. 배포 전 stash·patch·HEAD archive·`.env`·DB dump를
+  `~/deploy-snapshots/20261110T152518Z`에 보존하고 이전 이미지에 `before-1.3.1-20261111` 태그. KORAIL은 11월 3일과
+  같은 보호 정지(세대 4) 유지·재생성 직후 새 로그인 제출 없음, SRT는 `authenticated` 갱신
 
 ## 구현됨
 

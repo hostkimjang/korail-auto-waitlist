@@ -15,7 +15,19 @@ v1.3.1(작업 처리·일정 실행 Redis heartbeat와 설문형 공지 인식)�
 PAYMENT_REQUIRED`와 `confirmed_payment_required` 공식 확인이 완료됐다. 결제하지 않은 결제보류는 22:46:03에
 `confirmed_payment_hold_no_longer_actionable_monitoring_resumed`로 자동 만료·`WATCHING` 복구됐고, 23:15:00에
 후보 소진·horizon 경제로 `EXPIRED`까지 정상 종료됐다. 화면 증거는 `output/v131-live-verification-20261110/`
-(gitignore된 로컬 산출물)에 있다. Oracle에는 아직 배포하지 않았다.
+(gitignore된 로컬 산출물)에 있다.
+
+v1.3.1의 Oracle 배포는 11월 11일 00:25~00:37 KST에 완료했다. 커밋 `3ad7d6b`(1.3.0·1.3.1 통합)를 push한 뒤,
+서버 checkout을 같은 커밋으로 fast-forward했다. 배포 전 커밋되지 않은 1.3.0 patch는 `git stash`
+(`pre-1.3.1 deploy 20261110T152518Z`)와 `~/deploy-snapshots/20261110T152518Z`의 `worktree-before.patch`·
+HEAD `git archive`·`.env`·DB dump(`predeploy-0042.dump.gz`, 340MB)로 보관했고, 이전 이미지 3개에는
+`before-1.3.1-20261111` 태그를 붙였다. 활성 대기·Celery 큐가 0건인 상태에서 `ops.sh experimental`로 프로필
+전체를 빌드·재생성했고, 장기 서비스 12개 healthy·migration·log-init 종료 코드 0·스키마 `0042_protection_halt`
+유지·`/healthz` HTTP 200을 확인했다. 재생성 직후 Redis에서 `rail-waitlist:heartbeat:worker`·`scheduler`
+key 2개가 TTL 120 이내로 갱신되는 것을 확인했고(62초·61초), API 컨테이너에 heartbeat 모듈이 설치된 것도
+확인했다. `korail-browser-adapter` 로그에는 새 로그인 제출이 없었고 `rail_provider_accounts`의 KORAIL은
+11월 3일과 같은 보호 정지(계정 세대 4)를 유지한다 — 재생성 직후 재시도는 관측되지 않았다. SRT는 00:36에
+`authenticated`로 갱신했다. 이전 배포와 달리 서버 `.env`는 root 소유(600)라 root SSH로 `ops.sh`를 실행했다.
 
 2026년 11월 3일 21시대에 Oracle(`oracle-arm-free-01`)을 로컬과 같은 1.3.0 작업 트리로 올렸습니다. 서버
 checkout을 `origin/main`(`e1e8d00`)으로 fast-forward하고 커밋 전 1.3.0 변경을 patch로 적용한 뒤, 정규화한

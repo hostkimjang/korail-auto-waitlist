@@ -217,6 +217,31 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 11일 공지 창 완화 인식·닫지 못한 팝업 구조 관측 (v1.3.2)
+
+- [x] 공지 창 완화 인식: 기존 검증이 실패하면 입력 요소가 없는 aria-modal/native dialog 중 닫기 문구
+  (창닫기·닫기·close·X) 단추가 정확히 1개인 창을 그 단추로 닫고, 대화형 컨트롤이 전혀 없는 단일 모달에만
+  Esc를 한 번 보내 페이지 자신의 닫기(native dialog는 close() 직접 호출)를 화면에서 확인한 뒤 다음 동작을
+  진행. 닫기 단추 2개 이상·입력 혼재·숨겨진 닫기·Esc 무응답은 fail-closed. 실제 Chromium 회귀 10종 신규
+  (닫기 단추 클릭·제외 버튼 미클릭·마킹 셀렉터·겹친 폴백·혼합 순서·복수 닫기 차단·숨긴 닫기 차단·
+  native dialog close·페이지 Esc 처리·Esc 무응답 persisted·report sink 전파)
+- [x] 닫지 못한 창 구조 관측 배선: dismiss 실패 보고 → adapter(KORAIL_NOTICE_OBSERVATION_REDIS_URL,
+  Compose 기본값 redis://redis:6379/0, .env로 덮어씀) → Redis key(TTL 48시간, 원문·링크·쿠키 제외,
+  구조 요약 200자/API 상한 400자) → API 요약 unresolved_notice+제약 → 설정 닫지 못한 팝업 카드
+  (단계·닫기 시도 방법·시도 횟수·관측 시각). OpenAPI 스키마 80개·길이 93,254·SHA-256
+  a04ffb74…088abbe로 갱신(2건), 웹 계약은 stage/attempts/shape 실패 시 누락(fail-closed)이며
+  하픈·공백 치환 보존과 제어문자 제거 회귀 포함
+- [x] 정책 반영: 완화 단계의 Esc/close()는 확인된 닫기 버튼 클릭보다 넓은 공식 화면 조작임을
+  POLICY_AND_SAFETY에 명시하고, 원문 미저장·48시간 만료 경계와 기본 Redis 계정 사용 이유(전용 ACL
+  대신 단순함 우선)를 OPERATIONS에 기록
+- [x] pytest 병렬화: make verify-api(CI web-journey 동일 호출)에 -n auto --dist loadfile 적용,
+  pytest-xdist 의존성·uv.lock 반영. 로컬 12워커 첫 실행에서 신규 생성자 파라미터·셸 표면 가드
+  11건 실패 → 가드·fake 갱신 후 해당 파일군 통과, 전체 재실행 결과를 아래에 기록
+- [ ] 로컬 experimental-rail 전체 재빌드·재생성 후 확인: 설정 로그·진행 상태에 닫지 못한 팝업 카드
+  없음(관측 없는 정상 상태), 새 대기 화면에서 공지 존재 시 조회 성공과 어댑터
+  event=search_notice_dismissed strict=N fallback=M 로그, Redis 관측 key 미생성 확인
+- [ ] Oracle 배포(사용자 승인 시) 후 같은 확인과 어댑터 환경변수 반영 확인
+
 ## 2026년 11월 10일 작업 처리 heartbeat와 설문형 공지 인식 (v1.3.1)
 
 - [x] `작업 처리`·`일정 실행` 확인 불가 고정 제거: worker는 태스크 전후, beat는 tick마다 Redis key(TTL 120초)에

@@ -20,4 +20,10 @@ async def operations_summary(
     response.headers["Cache-Control"] = "no-store"
     reader = getattr(request.app.state, "heartbeat_reader", None)
     heartbeats = await reader.read() if reader is not None else EMPTY_HEARTBEATS
-    return await build_operations_summary(session, heartbeats=heartbeats)
+    notice_reader = getattr(request.app.state, "notice_observation_reader", None)
+    notice_observation = await notice_reader.read() if notice_reader is not None else None
+    return await build_operations_summary(
+        session,
+        heartbeats=heartbeats,
+        notice_observation=notice_observation,
+    )

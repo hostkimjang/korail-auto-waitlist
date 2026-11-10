@@ -1647,7 +1647,7 @@ Oracle의 10월 1일 대전→서울 12:00~18:00 조회는 새 공식 `승차권
 실패했습니다. 설정·health·로그인은 정상이었습니다. 이 서명이 반복되면 제한시간을 늘리기 전에 공식
 안내 팝업과 클릭 대상의 겹침을 확인합니다. 현행 읽기 조회는 공지 내용이 갱신돼도 구조가 검증된 창의
 닫기만 처리합니다. 겹친 공지·이어지는 공지는 최대 5개·5초 동안 순서대로 닫고, 긴 공지는 닫기까지
-스크롤합니다. 닫힌 로그는 `event=search_notice_dismissed kind=public_search_notice count=N`입니다.
+스크롤합니다. 닫힌 로그는 v1.3.2부터 `event=search_notice_dismissed strict=N fallback=M`입니다(v1.3.1까지는 `kind=public_search_notice count=N`).
 v1.2.1~1.2.2의 유형은 `booking_window_expansion`이었습니다. 미확인 창은
 `search_notice_unrecognized`, 닫기 후 남거나 재등장한 같은 공지는 `search_notice_persisted`,
 처리 상한은 `search_notice_action_limit`, 버튼을 찾은 뒤 창 변경은 `search_notice_changed`,
@@ -1667,6 +1667,20 @@ v1.3.1부터 `1일간 그만보기` 체크박스가 있는 공지에서는 닫�
 인식 조건은 기존 창 구조 검증 뒤에 `창닫기/닫기` 문구 버튼이 정확히 1개이고, 버튼이 2개일 때는 체크박스 마커가
 있을 때만 허용하는 방식입니다. 클릭 대상은 항상 닫기 버튼이며 나머지 버튼은 누르지 않습니다. 체크박스 없는 2버튼 창
 (예약 선택 등)은 전처럼 `search_notice_unrecognized`로 닫지 않습니다.
+
+v1.3.2부터는 창 구조 자체가 완전히 바뀐 팝업을 위해 완화 인식 단계를 추가했습니다. 검증된 창이 없으면
+입력상자·선택상자·폼이 없고 닫기 문구(창닫기·닫기·close·X) 단추가 정확히 1개인 모달(aria-modal 또는
+네이티브 `<dialog>`)을 그 단추로 닫고, 대화형 컨트롤이 전혀 없는 단일 모달에는 Esc를 한 번 보내 페이지
+자신의 닫기 동작(네이티브 dialog는 close())을 기다렸다가 사라진 화면을 확인한 뒤에만 다음 동작을
+진행합니다. 닫기 단추가 2개 이상이거나 닫기 단추가 숨겨진 채 다른 동작 버튼이 있는 창, 입력이 섞인 창,
+Esc에 응답하지 않아 남는 창은 fail-closed로 `search_notice_unrecognized`·`search_notice_persisted`로
+중단합니다. 닫지 못한 채 실패하면 `KORAIL_NOTICE_OBSERVATION_REDIS_URL`이 설정된 adapter에서 원문을
+뺀 구조 요약(클래스·닫기 단추 레이블·입력 요소) 1줄을 Redis에 48시간 저장하고, 설정의 로그·진행 상태
+"닫지 못한 팝업" 카드에 관측 시각·단계·닫기 시도 방법·시도 횟수와 함께 표시합니다. 원문·링크·쿠키는
+저장하지 않습니다. 어댑터는 이 key 하나에만 쓰는 전용 ACL 계정을 두지 않고 기본 Redis 계정으로
+붙입니다(저장되는 내용이 원문 없는 구조 요약이라 권한 절감보다 단순함을 택했습니다). `KORAIL_NOTICE_OBSERVATION_REDIS_URL`는 `.env`로 덮어쓸 수 있고 기본값은 `redis://redis:6379/0`입니다.
+
+### 운행·예매 상태 관측 안내가 보임
 
 ### 운행·예매 상태 관측 안내가 보임
 

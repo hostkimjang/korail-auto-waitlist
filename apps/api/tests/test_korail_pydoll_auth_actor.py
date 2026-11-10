@@ -444,6 +444,7 @@ def test_client_reserves_the_dedicated_profile_for_authentication_only(
         manual_session_only: bool,
         allow_dedicated_profile: bool,
         probe_restored_session: bool = False,
+        notice_report_sink: object | None = None,
     ) -> object:
         assert auto_handle_dialogs is False
         assert probe_restored_session is False

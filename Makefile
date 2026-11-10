@@ -9,7 +9,7 @@ verify-ops:
 	bash scripts/test-backup-restore.sh
 
 verify-api:
-	cd apps/api && uv lock --check && uv run --python 3.12 --frozen --extra test --extra browser pytest && uvx --from ruff==0.12.12 ruff check --select E,F,I . && uv run --python 3.12 --frozen --extra test python scripts/check_ruff_format_ratchet.py && uv run --python 3.12 --frozen --extra test --extra browser mypy
+	cd apps/api && uv lock --check && uv run --python 3.12 --frozen --extra test --extra browser pytest -n auto --dist loadfile && uvx --from ruff==0.12.12 ruff check --select E,F,I . && uv run --python 3.12 --frozen --extra test python scripts/check_ruff_format_ratchet.py && uv run --python 3.12 --frozen --extra test --extra browser mypy
 
 verify-browser:
 	$(COMPOSE) --profile test build korail-browser-adapter-test

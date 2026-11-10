@@ -108,6 +108,27 @@ export interface OperationsEntry {
   confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
 }
 
+export type UnresolvedNoticeStage =
+  | "search_notice_unrecognized"
+  | "search_notice_persisted"
+  | "search_notice_action_limit"
+  | "search_notice_changed"
+  | "search_notice_close_unknown";
+
+export type UnresolvedNoticeCloseMethod =
+  | "strict_close_button"
+  | "fallback_close_button"
+  | "fallback_escape"
+  | "none";
+
+export interface OperationsUnresolvedNotice {
+  observedAt: string | null;
+  stage: UnresolvedNoticeStage;
+  closeMethod: UnresolvedNoticeCloseMethod;
+  attempts: number;
+  shapeSummary: string;
+}
+
 export interface OperationsSummary {
   generatedAt: string | null;
   window: OperationsWindow;
@@ -118,6 +139,7 @@ export interface OperationsSummary {
   sourceFreshness: OperationsSourceFreshness[];
   services: OperationsServiceState[];
   providerCircuits: ProviderCircuit[];
+  unresolvedNotice: OperationsUnresolvedNotice | null;
   recentEntries: OperationsEntry[];
   limitations: string[];
   isPartial: boolean;
@@ -164,10 +186,24 @@ const entryReasonCodes = new Set<OperationsEntryReasonCode>([
   "payment_deadline_elapsed_one_off_expired",
   "payment_hold_no_longer_present_one_off_expired",
 ]);
+const noticeStages = new Set<UnresolvedNoticeStage>([
+  "search_notice_unrecognized",
+  "search_notice_persisted",
+  "search_notice_action_limit",
+  "search_notice_changed",
+  "search_notice_close_unknown",
+]);
+const noticeCloseMethods = new Set<UnresolvedNoticeCloseMethod>([
+  "strict_close_button",
+  "fallback_close_button",
+  "fallback_escape",
+  "none",
+]);
 const knownLimitations = new Set([
   "http_and_process_errors_are_not_durably_recorded",
   "worker_and_scheduler_health_depend_on_redis_heartbeats",
   "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
+  "unresolved_notice_shape_captured",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -290,6 +326,32 @@ function services(value: unknown): OperationsServiceState[] {
   }));
 }
 
+function unresolvedNotice(value: unknown): OperationsUnresolvedNotice | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.stage !== "string" || !noticeStages.has(value.stage as UnresolvedNoticeStage)) {
+    return null;
+  }
+  if (typeof value.close_method !== "string"
+    || !noticeCloseMethods.has(value.close_method as UnresolvedNoticeCloseMethod)) {
+    return null;
+  }
+  if (typeof value.attempts !== "number" || !Number.isInteger(value.attempts)
+    || value.attempts < 0 || value.attempts > 10) {
+    return null;
+  }
+  if (typeof value.shape_summary !== "string") return null;
+  // eslint-disable-next-line no-control-regex -- the summary must stay print-safe.
+  const shape = value.shape_summary.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  if (shape.length === 0 || shape.length > 400) return null;
+  return {
+    observedAt: timestamp(value.observed_at),
+    stage: value.stage as UnresolvedNoticeStage,
+    closeMethod: value.close_method as UnresolvedNoticeCloseMethod,
+    attempts: value.attempts,
+    shapeSummary: shape,
+  };
+}
+
 function recentEntries(value: unknown): OperationsEntry[] {
   if (!Array.isArray(value)) return [];
   return value.filter(isRecord).slice(0, 20).map((item) => ({
@@ -352,6 +414,7 @@ export function mapOperationsSummary(payload: unknown): OperationsSummary {
     sourceFreshness: sourceFreshness(payload.source_freshness),
     services: services(payload.services),
     providerCircuits,
+    unresolvedNotice: unresolvedNotice(payload.unresolved_notice),
     recentEntries: recentEntries(payload.recent_entries),
     limitations: Array.isArray(payload.limitations)
       ? payload.limitations.filter((item): item is string => typeof item === "string" && knownLimitations.has(item))

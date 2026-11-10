@@ -400,12 +400,12 @@ def test_browser_shell_has_exact_local_definitions_assignments_and_surface() -> 
     # restored-profile probe flag and enters the actor's booking login scope (7 lines).
     # Confirmation keeps the session on a typed local read rejection: one local import
     # name plus a single except branch that logs the closed reason and re-raises (10 lines).
-    assert len(source.splitlines()) <= 1_574
+    assert len(source.splitlines()) <= 1_582
     assert len({name for name in vars(browser) if not name.startswith("_")}) == 84
     private_names = {
         name for name in vars(browser) if name.startswith("_") and not name.startswith("__")
     }
-    assert len(private_names) == 30
+    assert len(private_names) == 31
     assert browser._ActorKorailReservedSeat is reservation_contracts.KorailReservedSeat
     assert not hasattr(browser, "__all__")
 

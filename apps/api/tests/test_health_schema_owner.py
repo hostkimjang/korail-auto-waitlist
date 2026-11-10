@@ -191,7 +191,7 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     encoded = json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
 
     assert len(schema["paths"]) == 37
-    assert len(schema["components"]["schemas"]) == 79
+    assert len(schema["components"]["schemas"]) == 80
     assert AutomaticReservationRetryFenceReason.__module__ == (
         "rail_waitlist.reservations.retry_fence_contracts"
     )
@@ -226,9 +226,9 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     assert schema["paths"]["/api/v1/seat-status/status"]["get"]["description"] == (
         "Expose every hold that prevents seat I/O, including authentication protection."
     )
-    assert len(encoded) == 92353
+    assert len(encoded) == 93254
     assert hashlib.sha256(encoded).hexdigest() == (
-        "b74e829c7aa293d25849ddd51eb1425a0f681a6d65eed8fd4116a33d1ed207af"
+        "a04ffb747e6aef9c745750f7a15f841a931ac7c6612090b7924ebf83a088abbe"
     )
 
 

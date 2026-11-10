@@ -131,6 +131,25 @@ class OperationServiceState(ApiModel):
     ]
 
 
+class OperationUnresolvedNotice(ApiModel):
+    observed_at: datetime
+    stage: Literal[
+        "search_notice_unrecognized",
+        "search_notice_persisted",
+        "search_notice_action_limit",
+        "search_notice_changed",
+        "search_notice_close_unknown",
+    ]
+    close_method: Literal[
+        "strict_close_button",
+        "fallback_close_button",
+        "fallback_escape",
+        "none",
+    ]
+    attempts: int = Field(ge=0, le=10)
+    shape_summary: str = Field(min_length=1, max_length=400)
+
+
 class OperationProviderCircuit(ApiModel):
     provider: Provider
     state: ProviderCircuitState
@@ -168,11 +187,13 @@ class OperationsSummary(ApiModel):
     source_freshness: list[OperationSourceFreshness]
     services: list[OperationServiceState]
     provider_circuits: list[OperationProviderCircuit]
+    unresolved_notice: OperationUnresolvedNotice | None
     recent_entries: list[OperationEntry]
     limitations: list[
         Literal[
             "http_and_process_errors_are_not_durably_recorded",
             "worker_and_scheduler_health_depend_on_redis_heartbeats",
             "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
+            "unresolved_notice_shape_captured",
         ]
     ]

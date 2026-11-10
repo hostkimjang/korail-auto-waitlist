@@ -19,6 +19,7 @@ from .domain import (
     reservation_result_reason_code_for_outcome,
 )
 from .heartbeat import EMPTY_HEARTBEATS, HEARTBEAT_TTL_SECONDS, ServiceHeartbeats
+from .notice_observations import NoticeObservationRecord
 from .operation_summary.schemas import (
     OperationCurrentCounts,
     OperationEntry,
@@ -30,6 +31,7 @@ from .operation_summary.schemas import (
     OperationsSummary,
     OperationStatusCount,
     OperationsWindow,
+    OperationUnresolvedNotice,
     OperationWindowCounts,
 )
 from .outbox_management.models import OutboxEvent
@@ -597,11 +599,24 @@ def _service_heartbeat_state(
     )
 
 
+def _unresolved_notice(record: NoticeObservationRecord | None) -> OperationUnresolvedNotice | None:
+    if record is None:
+        return None
+    return OperationUnresolvedNotice(
+        observed_at=record.observed_at,
+        stage=record.stage,
+        close_method=record.close_method,
+        attempts=record.attempts,
+        shape_summary=record.shape_summary,
+    )
+
+
 async def build_operations_summary(
     session: AsyncSession,
     *,
     now: datetime | None = None,
     heartbeats: ServiceHeartbeats = EMPTY_HEARTBEATS,
+    notice_observation: NoticeObservationRecord | None = None,
 ) -> OperationsSummary:
     generated_at = _utc(now) if now is not None else datetime.now(UTC)
     if generated_at is None:  # pragma: no cover - guarded by the branch above
@@ -828,9 +843,11 @@ async def build_operations_summary(
             for circuit in circuits
         ],
         recent_entries=await _recent_entries(session, window_start),
+        unresolved_notice=_unresolved_notice(notice_observation),
         limitations=[
             "http_and_process_errors_are_not_durably_recorded",
             "worker_and_scheduler_health_depend_on_redis_heartbeats",
             "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
-        ],
+        ]
+        + (["unresolved_notice_shape_captured"] if notice_observation is not None else []),
     )

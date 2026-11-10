@@ -10,6 +10,9 @@ import {
 } from "@phosphor-icons/react";
 import {
   isOperationsSummaryEmpty,
+  type OperationsSummary,
+  type UnresolvedNoticeCloseMethod,
+  type UnresolvedNoticeStage,
   type OperationsEntry,
   type OperationsRate,
   type OperationsHealthStatus,
@@ -205,6 +208,20 @@ const limitationLabels: Record<string, string> = {
   http_and_process_errors_are_not_durably_recorded: "HTTP·프로세스 오류는 이 영속 집계에 포함되지 않습니다.",
   worker_and_scheduler_health_depend_on_redis_heartbeats: "작업 처리·일정 실행 상태는 워커·스케줄러가 Redis에 남기는 heartbeat를 따르며, heartbeat가 없으면 정상으로 추정하지 않습니다.",
   recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors: "최근 기록은 내부 ID·노선·원문 오류를 제외하고 열차와 출발 시각 등 필요한 진행 문맥만 표시합니다.",
+  unresolved_notice_shape_captured: "닫지 못한 공식 창이 있어 그 구조 요약(마지막 관측)을 아래에 표시합니다. 공지 원문은 저장하지 않습니다.",
+};
+const noticeStageLabels: Record<UnresolvedNoticeStage, string> = {
+  search_notice_unrecognized: "알 수 없는 창 형태",
+  search_notice_persisted: "창닫기 후에도 창이 사라지지 않음",
+  search_notice_action_limit: "창이 계속 새로 열려 중단",
+  search_notice_changed: "창이 중간에 바뀜",
+  search_notice_close_unknown: "창닫기 전달 여부 확인 불가",
+};
+const noticeMethodLabels: Record<UnresolvedNoticeCloseMethod, string> = {
+  strict_close_button: "기존 창닫기 단추",
+  fallback_close_button: "완화 인식 단추",
+  fallback_escape: "Esc 키 시도",
+  none: "닫기 수단 없음",
 };
 
 function displayTimestamp(value: string | null): string {
@@ -252,6 +269,23 @@ function ServiceHealthCard({ item }: { item: OperationsServiceState }) {
       </div>
       <span className={`operations-status ${statusTone(item.status)}`}>{statusLabels[item.status]}</span>
       <p>{serviceDetail(item)}</p>
+    </article>
+  );
+}
+
+function UnresolvedNoticeCard({ notice }: { notice: NonNullable<OperationsSummary["unresolvedNotice"]> }) {
+  return (
+    <article className="operations-health-card">
+      <div className="operations-card-title">
+        <WarningCircle size={20} aria-hidden="true" />
+        <strong>닫지 못한 팝업</strong>
+      </div>
+      <span className="operations-status is-warning">{noticeStageLabels[notice.stage]}</span>
+      <p>
+        {noticeMethodLabels[notice.closeMethod]}으로 {notice.attempts}회 닫기 후 미해결 · {" "}
+        {notice.observedAt ? "관측 " + displayTimestamp(notice.observedAt) : "관측 시각 확인 불가"}
+      </p>
+      <code className="operations-notice-shape">{notice.shapeSummary}</code>
     </article>
   );
 }
@@ -440,8 +474,9 @@ export function SystemStatusDashboard({
             </div>
             <div className="operations-health-grid">
               {data.services.map((item, index) => <ServiceHealthCard key={`service-${item.service}-${index}`} item={item} />)}
+              {data.unresolvedNotice && <UnresolvedNoticeCard notice={data.unresolvedNotice} />}
               {data.sourceFreshness.map((item, index) => <SourceHealthCard key={`source-${item.source}-${index}`} item={item} />)}
-              {data.services.length === 0 && data.sourceFreshness.length === 0 && <p className="operations-inline-empty">상태 정보 없음</p>}
+              {data.services.length === 0 && data.sourceFreshness.length === 0 && !data.unresolvedNotice && <p className="operations-inline-empty">상태 정보 없음</p>}
             </div>
           </section>
 

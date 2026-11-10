@@ -32,6 +32,7 @@ from .heartbeat import RedisHeartbeatReader
 from .korail_browser_seat_source import KorailBrowserSeatSource
 from .korail_sidecar.provider_cooldown import RedisProviderCooldown
 from .metrics import HTTP_DURATION, HTTP_REQUESTS, OUTBOX_PENDING
+from .notice_observations import RedisNoticeObservationReader
 from .notification_management.http import router as notification_management_router
 from .operation_summary.http import router as operation_summary_router
 from .outbox_management.models import OutboxEvent
@@ -129,6 +130,7 @@ def create_app(
     seat_status_cooldown_store = RedisCooldownStore(app.state.seat_status_redis)
     app.state.seat_status_cooldown_store = seat_status_cooldown_store
     app.state.heartbeat_reader = RedisHeartbeatReader(app.state.seat_status_redis)
+    app.state.notice_observation_reader = RedisNoticeObservationReader(app.state.seat_status_redis)
     app.state.korail_provider_cooldown = RedisProviderCooldown(
         app.state.seat_status_redis,
         protection_seconds=settings.seat_status_protection_cooldown_seconds,

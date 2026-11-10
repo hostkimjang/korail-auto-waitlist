@@ -18,6 +18,8 @@ from rail_waitlist.korail_sidecar.browser_service_availability import BrowserPro
 from rail_waitlist.korail_sidecar.pydoll.page_contracts import PydollPageSnapshot, PydollTrainRow
 from rail_waitlist.korail_sidecar.pydoll.search_notice import (
     CLOSE_SELECTOR,
+    FALLBACK_CLOSE_SELECTOR,
+    FALLBACK_OBSERVE_SCRIPT,
     MAX_NOTICE_CLOSE_ACTIONS,
     OBSERVE_NOTICE_SCRIPT,
     dismiss_public_search_notices,
@@ -392,7 +394,7 @@ async def test_verified_notice_closes_once_before_expanding_and_refreshes_snapsh
     assert clicks == ["notice_closed", "more_clicked"]
     controls.assert_awaited_once_with(CLOSE_SELECTOR)
     snapshot_reader.assert_awaited_once()
-    assert "event=search_notice_dismissed kind=public_search_notice count=1" in caplog.text
+    assert "event=search_notice_dismissed strict=1 fallback=0" in caplog.text
     assert "안내 창닫기" not in caplog.text
 
 
@@ -705,17 +707,10 @@ async def test_long_notice_scrolls_to_close_without_clicking_its_content(notice_
     [
         notice_markup("예약 동의", close="네"),
         notice_markup("동의 확인", close="확인"),
-        notice_markup("기존 예약 선택", extra="<button>새 예약</button>"),
-        notice_markup(
-            "설문 형태지만 알림 체크 없음",
-            extra='<button title="새 창으로 열기">설문 참여하기</button>',
-        ),
         notice_markup("입력 필요", extra='<input type="text">'),
         notice_markup("선택 필요", extra="<select><option>선택</option></select>"),
         notice_markup("폼 처리", extra="<form></form>"),
         notice_markup("외부 내용", extra="<iframe></iframe>"),
-        notice_markup("공지", extra='<a href="/ticket/reservation/list">예약 확인</a>'),
-        notice_markup("공지").replace("emer_pop", "reservation_pop"),
         notice_markup("공지").replace("onclick=", "disabled onclick="),
         notice_markup("공지") + '<div role="dialog" style="position:fixed;inset:0">인증 확인</div>',
     ],
@@ -723,7 +718,8 @@ async def test_long_notice_scrolls_to_close_without_clicking_its_content(notice_
 async def test_non_public_or_action_dialog_is_never_closed_using_real_dom(notice_browser, markup):
     page = await notice_fixture_page(notice_browser, markup)
     try:
-        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "unrecognized"
+        assert (await page.evaluate(OBSERVE_NOTICE_SCRIPT))["state"] == "unrecognized"
+        assert (await page.evaluate(FALLBACK_OBSERVE_SCRIPT))["state"] == "unrecognized"
         controls = AsyncMock()
 
         async def execute(script, *, return_by_value):
@@ -749,5 +745,300 @@ async def test_notice_on_reservation_page_is_never_closed_using_real_dom(notice_
     )
     try:
         assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "unrecognized"
+        assert await page.evaluate(FALLBACK_OBSERVE_SCRIPT) == "unrecognized"
     finally:
         await page.close()
+
+
+def generic_modal_markup(content: str, *, extra: str = "") -> str:
+    return f"""
+    <div role="dialog" aria-modal="true" class="korailPopup2026"
+      style="position:fixed;inset:20px;background:white;z-index:20">
+      <p>{content}</p>
+      {extra}<button onclick="this.closest('[role=dialog]').remove()">창닫기</button>
+    </div>"""
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        notice_markup("기존 예약 선택", extra="<button>새 예약</button>"),
+        notice_markup(
+            "설문 형태지만 알림 체크 없음",
+            extra='<button title="새 창으로 열기">설문 참여하기</button>',
+        ),
+        notice_markup("공지", extra='<a href="/ticket/reservation/list">예약 확인</a>'),
+        notice_markup("공지").replace("emer_pop", "reservation_pop"),
+    ],
+)
+async def test_fallback_closes_variants_with_one_close_control_using_real_dom(
+    notice_browser, markup
+):
+    # The relaxed pass exists for shapes the strict contract predates: a modal with
+    # exactly one close-vocabulary control closes even when other controls or
+    # classes differ, and the close click never touches the other controls.
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        observed = await page.evaluate(FALLBACK_OBSERVE_SCRIPT)
+        assert observed["state"] == "fallback_notice"
+        assert observed["close_mode"] == "control"
+        assert observed["key"].startswith("F:")
+        await page.evaluate(
+            """() => {window.ctaClicks = 0;
+            document.querySelectorAll('a, button').forEach(node => node.addEventListener(
+              'click', () => { if (!/창닫기|닫기/.test(node.innerText)) window.ctaClicks++; }));}"""
+        )
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+        assert await page.evaluate("window.ctaClicks") == 0
+    finally:
+        await page.close()
+
+
+async def test_fallback_marks_close_control_for_verified_click_using_real_dom(notice_browser):
+    page = await notice_fixture_page(notice_browser, generic_modal_markup("새 형태로 바뀐 공지"))
+    try:
+        strict = await page.evaluate(OBSERVE_NOTICE_SCRIPT)
+        assert strict["state"] == "unrecognized"
+        observed = await page.evaluate(FALLBACK_OBSERVE_SCRIPT)
+        assert observed["state"] == "fallback_notice"
+        seen = []
+
+        async def execute(script, *, return_by_value):
+            return script_result(await page.evaluate(script))
+
+        async def controls(selector):
+            seen.append(selector)
+            return [
+                control
+                for control in await page.locator(selector).all()
+                if await control.is_visible()
+            ]
+
+        assert await dismiss_public_search_notices(
+            execute_script=execute,
+            find_controls=controls,
+            monotonic=time.monotonic,
+            sleep=asyncio.sleep,
+            timeout_seconds=5,
+        )
+        assert FALLBACK_CLOSE_SELECTOR in seen
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+    finally:
+        await page.close()
+
+
+async def test_stacked_fallback_dialogs_close_topmost_then_next_using_real_dom(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser,
+        generic_modal_markup("첫 폴백 공지") + generic_modal_markup("둘째 폴백 공지"),
+    )
+    try:
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+        assert await page.evaluate("document.querySelectorAll('[role=dialog]').length") == 0
+    finally:
+        await page.close()
+
+
+async def test_strict_and_fallback_dialogs_close_in_any_order_using_real_dom(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser, generic_modal_markup("폴백 공지") + notice_markup("공지")
+    )
+    try:
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+    finally:
+        await page.close()
+
+
+async def test_multiple_close_controls_block_fallback_using_real_dom(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser, generic_modal_markup("닫기가 둘", extra="<button>닫기</button>")
+    )
+    try:
+        observed = await page.evaluate(FALLBACK_OBSERVE_SCRIPT)
+        assert observed["state"] == "unrecognized"
+        controls = AsyncMock()
+
+        async def execute(script, *, return_by_value):
+            return script_result(await page.evaluate(script))
+
+        with pytest.raises(BrowserSourceUnavailable) as raised:
+            await dismiss_public_search_notices(
+                execute_script=execute,
+                find_controls=controls,
+                monotonic=lambda: 0,
+                sleep=AsyncMock(),
+                timeout_seconds=5,
+            )
+        assert raised.value.stage == "search_notice_unrecognized"
+        controls.assert_not_awaited()
+        assert await page.evaluate("document.querySelectorAll('[role=dialog]').length") == 1
+    finally:
+        await page.close()
+
+
+async def test_hidden_close_control_blocks_fallback_without_escape_guess(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser,
+        generic_modal_markup("은닉 닫기").replace("<button ", "<button hidden "),
+    )
+    try:
+        observed = await page.evaluate(FALLBACK_OBSERVE_SCRIPT)
+        assert observed["state"] == "unrecognized"
+        controls = AsyncMock()
+
+        async def execute(script, *, return_by_value):
+            return script_result(await page.evaluate(script))
+
+        with pytest.raises(BrowserSourceUnavailable) as raised:
+            await dismiss_public_search_notices(
+                execute_script=execute,
+                find_controls=controls,
+                monotonic=lambda: 0,
+                sleep=AsyncMock(),
+                timeout_seconds=5,
+            )
+        assert raised.value.stage == "search_notice_unrecognized"
+        controls.assert_not_awaited()
+        assert await page.evaluate("document.querySelectorAll('[role=dialog]').length") == 1
+    finally:
+        await page.close()
+
+
+async def test_native_dialog_without_controls_closes_through_fallback_escape_using_real_dom(
+    notice_browser,
+):
+    page = await notice_fixture_page(
+        notice_browser,
+        '<dialog open style="position:fixed;inset:30px;background:white">제휴 서비스 안내</dialog>',
+    )
+    try:
+        observed = await page.evaluate(FALLBACK_OBSERVE_SCRIPT)
+        assert observed["state"] == "fallback_notice"
+        assert observed["close_mode"] == "escape"
+        assert observed["key"].startswith("E:")
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate("document.querySelectorAll('dialog[open]').length") == 0
+    finally:
+        await page.close()
+
+
+async def test_control_free_modal_closes_when_page_handles_escape_using_real_dom(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser,
+        '<div role="dialog" aria-modal="true" style="position:fixed;inset:20px">'
+        "열어야 닫히는 팝업</div>"
+        "<script>window.escapes = 0; document.addEventListener('keydown', event => {"
+        " if (event.key === 'Escape') { window.escapes++;"
+        " document.querySelector('[role=dialog]').remove(); } });</script>",
+    )
+    try:
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate("window.escapes") == 1
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+    finally:
+        await page.close()
+
+
+async def test_escape_only_dialog_ignoring_escape_reports_persisted(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser,
+        '<div role="dialog" aria-modal="true" style="position:fixed;inset:20px">'
+        "응답 없는 팝업</div>",
+    )
+    try:
+
+        async def execute(script, *, return_by_value):
+            return script_result(await page.evaluate(script))
+
+        times = iter([0.0, 0.0, 6.0, 6.0, 6.0])
+        reports = []
+        with pytest.raises(BrowserSourceUnavailable) as raised:
+            await dismiss_public_search_notices(
+                execute_script=execute,
+                find_controls=AsyncMock(),
+                monotonic=lambda: next(times),
+                sleep=AsyncMock(),
+                timeout_seconds=5,
+                report_unrecognized=reports.append,
+            )
+        assert raised.value.stage == "search_notice_persisted"
+        assert reports[-1].close_method == "fallback_escape"
+        assert reports[-1].shape_summary
+        assert await page.evaluate("document.querySelectorAll('[role=dialog]').length") == 1
+    finally:
+        await page.close()
+
+
+async def test_unrecognized_failure_reports_structural_summary():
+    reports = []
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(
+                return_value=script_result(
+                    {
+                        "state": "unrecognized",
+                        "shape": "div.layerWrap koreaPop aria-modal=true 2 controls"
+                        " [확인 | 닫기] risky:input",
+                    }
+                )
+            ),
+            find_controls=AsyncMock(),
+            monotonic=lambda: 0,
+            sleep=AsyncMock(),
+            timeout_seconds=5,
+            report_unrecognized=reports.append,
+        )
+    assert raised.value.stage == "search_notice_unrecognized"
+    assert [report.stage for report in reports] == ["search_notice_unrecognized"]
+    assert reports[0].attempts == 0
+    assert "koreaPop" in reports[0].shape_summary
+
+
+async def test_closed_notice_that_persists_reports_attempt_and_method():
+    close = SimpleNamespace(click=AsyncMock())
+    times = iter([0.0, 0.0, 6.0, 6.0, 6.0])
+    reports = []
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(return_value=script_result("public_search_notice")),
+            find_controls=AsyncMock(return_value=[close]),
+            monotonic=lambda: next(times),
+            sleep=AsyncMock(),
+            timeout_seconds=5,
+            report_unrecognized=reports.append,
+        )
+    assert raised.value.stage == "search_notice_persisted"
+    assert reports[-1].attempts == 1
+    assert reports[-1].close_method == "strict_close_button"
+
+
+async def test_session_passes_notice_reports_to_the_configured_sink(monkeypatch):
+    reports = []
+    session = _PydollSession(
+        "https://www.korail.com/ticket/search/general",
+        1_000,
+        True,
+        notice_report_sink=reports.append,
+    )
+    session._tab = SimpleNamespace(
+        execute_script=AsyncMock(
+            return_value=script_result(
+                {
+                    "state": "unrecognized",
+                    "shape": "div.korailPop2027 aria-modal=true 0 controls [] no risky tags",
+                }
+            )
+        )
+    )
+    monkeypatch.setattr(
+        session, "_snapshot", AsyncMock(return_value=PydollPageSnapshot("닫기 안내", ()))
+    )
+
+    with pytest.raises(BrowserSourceUnavailable) as raised:
+        await session.dismiss_search_notice(PydollPageSnapshot("닫기 안내", ()))
+
+    assert raised.value.stage == "search_notice_unrecognized"
+    assert reports[-1].shape_summary.startswith("div.korailPop2027")

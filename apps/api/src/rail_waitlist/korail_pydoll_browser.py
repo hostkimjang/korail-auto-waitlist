@@ -151,6 +151,7 @@ from .korail_sidecar.pydoll.search_driver import (
 from .korail_sidecar.pydoll.search_driver import (
     SearchHourCandidate as _HourCandidate,
 )
+from .korail_sidecar.pydoll.search_notice import NoticeReportSink as _NoticeReportSink
 from .korail_sidecar.pydoll.search_snapshot_policy import (
     deduplicate_search_snapshot as _deduplicate_snapshot,
 )
@@ -295,6 +296,7 @@ def _default_pydoll_session_factory(
     manual_session_only: bool = False,
     allow_dedicated_profile: bool = True,
     probe_restored_session: bool = False,
+    notice_report_sink: _NoticeReportSink | None = None,
 ) -> PydollSessionContext:
     return _PydollSessionContext(
         _PydollSession(
@@ -305,6 +307,7 @@ def _default_pydoll_session_factory(
             manual_session_only=manual_session_only,
             allow_dedicated_profile=allow_dedicated_profile,
             probe_restored_session=probe_restored_session,
+            notice_report_sink=notice_report_sink,
         )
     )
 
@@ -329,6 +332,7 @@ class PydollKorailBrowserClient:
         provider_cooldown: ProviderCooldown | None = None,
         manual_session_only: bool = False,
         probe_restored_session: bool = False,
+        notice_report_sink: _NoticeReportSink | None = None,
     ) -> None:
         if session_reuse_ttl_seconds < 0:
             raise ValueError("session_reuse_ttl_seconds must be non-negative")
@@ -347,6 +351,7 @@ class PydollKorailBrowserClient:
                 manual_session_only=manual_session_only,
                 allow_dedicated_profile=True,
                 probe_restored_session=probe_restored_session,
+                notice_report_sink=notice_report_sink,
             )
         )
         # The authentication actor is the only owner of the persistent profile.
@@ -359,6 +364,7 @@ class PydollKorailBrowserClient:
                 auto_handle_dialogs=auto_handle_dialogs,
                 manual_session_only=False,
                 allow_dedicated_profile=False,
+                notice_report_sink=notice_report_sink,
             )
         )
         self._session_reuse_ttl_seconds = session_reuse_ttl_seconds
@@ -751,6 +757,7 @@ class _PydollSession:
         manual_session_only: bool = False,
         allow_dedicated_profile: bool = True,
         probe_restored_session: bool = False,
+        notice_report_sink: _NoticeReportSink | None = None,
     ) -> None:
         from .korail_sidecar.pydoll.search_response_protection import (
             PydollSearchResponseProtectionObserver,
@@ -841,6 +848,7 @@ class _PydollSession:
             monotonic=time.monotonic,
             sleep=asyncio.sleep,
             protection_surface_selector=_PROTECTION_SURFACE_SELECTOR,
+            notice_report_sink=notice_report_sink,
         )
 
     @property

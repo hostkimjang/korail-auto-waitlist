@@ -294,6 +294,7 @@ def test_pydoll_engine_factory_and_probe_are_selected_without_network(
         {
             "page_url": OFFICIAL_KORAIL_SEARCH_URL,
             "provider_cooldown": None,
+            "notice_report_sink": None,
             "timeout_seconds": 25,
             "headless": True,
             "auto_handle_dialogs": False,

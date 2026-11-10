@@ -132,6 +132,7 @@ export function operationsPayload() {
       "worker_and_scheduler_health_depend_on_redis_heartbeats",
       "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
     ],
+    unresolved_notice: null,
   };
 }
 
@@ -225,6 +226,53 @@ describe("operations summary API contract", () => {
       provider: null,
     });
     expect(result.isPartial).toBe(true);
+  });
+
+  it("maps an unresolved notice shape and keeps its limitation", () => {
+    const result = mapOperationsSummary({
+      ...operationsPayload(),
+      limitations: [...operationsPayload().limitations, "unresolved_notice_shape_captured"],
+      unresolved_notice: {
+        observed_at: "2026-11-11T02:50:00Z",
+        stage: "search_notice_unrecognized",
+        close_method: "fallback_escape",
+        attempts: 1,
+        shape_summary: "div.korailPopup2027 aria-modal=true 1 controls [확인] no risky tags",
+      },
+    });
+
+    expect(result.unresolvedNotice).toEqual({
+      observedAt: "2026-11-11T02:50:00Z",
+      stage: "search_notice_unrecognized",
+      closeMethod: "fallback_escape",
+      attempts: 1,
+      shapeSummary: "div.korailPopup2027 aria-modal=true 1 controls [확인] no risky tags",
+    });
+    expect(result.unresolvedNotice?.shapeSummary).toContain("aria-modal=true");
+    expect(result.limitations).toContain("unresolved_notice_shape_captured");
+    expect(result.isPartial).toBe(false);
+  });
+
+  it("drops malformed or absent unresolved notice payloads without failing the summary", () => {
+    expect(mapOperationsSummary(operationsPayload()).unresolvedNotice).toBeNull();
+    expect(mapOperationsSummary({
+      ...operationsPayload(),
+      unresolved_notice: { stage: "brand_new_stage", close_method: "none", attempts: 0, shape_summary: "x" },
+    }).unresolvedNotice).toBeNull();
+    expect(mapOperationsSummary({
+      ...operationsPayload(),
+      unresolved_notice: { stage: "search_notice_persisted", close_method: "none", attempts: 99, shape_summary: "x" },
+    }).unresolvedNotice).toBeNull();
+    expect(mapOperationsSummary({
+      ...operationsPayload(),
+      unresolved_notice: {
+        observed_at: null,
+        stage: "search_notice_unrecognized",
+        close_method: "none",
+        attempts: 0,
+        shape_summary: `form[0] xy`,
+      },
+    }).unresolvedNotice?.shapeSummary).toBe("form[0] x y");
   });
 
   it("uses the operations summary endpoint without sending payload data", async () => {

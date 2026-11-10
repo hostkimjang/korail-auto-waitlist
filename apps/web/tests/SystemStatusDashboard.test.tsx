@@ -42,6 +42,25 @@ describe("SystemStatusDashboard", () => {
     expect(screen.queryByText(/https?:\/\/|서울|payload|token|watch-|candidate-/i)).toBeNull();
   });
 
+  it("shows the unresolved popup card with its structural summary", async () => {
+    const loader = vi.fn().mockResolvedValue(mapOperationsSummary({
+      ...operationsPayload(),
+      unresolved_notice: {
+        observed_at: "2026-11-11T02:50:00Z",
+        stage: "search_notice_unrecognized",
+        close_method: "fallback_close_button",
+        attempts: 0,
+        shape_summary: "div.korailPopup2027 aria-modal=true 1 controls [확인] no risky tags",
+      },
+    }));
+    render(<SystemStatusDashboard loader={loader} />);
+
+    expect(await screen.findByText("닫지 못한 팝업")).toBeTruthy();
+    expect(screen.getByText("알 수 없는 창 형태")).toBeTruthy();
+    expect(screen.getByText(/완화 인식 단추으로 0회 닫기 후 미해결/)).toBeTruthy();
+    expect(screen.getByText("div.korailPopup2027 aria-modal=true 1 controls [확인] no risky tags")).toBeTruthy();
+  });
+
   it("labels standing-only seat observations in the operations summary", async () => {
     const payload = operationsPayload();
     const standingOnlyEntry = {

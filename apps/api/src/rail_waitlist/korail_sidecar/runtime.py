@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from redis.asyncio import Redis
 
+from ..notice_observations import RedisNoticeObservationWriter, UnrecognizedNoticeReport
 from ..provider_adapters.korail_search_bootstrap import KorailStationIdentityResolver
 from .browser_contracts import (
     BrowserClient,
@@ -141,6 +142,7 @@ def build_browser_client(
 
     return PydollKorailBrowserClient(
         provider_cooldown=provider_cooldown,
+        notice_report_sink=notice_report_sink_for_client(),
         page_url=page_url,
         timeout_seconds=timeout_seconds,
         headless=not gui_enabled,
@@ -240,6 +242,31 @@ def build_automation(
             maximum=86400,
         ),
     )
+
+
+def build_notice_observation_writer() -> RedisNoticeObservationWriter | None:
+    """Optional Redis sink for unresolved dialog shapes; unset env keeps diagnostics off."""
+
+    url = os.getenv("KORAIL_NOTICE_OBSERVATION_REDIS_URL")
+    if not url:
+        return None
+    from redis import Redis as SyncRedis
+
+    try:
+        redis = SyncRedis.from_url(
+            url,
+            socket_connect_timeout=3,
+            socket_timeout=3,
+            decode_responses=True,
+        )
+    except (ValueError, TypeError):
+        raise RuntimeError("KORAIL notice observation Redis configuration is invalid") from None
+    return RedisNoticeObservationWriter(redis)
+
+
+def notice_report_sink_for_client() -> Callable[[UnrecognizedNoticeReport], None] | None:
+    writer = build_notice_observation_writer()
+    return None if writer is None else writer.record
 
 
 def build_provider_cooldown() -> ProviderCooldown:

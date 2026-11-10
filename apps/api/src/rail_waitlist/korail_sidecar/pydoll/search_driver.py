@@ -23,7 +23,7 @@ from .page_contracts import (
     PydollTrainRow,
 )
 from .page_safety import assert_pydoll_response_allowed as _assert_pydoll_response_allowed
-from .search_notice import dismiss_public_search_notices
+from .search_notice import NoticeReportSink, dismiss_public_search_notices
 from .search_snapshot_policy import (
     advance_search_expansion,
     begin_search_expansion,
@@ -262,6 +262,7 @@ class PydollSearchDomDriver:
         monotonic: Callable[[], float],
         sleep: Callable[[float], Awaitable[None]],
         protection_surface_selector: str,
+        notice_report_sink: NoticeReportSink | None = None,
     ) -> None:
         self._port = port
         self._timeout_seconds = timeout_seconds
@@ -279,6 +280,7 @@ class PydollSearchDomDriver:
         self._monotonic = monotonic
         self._sleep = sleep
         self._protection_surface_selector = protection_surface_selector
+        self._notice_report_sink = notice_report_sink
 
     async def choose_station(self, kind: str, station: str) -> None:
         # The public announcement can arrive after open() returned. Observe its
@@ -327,6 +329,7 @@ class PydollSearchDomDriver:
                 monotonic=self._monotonic,
                 sleep=self._sleep,
                 timeout_seconds=self._timeout_seconds,
+                report_unrecognized=self._notice_report_sink,
             )
             if closed:
                 snapshot = await self._port._snapshot()
@@ -604,6 +607,7 @@ class PydollSearchDomDriver:
             monotonic=self._monotonic,
             sleep=self._sleep,
             timeout_seconds=self._timeout_seconds,
+            report_unrecognized=self._notice_report_sink,
         )
         return await self._port._snapshot() if closed else snapshot
 

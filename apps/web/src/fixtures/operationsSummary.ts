@@ -40,6 +40,7 @@ export const demoOperationsSummary: OperationsSummary = {
     { source: "seat_observations", status: "fresh", observedAt: "2026-07-29T12:28:00+09:00", ageSeconds: 120, timestampBasis: "observed_at" },
     { source: "notification_delivery", status: "fresh", observedAt: "2026-07-29T12:29:00+09:00", ageSeconds: 60, timestampBasis: "processed_at" },
   ],
+  unresolvedNotice: null,
   providerCircuits: [
     { provider: "KORAIL", state: "closed", updatedAt: "2026-07-29T12:20:00+09:00", manualResumeRequired: false },
     { provider: "SRT", state: "manual_hold", updatedAt: "2026-07-29T12:21:00+09:00", manualResumeRequired: true },

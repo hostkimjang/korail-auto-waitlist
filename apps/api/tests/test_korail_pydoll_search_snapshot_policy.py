@@ -97,7 +97,7 @@ def test_session_keeps_constructor_time_policy_callback_capture(
     for name, callback in callbacks.items():
         assert getattr(driver, name) is callback
     parameters = inspect.signature(PydollSearchDomDriver.__init__).parameters
-    assert tuple(parameters)[-7:-3] == (
+    assert tuple(parameters)[-8:-4] == (
         "deduplicate_snapshot",
         "merge_page_snapshots",
         "snapshot_requires_expansion_stop",

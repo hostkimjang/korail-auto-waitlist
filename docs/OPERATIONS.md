@@ -285,6 +285,8 @@ HTTPS 주소를 사용하면 `AUTH_COOKIE_SECURE=true`로 설정하고, 허용 �
 
 코드, Dockerfile, Compose 또는 실행 이미지를 바꿨다면 일부 서비스만 이전 버전으로 남겨 두지 말고 모두 같은 버전으로 다시 만듭니다. 실행 중인 예약 호출을 보호하려면 raw `docker compose up -d --force-recreate` 대신 운영 스크립트를 사용합니다.
 
+Git으로 새 버전을 받아 적용하는 전체 순서는 이 절 끝의 [Git으로 새 버전 받아 재가동하기](#git으로-새-버전-받아-재가동하기)를 따릅니다.
+
 | 작업 | Linux Bash | Windows PowerShell |
 | --- | --- | --- |
 | 실행 작업 요약 | `bash ./scripts/ops.sh drain-status` | `./scripts/ops.ps1 drain-status` |
@@ -388,6 +390,90 @@ worker, API와 두 sidecar에는 5분의 `stop_grace_period`가 적용됩니다.
 Linux의 `experimental` 명령은 `docker compose up --wait --wait-timeout 180`을 사용하므로 성공 종료 시 선택 프로필의 장기 서비스가 실행·healthy 상태입니다. 제한 시간 안에 준비되지 않으면 서비스 상태 표를 출력하고 원래 오류 코드를 반환합니다. 이 판정은 migration·log-init의 성공 종료나 실제 운영사 접근 성공을 대신하지 않으므로 `status`, 일회성 작업의 `exited 0`, 각 sidecar의 `/readyz`와 실제 읽기 조회 결과를 별도로 기록합니다.
 
 문서나 공개 이미지 파일만 바꾼 경우에는 전체 서비스 재배포가 필요하지 않습니다.
+
+### Git으로 새 버전 받아 재가동하기
+
+이미 설치해 운영 중인 서버를 새 버전으로 올리는 순서입니다. 저장소 루트에서 실행하고, 각 단계의 결과를
+확인한 뒤 다음 단계로 넘어갑니다. Git 명령은 Linux Bash와 Windows PowerShell에서 같습니다.
+
+1. 현재 버전을 기록하고 로컬 변경을 확인합니다. 화면 푸터의 버전과 지금 커밋 해시를 적어 두면 문제가
+   생겼을 때 되돌아갈 기준이 됩니다.
+
+   ```console
+   git rev-parse --short HEAD
+   git status --short
+   ```
+
+   `git status`에 변경이 보이면 그대로 받지 말고 `git stash push -m "before-update-YYYYMMDD"`로 보관하거나
+   커밋합니다. 보관한 변경은 자동으로 다시 적용되지 않으므로, 계속 필요하면 재가동을 확인한 뒤
+   `git stash list`로 찾아 새 버전과 충돌하지 않는지 보고 다시 적용·재배포합니다. `.env`, `secrets/`, `logs/`는
+   Git이 추적하지 않아 이 단계와 pull의 영향을 받지 않습니다. 변경을 지우려고 `git reset --hard`나
+   `git clean`을 실행하지 마세요.
+
+2. 받을 변경을 먼저 봅니다.
+
+   ```console
+   git fetch origin
+   git log --oneline HEAD..origin/main
+   git diff --stat HEAD..origin/main
+   ```
+
+   [업데이트 노트](../CHANGELOG.md)의 새 항목과 `적용할 때` 안내를 읽고, 변경 목록에 `.env.example`,
+   `compose*.yml`, `apps/api/migrations/`가 있는지 확인합니다. migration이 있고 암호화 백업을 설정했다면
+   재배포 전에 [백업과 복원](#백업과-복원)의 `backup` 명령으로 백업을 먼저 만듭니다.
+
+3. fast-forward로만 받습니다.
+
+   ```console
+   git pull --ff-only origin main
+   ```
+
+   실패하면 서버에만 있는 커밋이 있다는 뜻입니다. 병합하거나 강제로 덮어쓰지 말고
+   `git log --oneline origin/main..HEAD`로 그 커밋이 무엇인지 먼저 확인합니다.
+
+4. `.env`에 새 설정이 필요한지 확인합니다. `git diff <1단계 커밋>..HEAD -- .env.example`에 새 항목이 있으면
+   설명을 보고 `.env`에 추가합니다. 이미 쓰고 있는 `POSTGRES_PASSWORD`, `SECRET_ENCRYPTION_KEY`, VAPID 키 같은
+   값은 다시 만들지 않습니다. 값을 바꿨다면 `config` 명령으로 구성을 검사합니다.
+
+5. 사용하는 프로필 전체를 다시 빌드하고 재가동합니다. 받은 변경이 문서뿐이면 이 단계는 건너뜁니다.
+
+   Linux Bash:
+
+   ```bash
+   bash ./scripts/ops.sh drain-status
+   bash ./scripts/ops.sh experimental
+   ```
+
+   Windows PowerShell:
+
+   ```powershell
+   ./scripts/ops.ps1 drain-status
+   ./scripts/ops.ps1 experimental
+   ```
+
+   실험 프로필을 쓰지 않는 기본 구성은 `experimental` 대신 `up`을 사용합니다. 두 명령 모두 위에서 설명한
+   순서로 worker와 API를 정리한 뒤 migration을 포함한 전체 서비스를 같은 revision으로 다시 만듭니다.
+
+   `experimental`은 실행할 때마다 `.env`의 `EXPERIMENTAL_RAIL_ENABLED`, `KORAIL_BROWSER_ADAPTER_ENABLED`,
+   `KORAIL_SEAT_MONITORING_ENABLED`, `SRT_PROVIDER_ADAPTER_ENABLED`, `SRT_SEAT_STATUS_ENABLED`,
+   `SRT_SEAT_MONITORING_ENABLED`를 `true`로 다시 씁니다. 32자 이상인 기존 내부 adapter token은 그대로 둡니다.
+   이 중 일부를 일부러 꺼 둔 서버라면 실행 전에 그 점을 확인하세요.
+
+   서버에서 Docker 실행이나 root 소유 `.env` 때문에 관리자 권한이 필요하면 운영 스크립트만 `sudo`로 실행하고,
+   Git 명령은 저장소를 소유한 계정으로 실행해 root 소유 파일이 생기지 않게 합니다. pull 뒤 migration이
+   `Permission denied`로 멈추면 [제한적인 umask 뒤 Git 갱신 파일의 읽기 권한 오류](#제한적인-umask-뒤-git-갱신-파일의-읽기-권한-오류)를
+   따릅니다.
+
+6. 재가동 결과를 확인합니다. `status`로 장기 서비스가 모두 `healthy`인지 보고, 일회성 작업은
+   `docker compose -f compose.yml --profile experimental-rail ps -a migration log-init`으로 `Exited (0)`인지
+   확인합니다. 이어 위 "확인할 항목"의 `/healthz`·`/readyz`와 새로고침한 화면 푸터 버전이 업데이트 노트 맨 위
+   항목과 같은지 봅니다. 실험 프로필이면 KORAIL·SRT sidecar의 `/readyz`와 adapter 로그도 확인하고, 로그인
+   보호 신호가 기록되면 재시작이나 재배포를 반복하지 않습니다.
+
+새 버전에서 문제가 생겨 되돌려야 하면 1단계에서 적어 둔 커밋으로 `git switch --detach <커밋>`을 실행하고 같은
+운영 스크립트로 재배포합니다. 원인을 정리한 뒤에는 `git switch main`으로 돌아와 1단계부터 다시 진행합니다.
+새 버전에 migration이 있었다면 코드만 되돌릴 때 DB 스키마와 맞지 않을 수 있으므로
+[백업과 복원](#백업과-복원)을 함께 검토합니다.
 
 ## 선택 프로필
 

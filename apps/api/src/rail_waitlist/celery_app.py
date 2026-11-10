@@ -3,6 +3,8 @@ from __future__ import annotations
 from celery import Celery
 from celery.signals import after_setup_logger, after_setup_task_logger
 
+# Registers worker task heartbeats and the beat scheduler heartbeat class.
+from . import heartbeat as _heartbeat  # noqa: F401  -- import side effects
 from .config import get_settings
 from .file_logging import configure_service_file_logging
 
@@ -29,6 +31,7 @@ celery_app.conf.update(
     enable_utc=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    beat_scheduler="rail_waitlist.heartbeat:HeartbeatPersistentScheduler",
     task_routes={
         "rail_waitlist.worker.process_due_watches": {"queue": "rail"},
         "rail_waitlist.worker.process_watch_now": {"queue": "rail"},

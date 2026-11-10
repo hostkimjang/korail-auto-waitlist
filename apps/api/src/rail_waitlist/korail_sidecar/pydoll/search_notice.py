@@ -42,13 +42,25 @@ OBSERVE_NOTICE_SCRIPT = r"""
         || dialog.getAttribute('role') !== 'dialog'
         || dialog.getAttribute('aria-modal') !== 'true'
         || layers.length !== 1 || contents.length !== 1 || !visible(contents[0])
-        || !layers[0].contains(contents[0]) || buttons.length !== 1
+        || !layers[0].contains(contents[0]) || buttons.length < 1
         || inputs.length > 1 || inputs.some(input => input.type !== 'checkbox')
         || dialog.querySelector('form, select, textarea, iframe, [contenteditable="true"]')
         || Array.from(dialog.querySelectorAll('a')).some(link => !contents[0].contains(link))) {
       return 'unrecognized';
     }
-    const close = buttons[0];
+    const closers = buttons.filter(
+      button => ['창닫기', '닫기'].includes((button.innerText || '').replace(/\s+/g, ''))
+    );
+    // A survey-style announcement renders its own call-to-action next to the close
+    // control. That two-button shape is only trusted together with the
+    // "1일간 그만보기" checkbox KORAIL attaches to public announcements; action
+    // dialogs without the marker (e.g. reservation choices) stay unrecognized.
+    const hasReminderCheckbox = inputs.some(input => input.type === 'checkbox');
+    if (closers.length !== 1
+        || (buttons.length > 1 && !(buttons.length === 2 && hasReminderCheckbox))) {
+      return 'unrecognized';
+    }
+    const close = closers[0];
     const label = (close.innerText || '').replace(/\s+/g, '');
     if (!layers[0].contains(close) || !visible(close)
         || !['창닫기', '닫기'].includes(label) || close.disabled

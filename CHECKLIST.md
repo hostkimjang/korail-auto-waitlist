@@ -142,7 +142,8 @@
 
 - [x] 로컬 최신 작업 트리와 전용 profile·무인 로그인 개선을 Oracle에 반영하고 양쪽 전체 프로필 재빌드·재생성, 서비스 12개 healthy, migration·log-init 종료 0과 API·KORAIL adapter의 설치 파일 300개씩 일치를 확인. 로컬은 검증 후 volume을 보존하며 전체 중지. [최근 운영 서버 배포 확인](docs/OPERATIONS.md#최근-운영-서버-배포-확인) 참조
 - [x] 중지된 프록시 때문에 발생한 Tailnet HTTPS 502를 재배포로 해소하고 웹·health·인증 상태 API·배포 JS의 HTTP 200과 Chrome 관리자 로그인 화면 확인
-- [ ] Oracle의 현재 KORAIL 계정 세대 4가 `blocked`·재사용 불가인 상태에서 허용된 복구 조건을 확인하고 공식 인증을 복구. 과거 저장된 로그인 성공 이력과 서비스 health로 완료 처리하지 않음
+- [x] 11월 3일 Oracle을 로컬과 같은 1.3.0 작업 트리로 `experimental-rail` 프로필 전체 재빌드·재생성: 정규화 트리 해시 일치, 서비스 12개 healthy, migration·log-init 종료 0, 스키마 `0042_protection_halt`, API·KORAIL adapter 설치 Python 파일 303개 일치, Tailnet HTTPS 200. `.env` 세션 재사용 창은 로컬 운영값 7200초로 정렬. [최근 운영 서버 배포 확인](docs/OPERATIONS.md#최근-운영-서버-배포-확인) 참조
+- [ ] Oracle KORAIL 계정 세대 4의 공식 인증 복구. 11월 3일 1.3.0 재생성 직후 자동 로그인도 `macro_err1`로 차단돼 1800→3600→7200초 간격으로 재시도 중이며, 과거 저장된 로그인 성공 이력과 서비스 health로 완료 처리하지 않음
 - [x] 최근 로그인·열차 조회 채팅과 장애 기록을 대조해 해결한 결함과 원인 미확정 항목 분리
 - [x] 저장된 로그인 확인 이력과 상주 세션의 표시 구분, KORAIL·SRT 회귀와 웹 품질 검사
 - [x] 데이터·외부 통신을 격리한 검증 프로젝트에서 전체 프로필 빌드·재생성·health 확인, 기존 로컬 중지 상태 보존
@@ -216,6 +217,28 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 10일 작업 처리 heartbeat와 설문형 공지 인식 (v1.3.1)
+
+- [x] `작업 처리`·`일정 실행` 확인 불가 고정 제거: worker는 태스크 전후, beat는 tick마다 Redis key(TTL 120초)에
+  heartbeat를 남기고 API 요약이 이를 읽어 정상/지연/확인 불가로 표시. 기록 실패가 처리를 멈추지 않고 조회 실패는
+  확인 불가로 fail-closed. `test_heartbeat.py` 9건·`test_operations.py` 회귀 갱신·웹 계약/대시보드 테스트 포함
+  API·웹 전체 통과, 타입검사 통과
+- [x] 설문형 공지(`설문 참여하기`+`창닫기`+`1일간 그만보기`) 인식 최소 완화와 실측 Chromium 회귀: 닫기만 클릭하고
+  CTA는 미클릭, 체크박스 없는 2버튼 창은 계속 거부. adapter 컨테이너에서 실제 코레일 DOM 캡처로 원인 확인
+  (INCIDENTS 11월 10일 항목)
+- [x] 전체 pytest 회귀 정비: 1.2.22의 `humanize` 전달(`e1e8d00`)에서 갱신하지 않아 `TypeError`로 실패하던
+  `test_korail_reserve_once.py` fake의 `type_text` 시그니처를 `click`과 같은 `**_kwargs` 허용으로 수정(8건),
+  heartbeat 스키마 추가로 바뀐 OpenAPI 계약 지문을 길이 92,353·SHA-256 `b74e829c…207af`로 갱신(2건). 세 파일
+  182건 통과 뒤 전체 재실행에서 5,510건 통과·5건 스킵·실패 0(11월 10일 23:41~11월 11일 00:01). 중간 실행 하나에서
+  `test_korail_browser_automation`의 `drain_pending_calls` busy-loop이 풀슈트 타이밍에 정체되는 것을 관찰했으나
+  단독 99건 통과와 최종 전체 재실행 통과로 재현되지 않음
+- [x] v1.3.1 로컬 `experimental-rail` 프로필 전체 재빌드·재생성(22:23) 뒤 `로그·진행 상태`에서 `작업 처리`·
+  `일정 실행`이 heartbeat 기준으로 `정상`과 기록 시각을 표시하고 좌석 관측·예약·상태 변경·알림 집계가 `최신`으로
+  전환됨을 확인. 재생성 1분 안에 Redis heartbeat key 2개가 TTL 120으로 갱신되는 것도 확인. 같은 화면 실조작으로
+  대전→서울 공식 조회가 설문형 공지를 `search_notice_dismissed count=1`로 닫고 열차 7편·좌석 14개를 반환,
+  228편 일반실 `자동 예매` 등록 뒤 6초 만에 `PAYMENT_REQUIRED`·`confirmed_payment_required` 완료, 결제 없이
+  22:46에 결제보류 자동 만료 뒤 `WATCHING` 복구까지 확인. 서비스 12개 healthy·migration 종료 0. Oracle 배포는 아직 미실행
+
 ## 구현됨
 
 - [x] 모바일·데스크톱 반응형 웹과 PWA
@@ -232,6 +255,8 @@
 - [x] TAGO 응답 envelope·pagination·row 타입 검증과 malformed page 미캐시·fail-closed 처리
 - [x] TAGO 검증 raw 시간표 행의 provider·KST 시각·범위·운임·unknown 좌석 순수 projection 기능 owner 분리
 - [x] 새벽 `00:00–09:00`·저녁 `18:00–00:00` 시간 프리셋과 서비스 날짜 종료 경계 구분
+- [x] 새 대기 가는 날·출발 시간 범위의 KST 시각 기준 기본값(오늘은 다음 30분 경계부터 6시간·자정 상한, 23시 이후는 내일 12:00–18:00)과 시각별 경계 회귀
+- [x] 새 대기 상단 3단계 진행 표시의 wizard 카드 중앙 정렬과 1440·768·320px·200% 확대 반응형 회귀
 - [x] 일반실·특실별 대기 등록과 취소
 - [x] 홈의 감시·좌석 발견·결제 필요·인증 필요 상태
 - [x] pause·resume·cancel·정책 변경과 교차한 이전 목록 응답 폐기, mutation 후 canonical 재조회와 삭제 tombstone
@@ -571,7 +596,7 @@
 - [ ] 실제 철도사 계정에서 TTL을 넘는 장시간 로그인 session 유지와 sidecar 재시작 뒤 자동 재예열 확인
 - [ ] 실제 KORAIL 계정에서 로그인 session 만료 순간의 즉시 재로그인과, `korail-browser-adapter`를 정지했다가 다시 올렸을 때 5~60초 backoff로 1분 안에 재인증되는지 확인
 - [ ] 자격증명 거부가 실제로 반복될 때 revision당 5회에서 자동 복구가 멈추고 계정 잠금이나 보호 응답으로 악화되지 않는지 운영 표본에서 확인
-- [ ] Oracle 재가동 전에 같은 KORAIL 계정을 사용하는 로컬 scheduler·worker를 drain한 뒤 API provider session manager·sidecar를 포함한 Compose profile 전체를 volume 보존 상태로 정지하고 단일 활성 배포를 유지하며, hotfix 배포 뒤 자연 발생 예약에서 예약 직전 probe·필요 시 fresh login·불확실 session 폐기·fresh reconciliation과 공식 자동 배정 좌석 표시를 끝까지 확인
+- [ ] Oracle 재가동 전에 같은 KORAIL 계정을 사용하는 로컬 scheduler·worker를 drain한 뒤 API provider session manager·sidecar를 포함한 Compose profile 전체를 volume 보존 상태로 정지하고 단일 활성 배포를 유지하며, hotfix 배포 뒤 자연 발생 예약에서 예약 직전 probe·필요 시 fresh login·불확실 session 폐기·fresh reconciliation과 공식 자동 배정 좌석 표시를 끝까지 확인. 11월 3일 Oracle 재배포는 사용자 결정으로 로컬을 멈추지 않고 두 환경 모두 자동 로그인을 켠 채 진행해 단일 활성 배포 조건은 충족하지 않음
 - [x] 2026년 8월 17일 Oracle 00:56 KORAIL 70편과 로컬 01:00 KORAIL 107편에서 `session_keepalive`가 예약 control 전 0.5초 안에 실패하고 progress·click이 없음을 분리 확인했으며, 중간의 로컬 fresh 예매 성공과 Oracle 재로그인 뒤 로컬 session 무효화로 동일 계정 이중 실행 충돌을 확인하고 로컬 전체 Compose profile을 queue 0·volume 보존 상태로 정지
 - [ ] 실제 SRT 혼잡 시간대에 접속 대기 진입→통과→조회 재개 또는 caller timeout→late 종료 로그 순서와 비밀값 미노출 확인
 - [ ] 새 60/90초 timeout과 UUID correlation 배포 뒤 실제 SRT 혼잡 시간대에서 조기 caller 실패 감소, queue→query→late 종료의 동일 `provider_call_id`와 secret-free 로그 확인

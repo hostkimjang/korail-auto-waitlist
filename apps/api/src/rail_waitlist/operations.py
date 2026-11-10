@@ -18,6 +18,7 @@ from .domain import (
     WatchStatus,
     reservation_result_reason_code_for_outcome,
 )
+from .heartbeat import EMPTY_HEARTBEATS, HEARTBEAT_TTL_SECONDS, ServiceHeartbeats
 from .operation_summary.schemas import (
     OperationCurrentCounts,
     OperationEntry,
@@ -567,8 +568,40 @@ async def _recent_entries(session: AsyncSession, window_start: datetime) -> list
     return entries[:RECENT_ENTRY_LIMIT]
 
 
+def _service_heartbeat_state(
+    service: Literal["worker", "scheduler"],
+    heartbeats: ServiceHeartbeats,
+    now: datetime,
+) -> OperationServiceState:
+    observed_at = heartbeats.worker if service == "worker" else heartbeats.scheduler
+    if observed_at is None:
+        return OperationServiceState(
+            service=service,
+            status="unknown",
+            observed_at=None,
+            evidence="redis_heartbeat_missing",
+        )
+    age_seconds = max(0, int((now - observed_at).total_seconds()))
+    if age_seconds > HEARTBEAT_TTL_SECONDS:
+        return OperationServiceState(
+            service=service,
+            status="stale",
+            observed_at=observed_at,
+            evidence="redis_heartbeat_stale",
+        )
+    return OperationServiceState(
+        service=service,
+        status="healthy",
+        observed_at=observed_at,
+        evidence="redis_heartbeat",
+    )
+
+
 async def build_operations_summary(
-    session: AsyncSession, *, now: datetime | None = None
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    heartbeats: ServiceHeartbeats = EMPTY_HEARTBEATS,
 ) -> OperationsSummary:
     generated_at = _utc(now) if now is not None else datetime.now(UTC)
     if generated_at is None:  # pragma: no cover - guarded by the branch above
@@ -782,18 +815,8 @@ async def build_operations_summary(
                 observed_at=generated_at,
                 evidence="summary_query_succeeded",
             ),
-            OperationServiceState(
-                service="worker",
-                status="unknown",
-                observed_at=None,
-                evidence="durable_heartbeat_unavailable",
-            ),
-            OperationServiceState(
-                service="scheduler",
-                status="unknown",
-                observed_at=None,
-                evidence="durable_heartbeat_unavailable",
-            ),
+            _service_heartbeat_state("worker", heartbeats, generated_at),
+            _service_heartbeat_state("scheduler", heartbeats, generated_at),
         ],
         provider_circuits=[
             OperationProviderCircuit(
@@ -807,7 +830,7 @@ async def build_operations_summary(
         recent_entries=await _recent_entries(session, window_start),
         limitations=[
             "http_and_process_errors_are_not_durably_recorded",
-            "worker_and_scheduler_health_require_durable_heartbeats",
+            "worker_and_scheduler_health_depend_on_redis_heartbeats",
             "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
         ],
     )

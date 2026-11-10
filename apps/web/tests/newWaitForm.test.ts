@@ -93,15 +93,52 @@ describe("new wait form model", () => {
     expect(form).toMatchObject({
       provider: "KORAIL",
       providers: ["KORAIL"],
-      date: "2026-08-05",
-      time: "12:00",
-      timeEnd: "18:00",
-      selectedWeekdays: ["수"],
       passengers: "1",
       seat: "일반실",
       channels: ["web_push", "telegram"],
       ...expected,
     });
+  });
+
+  it.each([
+    {
+      name: "starts today at the next half hour with the six-hour default width",
+      now: "2026-08-04T00:10:00.000Z",
+      expected: { date: "2026-08-04", time: "09:30", timeEnd: "15:30", selectedWeekdays: ["화"] },
+    },
+    {
+      name: "keeps an exact half-hour boundary that has not passed yet",
+      now: "2026-08-04T03:00:00.000Z",
+      expected: { date: "2026-08-04", time: "12:00", timeEnd: "18:00", selectedWeekdays: ["화"] },
+    },
+    {
+      name: "caps an evening range at the service-date end sentinel",
+      now: "2026-08-04T09:10:00.000Z",
+      expected: { date: "2026-08-04", time: "18:30", timeEnd: "23:59", selectedWeekdays: ["화"] },
+    },
+    {
+      name: "keeps today while one hour of departures remains",
+      now: "2026-08-04T14:00:00.000Z",
+      expected: { date: "2026-08-04", time: "23:00", timeEnd: "23:59", selectedWeekdays: ["화"] },
+    },
+    {
+      name: "moves to tomorrow afternoon once less than an hour of today remains",
+      now: "2026-08-04T14:00:01.000Z",
+      expected: { date: "2026-08-05", time: "12:00", timeEnd: "18:00", selectedWeekdays: ["수"] },
+    },
+    {
+      name: "uses the new Seoul service date right after midnight",
+      now: "2026-08-04T15:00:00.000Z",
+      expected: { date: "2026-08-05", time: "00:00", timeEnd: "06:00", selectedWeekdays: ["수"] },
+    },
+  ])("$name", ({ now, expected }) => {
+    expect(createInitialNewWaitForm({
+      demo: false,
+      providerAccounts: [],
+      demoOriginNodeId: null,
+      demoDestinationNodeId: null,
+      now: new Date(now),
+    })).toMatchObject(expected);
   });
 
   it("swaps station labels and catalog identities together", () => {

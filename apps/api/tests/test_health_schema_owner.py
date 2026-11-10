@@ -226,9 +226,9 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     assert schema["paths"]["/api/v1/seat-status/status"]["get"]["description"] == (
         "Expose every hold that prevents seat I/O, including authentication protection."
     )
-    assert len(encoded) == 92309
+    assert len(encoded) == 92353
     assert hashlib.sha256(encoded).hexdigest() == (
-        "4ec22aa925b2ea0bd36ae6d130778720b9294343bb75194b19e9f539eb0e16f5"
+        "b74e829c7aa293d25849ddd51eb1425a0f681a6d65eed8fd4116a33d1ed207af"
     )
 
 

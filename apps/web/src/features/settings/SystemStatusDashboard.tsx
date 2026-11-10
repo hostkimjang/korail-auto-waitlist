@@ -203,7 +203,7 @@ const entryReasonLabels: Record<NonNullable<OperationsEntry["reasonCode"]>, stri
 };
 const limitationLabels: Record<string, string> = {
   http_and_process_errors_are_not_durably_recorded: "HTTP·프로세스 오류는 이 영속 집계에 포함되지 않습니다.",
-  worker_and_scheduler_health_require_durable_heartbeats: "작업 처리·일정 실행은 지속 heartbeat가 없어 현재 정상 여부를 판단할 수 없습니다.",
+  worker_and_scheduler_health_depend_on_redis_heartbeats: "작업 처리·일정 실행 상태는 워커·스케줄러가 Redis에 남기는 heartbeat를 따르며, heartbeat가 없으면 정상으로 추정하지 않습니다.",
   recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors: "최근 기록은 내부 ID·노선·원문 오류를 제외하고 열차와 출발 시각 등 필요한 진행 문맥만 표시합니다.",
 };
 
@@ -234,8 +234,10 @@ function statusTone(status: OperationsHealthStatus): string {
 
 function serviceDetail(item: OperationsServiceState): string {
   if ((item.service === "api" || item.service === "database") && item.status === "healthy") return "요청 시점에 확인됨";
-  if ((item.service === "worker" || item.service === "scheduler") && item.status === "unknown") {
-    return "지속 상태 기록이 없어 확인할 수 없습니다.";
+  if (item.service === "worker" || item.service === "scheduler") {
+    if (item.status === "unknown") return "최근 heartbeat 기록이 없어 확인할 수 없습니다.";
+    if (item.status === "stale") return "heartbeat가 기준 시간을 지났습니다.";
+    return item.observedAt ? `heartbeat ${displayTimestamp(item.observedAt)} 기록` : "heartbeat 시각 확인 불가";
   }
   return item.observedAt ? `${displayTimestamp(item.observedAt)} 확인` : "기록 시각 확인 불가";
 }
@@ -427,7 +429,7 @@ export function SystemStatusDashboard({
           {data.isPartial && (
             <div className="operations-message is-info" role="status">
               <Info size={22} aria-hidden="true" />
-              <div><strong>일부 상태는 확인할 수 없습니다.</strong><span>지속 heartbeat가 없는 항목은 정상으로 추정하지 않고 확인 불가로 표시합니다.</span></div>
+              <div><strong>일부 상태는 확인할 수 없습니다.</strong><span>heartbeat가 없거나 지난 항목은 정상으로 추정하지 않고 확인 불가·지연으로 표시합니다.</span></div>
             </div>
           )}
 

@@ -235,13 +235,21 @@ async def test_operations_summary_is_source_backed_and_sanitized(app, client):
     services = {item["service"]: item for item in payload["services"]}
     assert services["api"]["status"] == "healthy"
     assert services["database"]["status"] == "healthy"
+    # The route reads live Redis heartbeats; the test app has no reader wired, so
+    # both background services must stay fail-closed unknown instead of guessed.
     assert services["worker"] == {
         "service": "worker",
         "status": "unknown",
         "observed_at": None,
-        "evidence": "durable_heartbeat_unavailable",
+        "evidence": "redis_heartbeat_missing",
     }
-    assert services["scheduler"]["status"] == "unknown"
+    assert services["scheduler"] == {
+        "service": "scheduler",
+        "status": "unknown",
+        "observed_at": None,
+        "evidence": "redis_heartbeat_missing",
+    }
+    assert "worker_and_scheduler_health_depend_on_redis_heartbeats" in payload["limitations"]
     assert payload["provider_circuits"][0]["state"] == "manual_hold"
     assert any(
         entry["kind"] == "seat_observation" and entry["error_category"] == "unknown"

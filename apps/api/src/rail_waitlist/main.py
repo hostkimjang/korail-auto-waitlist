@@ -28,6 +28,7 @@ from .domain import OutboxStatus
 from .event_stream.http import router as event_stream_router
 from .file_logging import configure_service_file_logging
 from .health.schemas import HealthResponse
+from .heartbeat import RedisHeartbeatReader
 from .korail_browser_seat_source import KorailBrowserSeatSource
 from .korail_sidecar.provider_cooldown import RedisProviderCooldown
 from .metrics import HTTP_DURATION, HTTP_REQUESTS, OUTBOX_PENDING
@@ -127,6 +128,7 @@ def create_app(
     app.state.seat_status_redis = Redis.from_url(settings.redis_url, decode_responses=True)
     seat_status_cooldown_store = RedisCooldownStore(app.state.seat_status_redis)
     app.state.seat_status_cooldown_store = seat_status_cooldown_store
+    app.state.heartbeat_reader = RedisHeartbeatReader(app.state.seat_status_redis)
     app.state.korail_provider_cooldown = RedisProviderCooldown(
         app.state.seat_status_redis,
         protection_seconds=settings.seat_status_protection_cooldown_seconds,

@@ -392,6 +392,8 @@ test("여정 선택부터 만료 근거 1회 복구, 복수 좌석 즉시 등록
   await selectStation(page, "도착역", "부산");
   await page.getByRole("button", { name: /^가는 날:/ }).click();
   await page.getByRole("button", { name: "이번 주말" }).click();
+  // 기본 출발 시간 범위는 화면을 여는 시각에 따라 바뀌므로 목업 시간표가 기대하는 범위를 직접 고른다.
+  await page.getByRole("button", { name: "오후 12:00부터 18:00까지" }).click();
 
   await page.getByRole("button", { name: /다음/ }).click();
   await expect(page.getByRole("heading", { name: "어떤 좌석을 찾을까요?" })).toBeVisible();
@@ -468,6 +470,7 @@ test("KORAIL 공식 조회 제한 결과는 두 좌석을 미확인으로 유지
   await selectStation(page, "도착역", "부산");
   await page.getByRole("button", { name: /^가는 날:/ }).click();
   await page.getByRole("button", { name: "이번 주말" }).click();
+  await page.getByRole("button", { name: "오후 12:00부터 18:00까지" }).click();
   await page.getByRole("button", { name: /다음/ }).click();
   await page.getByRole("button", { name: /다음/ }).click();
 

@@ -160,6 +160,10 @@ test.describe("격리 Compose 전체 스택", () => {
 
     await selectStation(page, "출발역", "서울");
     await selectStation(page, "도착역", "부산");
+    // 기본 가는 날·시간 범위는 화면을 여는 시각에 따라 바뀌므로 가짜 상류의 13시대 열차가 들어가는 범위를 고른다.
+    await page.getByRole("button", { name: /^가는 날:/ }).click();
+    await page.getByRole("button", { name: "내일", exact: true }).click();
+    await page.getByRole("button", { name: "오후 12:00부터 18:00까지" }).click();
     await page.getByRole("button", { name: "다음", exact: true }).click();
     await page.getByRole("button", { name: "다음", exact: true }).click();
     await expect(page.getByRole("heading", { name: "공식 시간표에서 관심 열차를 고르세요" }))

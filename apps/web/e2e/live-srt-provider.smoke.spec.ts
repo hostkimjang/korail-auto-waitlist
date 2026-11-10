@@ -130,6 +130,7 @@ test.describe("선택 실행형 SRT 운영 좌석 조회 스모크", () => {
     await selectStation(page, "도착역", "부산");
     await page.getByRole("button", { name: /^가는 날:/ }).click();
     await page.getByRole("button", { name: "내일", exact: true }).click();
+    await page.getByRole("button", { name: "오후 12:00부터 18:00까지" }).click();
     await page.getByRole("slider", { name: "출발 종료 시간" }).fill("28");
     await expect(page.getByText("12:00", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("14:00", { exact: true }).first()).toBeVisible();

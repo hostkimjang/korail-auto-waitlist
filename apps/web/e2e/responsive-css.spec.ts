@@ -476,6 +476,31 @@ async function expectProviderAccountWithinBounds(page: Page, viewport: ViewportC
   expect(rootWidths.scroll).toBeLessThanOrEqual(rootWidths.client);
 }
 
+async function expectStepperCenteredOnWizard(page: Page, viewport: ViewportCase): Promise<void> {
+  await expectWithinViewport(page.locator(".stepper"), viewport.width, "new wait stepper");
+  const layout = await page.evaluate(() => {
+    const panel = document.querySelector(".wizard-panel")?.getBoundingClientRect();
+    const markerCenters = [...document.querySelectorAll(".stepper li > span")].map((marker) => {
+      const rect = marker.getBoundingClientRect();
+      return rect.left + rect.width / 2;
+    });
+    return {
+      panelCenter: panel === undefined ? Number.NaN : panel.left + panel.width / 2,
+      markerCenters,
+    };
+  });
+  expect(layout.markerCenters).toHaveLength(3);
+  const [first = Number.NaN, middle = Number.NaN, last = Number.NaN] = layout.markerCenters;
+  expect(
+    Math.abs(middle - layout.panelCenter),
+    "the middle step must sit on the wizard panel center",
+  ).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs((first + last) / 2 - layout.panelCenter),
+    "the first and last steps must be symmetric around the wizard panel center",
+  ).toBeLessThanOrEqual(1);
+}
+
 async function expectReservationPolicyWithinBounds(
   page: Page,
   viewport: ViewportCase,
@@ -485,6 +510,7 @@ async function expectReservationPolicyWithinBounds(
   ).filter({ hasText: "새 대기" });
   await newWaitNavigation.click();
   await expect(page.getByRole("heading", { name: "어디로 떠나세요?" })).toBeVisible();
+  await expectStepperCenteredOnWizard(page, viewport);
 
   if (viewport.width > 760 && usesCompactShell(viewport)) {
     await expect(page.locator(".sidebar")).toBeHidden();

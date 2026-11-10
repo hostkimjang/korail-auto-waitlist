@@ -662,6 +662,32 @@ async def test_new_content_in_same_modal_is_closed_using_real_dom(notice_browser
         await page.close()
 
 
+async def test_survey_notice_with_call_to_action_is_closed_using_real_dom(notice_browser):
+    # Captured 2026-11-10 from www.korail.com: a national-railway-plan survey
+    # announcement pairs "설문 참여하기" with "창닫기" beside the "1일간 그만보기"
+    # checkbox. Only the close control may be clicked; the survey CTA must stay
+    # untouched so the popup dismissal never navigates or submits anything.
+    markup = notice_markup(
+        '<p><img alt="제5차 국가철도망 구축계획 대국민 설문조사"></p>',
+        extra=(
+            '<input type="checkbox" id="popClose121">'
+            '<button title="새 창으로 열기" '
+            'onclick="window.surveyClicks=(window.surveyClicks||0)+1">설문 참여하기</button>'
+        ),
+    )
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        observed = await page.evaluate(OBSERVE_NOTICE_SCRIPT)
+        assert observed["state"] == "public_search_notice"
+        assert observed["close_index"] == 1
+        assert observed["control_count"] == 2
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate(OBSERVE_NOTICE_SCRIPT) == "absent"
+        assert await page.evaluate("window.surveyClicks || 0") == 0
+    finally:
+        await page.close()
+
+
 async def test_long_notice_scrolls_to_close_without_clicking_its_content(notice_browser):
     markup = notice_markup('<div style="height:1200px">긴 신규 공지</div>').replace(
         "background:white;", "background:white;overflow:auto;"
@@ -680,6 +706,10 @@ async def test_long_notice_scrolls_to_close_without_clicking_its_content(notice_
         notice_markup("예약 동의", close="네"),
         notice_markup("동의 확인", close="확인"),
         notice_markup("기존 예약 선택", extra="<button>새 예약</button>"),
+        notice_markup(
+            "설문 형태지만 알림 체크 없음",
+            extra='<button title="새 창으로 열기">설문 참여하기</button>',
+        ),
         notice_markup("입력 필요", extra='<input type="text">'),
         notice_markup("선택 필요", extra="<select><option>선택</option></select>"),
         notice_markup("폼 처리", extra="<form></form>"),

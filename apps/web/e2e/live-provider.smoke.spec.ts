@@ -270,8 +270,7 @@ test.describe("선택 실행형 KORAIL 운영 좌석 조회 스모크", () => {
     await selectStation(page, "도착역", destination);
     await page.getByRole("button", { name: /^가는 날:/ }).click();
     await page.getByRole("button", { name: "내일", exact: true }).click();
-    await page.getByRole("slider", { name: "출발 시작 시간" }).fill("24");
-    await page.getByRole("slider", { name: "출발 종료 시간" }).fill("36");
+    await page.getByRole("button", { name: "오후 12:00부터 18:00까지" }).click();
     await page.getByRole("button", { name: /다음/ }).click();
 
     await expect(page.getByLabel("인원")).toHaveValue("1");

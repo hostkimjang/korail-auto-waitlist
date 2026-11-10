@@ -170,7 +170,7 @@ class FakeElement:
     async def clear(self) -> None:
         self.typed_values.clear()
 
-    async def type_text(self, value: str) -> None:
+    async def type_text(self, value: str, **_kwargs: object) -> None:
         self.typed_values.append(value)
 
     async def is_visible(self) -> bool:
@@ -217,8 +217,8 @@ class FakeLoginInput(FakeElement):
         self.value = ""
         await super().clear()
 
-    async def type_text(self, value: str) -> None:
-        await super().type_text(value)
+    async def type_text(self, value: str, **_kwargs: object) -> None:
+        await super().type_text(value, **_kwargs)
         if self.deliver_input:
             self.value += value
 

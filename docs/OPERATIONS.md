@@ -4,11 +4,42 @@
 
 ## 최근 운영 서버 배포 확인
 
+v1.3.1(작업 처리·일정 실행 Redis heartbeat와 설문형 공지 인식)은 11월 10일 22시대에 로컬(집컴)에
+배포·확인했다. `experimental-rail` 프로필 전체를 `--force-recreate --wait`으로 재생성해 장기 서비스
+12개 healthy·migration 정상 종료를 확인했고, 재생성 1분 안에 `rail-waitlist:heartbeat:worker`·
+`rail-waitlist:heartbeat:scheduler` key(TTL 120초)가 갱신되는 것을 Redis에서 직접 확인했다. 관리자 화면
+`로그·진행 상태`에서 `작업 처리`·`일정 실행`이 `정상`과 heartbeat 기록 시각을 표시하고, 좌석 관측·예약
+시도·상태 변경·알림 전달 집계는 `최신`으로 돌아왔다. 같은 화면의 실제 조작 검증으로 대전→서울(11월 10일
+23:00~00:00) 공식 조회가 `search_notice_dismissed kind=public_search_notice count=1` 뒤 열차 7편과 좌석
+14개를 반환했고, 228편 일반실 `자동 예매` 등록 뒤 6초 만에 `WATCHING → SEAT_FOUND → RESERVING →
+PAYMENT_REQUIRED`와 `confirmed_payment_required` 공식 확인이 완료됐다. 결제하지 않은 결제보류는 22:46:03에
+`confirmed_payment_hold_no_longer_actionable_monitoring_resumed`로 자동 만료·`WATCHING` 복구됐고, 23:15:00에
+후보 소진·horizon 경제로 `EXPIRED`까지 정상 종료됐다. 화면 증거는 `output/v131-live-verification-20261110/`
+(gitignore된 로컬 산출물)에 있다. Oracle에는 아직 배포하지 않았다.
+
+2026년 11월 3일 21시대에 Oracle(`oracle-arm-free-01`)을 로컬과 같은 1.3.0 작업 트리로 올렸습니다. 서버
+checkout을 `origin/main`(`e1e8d00`)으로 fast-forward하고 커밋 전 1.3.0 변경을 patch로 적용한 뒤, 정규화한
+트리 해시가 로컬 작업 트리와 같음을 확인했습니다. 이전 1.2.14 작업 트리는 서버 `git stash`와
+`~/deploy-snapshots/20261103T115847Z`의 소스 tar·`.env`·DB dump(`predeploy-0041.dump`)로 보관했고, 이전
+이미지 3개에는 `before-1.3.0-20261103` 태그를 붙였습니다. 활성 대기와 진행 중 Celery 작업이 0건인 상태에서
+`experimental-rail` 프로필 전체를 빌드하고 `ops.sh`의 `graceful_recreate` 순서로 재생성했습니다. 장기 서비스
+12개 healthy, migration·log-init 종료 코드 0, 스키마 `0042_protection_halt`, API·KORAIL adapter에 설치된
+Python 파일 303개 일치, Tailnet HTTPS의 웹·`/healthz`·인증 상태 API HTTP 200과 1.3.0 번들을 확인했습니다.
+proxy는 열린 SSE 연결 때문에 정지 제한 300초를 모두 쓴 뒤 멈췄습니다.
+
+Oracle `.env`의 `KORAIL_BROWSER_SESSION_REUSE_TTL_SECONDS`는 로컬 운영값과 같은 7200초로 맞췄습니다.
+사용자 결정에 따라 Oracle도 로컬과 같은 KORAIL 계정으로 자동 로그인을 켜 둡니다. 재생성 직후 Oracle의
+자동 로그인은 `macro_err1` 보호 응답으로 차단돼 계정 세대 4에 보호 정지가 기록됐고, 1800→3600→7200초
+간격으로 다시 시도합니다. 같은 시각 로컬 KORAIL 세션은 `authenticated`를 유지했습니다. Oracle 로그인이
+성공하면 8월처럼 두 환경이 서로의 세션을 끊을 수 있으므로, 그 뒤에는 로컬 예약 세션도 함께 확인합니다.
+아래 10월 16일 기록은 이력입니다.
+
 17시대 로컬 후속 수정에서는 정상 예약 내역 응답을 거부하던 완료 이벤트 시각 비교를 고쳤습니다.
 로컬 전체 프로필 재생성·소스 일치·12개 healthy·감시 재개 뒤, 346편은 공식 내역 연속 부재로
 `CONFIRMED_ABSENT`가 됐습니다. 348편은 당시 새 배정 좌석 상관 정보가 남지 않아 공식 근거 부족으로
 유지됩니다. 이 시도를 특정할 근거 없이 예약 결과를 수동 변경하거나 새 예약을 제출하지 않습니다.
-해당 후속 수정은 Oracle에 설치하지 않았습니다. 아래 양쪽 소스 일치 기록은 16시대 비교 시점의 근거입니다.
+해당 후속 수정은 당시 Oracle에 설치하지 않았고 11월 3일 1.3.0 배포에 포함됐습니다. 아래 양쪽 소스 일치
+기록은 16시대 비교 시점의 근거입니다.
 
 10월 16일 16시대의 후속 요청으로 집컴도 v1.2.14 전체 프로필을 재빌드·재생성했습니다. DB 백업과 이전
 이미지를 보관하고 `.env`·DB·volume·앱 전용 profile을 유지했습니다. 현재 로컬은 장기 서비스 12개가
@@ -46,7 +77,7 @@ Chrome에서도 관리자 로그인 화면이 열렸습니다. Tailscale 공개 
 
 Oracle의 소스와 `.env` 원본, DB dump, 이전 이미지 3개를 복구용으로 보관했습니다. DB와 volume은 삭제하지
 않았고, 배포 전후 대기 298건·예약 시도 1,184건과 진행 중 예약·미래 후보 0건이 유지됐습니다.
-현재 KORAIL 계정 세대 4의 세션은 `blocked`·재사용 불가이므로 실제 인증·좌석 조회·예약 복구는 미완료입니다.
+당시 KORAIL 계정 세대 4의 세션은 `blocked`·재사용 불가이므로 실제 인증·좌석 조회·예약 복구는 미완료였습니다.
 과거 저장된 `authenticated` 이력이나 정상 health를 현재 공식 인증 성공으로 해석하지 않습니다.
 
 후속 실제 읽기 검증은 14:27:33 KST에 기존 공통 대기의 자연 만료 뒤 수행했습니다. 서울→부산
@@ -1063,6 +1094,13 @@ healthy였습니다. 배포 뒤 KORAIL 공식 관측은 `AVAILABLE` 12건, `LIMI
 더 깊은 장애 분석이 필요할 때만 아래 sanitized 서비스 로그를 함께 확인합니다. 계정 저장 요청처럼 영속되지
 않은 HTTP 실패와 저장되지 않은 provider 세부 실패 사유는 목록에 항상 남지 않으며 추정하지 않습니다.
 
+`서비스·데이터 상태`의 `작업 처리`·`일정 실행` 카드는 v1.3.1부터 Redis heartbeat를 따릅니다. worker는 태스크
+전후(`task_prerun`/`task_postrun`)에, scheduler(celery beat)는 tick마다 자기 key
+(`rail-waitlist:heartbeat:worker`, `rail-waitlist:heartbeat:scheduler`, TTL 120초)에 시각을 씁니다. API는 요약
+요청 시 두 key를 읽어 120초 이내면 `정상`, 지나면 `지연`, 없거나 Redis 조회 실패·손상 값이면 `확인 불가`로
+표시하며 정상으로 추정하지 않습니다. heartbeat 쓰기가 실패해도 예약·알림 처리는 계속되며 로그에만
+`heartbeat 기록 실패`로 남습니다. 컨테이너 healthcheck(셀러리 ping·beat pid)와는 별개의 화면용 신호입니다.
+
 ### 예매 시도와 공식 결과 확인 진단
 
 예매 장애는 `진행 단계`, `예매 명령의 terminal`, `읽기 전용 공식 확인`을 분리해서 봅니다.
@@ -1525,6 +1563,12 @@ v1.2.7은 일반 검색 폼의 역 선택 직전에도 현재 공지를 처리�
 검색창이 여전히 없을 때만 역 버튼을 한 번 더 누르며, 불확실 닫기·단순 시간 초과·보호·업무 오류에는
 재클릭하지 않습니다. 조회 제출은 반복하지 않습니다.
 자세한 재현과 수정 근거는 [운영 장애 기록](INCIDENTS.md)에 있습니다.
+
+v1.3.1부터 `1일간 그만보기` 체크박스가 있는 공지에서는 닫기 버튼 외에 `설문 참여하기` 같은 버튼이
+하나 더 있어도 닫기를 인식합니다(2026-11-10 관측: 제5차 국가철도망 구축계획 설문 팝업의 `search_notice_unrecognized`).
+인식 조건은 기존 창 구조 검증 뒤에 `창닫기/닫기` 문구 버튼이 정확히 1개이고, 버튼이 2개일 때는 체크박스 마커가
+있을 때만 허용하는 방식입니다. 클릭 대상은 항상 닫기 버튼이며 나머지 버튼은 누르지 않습니다. 체크박스 없는 2버튼 창
+(예약 선택 등)은 전처럼 `search_notice_unrecognized`로 닫지 않습니다.
 
 ### 운행·예매 상태 관측 안내가 보임
 

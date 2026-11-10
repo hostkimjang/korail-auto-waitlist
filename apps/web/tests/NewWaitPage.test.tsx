@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/api/client";
 import type { ProviderAccount } from "../src/api/providerAccounts";
@@ -171,12 +171,56 @@ async function selectStation(user: TestUser, label: string, name: string): Promi
   await user.click(within(listbox).getByRole("option", { name: new RegExp(`^${escapedName}`) }));
 }
 
+// 가는 날·출발 시간 범위 기본값은 화면을 여는 KST 시각에 따라 달라진다. 아래 시나리오는 오늘 남은
+// 출발 범위가 1시간보다 짧은 늦은 밤에 여는 상황으로 고정해 기본값 `내일 12:00–18:00`을 전제로 한다.
+const LATE_NIGHT_IN_SEOUL = new Date("2026-11-03T23:30:00+09:00");
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+  vi.setSystemTime(LATE_NIGHT_IN_SEOUL);
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("NewWaitPage behavior", () => {
+  it("defaults to today from the next half hour while same-day departures remain", async () => {
+    vi.setSystemTime(new Date("2026-11-03T10:10:00+09:00"));
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const parsed = requestUrl(url);
+      if (parsed.pathname.endsWith("/stations")) {
+        return response(stationCatalog(parsed.searchParams.get("provider")));
+      }
+      return response([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<OwnedNewWait demo={false} onComplete={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "가는 날: 11월 3일 (화)" })).toBeTruthy();
+    expect(screen.getByRole("slider", { name: "출발 시작 시간" }).getAttribute("aria-valuetext"))
+      .toBe("10:30부터");
+    expect(screen.getByRole("slider", { name: "출발 종료 시간" }).getAttribute("aria-valuetext"))
+      .toBe("16:30까지");
+    const weekdayGroup = screen.getByRole("group", { name: /출발 요일 빠른 선택/ });
+    expect(within(weekdayGroup).getByRole("button", { pressed: true }).textContent).toBe("화");
+
+    await selectStation(user, "출발역", "서울");
+    await selectStation(user, "도착역", "부산");
+    await user.click(screen.getByRole("button", { name: /다음/ }));
+    await user.click(screen.getByRole("button", { name: /다음/ }));
+
+    await waitFor(() => expect(fetchMock.mock.calls
+      .filter(([url]) => requestUrl(url).pathname.endsWith("/timetables"))
+      .map(([url]) => {
+        const params = requestUrl(url).searchParams;
+        return [params.get("departure_from"), params.get("departure_to")];
+      })).toEqual([["2026-11-03T10:30:00+09:00", "2026-11-03T16:30:00+09:00"]]));
+  });
+
   it("shows the observed official queue progress in the train selection area", async () => {
     const user = userEvent.setup();
     let finishTimetable: (result: Response) => void = () => undefined;

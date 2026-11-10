@@ -166,7 +166,7 @@ const entryReasonCodes = new Set<OperationsEntryReasonCode>([
 ]);
 const knownLimitations = new Set([
   "http_and_process_errors_are_not_durably_recorded",
-  "worker_and_scheduler_health_require_durable_heartbeats",
+  "worker_and_scheduler_health_depend_on_redis_heartbeats",
   "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
 ]);
 

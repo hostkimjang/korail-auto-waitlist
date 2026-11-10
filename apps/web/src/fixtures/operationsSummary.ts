@@ -33,8 +33,8 @@ export const demoOperationsSummary: OperationsSummary = {
   services: [
     { service: "api", status: "healthy", observedAt: "2026-07-29T12:30:00+09:00", evidence: "summary_request_succeeded" },
     { service: "database", status: "healthy", observedAt: "2026-07-29T12:30:00+09:00", evidence: "summary_query_succeeded" },
-    { service: "worker", status: "unknown", observedAt: null, evidence: "durable_heartbeat_unavailable" },
-    { service: "scheduler", status: "unknown", observedAt: null, evidence: "durable_heartbeat_unavailable" },
+    { service: "worker", status: "healthy", observedAt: "2026-07-29T12:29:55+09:00", evidence: "redis_heartbeat" },
+    { service: "scheduler", status: "stale", observedAt: "2026-07-29T12:20:00+09:00", evidence: "redis_heartbeat_stale" },
   ],
   sourceFreshness: [
     { source: "seat_observations", status: "fresh", observedAt: "2026-07-29T12:28:00+09:00", ageSeconds: 120, timestampBasis: "observed_at" },
@@ -108,7 +108,7 @@ export const demoOperationsSummary: OperationsSummary = {
   ],
   limitations: [
     "http_and_process_errors_are_not_durably_recorded",
-    "worker_and_scheduler_health_require_durable_heartbeats",
+    "worker_and_scheduler_health_depend_on_redis_heartbeats",
     "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
   ],
   isPartial: true,

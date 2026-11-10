@@ -20,7 +20,7 @@ from ..reservations.provider_confirmation.contracts import (
 from ..schema_base import ApiModel
 
 OperationFreshness = Literal["fresh", "stale", "unknown"]
-OperationServiceStatus = Literal["healthy", "unknown"]
+OperationServiceStatus = Literal["healthy", "stale", "unknown"]
 OperationEntryKind = Literal[
     "seat_observation",
     "reservation_attempt",
@@ -125,7 +125,9 @@ class OperationServiceState(ApiModel):
     evidence: Literal[
         "summary_request_succeeded",
         "summary_query_succeeded",
-        "durable_heartbeat_unavailable",
+        "redis_heartbeat",
+        "redis_heartbeat_stale",
+        "redis_heartbeat_missing",
     ]
 
 
@@ -170,7 +172,7 @@ class OperationsSummary(ApiModel):
     limitations: list[
         Literal[
             "http_and_process_errors_are_not_durably_recorded",
-            "worker_and_scheduler_health_require_durable_heartbeats",
+            "worker_and_scheduler_health_depend_on_redis_heartbeats",
             "recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors",
         ]
     ]

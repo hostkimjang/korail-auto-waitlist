@@ -11567,6 +11567,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/korail_sidecar/pydoll/reservation_actor.py",
         "rail_waitlist/korail_sidecar/pydoll/reservation_driver.py",
         "rail_waitlist/korail_sidecar/pydoll/reservation_list_response.py",
+        "rail_waitlist/korail_sidecar/pydoll/reservation_protection.py",
         "rail_waitlist/korail_sidecar/pydoll/search_actor.py",
         "rail_waitlist/korail_sidecar/pydoll/search_driver.py",
         "rail_waitlist/korail_sidecar/pydoll/search_notice.py",
@@ -11590,6 +11591,7 @@ def test_production_uses_canonical_korail_browser_contract_and_protection_owners
         "rail_waitlist/timetable_management/korail_browser_projection.py",
     }
     assert protection_consumers == {
+        "rail_waitlist/korail_sidecar/pydoll/reservation_protection.py",
         "rail_waitlist/korail_browser_automation.py",
         "rail_waitlist/korail_sidecar/http_replay.py",
         "rail_waitlist/korail_pydoll_browser.py",

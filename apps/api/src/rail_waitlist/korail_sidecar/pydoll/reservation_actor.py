@@ -407,7 +407,11 @@ class PydollReservationActor[Session: PydollReservationSession]:
                         if result.outcome is KorailReservationOutcome.AUTH_REQUIRED
                         else KorailSessionActorState.BLOCKED,
                     )
-                elif result.outcome is not KorailReservationOutcome.PAYMENT_REQUIRED and (
+                elif result.outcome not in {
+                    KorailReservationOutcome.PAYMENT_REQUIRED,
+                    KorailReservationOutcome.ACTION_REQUIRED,
+                    KorailReservationOutcome.CONSENT_REQUIRED,
+                } and (
                     (
                         result.outcome is KorailReservationOutcome.FAILED
                         and merged_result.seat_clicked
@@ -417,6 +421,9 @@ class PydollReservationActor[Session: PydollReservationSession]:
                     or result.reason.startswith("reservation_result_unknown")
                 ):
                     await self._discard_with_state(KorailSessionActorState.STALE)
+                # A completed official-dialog stop is not evidence of lost authentication.
+                # Keep the same generation for read-only reconciliation; the durable
+                # attempt fence still forbids replaying the uncertain reservation.
                 return merged_result
             except asyncio.CancelledError:
                 await self._discard_with_state(KorailSessionActorState.STALE)

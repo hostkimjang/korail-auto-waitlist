@@ -1,16 +1,8 @@
-"""Close public search announcements independently of their changing content.
+"""Dismiss verified public promotions without accepting unrelated provider actions.
 
-Two passes run against the official search page. The strict pass recognizes the
-known announcement shape (ReactModal layer with 창닫기, plus
-survey-style two-button windows only with the 1일간 그만보기) exactly as before.
-When the official page ships a dialog shape that predates this code, the fallback
-pass still closes a visible modal dialog that has no form controls and exactly
-one close-vocabulary control, and — only when every visible modal dialog has
-no interactive control at all — lets the page itself close the dialog
-through Escape (native dialogs close directly). Every close is verified by
-watching the dialog disappear, and a terminal failure records one structural
-summary of the blocking dialog (classes, control labels, risky tags — never body
-text) so the settings screen can show what changed on the official page.
+Known announcement layouts and changed layouts with a labelled reminder checkbox
+share one safety policy. Unknown dialogs are observed, never guessed with Escape.
+Only closed structural categories are persisted; content fingerprints stay in memory.
 """
 
 from __future__ import annotations
@@ -25,7 +17,7 @@ from ..browser_contracts import BrowserSourceUnavailable
 
 logger = logging.getLogger("rail_waitlist.korail_pydoll_browser")
 NoticeState = Literal["absent", "public_search_notice", "fallback_notice", "unrecognized"]
-NoticeCloseMethod = Literal["strict_close_button", "fallback_close_button", "fallback_escape"]
+NoticeCloseMethod = Literal["strict_close_button", "fallback_close_button"]
 MAX_NOTICE_CLOSE_ACTIONS = 5
 CLOSE_SELECTOR = '.ReactModal__Content[role="dialog"][aria-modal="true"] .layerWrap.emer_pop button'
 FALLBACK_CLOSE_SELECTOR = (
@@ -33,12 +25,9 @@ FALLBACK_CLOSE_SELECTOR = (
     "dialog[open] [data-rail-notice-close]"
 )
 
-# Shared JavaScript prologue: visibility helper, dialog inventory, the
-# official-search page guard, a per-dialog identity store shared by every pass,
-# and the structural summary used for diagnostics. Identities live in a WeakMap
-# keyed by the DOM node, so a dialog that survives its own close can never be
-# re-clicked as if it were new. The summary keeps structure only — announcement
-# body text never leaves the page.
+# DOM identity plus content separates sequential promotions in a reused layer.
+# Repeated identical content is never clicked twice within one dismissal call.
+# Button identity also detects replacement between observation and resolution.
 _COMMON_JS = r"""
   const visible = element => {
     const rect = element.getBoundingClientRect();
@@ -46,17 +35,41 @@ _COMMON_JS = r"""
     return style.display !== 'none' && style.visibility !== 'hidden'
       && rect.width > 0 && rect.height > 0;
   };
-  const dialogs = Array.from(document.querySelectorAll(
+  const normalize = text => (text || '').replace(/\s+/g, '').toLowerCase();
+  const resolvedLabels = element => !(element.getAttribute('aria-labelledby') || '')
+    .split(/\s+/).filter(Boolean).some(id => !document.getElementById(id)?.textContent?.trim());
+  const labelsOf = element => [element.innerText, element.getAttribute('aria-label'),
+    element.getAttribute('title'), ...(element.getAttribute('aria-labelledby') || '')
+      .split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.innerText)]
+    .map(normalize).filter(Boolean);
+  const closeLabel = element => {
+    const labels = labelsOf(element);
+    return resolvedLabels(element) && labels.length > 0 && labels.every(label =>
+      /^(?:[x×✕✖]|[x×✕✖]?(?:창닫기|닫기|close|closewindow)[x×✕✖]?)$/.test(label));
+  };
+  const reminderLabel = input => {
+    const labels = [...Array.from(input.labels || []).map(label => label.innerText),
+      ...labelsOf(input)].map(normalize).filter(Boolean);
+    if (!resolvedLabels(input)) return false;
+    return input.type === 'checkbox' && ((labels.length === 0
+      && /^popClose[0-9]+$/.test(input.id) && input.closest('.layerWrap.emer_pop'))
+      || labels.length > 0 && labels.every(label =>
+      /^(오늘(?:하루)?|1일간|하루동안)(그만보기|보지않기|다시보지않기|열지않기)$/.test(label)));
+  };
+  const knownContent = dialog => dialog.querySelector('.layerWrap.emer_pop .pop_content');
+  const publicMarker = dialog => Boolean(knownContent(dialog))
+    || Array.from(dialog.querySelectorAll('input')).some(reminderLabel);
+  const allDialogs = Array.from(document.querySelectorAll(
     '[role="dialog"], dialog[open], [aria-modal="true"]'
   )).filter(visible);
+  const dialogs = allDialogs.filter(dialog => typeof noticeScope === 'undefined'
+    || noticeScope !== 'reservation' || publicMarker(dialog));
   if (dialogs.length === 0) return 'absent';
   if (location.protocol !== 'https:'
       || !['www.korail.com', 'korail.com'].includes(location.hostname)
       || !['/ticket/search/general', '/ticket/search/list'].includes(
         location.pathname.replace(/\/$/, '')
-      )) {
-    return 'unrecognized';
-  }
+      )) return 'unrecognized';
   const store = window.__railWaitlistPublicNoticeIdentity ||=
     {keys: new WeakMap(), next: 1};
   const identityOf = node => {
@@ -65,210 +78,162 @@ _COMMON_JS = r"""
   };
   const hashText = text => {
     let hash = 2166136261;
-    for (let i = 0; i < text.length; i++) {
-      hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
-    }
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
     return (hash >>> 0).toString(16);
   };
-  const closeLabel = element => {
-    const text = ((element.innerText || '') + ' ' +
-      (element.getAttribute('aria-label') || '') + ' ' +
-      (element.getAttribute('title') || '')).replace(/\s+/g, ' ').trim();
-    if (/(\ucc3d\ub2eb\uae30|\ub2eb\uae30|\bclose\b)/i.test(text)) return true;
-    const glyph = (element.innerText || '').replace(/\s+/g, '');
-    return ['x', 'X', '\u2715', '\u2716', '\u00d7'].includes(glyph);
+  const controlsOf = dialog => Array.from(dialog.querySelectorAll(
+    'button, a[href], [role="button"]'
+  ));
+  const riskyControl = control => labelsOf(control).some(label =>
+    /(결제|동의|승낙|예약|예매|취소|인증|로그인|payment|paynow|agree|consent|accept|reserve|booknow|cancel|login)/
+      .test(label) || /^(확인|네|예|아니오|아니요|yes|no|ok|confirm)$/.test(label));
+  const safeShape = dialog => {
+    const inputs = Array.from(dialog.querySelectorAll('input'));
+    const controls = controlsOf(dialog);
+    const content = knownContent(dialog);
+    const publicActionLabels =
+      /^(설문(?:조사)?참여(?:하기)?|이벤트보기|프로모션보기|혜택보기|자세히보기)$/;
+    const supplementalLabel = /^(새창으로열기|새창열기|opensinnewwindow)$/;
+    const publicAction = control => control.tagName === 'A' && content?.contains(control)
+      || labelsOf(control).every(label => publicActionLabels.test(label)
+        || supplementalLabel.test(label))
+        && labelsOf(control).length > 0;
+    const actionBody = /(약관|개인정보|동의|승낙|기존예약|결제정보|결제진행|결제확인)/;
+    const actionBodyEnglish = /(consent|agreement|termsandconditions|confirmpayment)/;
+    return !actionBody.test(normalize(dialog.innerText))
+      && !actionBodyEnglish.test(normalize(dialog.innerText))
+      && ((dialog.getAttribute('role') === 'dialog'
+      && dialog.getAttribute('aria-modal') === 'true') || dialog.tagName === 'DIALOG')
+      && !dialog.querySelector('form, select, textarea, iframe, object, embed, '
+        + '[contenteditable]:not([contenteditable="false"]), [role="checkbox"], '
+        + '[role="radio"], [role="switch"], [role="textbox"], [role="combobox"], '
+        + '[role="listbox"], [role="slider"], [role="spinbutton"]')
+      && inputs.length <= 1 && inputs.every(reminderLabel)
+      && !controls.some(control => control.form || control.closest('form') || riskyControl(control)
+        || (control.hasAttribute('href') && /\/(?:payment|reservation|login|auth)(?:[/?#]|$)/i
+          .test(control.getAttribute('href')))
+        || (!closeLabel(control) && !publicAction(control)))
+      && !allDialogs.some(other => other !== dialog
+        && (dialog.contains(other) || other.contains(dialog)));
   };
+  const safeClose = control => closeLabel(control) && control.tagName !== 'A'
+    && !control.disabled && control.getAttribute('aria-disabled') !== 'true'
+    && !control.closest('[inert]') && visible(control);
   const actionable = element => {
     const rect = element.getBoundingClientRect();
     const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
     return hit === element || (hit && element.contains(hit));
   };
-  const hasControl = node => Boolean(node.closest('button, a[href], [role="button"]'));
+  // Only closed categories leave the browser. Unknown labels/classes can contain
+  // account data, so they are never copied into persistent diagnostic summaries.
   const shapeOf = dialog => {
-    const classes = Array.from(dialog.classList).slice(0, 3).join('.');
-    const controls = Array.from(dialog.querySelectorAll(
-      'button, a[href], [role="button"]'
-    ));
-    const labels = controls.slice(0, 6).map(control => ((control.innerText
-        || control.getAttribute('aria-label') || control.getAttribute('title')
-        || '?').replace(/\s+/g, ' ').trim().slice(0, 30)));
-    const risky = ['form', 'input', 'select', 'textarea', 'iframe']
+    const controls = controlsOf(dialog);
+    const labels = controls.slice(0, 6).map(control => closeLabel(control) ? 'close'
+      : riskyControl(control) ? 'restricted' : control.tagName === 'A' ? 'link' : 'other');
+    const risky = ['form', 'input', 'select', 'textarea', 'iframe', '[contenteditable]']
       .filter(tag => Boolean(dialog.querySelector(tag)));
-    return [
-      dialog.tagName.toLowerCase() + (classes ? '.' + classes : ''),
-      'aria-modal=' + (dialog.getAttribute('aria-modal') || 'none'),
+    return [dialog.tagName.toLowerCase(), 'aria-modal=' +
+      (dialog.getAttribute('aria-modal') === 'true' ? 'true' : 'other'),
+      'public-marker=' + publicMarker(dialog),
       controls.length + ' controls [' + labels.join(' | ') + ']',
-      risky.length ? 'risky:' + risky.join(',') : 'no risky tags',
-    ].join(' ').slice(0, 200);
+      risky.length ? 'risky:' + risky.join(',') : 'no risky tags'].join(' ').slice(0, 200);
   };
 """
 
-OBSERVE_NOTICE_SCRIPT = (
-    "(() => {"
-    + _COMMON_JS
-    + r"""
+_STRICT_NOTICE_BODY = r"""
   const candidates = [];
   for (const dialog of dialogs) {
     const layers = dialog.querySelectorAll('.layerWrap.emer_pop');
     const contents = dialog.querySelectorAll('.pop_content');
     const buttons = Array.from(dialog.querySelectorAll('button'));
     const inputs = Array.from(dialog.querySelectorAll('input'));
-    if (!dialog.classList.contains('ReactModal__Content')
-        || dialog.getAttribute('role') !== 'dialog'
-        || dialog.getAttribute('aria-modal') !== 'true'
+    if (!safeShape(dialog) || !dialog.classList.contains('ReactModal__Content')
         || layers.length !== 1 || contents.length !== 1 || !visible(contents[0])
         || !layers[0].contains(contents[0]) || buttons.length < 1
-        || inputs.length > 1 || inputs.some(input => input.type !== 'checkbox')
-        || dialog.querySelector('form, select, textarea, iframe, [contenteditable="true"]')
         || Array.from(dialog.querySelectorAll('a')).some(link => !contents[0].contains(link))) {
       return {state: 'unrecognized', shape: shapeOf(dialog)};
     }
-    const closeLabelSet = ['\ucc3d\ub2eb\uae30', '\ub2eb\uae30'];
-    const closers = buttons.filter(
-      button => closeLabelSet.includes((button.innerText || '').replace(/\s+/g, ''))
-    );
-    // A survey-style announcement renders its own call-to-action next to the close
-    // control. That two-button shape is only trusted together with the
-    // 1\uc77c\uac04 \uadf8\ub9cc\ubcf4\uae30 checkbox KORAIL attaches to public announcements;
-    // action dialogs without the marker (e.g. reservation choices) stay unmatched.
-    const hasReminderCheckbox = inputs.some(input => input.type === 'checkbox');
-    if (closers.length !== 1
-        || (buttons.length > 1 && !(buttons.length === 2 && hasReminderCheckbox))) {
+    const closers = controlsOf(dialog).filter(closeLabel);
+    if (closers.length !== 1 || (buttons.length > 1 && !(buttons.length === 2
+        && inputs.length === 1 && reminderLabel(inputs[0])))) {
       return {state: 'unrecognized', shape: shapeOf(dialog)};
     }
     const close = closers[0];
-    const label = (close.innerText || '').replace(/\s+/g, '');
-    if (!layers[0].contains(close) || !visible(close)
-        || !['\ucc3d\ub2eb\uae30', '\ub2eb\uae30'].includes(label) || close.disabled
-        || close.getAttribute('aria-disabled') === 'true'
+    if (close.tagName !== 'BUTTON' || !layers[0].contains(close) || !safeClose(close)
         || !(contents[0].innerText.trim() || contents[0].querySelector('img'))) {
       return {state: 'unrecognized', shape: shapeOf(dialog)};
     }
     candidates.push({dialog, close, content: contents[0]});
   }
   let usable = candidates.filter(candidate => actionable(candidate.close));
-  if (!usable.length && candidates.length) {
+  if (!usable.length) {
     for (const candidate of [...candidates].reverse()) {
       candidate.close.scrollIntoView({block: 'center'});
       if (actionable(candidate.close)) { usable.push(candidate); break; }
     }
   }
-  if (!usable.length) {
-    return {state: 'unrecognized', shape: shapeOf(dialogs[dialogs.length - 1])};
-  }
+  if (!usable.length) return {state: 'unrecognized', shape: shapeOf(dialogs[dialogs.length - 1])};
   const chosen = usable[usable.length - 1];
-  const identity = identityOf(chosen.dialog);
-  const contentKey = hashText(chosen.content.innerHTML);
   const controls = Array.from(document.querySelectorAll(
     '.ReactModal__Content[role="dialog"][aria-modal="true"] .layerWrap.emer_pop button'
   )).filter(visible);
   return {
     state: 'public_search_notice',
-    key: 'S:' + identity + ':' + contentKey,
-    close_index: controls.indexOf(chosen.close),
-    control_count: controls.length,
+    key: 'S:' + identityOf(chosen.dialog) + ':' + hashText(chosen.content.innerHTML),
+    target: identityOf(chosen.close),
+    close_index: controls.indexOf(chosen.close), control_count: controls.length,
   };
 })()"""
+OBSERVE_NOTICE_SCRIPT = "(() => {" + _COMMON_JS + _STRICT_NOTICE_BODY
+RESERVATION_NOTICE_SCRIPT = (
+    "(() => { const noticeScope = 'reservation';" + _COMMON_JS + _STRICT_NOTICE_BODY
 )
 
-# Research-grounded relaxed pass. A visible aria-modal dialog (or native open
-# dialog) with no form controls and exactly one close-vocabulary control may be
-# closed by that control alone, so stacked or newly designed announcement windows
-# still resolve. A dialog whose only dismissal option is Escape gets one Escape
-# keydown that the page itself must act on; native dialogs close() directly.
-# Anything with form fields, ambiguous close labels, or a non-modal role stays
-# unmatched and blocks the search as before.
-FALLBACK_OBSERVE_SCRIPT = (
-    "(() => {"
-    + _COMMON_JS
-    + r"""
-  const modal = dialog => (dialog.getAttribute('role') === 'dialog'
-    && dialog.getAttribute('aria-modal') === 'true') || dialog.tagName === 'DIALOG';
-  const riskyDialog = dialogs.find(dialog => !modal(dialog)
-    || dialog.querySelector(
-      'input:not([type="checkbox"]), select, textarea, form, iframe, [contenteditable="true"]'
-    ));
-  if (riskyDialog) {
-    return {state: 'unrecognized', shape: shapeOf(riskyDialog)};
-  }
+# A changed container/class can still be a public notice when its reminder
+# checkbox is explicitly labelled. Close vocabulary alone is not public evidence.
+_FALLBACK_NOTICE_BODY = r"""
   const candidates = [];
   for (const dialog of dialogs) {
-    const controls = Array.from(dialog.querySelectorAll('button, a[href], [role="button"]'));
-    // A control-free modal is a dismissal-only surface (native or Escape-driven
-    // dialogs); it never blocks the escape verdict below.
-    if (controls.length === 0) continue;
-    const closers = controls.filter(control => closeLabel(control)
-      && !control.disabled && control.getAttribute('aria-disabled') !== 'true');
-    if (closers.length !== 1) {
+    const controls = controlsOf(dialog);
+    const closers = controls.filter(closeLabel);
+    const inputs = Array.from(dialog.querySelectorAll('input'));
+    if (!safeShape(dialog) || !publicMarker(dialog) || closers.length !== 1
+        || !safeClose(closers[0]) || controls.length > 6
+        || (controls.some(control => control !== closers[0] && control.tagName !== 'A')
+          && inputs.length !== 1)) {
       return {state: 'unrecognized', shape: shapeOf(dialog)};
     }
-    if (visible(closers[0])) {
-      candidates.push({dialog, close: closers[0]});
-    } else if (hasControl(closers[0])) {
-      // The dialog offers a hidden or embedded close affordance instead of none,
-      // so pressing Escape is a guess; leave it unrecognized.
-      return {state: 'unrecognized', shape: shapeOf(dialog)};
-    }
+    candidates.push({dialog, close: closers[0]});
   }
   let usable = candidates.filter(candidate => actionable(candidate.close));
-  if (!usable.length && candidates.length) {
+  if (!usable.length) {
     for (const candidate of [...candidates].reverse()) {
       candidate.close.scrollIntoView({block: 'center'});
       if (actionable(candidate.close)) { usable.push(candidate); break; }
     }
   }
-  if (usable.length) {
-    document.querySelectorAll('[data-rail-notice-close]')
-      .forEach(node => node.removeAttribute('data-rail-notice-close'));
-    for (const candidate of usable) {
-      candidate.close.setAttribute('data-rail-notice-close', '1');
-    }
-    const chosen = usable[usable.length - 1];
-    const marked = Array.from(document.querySelectorAll(
-      '[role="dialog"][aria-modal="true"] [data-rail-notice-close], '
-      + 'dialog[open] [data-rail-notice-close]'
-    )).filter(visible);
-    return {
-      state: 'fallback_notice',
-      close_mode: 'control',
-      key: 'F:' + identityOf(chosen.dialog),
-      close_index: marked.indexOf(chosen.close),
-      control_count: marked.length,
-    };
-  }
-  if (dialogs.every(dialog =>
-    dialog.querySelectorAll('button, a[href], [role="button"]').length === 0)) {
-    return {
-      state: 'fallback_notice',
-      close_mode: 'escape',
-      key: 'E:' + identityOf(dialogs[0]),
-      close_index: 0,
-      control_count: 0,
-    };
-  }
-  return {state: 'unrecognized', shape: shapeOf(dialogs[dialogs.length - 1])};
+  if (!usable.length) return {state: 'unrecognized', shape: shapeOf(dialogs[dialogs.length - 1])};
+  document.querySelectorAll('[data-rail-notice-close]')
+    .forEach(node => node.removeAttribute('data-rail-notice-close'));
+  usable.forEach(candidate => candidate.close.setAttribute('data-rail-notice-close', '1'));
+  const chosen = usable[usable.length - 1];
+  const marked = Array.from(document.querySelectorAll(
+    '[role="dialog"][aria-modal="true"] [data-rail-notice-close], '
+    + 'dialog[open] [data-rail-notice-close]'
+  )).filter(visible);
+  // The whole structural signature catches same-node content/control mutations.
+  // The close-node identity separately prevents resolving a stale element handle.
+  return {
+    state: 'fallback_notice', close_mode: 'control',
+    key: 'F:' + identityOf(chosen.dialog) + ':' + hashText(chosen.dialog.innerHTML),
+    target: identityOf(chosen.close),
+    close_index: marked.indexOf(chosen.close), control_count: marked.length,
+  };
 })()"""
+FALLBACK_OBSERVE_SCRIPT = "(() => {" + _COMMON_JS + _FALLBACK_NOTICE_BODY
+RESERVATION_FALLBACK_SCRIPT = (
+    "(() => { const noticeScope = 'reservation';" + _COMMON_JS + _FALLBACK_NOTICE_BODY
 )
-
-
-def escape_script(identity: str) -> str:
-    # The page decides what Escape means; a native dialog additionally defines
-    # close() as its programmatic dismissal. Either way the caller must still
-    # verify that the dialog disappeared before trusting the dismissal.
-    return (
-        "(() => {"
-        + _COMMON_JS
-        + "const target = dialogs.find(dialog => store.keys.get(dialog) === "
-        + identity
-        + ");"
-        "  if (!target) return 'gone';"
-        "  if (target.tagName === 'DIALOG') { target.close(); return 'closed'; }"
-        "  target.dispatchEvent(new KeyboardEvent('keydown',"
-        " {key: 'Escape', code: 'Escape', keyCode: 27, which: 27,"
-        " bubbles: true, cancelable: true}));"
-        "  return 'dispatched';"
-        "})()"
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +244,7 @@ class NoticeObservation:
     control_count: int = 0
     close_mode: str = "control"
     shape: str = ""
+    target: int = 0
 
 
 class NoticeCloseControl(Protocol):
@@ -319,16 +285,15 @@ def _validated(value: object, *, accepted: NoticeState) -> NoticeObservation:
     index = value.get("close_index")
     count = value.get("control_count")
     mode = "control" if accepted == "public_search_notice" else value.get("close_mode", "control")
-    if mode not in ("control", "escape"):
+    if mode != "control":
         return NoticeObservation("unrecognized")
     if not isinstance(key, str) or not 0 < len(key) <= 64:
         return NoticeObservation("unrecognized")
-    if mode == "escape":
-        if index == 0 and count == 0:
-            return NoticeObservation(accepted, key, 0, 0, "escape")
+    target = value.get("target")
+    if type(target) is not int or target <= 0:
         return NoticeObservation("unrecognized")
-    if type(index) is int and type(count) is int and 0 <= index < count <= MAX_NOTICE_CLOSE_ACTIONS:
-        return NoticeObservation(accepted, key, index, count, "control")
+    if type(index) is int and type(count) is int and 0 <= index < count <= 30:
+        return NoticeObservation(accepted, key, index, count, "control", target=target)
     return NoticeObservation("unrecognized")
 
 
@@ -359,11 +324,13 @@ async def dismiss_public_search_notices(
     sleep: Callable[[float], Awaitable[None]],
     timeout_seconds: float,
     report_unrecognized: NoticeReportSink | None = None,
+    context: Literal["search", "reservation"] = "search",
 ) -> bool:
     deadline = monotonic() + min(5.0, timeout_seconds)
     closed_keys: set[str] = set()
     closed_methods: list[str] = []
     last_shape = ""
+    strict_script = RESERVATION_NOTICE_SCRIPT if context == "reservation" else OBSERVE_NOTICE_SCRIPT
 
     def report(stage: str, method: str, *, shape: str = "") -> None:
         if report_unrecognized is not None:
@@ -378,16 +345,15 @@ async def dismiss_public_search_notices(
 
     async def next_observation() -> tuple[NoticeObservation, str, str, str]:
         nonlocal last_shape
-        strict = await _observe(
-            execute_script, OBSERVE_NOTICE_SCRIPT, accepted="public_search_notice"
-        )
+        strict = await _observe(execute_script, strict_script, accepted="public_search_notice")
         if strict.state in ("absent", "public_search_notice"):
-            return strict, OBSERVE_NOTICE_SCRIPT, "public_search_notice", "strict_close_button"
+            return strict, strict_script, "public_search_notice", "strict_close_button"
         if strict.shape:
             last_shape = strict.shape
-            fallback = await _observe(
-                execute_script, FALLBACK_OBSERVE_SCRIPT, accepted="fallback_notice"
+            fallback_script = (
+                RESERVATION_FALLBACK_SCRIPT if context == "reservation" else FALLBACK_OBSERVE_SCRIPT
             )
+            fallback = await _observe(execute_script, fallback_script, accepted="fallback_notice")
             if fallback.state == "absent":
                 return (
                     fallback,
@@ -395,10 +361,8 @@ async def dismiss_public_search_notices(
                     "public_search_notice",
                     "strict_close_button",
                 )
-            method = (
-                "fallback_escape" if fallback.close_mode == "escape" else "fallback_close_button"
-            )
-            return fallback, FALLBACK_OBSERVE_SCRIPT, "fallback_notice", method
+            method = "fallback_close_button"
+            return fallback, fallback_script, "fallback_notice", method
         return strict, OBSERVE_NOTICE_SCRIPT, "public_search_notice", "strict_close_button"
 
     observed, script, accepted, method = await next_observation()
@@ -446,18 +410,18 @@ async def dismiss_public_search_notices(
             # Revalidate after resolving controls: a replacement dialog must never
             # turn a verified dismissal into accepting an unrelated provider action.
             if await _observe(execute_script, script, accepted=accepted) != observed:
+                report(
+                    "search_notice_changed", method, shape=await _unresolved_shape(execute_script)
+                )
                 raise BrowserSourceUnavailable("search_notice_changed")
             try:
                 await controls[observed.close_index].click()
             except Exception:  # noqa: BLE001 -- uncertain dispatch must never be replayed.
-                raise BrowserSourceUnavailable("search_notice_close_unknown") from None
-        else:
-            identity = observed.key.split(":", 1)[1]
-            if not identity.isdigit():
-                raise BrowserSourceUnavailable("search_notice_unrecognized")
-            try:
-                await execute_script(escape_script(identity), return_by_value=True)
-            except Exception:  # noqa: BLE001 -- uncertain dispatch must never be replayed.
+                report(
+                    "search_notice_close_unknown",
+                    method,
+                    shape=await _unresolved_shape(execute_script),
+                )
                 raise BrowserSourceUnavailable("search_notice_close_unknown") from None
         closed_keys.add(observed.key)
         closed_methods.append("strict" if accepted == "public_search_notice" else "fallback")
@@ -474,3 +438,12 @@ async def dismiss_public_search_notices(
                 )
                 raise BrowserSourceUnavailable("search_notice_persisted")
             await sleep(0.1)
+        if context == "reservation":
+            # Re-read the booking surface after each exact public notice dismissal.
+            # Its other dialogs belong to the reservation policy and stay untouched.
+            logger.info(
+                "KORAIL event=search_notice_dismissed strict=%d fallback=%d",
+                closed_methods.count("strict"),
+                closed_methods.count("fallback"),
+            )
+            return True

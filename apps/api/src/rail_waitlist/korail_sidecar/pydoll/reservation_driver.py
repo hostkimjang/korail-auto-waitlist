@@ -34,10 +34,69 @@ from .reservation_contracts import (
     KorailReservationResult,
     KorailReservedSeat,
 )
+from .reservation_protection import classify_reservation_protection, log_reservation_protection
+from .search_notice import MAX_NOTICE_CLOSE_ACTIONS, dismiss_public_search_notices
 from .session_auth_policy import is_korail_session_authenticated
 
 _LOGIN_ROUTE_OFFICIAL_PROBE_INITIAL_BACKOFF_SECONDS = 0.25
 _LOGIN_ROUTE_OFFICIAL_PROBE_MAX_BACKOFF_SECONDS = 1.0
+
+_CONTROL_CLICK_PREPARE_BODY = r"""
+  this.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+  const rect = this.getBoundingClientRect();
+  const style = getComputedStyle(this);
+  if (!rect.width || !rect.height || style.visibility === 'hidden'
+      || style.display === 'none') return 'unavailable';
+  const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  if (!(hit === this || (hit && this.contains(hit)))) return 'covered';
+  const key = Symbol.for('railwait.reservation.click');
+  const previous = this[key];
+  if (previous) this.removeEventListener('click', previous.listener, true);
+  const state = {observed: false};
+  state.listener = event => {
+    if (event.target === this || this.contains(event.target)) state.observed = true;
+  };
+  this[key] = state;
+  this.addEventListener('click', state.listener, true);
+  return 'ready';
+}"""
+_RESERVATION_CLICK_PREPARE_SCRIPT = (
+    r"""function() {
+  if (!this.isConnected || !this.matches('button.reservbtn')
+      || (this.innerText || '').replace(/\s+/g, ' ').trim() !== '예매'
+      || this.disabled || this.getAttribute('aria-disabled') === 'true') return 'unavailable';
+"""
+    + _CONTROL_CLICK_PREPARE_BODY
+)
+_DIALOG_CLICK_PREPARE_SCRIPT = (
+    r"""function() {
+  if (!this.isConnected || !this.matches('button') || this.disabled
+      || this.getAttribute('aria-disabled') === 'true') return 'unavailable';
+"""
+    + _CONTROL_CLICK_PREPARE_BODY
+)
+_SEAT_CLICK_PREPARE_SCRIPT = (
+    r"""function() {
+  if (!this.isConnected || !this.matches('button,a,[role="button"]') || this.disabled
+      || this.getAttribute('aria-disabled') === 'true') return 'unavailable';
+"""
+    + _CONTROL_CLICK_PREPARE_BODY
+)
+_RESERVATION_CLICK_OBSERVATION_SCRIPT = r"""function() {
+  const key = Symbol.for('railwait.reservation.click');
+  const state = this[key];
+  if (state) this.removeEventListener('click', state.listener, true);
+  delete this[key];
+  if (state && state.observed) return 'dispatched';
+  if (state && this.isConnected) {
+    const rect = this.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    if (rect.width && rect.height && hit && hit !== this && !this.contains(hit)) {
+      return 'intercepted';
+    }
+  }
+  return 'unconfirmed';
+}"""
 
 __all__ = (
     "KORAIL_ROUTE_HEADING",
@@ -103,6 +162,7 @@ class ReservationAttemptState:
         | None
     ) = None
     post_dialog_action_followup_deadline: float | None = None
+    public_notices_dismissed: int = 0
 
 
 class ReservationControlState(Protocol):
@@ -325,6 +385,56 @@ class PydollReservationDomDriver:
         self._auto_handle_dialogs = auto_handle_dialogs
         self._confirmation_correlation_baseline: tuple[KorailReservedSeat, ...] | None = None
 
+    @staticmethod
+    async def _dispatch_reservation_control(
+        control: Any,
+        *,
+        event_logger: logging.Logger | None = None,
+        prepare_script: str = _RESERVATION_CLICK_PREPARE_SCRIPT,
+    ) -> bool:
+        def value_of(response: object) -> object:
+            envelope = response.get("result") if isinstance(response, Mapping) else None
+            result = envelope.get("result") if isinstance(envelope, Mapping) else None
+            return result.get("value") if isinstance(result, Mapping) else None
+
+        value = value_of(await control.execute_script(prepare_script, return_by_value=True))
+        if event_logger is not None:
+            event_logger.info(
+                "KORAIL reservation click phase=prepare evidence=%s",
+                value
+                if isinstance(value, str) and value in {"ready", "covered", "unavailable"}
+                else "unrecognized",
+            )
+        if value == "covered":
+            return False
+        if value != "ready":
+            raise BrowserSourceUnavailable("reservation_control_prepare_unconfirmed")
+        observed: object = None
+        try:
+            # Preserve the provider's ordinary native mouse input. A successful CDP
+            # call alone does not prove that an overlay let the target receive it.
+            await control.click()
+        finally:
+            try:
+                observed = await control.execute_script(
+                    _RESERVATION_CLICK_OBSERVATION_SCRIPT, return_by_value=True
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- uncertain delivery never permits replay.
+                pass
+        if value_of(observed) == "intercepted":
+            if event_logger is not None:
+                event_logger.info("KORAIL reservation click phase=observe evidence=intercepted")
+            return False
+        if value_of(observed) != "dispatched":
+            # Dispatch may already have occurred when transport/result validation failed.
+            # The caller must keep the existing UNKNOWN fence instead of replaying it.
+            raise BrowserSourceUnavailable("reservation_control_dispatch_unconfirmed")
+        if event_logger is not None:
+            event_logger.info("KORAIL reservation click phase=observe evidence=dispatched")
+        return True
+
     async def reserve_once(
         self,
         request: KorailReservationRequest,
@@ -348,8 +458,8 @@ class PydollReservationDomDriver:
             return KorailReservationResult(
                 outcome=outcome,
                 reason=reason,
-                seat_clicked=seat_clicked,
-                reservation_clicked=reservation_clicked,
+                seat_clicked=seat_clicked and seat_selected_at is not None,
+                reservation_clicked=reservation_clicked and reservation_requested_at is not None,
                 target_rechecked_at=target_rechecked_at,
                 seat_selected_at=seat_selected_at,
                 reservation_requested_at=reservation_requested_at,
@@ -382,11 +492,31 @@ class PydollReservationDomDriver:
         self._confirmation_correlation_baseline = (
             await self._read_reserved_seats_from_preserved_state(request)
         )
-        await seat.click()
-        seat_selected_at = self._utc_now()
-        if on_progress is not None:
-            on_progress(KorailReservationProgress("seat_selected", seat_selected_at))
         attempt = ReservationAttemptState()
+        selection_deadline = self._monotonic() + self._timeout_seconds
+        while self._monotonic() < selection_deadline:
+            try:
+                delivered = await self._dispatch_reservation_control(
+                    seat,
+                    event_logger=self._event_logger,
+                    prepare_script=_SEAT_CLICK_PREPARE_SCRIPT,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- inspect selection without replaying uncertain input.
+                self._event_logger.info("KORAIL reservation seat selection evidence=unconfirmed")
+                break
+            if delivered:
+                seat_selected_at = self._utc_now()
+                if on_progress is not None:
+                    on_progress(KorailReservationProgress("seat_selected", seat_selected_at))
+                break
+            terminal = await self._port._probe_reservation_terminal(request, attempt)
+            if terminal is not None:
+                return result(terminal.outcome, terminal.reason)
+            await self._sleep(0.1)
+        else:
+            return result(KorailReservationOutcome.UNAVAILABLE, "seat_not_available")
         deadline = self._monotonic() + self._timeout_seconds
         while self._monotonic() < deadline:
             terminal = await self._port._probe_reservation_terminal(request, attempt)
@@ -475,7 +605,7 @@ class PydollReservationDomDriver:
                         seat_clicked=True,
                     )
                 if len(candidates) == 1:
-                    if attempt.login_attempted:
+                    if attempt.login_attempted or seat_selected_at is None:
                         if not attempt.preserved_selection_checked:
                             attempt.preserved_selection_checked = True
                             attempt.preserved_selection_matches = (
@@ -500,15 +630,30 @@ class PydollReservationDomDriver:
                             seat_clicked=True,
                         )
                     try:
-                        await candidates[0].click()
+                        if not await self._dispatch_reservation_control(
+                            candidates[0], event_logger=self._event_logger
+                        ):
+                            await self._sleep(0.1)
+                            continue
                     except asyncio.CancelledError:
                         raise
-                    except Exception:  # noqa: BLE001 -- click outcome is intentionally uncertain.
-                        return result(
-                            KorailReservationOutcome.FAILED,
-                            "reservation_result_unknown:reservation_click_error",
-                            seat_clicked=True,
+                    except Exception as error:  # noqa: BLE001 -- never replay uncertain input.
+                        phase = (
+                            "prepare"
+                            if isinstance(error, BrowserSourceUnavailable)
+                            and error.stage == "reservation_control_prepare_unconfirmed"
+                            else "dispatch_or_observe"
                         )
+                        self._event_logger.info(
+                            "KORAIL reservation click phase=%s evidence=unconfirmed", phase
+                        )
+                        # Navigation can invalidate the element immediately after its
+                        # native click. Keep the one-shot latch and inspect the resulting
+                        # official UI; failed event observation alone is not a terminal
+                        # booking result. Never record unproven request progress or replay.
+                        attempt.reservation_clicked = True
+                        deadline = self._monotonic() + self._timeout_seconds
+                        continue
                     attempt.reservation_clicked = True
                     reservation_requested_at = self._utc_now()
                     if on_progress is not None:
@@ -815,14 +960,24 @@ class PydollReservationDomDriver:
             control_labels=tuple([await self._safe_element_text(control) for control in controls]),
             has_official_alert_structure=(len(title_elements) == 1 and len(message_elements) == 1),
         )
-        return (
-            _dialog_policy.classify_reservation_dialog(
-                evidence,
-                phase=phase,
-                auto_handle_dialogs=self._auto_handle_dialogs,
-            ),
-            controls,
+        decision = _dialog_policy.classify_reservation_dialog(
+            evidence,
+            phase=phase,
+            auto_handle_dialogs=self._auto_handle_dialogs,
         )
+        if decision.kind is _dialog_policy.ReservationDialogKind.UNKNOWN:
+            title_kind, controls_kind = _dialog_policy.reservation_dialog_evidence_summary(evidence)
+            self._event_logger.info(
+                "KORAIL reservation dialog evidence title_kind=%s controls_kind=%s "
+                "title_count=%s message_count=%s official_structure=%s auto_handle=%s",
+                title_kind,
+                controls_kind,
+                min(len(title_elements), 9),
+                min(len(message_elements), 9),
+                evidence.has_official_alert_structure,
+                self._auto_handle_dialogs,
+            )
+        return decision, controls
 
     def _log_reservation_dialog(
         self,
@@ -848,26 +1003,46 @@ class PydollReservationDomDriver:
     ) -> KorailReservationResult | None:
         attempt = attempt or ReservationAttemptState()
         snapshot = await self._port._snapshot()
-        for status, resource_type in snapshot.network_responses:
-            if is_rate_limit_response(status, resource_type):
-                return KorailReservationResult(
-                    KorailReservationOutcome.PROVIDER_BLOCKED,
-                    "rate_limited",
-                )
-            if protection_trigger_from_http_response(status, resource_type) is not None:
-                return KorailReservationResult(
-                    KorailReservationOutcome.PROVIDER_BLOCKED,
-                    "provider_access_restricted",
-                )
-        if protection_trigger_from_text(snapshot.body_text) is not None or any(
-            protection_trigger_from_text(text) is not None for text in snapshot.protection_texts
-        ):
+        protection = classify_reservation_protection(snapshot)
+        if protection is not None:
+            log_reservation_protection(
+                protection,
+                snapshot,
+                (
+                    _dialog_policy.ReservationDialogPhase.POST_REQUEST
+                    if attempt.reservation_clicked
+                    else _dialog_policy.ReservationDialogPhase.PRE_REQUEST
+                ),
+                event_logger=self._event_logger,
+            )
             return KorailReservationResult(
                 KorailReservationOutcome.PROVIDER_BLOCKED,
-                "provider_access_restricted",
+                "rate_limited"
+                if protection.trigger == "rate_limited"
+                else "provider_access_restricted",
             )
 
         path = urlsplit(snapshot.url).path
+        if (
+            path.rstrip("/") in {"/ticket/search/general", "/ticket/search/list"}
+            and attempt.public_notices_dismissed < MAX_NOTICE_CLOSE_ACTIONS
+            and await self._visible_elements(".layerWrap.emer_pop")
+            and await dismiss_public_search_notices(
+                execute_script=lambda script, *, return_by_value: self._execute_script(
+                    script,
+                    return_by_value=return_by_value,
+                    await_promise=False,
+                    timeout=self._timeout_ms,
+                ),
+                find_controls=self._visible_elements,
+                monotonic=self._monotonic,
+                sleep=self._sleep,
+                timeout_seconds=self._timeout_seconds,
+                context="reservation",
+            )
+        ):
+            attempt.public_notices_dismissed += 1
+            return await self.probe_reservation_terminal(request, attempt)
         authenticated_login_route = False
         if path.rstrip("/") != "/ticket/login":
             attempt.login_route_auth_unavailable_stage = None
@@ -974,6 +1149,29 @@ class PydollReservationDomDriver:
             if attempt.reservation_clicked
             else _dialog_policy.ReservationDialogPhase.PRE_REQUEST
         )
+        if (
+            dialogs
+            and path.rstrip("/") in {"/ticket/search/general", "/ticket/search/list"}
+            and attempt.public_notices_dismissed < MAX_NOTICE_CLOSE_ACTIONS
+            and await self._visible_elements(".layerWrap.emer_pop")
+            and await dismiss_public_search_notices(
+                execute_script=lambda script, *, return_by_value: self._execute_script(
+                    script,
+                    return_by_value=return_by_value,
+                    await_promise=False,
+                    timeout=self._timeout_ms,
+                ),
+                find_controls=self._visible_elements,
+                monotonic=self._monotonic,
+                sleep=self._sleep,
+                timeout_seconds=self._timeout_seconds,
+                context="reservation",
+            )
+        ):
+            # A public layer may mount after the initial snapshot but before
+            # dialog enumeration. Re-read the remaining official booking surface.
+            attempt.public_notices_dismissed += 1
+            return await self.probe_reservation_terminal(request, attempt)
         if len(dialogs) > 1:
             ambiguous = _dialog_policy.ReservationDialogDecision(
                 _dialog_policy.ReservationDialogKind.UNKNOWN,
@@ -1105,7 +1303,20 @@ class PydollReservationDomDriver:
                     ),
                 )
                 try:
-                    await matching_controls[0].click()
+                    delivered = await self._dispatch_reservation_control(
+                        matching_controls[0],
+                        event_logger=self._event_logger,
+                        prepare_script=_DIALOG_CLICK_PREPARE_SCRIPT,
+                    )
+                    if not delivered:
+                        # Preflight found a cover, or completed native input was
+                        # proven intercepted by that cover. No official action
+                        # happened, so it has not spent its one shot.
+                        attempt.dialog_actions_attempted = tuple(
+                            key for key in attempt.dialog_actions_attempted if key != action_key
+                        )
+                        attempt.dialog_settle_deadlines.pop(action_key, None)
+                        return None
                 except asyncio.CancelledError:
                     raise
                 except Exception:  # noqa: BLE001 -- official dialog action result is uncertain.

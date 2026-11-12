@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -10,6 +11,7 @@ import pytest
 
 import rail_waitlist.korail_pydoll_browser as browser_module
 import rail_waitlist.korail_pydoll_reservation_actor as reservation_actor_module
+from rail_waitlist.domain import Provider, SeatClass
 from rail_waitlist.korail_pydoll_browser import (
     KorailCredentialInput,
     KorailReservationOutcome,
@@ -30,6 +32,8 @@ from rail_waitlist.korail_sidecar.pydoll.reservation_contracts import (
     KorailReservationProgressCallback,
     KorailReservedSeat,
 )
+from rail_waitlist.reservations.provider_confirmation.contracts import ReservationConfirmationTarget
+from rail_waitlist.reservations.provider_confirmation.korail import KorailSameSessionDetailEvidence
 
 
 class _ReservationSession:
@@ -277,6 +281,77 @@ def _request() -> KorailReservationRequest:
             version="credential-v1",
         ),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [KorailReservationOutcome.ACTION_REQUIRED, KorailReservationOutcome.CONSENT_REQUIRED],
+)
+async def test_official_dialog_stop_keeps_same_session_for_read_only_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: KorailReservationOutcome,
+) -> None:
+    class DialogSession(_ReservationSession):
+        async def reserve_once(
+            self,
+            request: KorailReservationRequest,
+            *,
+            on_progress: KorailReservationProgressCallback | None = None,
+        ) -> KorailReservationResult:
+            del request, on_progress
+            self.events.append("reserve")
+            return KorailReservationResult(
+                outcome=outcome,
+                reason="official_action_required",
+                seat_clicked=True,
+                reservation_clicked=True,
+            )
+
+    monkeypatch.setattr(
+        PydollKorailBrowserClient, "_assert_reservation_identity", staticmethod(AsyncMock())
+    )
+    session = DialogSession()
+    factory = _SequenceReservationFactory(session)
+    client = PydollKorailBrowserClient(
+        session_factory=factory,  # type: ignore[arg-type]
+        session_reuse_ttl_seconds=60,
+        session_reuse_max_searches=5,
+    )
+    request = _request()
+    request = replace(request, credential=replace(request.credential, version="7"))
+    evidence = KorailSameSessionDetailEvidence(
+        observed_at=datetime.now(UTC),
+        credential_version=7,
+        exact_identity_matched=False,
+        payment_pending_markers_present=False,
+    )
+    read_confirmation = AsyncMock(return_value=evidence)
+    monkeypatch.setattr(browser_module, "read_korail_same_session_confirmation", read_confirmation)
+    try:
+        result = await client.reserve_once(request)
+        assert result.outcome is outcome
+        target = ReservationConfirmationTarget(
+            attempt_id="fixture-attempt",
+            candidate_id="fixture-candidate",
+            provider=Provider.KORAIL,
+            train_number=request.train_number,
+            origin=request.origin,
+            destination=request.destination,
+            departure_at=datetime(2026, 8, 8, 5, 11, tzinfo=UTC),
+            seat_class=SeatClass.STANDARD,
+            passenger_count=1,
+            credential_version=7,
+        )
+        assert await client.read_reservation_detail(target) is evidence
+        assert read_confirmation.await_args.kwargs["session"] is session
+        assert session.events.count("reserve") == 1
+        assert session.events.count("authenticate") == 1
+        assert factory.calls == 1
+        assert session.closed == 0
+    finally:
+        await client.close()
+    assert session.closed == 1
 
 
 @pytest.mark.asyncio

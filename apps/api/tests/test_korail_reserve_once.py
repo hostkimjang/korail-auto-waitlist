@@ -177,6 +177,10 @@ class FakeElement:
         return True
 
     async def execute_script(self, script: str, *, return_by_value: bool) -> dict[str, object]:
+        if "this.matches(" in script:
+            return {"result": {"result": {"value": "ready"}}}
+        if "delete this[key]" in script:
+            return {"result": {"result": {"value": "dispatched"}}}
         return {
             "result": {
                 "result": {
@@ -2953,14 +2957,29 @@ async def test_terminal_probe_types_existing_reservation_choice_without_clicking
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("obstruction", ["none", "covered", "intercepted"])
 async def test_terminal_probe_dismisses_each_known_notice_phase_at_most_once(
     monkeypatch: pytest.MonkeyPatch,
+    obstruction: str,
 ) -> None:
     session = _PydollSession("https://www.korail.com/ticket/search/general", 1_000, True)
     dialog = FakeElement("안내메세지 서버 안내입니다. 확인")
     title = FakeElement("안내메세지")
     message = FakeElement("서버 안내입니다.")
     acknowledge = FakeElement("확인")
+    original_execute = acknowledge.execute_script
+    obstructed = [False]
+
+    async def execute(script: str, *, return_by_value: bool) -> dict[str, object]:
+        if not obstructed[0] and (
+            (obstruction == "covered" and "this.matches('button')" in script)
+            or (obstruction == "intercepted" and "delete this[key]" in script)
+        ):
+            obstructed[0] = True
+            return {"result": {"result": {"value": obstruction}}}
+        return await original_execute(script, return_by_value=return_by_value)
+
+    monkeypatch.setattr(acknowledge, "execute_script", execute)
     attempt = _ReservationAttemptState(reservation_clicked=True)
     monotonic = [10.0]
 
@@ -2990,14 +3009,20 @@ async def test_terminal_probe_dismisses_each_known_notice_phase_at_most_once(
     )
 
     first = await session._probe_reservation_terminal(reservation_request(), attempt)
-    monotonic[0] = 10.5
+    if obstruction != "none":
+        assert first is None
+        assert attempt.dialog_actions_attempted == ()
+        assert attempt.dialog_settle_deadlines == {}
+        monotonic[0] = 10.1
+        assert await session._probe_reservation_terminal(reservation_request(), attempt) is None
+    monotonic[0] = 10.6
     second = await session._probe_reservation_terminal(reservation_request(), attempt)
 
     assert first is None
     assert second is not None
     assert second.outcome is KorailReservationOutcome.ACTION_REQUIRED
     assert second.reason == "official_notice_persisted"
-    assert acknowledge.clicks == 1
+    assert acknowledge.clicks == (2 if obstruction == "intercepted" else 1)
 
 
 @pytest.mark.asyncio

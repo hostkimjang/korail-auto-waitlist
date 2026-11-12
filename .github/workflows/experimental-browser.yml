@@ -27,6 +27,57 @@ on:
       - ".github/workflows/experimental-browser.yml"
 
 jobs:
+  verify-native-reservation-controls:
+    name: Reservation controls (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - run: uv sync --frozen --extra test --extra browser
+      - name: Select isolated fixture Chrome
+        run: |
+          uv run --frozen --extra test --extra browser python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          candidates = [
+              shutil.which("google-chrome"),
+              shutil.which("google-chrome-stable"),
+              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+              str(Path(os.environ.get("PROGRAMFILES", "C:/Program Files"))
+                  / "Google/Chrome/Application/chrome.exe"),
+          ]
+          binary = next((str(Path(p)) for p in candidates if p and Path(p).is_file()), None)
+          if binary is None:
+              raise RuntimeError("Fixture Chrome is unavailable")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
+              environment.write(f"KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH={binary}\n")
+          PY
+      - name: Verify native clicks and protection without provider requests
+        env:
+          KORAIL_BROWSER_TEST_DISABLE_SANDBOX: ${{ runner.os == 'Linux' && 'true' || 'false' }}
+        run: >-
+          uv run --frozen --extra test --extra browser pytest -q -p no:cacheprovider
+          tests/test_korail_reservation_click_runtime.py
+          tests/test_korail_reservation_protection.py
+          tests/test_korail_pydoll_reservation_driver.py
+
   verify-experimental-browser:
     name: Experimental KORAIL browser
     runs-on: ubuntu-latest

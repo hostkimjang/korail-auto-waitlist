@@ -298,6 +298,7 @@ print(json.dumps({
 def test_production_consumers_import_exact_canonical_contract_owners() -> None:
     expected = {
         "korail_sidecar.pydoll.page_contracts": {
+            "korail_sidecar/pydoll/reservation_protection.py",
             "korail_browser_mode_smoke.py",
             "korail_sidecar/pydoll/auth_actor.py",
             "korail_pydoll_browser.py",

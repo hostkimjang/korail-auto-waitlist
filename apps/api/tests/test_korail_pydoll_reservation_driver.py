@@ -21,6 +21,8 @@ class _ClickControl:
     def __init__(self, text: str = "") -> None:
         self._text = text
         self.clicks = 0
+        self.dispatch_results: list[str] = []
+        self.observes_dispatch = True
 
     @property
     def text(self):  # type: ignore[no-untyped-def]
@@ -31,6 +33,18 @@ class _ClickControl:
 
     async def click(self) -> None:
         self.clicks += 1
+
+    async def execute_script(self, script: str, *, return_by_value: bool) -> dict[str, object]:
+        assert return_by_value
+        if script == reservation_driver_module._RESERVATION_CLICK_OBSERVATION_SCRIPT:
+            value = "dispatched" if self.clicks and self.observes_dispatch else "unconfirmed"
+        else:
+            assert script in {
+                reservation_driver_module._RESERVATION_CLICK_PREPARE_SCRIPT,
+                reservation_driver_module._SEAT_CLICK_PREPARE_SCRIPT,
+            }
+            value = self.dispatch_results.pop(0) if self.dispatch_results else "ready"
+        return {"result": {"result": {"value": value}}}
 
 
 def _request() -> reservation_contracts_module.KorailReservationRequest:
@@ -52,8 +66,18 @@ def _request() -> reservation_contracts_module.KorailReservationRequest:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("covered_first", [False, True])
+@pytest.mark.parametrize("seat_covered_first", [False, True])
+@pytest.mark.parametrize("seat_dispatch_observed", [False, True])
+@pytest.mark.parametrize("dispatch_observed", [False, True])
+@pytest.mark.parametrize("terminal_outcome", ["payment_required", "provider_blocked", "failed"])
 async def test_reservation_driver_resolves_session_monkeypatch_seams_after_construction(
     monkeypatch: pytest.MonkeyPatch,
+    covered_first: bool,
+    seat_covered_first: bool,
+    seat_dispatch_observed: bool,
+    dispatch_observed: bool,
+    terminal_outcome: str,
 ) -> None:
     session = _PydollSession(
         "https://www.korail.com/ticket/search/general",
@@ -62,7 +86,13 @@ async def test_reservation_driver_resolves_session_monkeypatch_seams_after_const
     )
     row = object()
     seat = _ClickControl()
+    seat.observes_dispatch = seat_dispatch_observed
+    if seat_covered_first:
+        seat.dispatch_results = ["covered", "ready"]
     reservation = _ClickControl("예매")
+    reservation.observes_dispatch = dispatch_observed
+    if covered_first:
+        reservation.dispatch_results = ["covered", "ready"]
 
     async def visible_elements(selector: str, *, scope: object = None) -> list[object]:
         del scope
@@ -76,9 +106,9 @@ async def test_reservation_driver_resolves_session_monkeypatch_seams_after_const
     actionable_controls = AsyncMock(return_value=[seat])
     terminal_probe = AsyncMock(
         side_effect=[
-            None,
+            *([None] * (1 + int(covered_first) + int(seat_covered_first))),
             reservation_contracts_module.KorailReservationResult(
-                reservation_contracts_module.KorailReservationOutcome.PAYMENT_REQUIRED,
+                reservation_contracts_module.KorailReservationOutcome(terminal_outcome),
                 "reservation_pending_payment",
             ),
         ]
@@ -86,6 +116,8 @@ async def test_reservation_driver_resolves_session_monkeypatch_seams_after_const
     monkeypatch.setattr(session, "_visible_elements", visible_elements)
     monkeypatch.setattr(session, "_row_matches_reservation", row_matches)
     monkeypatch.setattr(session, "_actionable_seat_controls", actionable_controls)
+    preserved_selection = AsyncMock(return_value=False)
+    monkeypatch.setattr(session, "_has_exact_preserved_booking_state", preserved_selection)
     monkeypatch.setattr(session, "_probe_reservation_terminal", terminal_probe)
     monkeypatch.setattr(
         session,
@@ -102,17 +134,27 @@ async def test_reservation_driver_resolves_session_monkeypatch_seams_after_const
 
     result = await session.reserve_once(_request())
 
-    assert result.outcome is reservation_contracts_module.KorailReservationOutcome.PAYMENT_REQUIRED
-    assert result.seat_clicked is True
-    assert result.reservation_clicked is True
+    assert result.seat_clicked is seat_dispatch_observed
     assert seat.clicks == 1
-    assert reservation.clicks == 1
+    assert reservation.clicks == int(seat_dispatch_observed)
     row_matches.assert_awaited_once()
     actionable_controls.assert_awaited_once_with(
         row,
         reservation_contracts_module.KorailReservationSeatClass.SPECIAL.label,
     )
-    assert terminal_probe.await_count == 2
+    if not seat_dispatch_observed:
+        assert result.outcome is reservation_contracts_module.KorailReservationOutcome.FAILED
+        assert result.reason == "reservation_selection_not_preserved"
+        assert result.reservation_requested_at is None
+        preserved_selection.assert_awaited_once()
+        return
+    assert result.outcome is reservation_contracts_module.KorailReservationOutcome(terminal_outcome)
+    assert result.reservation_clicked is dispatch_observed
+    assert terminal_probe.await_count == 2 + int(covered_first) + int(seat_covered_first)
+    if not dispatch_observed:
+        # A successful official terminal page still settles an uncertain click;
+        # failure to observe its event must never trigger a second click.
+        assert result.reservation_requested_at is None
 
 
 @pytest.mark.asyncio
@@ -487,6 +529,70 @@ async def test_payment_terminal_does_not_persist_page_wide_seat_text_without_off
     assert result is not None
     assert result.outcome is reservation_contracts_module.KorailReservationOutcome.PAYMENT_REQUIRED
     assert result.reserved_seats == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protected", [False, True])
+@pytest.mark.parametrize("late_public_layer", [False, True])
+async def test_terminal_probe_dismisses_reopened_public_notice_then_reads_fresh_booking_surface(
+    monkeypatch: pytest.MonkeyPatch, protected: bool, late_public_layer: bool
+) -> None:
+    search = reservation_driver_module.PydollPageSnapshot(
+        body_text="열차 조회",
+        rows=(),
+        url="https://www.korail.com/ticket/search/general",
+        network_responses=((429, "xhr"),) if protected else (),
+    )
+    detail = reservation_driver_module.PydollPageSnapshot(
+        body_text="KTX 118 2026-08-02 대전 06:35 서울 07:49 특실 예약취소 장바구니 결제하기",
+        rows=(),
+        url="https://www.korail.com/ticket/reservation/detail",
+    )
+    read_snapshot = AsyncMock(side_effect=[search, detail])
+    close_notice = AsyncMock(return_value=True)
+    monkeypatch.setattr(reservation_driver_module, "dismiss_public_search_notices", close_notice)
+    layer_reads = 0
+
+    async def visible(selector: str, *, scope: object = None) -> list[object]:
+        nonlocal layer_reads
+        if selector == ".layerWrap.emer_pop":
+            layer_reads += 1
+            if late_public_layer and layer_reads == 1:
+                return []
+        return [object()]
+
+    driver = reservation_driver_module.PydollReservationDomDriver(
+        port=SimpleNamespace(_snapshot=read_snapshot),
+        timeout_ms=1_000,
+        timeout_seconds=1.0,
+        execute_script=AsyncMock(),
+        visible_elements=visible,
+        current_schedule=AsyncMock(),
+        read_control_state=AsyncMock(),
+        monotonic=lambda: 0.0,
+        sleep=AsyncMock(),
+        utc_now=lambda: datetime.now(UTC),
+        event_logger=SimpleNamespace(info=lambda *_args: None, warning=lambda *_args: None),
+    )
+    monkeypatch.setattr(driver, "reserved_seats_from_preserved_state", AsyncMock(return_value=()))
+    attempt = reservation_driver_module.ReservationAttemptState(reservation_clicked=True)
+    result = await driver.probe_reservation_terminal(_request(), attempt)
+    assert result is not None
+    if protected:
+        assert (
+            result.outcome is reservation_contracts_module.KorailReservationOutcome.PROVIDER_BLOCKED
+        )
+        close_notice.assert_not_awaited()
+        assert attempt.public_notices_dismissed == 0
+    else:
+        assert (
+            result.outcome is reservation_contracts_module.KorailReservationOutcome.PAYMENT_REQUIRED
+        )
+        close_notice.assert_awaited_once()
+        assert close_notice.await_args.kwargs["context"] == "reservation"
+        assert attempt.public_notices_dismissed == 1
+        assert read_snapshot.await_count == 2
+    assert attempt.reservation_clicked is True
 
 
 def test_reservation_driver_has_no_browser_or_actor_dependencies() -> None:

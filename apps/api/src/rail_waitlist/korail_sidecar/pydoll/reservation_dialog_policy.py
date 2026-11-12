@@ -58,6 +58,41 @@ def _normalized_text(value: str) -> str:
     return " ".join(value.split())
 
 
+def reservation_dialog_evidence_summary(evidence: ReservationDialogEvidence) -> tuple[str, str]:
+    """Describe selector/label drift without recording provider text or identifiers."""
+
+    title = _normalized_text(evidence.title)
+    title_kind = {
+        "이용안내": "information",
+        "지연승낙 안내": "delay_consent",
+        "안내메세지": "notice",
+        "안내메시지": "notice_variant",
+        "안내 메세지": "notice_spaced",
+        "로그인": "login",
+        "": "missing",
+    }.get(title, "other")
+    label_kinds = {
+        "확인": "ack",
+        "닫기": "close",
+        "취소": "cancel",
+        "네": "yes",
+        "예": "yes_variant",
+        "아니오": "no",
+        "아니요": "no_variant",
+        "예약내역확인": "existing_reservations",
+        "다른여정예약": "other_journey",
+    }
+    labels = evidence.control_labels
+    controls_kind = (
+        ":".join(label_kinds.get(_normalized_text(label), "other") for label in labels)
+        if 0 < len(labels) <= 8
+        else "empty"
+        if not labels
+        else "many"
+    )
+    return title_kind, controls_kind
+
+
 def _control_shape(labels: tuple[str, ...]) -> ReservationDialogControlShape:
     if labels == ("확인",):
         return ReservationDialogControlShape.SINGLE_ACKNOWLEDGEMENT

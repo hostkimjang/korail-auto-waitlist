@@ -217,6 +217,7 @@ files = [
   "src/rail_waitlist/korail_sidecar/pydoll/reservation_contracts.py",
   "src/rail_waitlist/korail_sidecar/pydoll/reservation_dialog_policy.py",
   "src/rail_waitlist/korail_sidecar/pydoll/reservation_driver.py",
+  "src/rail_waitlist/korail_sidecar/pydoll/reservation_protection.py",
   "src/rail_waitlist/korail_pydoll_reservation_driver.py",
   "src/rail_waitlist/korail_sidecar/pydoll/search_actor.py",
   "src/rail_waitlist/korail_pydoll_search_actor.py",

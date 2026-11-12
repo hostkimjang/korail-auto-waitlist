@@ -2,8 +2,11 @@ FROM mcr.microsoft.com/playwright/python:v1.55.0-noble AS browser-base
 
 ARG TARGETARCH
 
+# Keep application packages outside the base image's externally managed Python.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH" \
     LANGUAGE=ko_KR:ko \
     KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome
 
@@ -18,6 +21,7 @@ RUN apt-get update \
         fonts-noto-cjk \
         novnc \
         openbox \
+        python3-venv \
         scrot \
         websockify \
         x11-utils \
@@ -32,6 +36,7 @@ RUN apt-get update \
         "https://dl.google.com/linux/direct/google-chrome-stable_current_${TARGETARCH}.deb" \
     && apt-get install -y --no-install-recommends /tmp/google-chrome-stable.deb \
     && rm -f /tmp/google-chrome-stable.deb \
+    && python3 -m venv /opt/venv \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -44,16 +49,17 @@ RUN chmod 0755 \
         /usr/local/bin/start-korail-browser-test \
     && install -d -o pwuser -g pwuser -m 0700 \
         /var/lib/rail-waitlist/korail-browser-profile \
-    && pip install --no-cache-dir --ignore-installed ".[browser]"
+    && python -m pip install --no-cache-dir ".[browser]"
 
 FROM browser-base AS test
 
 ENV KORAIL_BROWSER_TEST_DISABLE_SANDBOX=true \
+    KORAIL_BROWSER_IMAGE_TEST=true \
     KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/start-korail-browser-test
 
 USER root
 COPY tests ./tests
-RUN pip install --no-cache-dir --ignore-installed ".[browser,test]"
+RUN python -m pip install --no-cache-dir ".[browser,test]"
 USER pwuser
 CMD ["pytest", "tests/test_korail_browser_automation.py", "tests/test_korail_browser_mode_smoke.py", "tests/test_korail_chromium_launch.py", "tests/test_korail_direct_cdp.py", "tests/test_korail_login_failure_transport.py", "tests/test_korail_pydoll_auth_actor.py", "tests/test_korail_pydoll_browser.py", "tests/test_korail_pydoll_chromium_lifecycle.py", "tests/test_korail_pydoll_login_driver.py", "tests/test_korail_sidecar_runtime.py", "-q", "-p", "no:cacheprovider"]
 

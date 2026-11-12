@@ -8,6 +8,7 @@ from rail_waitlist.korail_sidecar.pydoll.reservation_dialog_policy import (
     ReservationDialogKind,
     ReservationDialogPhase,
     classify_reservation_dialog,
+    reservation_dialog_evidence_summary,
 )
 
 
@@ -213,3 +214,20 @@ def test_authenticated_login_shell_is_separate_from_actionable_notices() -> None
 
     assert decision.kind is ReservationDialogKind.AUTHENTICATED_LOGIN_SHELL
     assert decision.action is ReservationDialogAction.NONE
+
+
+def test_dialog_diagnostics_keep_only_closed_titles_and_control_kinds() -> None:
+    assert reservation_dialog_evidence_summary(
+        _evidence(title="이용안내", labels=("아니오", "네"))
+    ) == ("information", "no:yes")
+    assert reservation_dialog_evidence_summary(
+        _evidence(
+            title="fixture-private-title",
+            message="fixture-private-message",
+            labels=("fixture-private-control", "확인"),
+        )
+    ) == ("other", "other:ack")
+    assert reservation_dialog_evidence_summary(_evidence(title="", labels=("확인",) * 9)) == (
+        "missing",
+        "many",
+    )

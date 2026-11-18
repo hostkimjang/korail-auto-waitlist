@@ -76,6 +76,7 @@ jobs:
           import os
           import shutil
           import subprocess
+          import tempfile
           from pathlib import Path
 
           installed = shutil.which("google-chrome")
@@ -89,6 +90,24 @@ jobs:
           ).stdout.strip()
           if not version.startswith("Google Chrome "):
               raise RuntimeError("Unexpected runtime browser family")
+          # Start Chrome once before the parallel test run, as the release workflow does. The first
+          # start on a fresh runner can outlast Pydoll's start timeout while other workers load the CPU.
+          with tempfile.TemporaryDirectory() as profile:
+              subprocess.run(
+                  [
+                      str(binary),
+                      "--headless=new",
+                      "--no-sandbox",
+                      "--disable-gpu",
+                      "--no-first-run",
+                      f"--user-data-dir={profile}",
+                      "--dump-dom",
+                      "about:blank",
+                  ],
+                  check=True,
+                  capture_output=True,
+                  timeout=120,
+              )
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
               environment.write(f"KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH={binary}\n")
           print(f"Pydoll runtime browser: {version}")

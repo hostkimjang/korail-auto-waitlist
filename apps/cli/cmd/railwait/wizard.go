@@ -462,8 +462,12 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	}
 	ui.Section("4 / 5  자동 시작")
 	ui.Start("사용자 관리 서비스 확인")
-	if err = installManager(ctx, s.Path); err != nil {
+	var upgraded managerUpgradeResult
+	if upgraded, err = installOrUpgradeManager(ctx, s.Path); err != nil {
 		return fmt.Errorf("앱은 준비됐지만 자동 시작 등록이 필요합니다: %w", err)
+	}
+	if upgraded.To != "" {
+		ui.Done("관리 서비스 교체 · " + upgraded.From + " → " + upgraded.To)
 	}
 	ui.Done("로그인 시 관리 서비스 시작 · 현재 실행 확인")
 	ui.Hint("앱 실행에는 Docker도 실행 중이어야 합니다. OS 재부팅은 이 과정에서 수행하지 않습니다.")

@@ -143,7 +143,7 @@ func savePlan(s State, plan UpdatePlan, targetSHA, kind string, candidate []byte
 // installed release. Update validates each candidate with that group's own check.
 func configureKind(kind string) bool {
 	switch kind {
-	case "configure_tago", "configure_access", "configure_push", "configure_reservation":
+	case "configure_tago", "configure_access", "configure_push", "configure_reservation", "configure_settings":
 		return true
 	}
 	return false
@@ -431,6 +431,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	var candidate []byte
 	var staged *release.LocalSource
 	stagedPackage := ""
+	settingsScope := ""
 	if configure {
 		candidatePath := filepath.Join(abs, ".railwait", "plans", o.PlanID+".candidate.env")
 		candidate, err = os.ReadFile(candidatePath)
@@ -447,6 +448,8 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			err = validatePushCandidate(env, candidate)
 		case "configure_reservation":
 			err = validateReservationCandidate(env, candidate)
+		case "configure_settings":
+			settingsScope, err = validateSettingsCandidate(env, candidate)
 		default:
 			err = validateTAGOCandidate(env, candidate)
 		}
@@ -525,6 +528,14 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		} else if _, err = i.compose(ctx, next, nil, "pull"); err != nil {
 			return result, err
 		}
+	}
+	if saved.Kind == "configure_settings" && settingsScope == "web" {
+		if err = i.applyWebSettings(ctx, s, env, candidate, &result, progress); err != nil {
+			return result, err
+		}
+		result.State = "succeeded"
+		result.Stage = "succeeded"
+		return result, nil
 	}
 	if s.ReleaseSource != "local_package" {
 		if _, err = i.compose(ctx, s, nil, "--profile", "backup", "pull", "backup"); err != nil {
@@ -647,6 +658,23 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		if err = atomicWrite(filepath.Join(abs, ".env"), candidate); err != nil {
 			return result, err
 		}
+		// From here a failure puts the previous settings back and restarts the services
+		// with them, so a value the app rejects does not leave it down behind a closed gate.
+		defer func() {
+			if err == nil {
+				return
+			}
+			if restoreErr := i.restoreSettings(ctx, s, env, services); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+				return
+			}
+			if gateErr := writeGate(controlDir, false, generation); gateErr != nil {
+				err = errors.Join(err, gateErr)
+				return
+			}
+			closed = false
+			result.Stage = "rolled_back"
+		}()
 	}
 	for _, oneShot := range []string{"migration", "log-init"} {
 		if _, err = i.compose(ctx, next, nil, "up", "--no-deps", "--force-recreate", "--abort-on-container-exit", "--exit-code-from", oneShot, oneShot); err != nil {

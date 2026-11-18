@@ -185,7 +185,8 @@ DB revision이 같은지 먼저 확인합니다. 그다음 Compose의 build 정�
 이미지가 되게 합니다), 빌드하지 않는 이미지가 Docker에 있는지 확인한 뒤 일회성
 키로 서명한 로컬 패키지를 만듭니다. 개인키는 서명 직후 지웁니다. 같은 커밋의 CLI를 Docker 안의 Go로 빌드해
 계획을 확인하고 적용한 다음, 새 CLI의 `status`, `/healthz`·`/readyz`·`/` 응답, web 컨테이너 화면 파일의 버전을
-확인합니다. 적용은 기존 서비스를 멈춘 뒤 새 migration부터 실행하고 자동으로 되돌리지 않으므로, 빌드한 이미지는
+확인하고, 호스트 관리 서비스도 같은 커밋의 CLI로 바꿉니다(`manager upgrade --force`). 적용은 기존 서비스를 멈춘 뒤 새
+migration부터 실행하고 자동으로 되돌리지 않으므로, 빌드한 이미지는
 패키지를 만들기 전에 각 이미지의 비root 기본 사용자로 한 번씩 실행해 봅니다. API는 import와 DB 없이 계산한
 `alembic heads`가 설치 DB revision과 같은지, 웹은 `nginx -t`와 화면 파일 읽기, KORAIL 어댑터는 import와 Chrome
 버전, 백업은 도구와 스크립트 실행 권한을 확인하고 실패하면 설치를 건드리지 않고 멈춥니다. worktree는 umask 022로

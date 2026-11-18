@@ -8,6 +8,7 @@
 #   3. 일회성 Ed25519 키로 서명한 로컬 패키지를 만들고 개인키는 바로 지운다.
 #   4. 같은 커밋의 호스트 CLI를 Docker 안에서 빌드해 업데이트 계획을 확인하고 적용한다.
 #   5. CLI 상태, HTTP 응답, 화면 파일의 버전을 확인한다. 선택하면 KORAIL 공개 좌석 조회도 확인한다.
+#   6. 호스트 관리 서비스를 같은 커밋의 CLI로 바꿔, 관리 서비스가 맡는 기능(웹 서버 설정 등)도 같은 커밋을 쓰게 한다.
 #
 # 운영 .env와 비밀값을 읽거나 출력하지 않는다. 볼륨과 이전 이미지를 지우지 않으므로 이전 버전 이미지는
 # 되돌리기용으로 남는다. macOS 기본 bash 3.2에서도 돌도록 연관 배열·mapfile·빈 배열 확장을 쓰지 않고,
@@ -520,6 +521,13 @@ docker --context "$docker_context" exec "$web_container" \
     grep -rqF "version:\"${version}\",releasedOn:\"${released_on}\"" /usr/share/nginx/html </dev/null \
     || die "web 컨테이너의 화면 파일에서 v$version 표시를 찾지 못했습니다"
 log "화면 파일 확인: v$version ($released_on)"
+
+# 관리 서비스는 업데이트로 바뀌지 않는다. 개발용 CLI는 릴리스 버전이 없어 비교할 수 없으므로 --force로 바꾼다.
+keep_work=1
+log "호스트 관리 서비스를 같은 커밋의 CLI로 교체"
+"$cli" manager upgrade --path "$install_path" --force \
+    || die "앱 업데이트는 끝났지만 관리 서비스를 바꾸지 못했습니다. \"$cli\" manager upgrade --path \"$install_path\" --force로 다시 시도하세요"
+keep_work=0
 
 if [[ "$korail_smoke" -eq 1 ]]; then
     adapter_container=""

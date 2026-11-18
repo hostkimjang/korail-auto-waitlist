@@ -29,6 +29,8 @@ type updateRunner struct {
 	base          *fakeRunner
 	state         State
 	failure       string
+	failureLimit  int
+	failed        int
 	drainRevision string
 	commands      []Command
 	inputs        []string
@@ -55,7 +57,8 @@ func (r *updateRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 		gate["drained"] = true
 		return json.Marshal(gate)
 	}
-	if r.failure != "" && strings.Contains(args, r.failure) {
+	if r.failure != "" && strings.Contains(args, r.failure) && (r.failureLimit == 0 || r.failed < r.failureLimit) {
+		r.failed++
 		return nil, fmt.Errorf("injected update failure")
 	}
 	if strings.Contains(args, "ps --all --format") {

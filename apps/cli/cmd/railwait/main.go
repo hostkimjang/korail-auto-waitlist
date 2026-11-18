@@ -63,7 +63,7 @@ func run(ctx context.Context, args []string) error {
 		return previewCommand(ctx, args[1:])
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("railwait install|setup|status|doctor|update|configure|manager|package|preview|version\n간편 설치: railwait install [--path <경로>] [--plain]\n직접 설정: railwait install --custom / 로컬 전용: --access local\n로컬 패키지: railwait install --path <새 경로> --package <패키지 디렉터리> --trust-key <공개키 파일>\n업데이트: railwait update --path <경로> --dry-run / --target <버전> --plan <계획ID>\n로컬 패키지 업데이트: railwait update --path <경로> --package <새 패키지> --trust-key <공개키 파일> [--dry-run]\nTAGO 설정: railwait configure --path <경로>\n자동 예매: railwait configure reservation on|off --path <경로>\n비대화형: railwait install --input - < protected-input.json")
+		fmt.Println("railwait install|setup|status|doctor|update|configure|manager|package|preview|version\n간편 설치: railwait install [--path <경로>] [--plain]\n직접 설정: railwait install --custom / 로컬 전용: --access local\n로컬 패키지: railwait install --path <새 경로> --package <패키지 디렉터리> --trust-key <공개키 파일>\n업데이트: railwait update --path <경로> --dry-run / --target <버전> --plan <계획ID>\n로컬 패키지 업데이트: railwait update --path <경로> --package <새 패키지> --trust-key <공개키 파일> [--dry-run]\nTAGO 설정: railwait configure --path <경로>\n자동 예매: railwait configure reservation on|off --path <경로>\n관리 서비스 교체: railwait manager upgrade --path <경로>\n비대화형: railwait install --input - < protected-input.json")
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" {
@@ -466,7 +466,7 @@ func applySettingsPlanInProcess(ctx context.Context, i *install.Installer, path,
 
 func managerCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("manager install|serve|status 명령이 필요합니다")
+		return fmt.Errorf("manager install|upgrade|serve|status 명령이 필요합니다")
 	}
 	defaultPath, err := platform.DefaultInstallDir()
 	if err != nil {
@@ -474,6 +474,7 @@ func managerCommand(ctx context.Context, args []string) error {
 	}
 	flags := flag.NewFlagSet("manager", flag.ContinueOnError)
 	path := flags.String("path", defaultPath, "설치 경로")
+	force := flags.Bool("force", false, "버전을 비교할 수 없는 개발용 CLI로도 관리 서비스를 교체 (upgrade)")
 	if err = flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -486,7 +487,29 @@ func managerCommand(ctx context.Context, args []string) error {
 	}
 	switch args[0] {
 	case "install":
-		return installManager(ctx, abs)
+		_, err = installOrUpgradeManager(ctx, abs)
+		return err
+	case "upgrade":
+		if _, err = install.ReadState(abs); err != nil {
+			return err
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		result, err := newManagerUpgrader().upgrade(ctx, abs, exe, version, *force)
+		if err != nil {
+			return err
+		}
+		if result.To == "" {
+			if _, statErr := os.Lstat(managerExecutablePath(abs)); errors.Is(statErr, os.ErrNotExist) {
+				return fmt.Errorf("관리 서비스가 아직 설치되지 않았습니다; %s 를 실행하세요", pasteableCommand("manager", "install", "--path", abs))
+			}
+			fmt.Println("관리 서비스가 이미 이 CLI 이상 버전입니다. 개발용 CLI로 바꾸려면 --force를 붙입니다.")
+			return nil
+		}
+		fmt.Printf("관리 서비스를 교체했습니다: %s → %s\n", result.From, result.To)
+		return nil
 	case "status":
 		if !manager.Available(abs, time.Now()) {
 			return fmt.Errorf("관리 서비스 heartbeat를 확인하지 못했습니다")
@@ -498,27 +521,43 @@ func managerCommand(ctx context.Context, args []string) error {
 		return manager.RunWithOptions(ctx, abs, func(ctx context.Context, r manager.Request, progress manager.Progress) (manager.Result, error) {
 			result, err := i.Update(ctx, install.UpdateOptions{Path: abs, TargetReleaseID: r.TargetReleaseID, PlanID: r.PlanID, JobID: r.ID, Progress: progress})
 			return manager.Result{State: result.State, Stage: result.Stage, CurrentVersion: result.CurrentVersion, TargetVersion: result.TargetVersion}, err
-		}, manager.Options{RefreshCatalog: func(ctx context.Context) (manager.Catalog, error) {
-			plan, err := i.PlanUpdate(ctx, abs)
-			if err != nil {
-				return manager.Catalog{}, err
-			}
-			return manager.Catalog{Schema: 1, CheckedAt: time.Now().UTC().Format(time.RFC3339), CurrentVersion: plan.CurrentReleaseID, LatestVersion: plan.TargetReleaseID, PlanID: plan.PlanID, Available: plan.Allowed, Reason: plan.Reason}, nil
-		}})
+		}, manager.Options{
+			RefreshCatalog: func(ctx context.Context) (manager.Catalog, error) {
+				plan, err := i.PlanUpdate(ctx, abs)
+				if err != nil {
+					return manager.Catalog{}, err
+				}
+				return manager.Catalog{Schema: 1, CheckedAt: time.Now().UTC().Format(time.RFC3339), CurrentVersion: plan.CurrentReleaseID, LatestVersion: plan.TargetReleaseID, PlanID: plan.PlanID, Available: plan.Allowed, Reason: plan.Reason}, nil
+			},
+			PlanSettings: func(ctx context.Context, r manager.SettingsRequest) (manager.Request, error) {
+				return i.PlanSettingsRequest(ctx, abs, r)
+			},
+			SettingsSnapshot: func() (manager.SettingsSnapshot, error) { return install.SettingsSnapshot(abs) },
+		})
 	default:
 		return fmt.Errorf("지원하지 않는 manager 명령입니다")
 	}
 }
 
-func installManager(ctx context.Context, path string) error {
-	if manager.Available(path, time.Now()) {
-		return nil
-	}
-	if _, err := install.ReadState(path); err != nil {
-		return err
-	}
+// installOrUpgradeManager starts this installation's manager, or replaces a running one
+// built by an older release with this CLI. It reports the replaced versions.
+func installOrUpgradeManager(ctx context.Context, path string) (managerUpgradeResult, error) {
 	exe, err := os.Executable()
 	if err != nil {
+		return managerUpgradeResult{}, err
+	}
+	if _, err = install.ReadState(path); err != nil {
+		return managerUpgradeResult{}, err
+	}
+	result, err := newManagerUpgrader().upgrade(ctx, path, exe, version, false)
+	if err != nil || result.To != "" || manager.Available(path, time.Now()) {
+		return result, err
+	}
+	return result, installManager(ctx, path, exe)
+}
+
+func installManager(ctx context.Context, path, exe string) error {
+	if _, err := install.ReadState(path); err != nil {
 		return err
 	}
 	plan, err := platform.CurrentServicePlan(managerExecutablePath(path), path)

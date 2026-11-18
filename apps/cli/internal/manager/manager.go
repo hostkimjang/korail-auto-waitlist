@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +19,10 @@ type Options struct {
 	PollInterval    time.Duration
 	CatalogInterval time.Duration
 	RefreshCatalog  func(context.Context) (Catalog, error)
+	// PlanSettings and SettingsSnapshot are set together by a manager that supports the
+	// web settings window. Without them settings requests stay where the API wrote them.
+	PlanSettings     SettingsPlanner
+	SettingsSnapshot func() (SettingsSnapshot, error)
 }
 
 func Run(ctx context.Context, installation string, handler Handler) error {
@@ -80,6 +85,7 @@ func RunWithOptions(ctx context.Context, installation string, handler Handler, o
 	defer ticker.Stop()
 	lastCatalog := time.Time{}
 	var catalogFingerprint string
+	var settings settingsPublication
 	for {
 		fingerprint, err := journalFingerprint(p)
 		if err != nil {
@@ -96,7 +102,12 @@ func RunWithOptions(ctx context.Context, installation string, handler Handler, o
 			lastCatalog = time.Now()
 			catalogFingerprint = fingerprint
 		}
-		if err := processPending(ctx, p, token, handler); err != nil {
+		if options.SettingsSnapshot != nil {
+			if err := settings.publish(p, started, options.SettingsSnapshot); err != nil {
+				return err
+			}
+		}
+		if err := processPending(ctx, p, token, handler, options.PlanSettings); err != nil {
 			return err
 		}
 		select {
@@ -105,6 +116,37 @@ func RunWithOptions(ctx context.Context, installation string, handler Handler, o
 		case <-ticker.C:
 		}
 	}
+}
+
+// settingsPublication rewrites status/settings.json when .env changes, and every few
+// minutes otherwise, so the API never shows values older than the file it would change.
+type settingsPublication struct {
+	revision string
+	at       time.Time
+}
+
+func (s *settingsPublication) publish(p Paths, started string, snapshot func() (SettingsSnapshot, error)) error {
+	path := filepath.Join(p.Status, "settings.json")
+	value, err := snapshot()
+	if err != nil || !planPattern.MatchString(value.Revision) {
+		// Without a current snapshot the API must not offer a change based on an old one.
+		s.revision = ""
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+		return nil
+	}
+	if value.Revision == s.revision && time.Since(s.at) < 5*time.Minute {
+		return nil
+	}
+	value.Schema = 1
+	value.ManagerStartedAt = started
+	value.GeneratedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := WriteStatusFile(path, value); err != nil {
+		return err
+	}
+	s.revision, s.at = value.Revision, time.Now()
+	return nil
 }
 
 // Any accepted/completed job invalidates the catalog before the next poll, so a
@@ -156,7 +198,7 @@ func recoverInterrupted(p Paths) error {
 	return nil
 }
 
-func processPending(ctx context.Context, p Paths, token string, handler Handler) error {
+func processPending(ctx context.Context, p Paths, token string, handler Handler, planSettings SettingsPlanner) error {
 	entries, err := os.ReadDir(p.Requests)
 	if err != nil {
 		return err
@@ -171,6 +213,16 @@ func processPending(ctx context.Context, p Paths, token string, handler Handler)
 			return ctx.Err()
 		}
 		name := entry.Name()
+		if id, ok := strings.CutSuffix(name, ".settings.json"); ok {
+			if planSettings == nil || !idPattern.MatchString(id) {
+				continue
+			}
+			processed++
+			if err := processSettings(ctx, p, token, handler, planSettings, id); err != nil {
+				return err
+			}
+			continue
+		}
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
@@ -242,39 +294,141 @@ func processPending(ctx context.Context, p Paths, token string, handler Handler)
 			return err
 		}
 		request.AuthToken = ""
-		result, handlerErr := handler(ctx, request, func(stage string) error {
-			if !stagePattern.MatchString(stage) {
-				return errors.New("invalid manager stage")
-			}
-			job.Stage = stage
-			job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			return writeJob(p, job)
-		})
-		if !terminal(result.State) {
-			result.State = "recovery_required"
-		}
-		job.State = result.State
-		if stagePattern.MatchString(result.Stage) {
-			job.Stage = result.Stage
-		}
-		if versionPattern.MatchString(result.CurrentVersion) {
-			job.CurrentVersion = result.CurrentVersion
-		}
-		if versionPattern.MatchString(result.TargetVersion) {
-			job.TargetVersion = result.TargetVersion
-		}
-		if handlerErr != nil {
-			job.ErrorCode = "E_HANDLER_FAILED"
-			if job.State == "succeeded" {
-				job.State = "failed"
-			}
-		}
-		job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		if err := writeJob(p, job); err != nil {
+		if err := runJob(ctx, p, job, request, handler); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// runJob runs an accepted request and records the handler's terminal state.
+func runJob(ctx context.Context, p Paths, job Job, request Request, handler Handler) error {
+	result, handlerErr := handler(ctx, request, func(stage string) error {
+		if !stagePattern.MatchString(stage) {
+			return errors.New("invalid manager stage")
+		}
+		job.Stage = stage
+		job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		return writeJob(p, job)
+	})
+	if !terminal(result.State) {
+		result.State = "recovery_required"
+	}
+	job.State = result.State
+	if stagePattern.MatchString(result.Stage) {
+		job.Stage = result.Stage
+	}
+	if versionPattern.MatchString(result.CurrentVersion) {
+		job.CurrentVersion = result.CurrentVersion
+	}
+	if versionPattern.MatchString(result.TargetVersion) {
+		job.TargetVersion = result.TargetVersion
+	}
+	if handlerErr != nil {
+		job.ErrorCode = "E_HANDLER_FAILED"
+		if job.State == "succeeded" {
+			job.State = "failed"
+		}
+	}
+	job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return writeJob(p, job)
+}
+
+// noPlan fills the plan ID of a settings job refused before a plan existed.
+var noPlan = strings.Repeat("0", 64)
+
+var settingsErrorCodes = map[string]bool{"E_SETTINGS_CHANGED": true, "E_SETTINGS_INVALID": true, "E_SETTINGS_FORBIDDEN": true, "E_SETTINGS_UNCHANGED": true}
+
+// processSettings plans a settings request and then runs the plan as an ordinary job,
+// so a settings change has the same journal, progress and recovery as an update.
+func processSettings(ctx context.Context, p Paths, token string, handler Handler, planSettings SettingsPlanner, id string) error {
+	path := filepath.Join(p.Requests, id+".settings.json")
+	if _, err := os.Lstat(filepath.Join(p.Jobs, id+".json")); err == nil {
+		return os.Remove(path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	data, readErr := readBounded(path, 160<<10)
+	var request SettingsRequest
+	if readErr != nil || decode(data, &request) != nil || !validSettingsRequest(request) || request.ID != id {
+		return os.Remove(path)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	job := Job{Schema: 1, ID: id, TargetReleaseID: "0.0.0", PlanID: noPlan, IdempotencyKey: request.IdempotencyKey, State: "running", Stage: "accepted", CreatedAt: now, UpdatedAt: now}
+	reject := func(code string) error {
+		job.State, job.Stage, job.ErrorCode = "rejected", "rejected", code
+		if err := writeJob(p, job); err != nil {
+			return err
+		}
+		return os.Remove(path)
+	}
+	if subtle.ConstantTimeCompare([]byte(request.AuthToken), []byte(token)) != 1 {
+		return reject("E_UNAUTHORIZED")
+	}
+	previous, found, err := findIdempotent(p, request.IdempotencyKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		job.State, job.Stage, job.ErrorCode = previous.State, previous.Stage, previous.ErrorCode
+		job.TargetReleaseID, job.PlanID, job.DuplicateOf = previous.TargetReleaseID, previous.PlanID, previous.ID
+		job.CurrentVersion, job.TargetVersion = previous.CurrentVersion, previous.TargetVersion
+		if err := writeJob(p, job); err != nil {
+			return err
+		}
+		return os.Remove(path)
+	}
+	if err := writeJob(p, job); err != nil {
+		return err
+	}
+	// The request may carry a new credential, so it leaves the shared folder before planning.
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	request.AuthToken = ""
+	planned, planErr := planSettings(ctx, request)
+	request.Fields, request.Raw = nil, nil
+	if versionPattern.MatchString(planned.TargetReleaseID) {
+		job.TargetReleaseID = planned.TargetReleaseID
+	}
+	var rejected RejectedError
+	if errors.As(planErr, &rejected) && settingsErrorCodes[rejected.Code] {
+		job.State, job.Stage, job.ErrorCode = "rejected", "rejected", rejected.Code
+		job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		return writeJob(p, job)
+	}
+	if planErr != nil || !planPattern.MatchString(planned.PlanID) || !versionPattern.MatchString(planned.TargetReleaseID) {
+		job.State, job.Stage, job.ErrorCode = "failed", "checking", "E_HANDLER_FAILED"
+		job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		return writeJob(p, job)
+	}
+	job.PlanID = planned.PlanID
+	job.Stage = "checking"
+	job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := writeJob(p, job); err != nil {
+		return err
+	}
+	return runJob(ctx, p, job, Request{Schema: 1, ID: id, TargetReleaseID: planned.TargetReleaseID, PlanID: planned.PlanID, IdempotencyKey: request.IdempotencyKey}, handler)
+}
+
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+func validSettingsRequest(r SettingsRequest) bool {
+	if r.Schema != 1 || !idPattern.MatchString(r.ID) || !idPattern.MatchString(r.IdempotencyKey) || !planPattern.MatchString(r.BaseRevision) || len(r.AuthToken) != 43 {
+		return false
+	}
+	if (len(r.Fields) == 0) == (r.Raw == nil) || len(r.Fields) > 32 {
+		return false
+	}
+	if r.Raw != nil && (len(*r.Raw) > 64<<10 || strings.ContainsRune(*r.Raw, 0)) {
+		return false
+	}
+	for key, value := range r.Fields {
+		if !envKeyPattern.MatchString(key) || len(value) > 1024 {
+			return false
+		}
+	}
+	return true
 }
 
 func validRequest(r Request) bool {

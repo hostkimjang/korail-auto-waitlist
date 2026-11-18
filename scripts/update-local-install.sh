@@ -4,6 +4,7 @@
 #
 #   1. 지정한 커밋을 임시 worktree에 꺼내 버전 기록·DB revision을 확인한다.
 #   2. Compose의 build 정의대로 앱 이미지를 버전 태그로 빌드한다. 기존 :local 태그는 건드리지 않는다.
+#      빌드한 이미지는 실행 사용자로 한 번씩 실행해 보고, 실패하면 설치를 건드리기 전에 멈춘다.
 #   3. 일회성 Ed25519 키로 서명한 로컬 패키지를 만들고 개인키는 바로 지운다.
 #   4. 같은 커밋의 호스트 CLI를 Docker 안에서 빌드해 업데이트 계획을 확인하고 적용한다.
 #   5. CLI 상태, HTTP 응답, 화면 파일의 버전을 확인한다. 선택하면 KORAIL 공개 좌석 조회도 확인한다.
@@ -147,9 +148,9 @@ heading = re.search(r"^## (\d+\.\d+\.\d+) ", changelog, re.M)
 if not version or not released_on or not heading:
     fail("appRelease.ts 또는 CHANGELOG.md에서 릴리스 버전을 읽지 못했습니다")
 if heading[1] != version[1]:
-    fail(f"appRelease.ts의 {version[1]}과 CHANGELOG.md 맨 위 {heading[1]}이 다릅니다")
+    fail(f"appRelease.ts 버전({version[1]})과 CHANGELOG.md 맨 위 버전({heading[1]})이 다릅니다")
 if build_bundle.VERSION.fullmatch(installed_release) and semantic(version[1]) <= semantic(installed_release):
-    fail(f"반영할 버전 {version[1]}이 설치된 {installed_release}보다 높지 않습니다. "
+    fail(f"반영할 버전({version[1]})이 설치된 버전({installed_release})보다 높지 않습니다. "
          "CONTRIBUTING.md의 '릴리스 버전 올리기'대로 버전을 올려 커밋한 뒤 다시 실행하세요")
 try:
     revision = build_bundle.database_head(root)
@@ -252,6 +253,49 @@ build_image() {
     docker --context "$docker_context" build --quiet "$@" "$source_dir/$context" </dev/null
 }
 
+# 적용 단계는 기존 서비스를 멈춘 뒤 새 migration부터 실행하고 자동으로 되돌리지 않는다. 그래서 파일 권한·
+# 설정·의존성 오류는 여기서 막는다. 앱 이미지는 모두 비root 기본 사용자로 실행되므로 그대로 실행해 본다.
+smoke_check() {
+    local label="$1" output
+    shift
+    if ! output="$(docker --context "$docker_context" run --rm --network none --read-only --tmpfs /tmp "$@" </dev/null 2>&1)"; then
+        printf '%s\n' "$output" | tail -n 5 >&2
+        die "$label 실행 점검이 실패했습니다. 설치는 바꾸지 않았습니다"
+    fi
+    printf '%s\n' "$output"
+}
+
+smoke_image() {
+    local original="$1" tag="$2" heads head_lines
+    case "$original" in
+        rail-waitlist-api:local)
+            smoke_check "$tag" --entrypoint python "$tag" \
+                -c 'import rail_waitlist.main; import rail_waitlist.admin_auth.bootstrap' >/dev/null
+            # migration은 /app의 설정과 migration 파일을 읽는다. DB 없이 head만 계산해 읽기 권한과 revision을 함께 본다.
+            heads="$(smoke_check "$tag" --entrypoint alembic "$tag" heads)"
+            head_lines="$(grep ' (head)$' <<<"$heads" || true)"
+            [[ "$head_lines" == "$current_revision (head)" ]] \
+                || die "${tag}의 migration head가 설치 DB revision($current_revision)과 다릅니다: $head_lines"
+            ;;
+        rail-waitlist-web:local)
+            smoke_check "$tag" --tmpfs /var/run:uid=101,gid=101,mode=0755 \
+                --tmpfs /var/cache/nginx:uid=101,gid=101,mode=0755 --entrypoint sh "$tag" \
+                -ec 'nginx -t; test -r /usr/share/nginx/html/index.html' >/dev/null
+            ;;
+        rail-waitlist-korail-browser-adapter:local)
+            smoke_check "$tag" --entrypoint python "$tag" -c 'import subprocess; import pydoll; import rail_waitlist.korail_sidecar.http; subprocess.run(["/usr/bin/google-chrome", "--version"], check=True, timeout=15)' >/dev/null
+            ;;
+        rail-waitlist-backup:local)
+            smoke_check "$tag" --entrypoint sh "$tag" -ec 'command -v age; command -v pg_dump; test -x /scripts/backup-postgres.sh; test -x /scripts/restore-postgres.sh; test -x /scripts/update-backup.sh' >/dev/null
+            ;;
+        *)
+            log "  $original 이미지는 실행 점검 항목이 없어 빌드 결과만 확인했습니다"
+            return 0
+            ;;
+    esac
+    log "  실행 점검 통과"
+}
+
 container_for() {
     docker --context "$docker_context" ps --quiet \
         --filter "label=com.docker.compose.project=$compose_project" \
@@ -284,7 +328,7 @@ IFS=$'\x1f' read -r install_path release_source docker_context compose_project p
     || die "설치 기록의 경로($install_path)가 --path와 다릅니다"
 
 docker_platform="$(docker --context "$docker_context" info --format '{{.OSType}}/{{.Architecture}}' </dev/null)" \
-    || die "Docker context $docker_context에 연결하지 못했습니다"
+    || die "Docker context ${docker_context}에 연결하지 못했습니다"
 case "$docker_platform" in
     linux/aarch64 | linux/arm64) platform=linux/arm64 ;;
     linux/x86_64 | linux/amd64) platform=linux/amd64 ;;
@@ -336,13 +380,15 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-umask 077
 temporary_root="${TMPDIR:-/tmp}"
+# mktemp -d가 만든 0700 작업 폴더가 내용 전체를 다른 사용자로부터 막는다.
 work_dir="$(mktemp -d "${temporary_root%/}/railwait-local-update.XXXXXX")"
 cd -- "$work_dir"
 source_dir="$work_dir/source"
-log "커밋 ${commit:0:12}을 임시 worktree에 꺼냅니다"
-git -C "$repo_root" worktree add --quiet --detach "$source_dir" "$commit"
+log "커밋 ${commit:0:12} 기준으로 임시 worktree를 만듭니다"
+# Docker COPY는 빌드 컨텍스트의 파일 권한을 그대로 이미지에 넣는다. 사용자의 umask가 077이면 비root 실행
+# 사용자가 /app 파일을 읽지 못하므로, 체크아웃은 저장소 기본 권한(0644·0755)으로 고정한다.
+(umask 022 && git -C "$repo_root" worktree add --quiet --detach "$source_dir" "$commit")
 
 release_info="$(inspect_source)"
 version=""
@@ -361,6 +407,10 @@ while read -r kind first second third fourth; do
 done <<<"$release_info"
 [[ -n "$version" && -n "$build_specs" ]] || die "반영할 버전과 빌드할 이미지를 정하지 못했습니다"
 log "반영할 버전 v$version ($released_on), 설치된 버전 v$current_release"
+# CLI는 이미 있는 releases/<버전> 폴더를 새 번들과 비교해 다르면 멈춘다. 실패한 이전 작업이 남긴 폴더는
+# 설치 기록이 쓰지 않는 것을 운영자가 확인하고 지우도록 빌드 전에 알린다.
+[[ ! -e "$install_path/releases/$version" ]] \
+    || die "이전 업데이트 작업이 남긴 $install_path/releases/$version 폴더가 있습니다. 설치 기록의 현재 버전이 v${current_release}인지 확인한 뒤 이 폴더를 지우고 다시 실행하세요"
 
 # 패키지는 모든 운영 프로필의 이미지를 담는다. 빌드하지 않는 이미지는 미리 있어야 하므로 먼저 확인한다.
 missing_images=""
@@ -369,7 +419,7 @@ for image in $external_images; do
         || missing_images="${missing_images} ${image}"
 done
 [[ -z "$missing_images" ]] \
-    || die "Docker context $docker_context에 없는 이미지가 있습니다:${missing_images}. docker --context $docker_context pull <이미지>로 받은 뒤 다시 실행하세요"
+    || die "Docker context ${docker_context}에 없는 이미지가 있습니다:${missing_images}. docker --context $docker_context pull <이미지>로 받은 뒤 다시 실행하세요"
 
 images_json="{"
 separator=""
@@ -383,6 +433,7 @@ while read -r image context dockerfile target; do
     log "이미지 빌드: $tag"
     image_id="$(build_image "$tag" "$context" "$dockerfile" "$target")"
     log "  ${image_id}"
+    smoke_image "$image" "$tag"
     images_json="${images_json}${separator}\"${image}\":\"${tag}\""
     separator=","
     built_tags="${built_tags} ${tag}"
@@ -390,7 +441,7 @@ done <<<"$build_specs"
 printf '%s}\n' "$images_json" >"$work_dir/images.json"
 
 seed_file="$work_dir/signing-seed"
-py -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode("ascii"))' >"$seed_file"
+(umask 077 && py -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode("ascii"))' >"$seed_file")
 package_dir="$work_dir/package"
 trust_key="$work_dir/trust-key.pub"
 log "로컬 패키지 생성: v$version ($platform). 이미지 묶음을 저장하는 데 몇 분 걸립니다"
@@ -436,7 +487,7 @@ keep_work=1
 log "업데이트 적용: 새 작업 차단 → 기존 작업 종료 대기 → 암호화 백업 → 교체 → 확인 → 재개"
 if ! "$cli" update --path "$install_path" --package "$package_dir" --trust-key "$trust_key" \
     --target "$plan_target" --plan "$plan_id"; then
-    die "업데이트가 끝나지 않았습니다. 위에 표시된 작업 ID로 \"$cli\" status --path \"$install_path\" --job <작업 ID>를 실행해 상태를 확인하세요"
+    die "업데이트가 끝나지 않았습니다. 위에 표시된 작업 ID로 \"$cli\" status --path \"$install_path\" --job <작업 ID>를 실행해 상태를 확인하고, docs/OPERATIONS.md의 '로컬 패키지 업데이트가 멈췄을 때' 절차로 복구하세요"
 fi
 keep_work=0
 
@@ -446,7 +497,7 @@ status_info="$(read_status "$work_dir/status.json")"
 read -r status_release status_health <<<"$status_info"
 if [[ "$status_release" != "$version" || "$status_health" != healthy ]]; then
     sed -n 's/^service /  - /p' <<<"$status_info" >&2
-    die "업데이트 뒤 설치 상태가 v$status_release · $status_health입니다"
+    die "업데이트 뒤 설치 상태가 v$status_release · ${status_health}입니다"
 fi
 
 for endpoint in /healthz /readyz /; do

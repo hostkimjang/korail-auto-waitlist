@@ -1734,7 +1734,42 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 일반 파일 모드(`0644`) 또는 실행 파일 모드(`0755`)로 복원한 뒤 `config --quiet`와 공식 운영 스크립트를
 처음부터 다시 실행합니다. `.env`, `secrets/`, `logs/`, Compose volume에는 이 복구를 적용하지 않습니다.
 저장소 전체에 `chmod -R`을 실행하거나 `down -v`, volume 삭제로 복구하지 마세요. 이 환경 차이를 자동으로
-정규화하는 배포 전 검사는 아직 구현하지 않았습니다.
+정규화하는 배포 전 검사는 Git 설치의 운영 스크립트에는 아직 없습니다. 로컬 패키지 설치를 갱신하는
+`scripts/update-local-install.sh`는 worktree를 umask 022로 만들고, 적용 전에 새 이미지를 실행 사용자로 점검해
+같은 문제를 막습니다.
+
+### 로컬 패키지 업데이트가 멈췄을 때
+
+`railwait update --package …`나 `scripts/update-local-install.sh`의 적용이 실패하면 작업이 `failed` 또는
+`recovery_required`로 남습니다. `failed`는 새 작업 차단 전에 멈춘 경우라 서비스가 그대로입니다.
+`recovery_required`는 유지보수 gate를 닫은 뒤 멈춘 경우이며 CLI가 자동으로 되돌리지 않습니다. 이때 앱 서비스가
+멈춰 있을 수 있으므로 다음 순서로 기록된 이전 버전을 다시 띄웁니다.
+
+1. 새 CLI로 `railwait status --path <설치 폴더> --job <작업 ID>`를 실행해 멈춘 단계를 확인하고,
+   `.railwait/install.json`의 `release`가 이전 버전인지 봅니다. 설치 기록은 새 서비스 확인이 끝난 뒤에만 바뀝니다.
+2. 실패한 one-shot 로그(`docker logs <compose_project>-migration-1`)로 DB를 바꾸기 전에 멈췄는지 확인합니다.
+   migration이 일부라도 실행됐다면 이 절차를 진행하지 말고, `backups` 볼륨의 업데이트 직전 암호화 백업을 기준으로
+   복구 방법을 따로 정합니다.
+3. 설치 폴더에서 CLI와 같은 인자로 이전 버전을 다시 띄웁니다. 값은 모두 `install.json`에 있고, CLI처럼
+   `COMPOSE_DISABLE_ENV_FILE=1`을 둡니다. `.env` 내용은 출력하지 않습니다.
+
+   ```console
+   docker --host <docker_endpoint> compose --project-name <compose_project> \
+     --project-directory <설치 폴더>/releases/<이전 버전> --env-file <설치 폴더>/.env \
+     -f <설치 폴더>/releases/<이전 버전>/compose.release.yml --profile <프로필> <명령>
+   ```
+
+   `<명령>`으로 `up --no-deps --force-recreate --abort-on-container-exit --exit-code-from migration migration`,
+   같은 형식의 `log-init`, 그다음 `up -d --force-recreate --no-deps --wait --wait-timeout 180 <서비스…>`를 차례로
+   실행합니다. 서비스 목록은 `expected_images`에서 `postgres`·`redis`·`migration`·`log-init`을 뺀 이름입니다.
+4. `railwait status --path <설치 폴더>`가 이전 버전으로 healthy인지 확인한 뒤
+   `.railwait/manager/control/maintenance.json`을 같은 `generation`의 `"closed": false`로 바꿉니다. 같은 폴더의
+   임시 파일에 쓰고 `0644`로 바꾼 다음 이름을 바꿔 원자적으로 교체합니다. 위 Compose 인자에 `run --rm --no-deps -T api
+   python -m rail_waitlist.maintenance --status`를 붙여 `"closed": false`인지 확인합니다.
+5. 실패한 작업이 남긴 `releases/<새 버전>` 폴더는 설치 기록이 쓰지 않는 것을 확인한 뒤 지웁니다. 남아 있으면 다음
+   업데이트가 번들 비교에서 멈춥니다. 원인을 고친 뒤 업데이트를 처음부터 다시 실행합니다.
+
+volume 삭제나 `down -v`로 복구하지 마세요. 이 절차를 자동화한 복구 명령은 아직 없습니다.
 
 ### 로그인할 수 없음
 

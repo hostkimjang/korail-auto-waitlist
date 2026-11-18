@@ -95,7 +95,7 @@ Windows PowerShell 5.1에서 `요청이 중단되었습니다. 예기치 않게 
 
 - **설치 폴더**: 운영체제의 사용자 앱 데이터 폴더(macOS `~/Library/Application Support/Railwait`)가 기본입니다. Docker가 Lima·Colima VM에서 돌고 그 VM이 기본 폴더를 쓸 수 없으면, VM이 쓰기 가능으로 공유한 폴더 안의 `railwait` 폴더로 자동으로 정합니다. 수 GB의 이미지를 받기 전에 Docker 컨테이너가 설치 폴더를 읽고 쓸 수 있는지 먼저 확인합니다. 직접 정하려면 `--path`를 씁니다.
 - **포트**: 이 컴퓨터의 접속 주소는 8080부터 비어 있는 포트를 자동으로 고릅니다. 직접 정하려면 `--port 9090`처럼 지정하고, `--custom`을 쓰면 설치 폴더와 포트를 물어봅니다. Enter를 누르면 표시된 기본값을 씁니다.
-- **원격 접속**: 로컬 전용은 `--access local`입니다. Tailscale 단계에서 멈췄다면 같은 명령을 다시 실행하면 원격 접속 설정을 이어갑니다. 로컬 전용으로 설치했다가 나중에 켜려면 `--access tailscale`을 붙여 다시 실행합니다.
+- **원격 접속**: 로컬 전용은 `--access local`입니다. Tailscale 단계에서 멈췄다면 같은 명령을 다시 실행하면 원격 접속 설정을 이어갑니다. 로컬 전용으로 설치했다가 나중에 켜려면 `--access tailscale`을 붙여 다시 실행합니다. 원격 접속을 켜면 다른 기기는 완료 화면의 HTTPS 주소로 접속하고, 이 컴퓨터에서는 로컬 주소(`http://127.0.0.1:<포트>`)도 계속 쓸 수 있습니다(1.4.5부터).
 - **TAGO 키**: 없어도 됩니다. 새 대기 등록의 역 목록은 앱에 포함된 공개 역 목록을 쓰고, 열차 시간표는 코레일·SRT 공식 조회를 먼저 씁니다. 공공데이터포털 TAGO 키를 `railwait configure`로 넣으면 최신 역 목록을 받아 쓰고, 공식 조회가 안 될 때 TAGO 시간표로 대신합니다.
 
 스크립트 없이 직접 받으려면 [최신 Release](https://github.com/hostkimjang/korail-auto-waitlist/releases/latest)에서 `railwait-<OS>-<CPU>` 실행 파일과 같은 이름의 `.sha256` 파일을 받아 `shasum -a 256 -c`(Linux는 `sha256sum -c`, Windows는 `Get-FileHash`)로 확인한 뒤 `install`을 실행합니다. 이때 받은 실행 파일은 설치가 끝날 때까지 옮기거나 지우지 마세요. 중단된 설치를 이어갈 때 같은 파일을 씁니다. 명령 전체는 [설치 CLI 안내](apps/cli/README.md)에 있습니다. 기존 Git 설치를 CLI 설치로 옮기는 기능은 아직 없으므로 다른 폴더와 포트에 설치하세요.

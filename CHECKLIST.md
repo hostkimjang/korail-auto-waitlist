@@ -229,9 +229,21 @@
   신뢰 판정 제거·Secure 고정·Fetch Metadata 무시로 깨뜨린 사본에서 각각 새 테스트가 실패함을 확인. 실제 설치 프록시
   로그에서 Tailscale serve가 원래 Host와 `X-Forwarded-Proto: https`를, 로컬 요청이 `127.0.0.1:8080` Host를 넘기는 것을 확인
 - [x] CLI: 원격 접속 계획 안내를 "다른 기기는 HTTPS, 이 컴퓨터는 로컬 주소도 가능"으로 바꾸고 완료 화면에 로컬 주소 표시
-- [ ] CI 통과와 1.4.5 서명 릴리스 게시(`compatible_from=1.4.3,1.4.4`)
+- [x] CI 통과(커밋 `885a6de`): CLI cross-platform 44323725115·44323725059, repository-verify 44323724989·44323724968,
+  experimental-browser-verify 44323724937·44323725060. 브랜치 repository-verify는 이전부터 간헐 실패하던 지연 DOM 테스트
+  `test_departure_dialog_waits_for_delayed_dom_insertion` 1건(5811 통과·1 실패, 해당 코드 변경 없음)으로 실패해 실패 job만
+  다시 실행해 통과
+- [x] 1.4.5 서명 릴리스 게시(run 44326638664, 커밋 `885a6de`, 2026-11-19 00:17 KST): verify의 API·웹·브라우저 전체 검증,
+  두 CPU 이미지 smoke 통과. 자산 19개, 최신 Release가 `v1.4.5`이고 공개 주소의 `install.sh`·`install.ps1`·
+  `release-manifest.json`이 200. manifest `compatible_from=["1.4.3","1.4.4"]`·DB revision `0042_protection_halt`·최소 CLI
+  0.1.0, 공개키 `qeR7…5nM=`로 OpenSSL 서명 검증 통과. Release 노트를 한국어로 정리. GitHub 쪽 Playwright 설치가 평소
+  3분에서 11분으로 늘어 전체 38분 걸림
+- [x] 1.4.3 공식 설치(`services/railwait`)의 관리 서비스가 게시 4분 뒤 1.4.5를 `update_available`로 인식(1.4.4를 거치지 않고
+  바로 적용 대상)
 - [ ] 사용자 설치에서 웹 **앱 업데이트** 뒤 로컬 주소에서 저장 확인
-- [ ] 게시 확인 뒤 설치·운영 안내(CLI 안내, 운영 가이드)의 "로그인은 HTTPS 주소에서만" 문구 갱신(새 공개 순서)
+- [x] 게시 확인 뒤 설치·운영 안내 갱신(새 공개 순서): CLI 안내, 운영 가이드(원격 접속 이어가기, Tailscale 절, 로그인 문제
+  해결), README 원격 접속 항목, 설치 설계 문서의 "로그인은 HTTPS 주소에서만" 문구를 "다른 기기는 HTTPS, 이 컴퓨터는
+  1.4.5부터 로컬 주소도 가능"으로 바꾸고 1.4.4 이하의 `untrusted or missing Origin` 대처(HTTPS 주소에서 앱 업데이트)를 추가
 
 ## 2026년 11월 18일 한 줄 설치, 설치 포트·폴더 자동 선택, TAGO 없는 역 목록 (v1.4.4)
 

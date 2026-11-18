@@ -223,11 +223,30 @@
   확인, Compose build 정의대로 작업 전용 태그 빌드, 빌드하지 않는 이미지 존재 확인, 일회성 키 서명 패키지(서명 직후
   개인키 삭제), Docker 안 Go로 같은 커밋 CLI 빌드, 계획·적용, 새 CLI status·HTTP 3종·web 화면 파일 버전 확인,
   선택 KORAIL 공개 조회. 적용 실패·중단 때는 새 CLI·패키지를 남기고 그 밖에는 worktree·작업 폴더 정리. macOS bash 3.2 문법 확인
-- [x] 사전 실패 경로: 없는 경로, 설치 기록 없음, 설치본과 같은 1.4.1 차단 뒤 worktree·작업 폴더 잔여 0 확인
+- [x] 사전 실패 경로: 없는 경로, 설치 기록 없음, 설치본과 같은 버전, 실패한 작업이 남긴 `releases/<버전>` 폴더를
+  빌드 전에 차단하고 worktree·작업 폴더 잔여 0 확인
 - [x] Windows CLI 테스트 3건: SDDL이 CI 계정 SID를 `LA` 별칭으로 쓰는 차이를 기대값도 같은 변환으로 맞춰 비교하고,
   macOS 앱·Docker 경로를 `path`로 계산. gofmt·vet·race 전체, Windows vet·테스트 컴파일, 6대상 빌드 통과
-- [ ] GitHub Actions windows-latest CLI 테스트 통과
-- [ ] 관리형 설치(18080)에 스크립트로 1.4.2 적용과 상태·조회 확인
+- [x] GitHub Actions `CLI cross-platform verification`(run 44245156416, 커밋 `0e85a3f`)에서 ubuntu·macOS·windows-latest
+  네이티브 테스트와 6대상 컴파일 통과. 같은 커밋의 repository-verify·experimental-browser-verify도 통과
+- [x] 첫 적용(작업 `e292f09f…`, 14:35 KST)이 `applying`의 1.4.2 migration에서 `PermissionError: 'pyproject.toml'`로
+  멈춰 `recovery_required`. 스크립트가 `umask 077`로 worktree를 만들어 `0600` 소스가 이미지에 들어간 탓. 기록된 1.4.1
+  구성으로 migration·log-init(종료 0)과 앱 서비스 10개를 다시 만들고 healthy 확인 뒤 같은 generation으로 gate를 열어
+  14:38에 복구(앱 중단 약 3분). DB는 migration 설정을 읽기 전에 멈춰 변경 없음. 경위는 [운영 장애 기록](docs/INCIDENTS.md)
+- [x] 수정: worktree를 umask 022로 만들고 패키지 전 이미지 실행 점검(API import·DB 없는 `alembic heads`=설치 revision,
+  웹 `nginx -t`·화면 파일, 어댑터 import·Chrome, 백업 도구) 추가. 같은 점검이 1.4.1 이미지 5건은 통과시키고 문제의
+  1.4.2 API·웹 이미지는 거르는 것을 확인. bash 3.2가 `$변수` 뒤 한글 바이트를 변수 이름으로 읽던 메시지 5곳 수정
+- [x] 두 번째 시도는 적용 전 패키지 생성에서 멈춤: 캐시 재빌드 이미지가 이전 이미지와 매니페스트를 공유해 Docker 29.9.3이
+  `image save`에 다른 이미지의 provenance referrer를 최상위 항목으로 덧붙임. 실행별 build-id 라벨로 config를 고유하게
+  하고 패키지 생성기가 실패 이유를 출력하도록 수정. 릴리스 도구 27건 통과
+- [x] 관리형 설치(18080)에 스크립트로 1.4.2 적용(작업 `404d885d…`, 14:51~14:52 KST succeeded, migration·서비스 재생성 14:51:41~49):
+  새 이미지 4개 실행 점검 통과, 설치 기록·보존 패키지 1.4.2(소스 `0513f7d`, dirty false), 새 CLI와 기존 관리 서비스
+  CLI 모두 healthy, `/healthz`·`/readyz`·`/` 200, 화면 v1.4.2, gate 열림, 앱 서비스 10개 로그 오류 0. KORAIL 공개 조회
+  1건 `search_notice_dismissed strict=1 fallback=0` → `outcome=success train_count=8`
+- [x] 정리: 실패한 두 실행의 이미지 8개(첫 실행 4개는 사용 컨테이너 없음 확인 뒤 삭제, 두 번째 4개는 태그 이동 때 Docker가
+  삭제), 보존했던 작업 폴더·진단 worktree·임시 키 삭제. 1.4.1 이미지와 업데이트 직전 암호화 백업은 되돌리기용으로 보존
+- [ ] `recovery_required` 작업을 기록된 이전 버전으로 되돌리는 CLI 복구 명령 (현재는 운영 가이드의 수동 절차)
+- [ ] Linux 호스트에서 스크립트 실행 확인 (macOS bash 3.2·Lima에서만 확인)
 
 ## 2026년 11월 17일 공지 팝업 화면 기준 판정과 거부 사유 표시 (v1.4.1)
 

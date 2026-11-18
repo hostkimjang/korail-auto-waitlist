@@ -138,7 +138,8 @@ Windows에서 백신·색인 프로그램이 보존 패키지 폴더를 잡고 �
 `bash scripts/update-local-install.sh --path <설치 경로>`로 위 과정을 한 번에 실행합니다. 스크립트는 지정한
 커밋(`--ref`, 기본 `HEAD`)을 임시 worktree로 꺼내 화면 버전과 `CHANGELOG.md` 맨 위가 같고 설치된 버전보다 높은지,
 DB revision이 같은지 먼저 확인합니다. 그다음 Compose의 build 정의대로 앱 이미지를
-`railwait-local-install-<이름>:<버전>` 태그로 빌드하고, 빌드하지 않는 이미지가 Docker에 있는지 확인한 뒤 일회성
+`railwait-local-install-<이름>:<버전>` 태그로 빌드하고(실행마다 다른 build-id 라벨을 붙여 캐시 재빌드도 고유한
+이미지가 되게 합니다), 빌드하지 않는 이미지가 Docker에 있는지 확인한 뒤 일회성
 키로 서명한 로컬 패키지를 만듭니다. 개인키는 서명 직후 지웁니다. 같은 커밋의 CLI를 Docker 안의 Go로 빌드해
 계획을 확인하고 적용한 다음, 새 CLI의 `status`, `/healthz`·`/readyz`·`/` 응답, web 컨테이너 화면 파일의 버전을
 확인합니다. 적용은 기존 서비스를 멈춘 뒤 새 migration부터 실행하고 자동으로 되돌리지 않으므로, 빌드한 이미지는

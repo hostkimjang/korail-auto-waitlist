@@ -3,6 +3,53 @@
 운영 환경에서 실제로 발생한 장애와 그 해결 과정을 남깁니다. 재발했을 때 같은 진단을 다시 반복하지
 않도록 증상, 근본 원인, 조치, 검증 근거, 남은 과제를 함께 적습니다. 최신 기록을 위에 둡니다.
 
+## 2026년 11월 18일 · 로컬 설치 업데이트 스크립트의 파일 권한 문제로 18080 앱 약 3분 중단
+
+### 증상
+
+새 `scripts/update-local-install.sh`로 관리형 설치(18080)를 1.4.1에서 1.4.2로 올리던 14:35 KST에 CLI 작업
+`e292f09f7bd38d58074fca984e2fe37c`가 `applying` 단계에서 `Docker command failed: exit status 1`로 멈추고
+`recovery_required`로 남았다. 기존 앱 서비스 10개는 이미 멈춘 뒤였고 PostgreSQL·Redis만 실행 중이었다. 새 1.4.2
+migration 컨테이너는 `PermissionError: [Errno 13] Permission denied: 'pyproject.toml'`로 종료 코드 1을 냈다.
+
+### 근본 원인
+
+스크립트가 개인키 파일을 보호하려고 처음부터 `umask 077`을 건 채 임시 worktree를 만들었다. 체크아웃한 소스가 `0600`이
+됐고 Docker `COPY`가 이 권한을 그대로 이미지에 넣었다. API 패키지는 빌드 중 root가 venv에 설치해 import는 됐지만,
+migration이 읽는 `/app/pyproject.toml`·`alembic.ini`·`migrations`는 비root 실행 사용자 `app`이 읽을 수 없었다. 웹
+이미지도 `nginx` 사용자가 `nginx.conf`를 읽지 못하는 상태였다. CLI는 기존 서비스를 멈춘 뒤 새 migration을 실행하고
+자동으로 되돌리지 않으므로 이미지 결함이 그대로 서비스 중단으로 이어졌다. 같은 계열의 Git 설치 문제는
+[문제 해결](OPERATIONS.md#제한적인-umask-뒤-git-갱신-파일의-읽기-권한-오류)에 이미 적혀 있었다.
+
+### 조치
+
+DB는 migration이 설정을 읽기 전에 멈춰 바뀌지 않았고 설치 기록도 1.4.1 그대로였다. CLI와 같은 Compose 인자로 기록된
+1.4.1 구성의 migration·log-init(종료 0)과 앱 서비스 10개를 다시 만들었고, `railwait status` healthy를 확인한 뒤 유지보수
+gate를 같은 generation의 `closed: false`로 원자적으로 교체했다. 14:38에 API가 gate 열림을 보고했고
+`/healthz`·`/readyz`·`/`가 200이었다. 이 순서는 [운영 가이드](OPERATIONS.md#로컬-패키지-업데이트가-멈췄을-때)에 남겼다.
+
+스크립트는 worktree를 umask 022로 만들고 개인키 파일만 소유자 전용으로 만든다. 패키지를 만들기 전에 새 이미지를 각자의
+비root 기본 사용자로 실행해 API import와 DB 없는 `alembic heads`, 웹 `nginx -t`, KORAIL 어댑터 import와 Chrome 버전,
+백업 도구를 확인하고, 실패하면 설치를 건드리지 않고 멈춘다. 실패한 작업이 남긴 `releases/<버전>` 폴더도 빌드 전에 알린다.
+
+다시 실행하자 적용 전 패키지 생성이 `OCI archive roots differ from the selected images`로 멈췄다. 캐시로 다시 빌드한
+이미지가 이전 이미지와 같은 플랫폼 매니페스트를 공유하면 Docker 29.9.3의 containerd 이미지 저장소가 `docker image save`에
+다른 이미지의 provenance 증명을 referrer 최상위 항목으로 덧붙이기 때문이다. 스크립트가 실행마다 다른 build-id 라벨을 붙여
+config를 고유하게 만들고, 패키지 생성기가 실패 이유를 출력하도록 고쳤다.
+
+### 검증 근거
+
+같은 실행 점검은 1.4.1 이미지 5건을 모두 통과시키고, 문제의 1.4.2 이미지에서는 API `alembic heads`와 웹 `nginx -t`를
+실패로 걸렀다. import만 확인하는 기존 릴리스 smoke로는 API 문제를 잡지 못한다. 14:51~14:52 KST 세 번째 실행에서 작업
+`404d885d2d4fff62e79df85dc7e6b10b`가 succeeded로 끝났다. 설치 기록·보존 패키지 1.4.2(dirty false), 새 CLI와 기존 관리
+서비스 CLI 모두 healthy, 화면 v1.4.2, 재시작 뒤 앱 로그 오류 0, KORAIL 공개 조회 1건
+`search_notice_dismissed strict=1 fallback=0` → `outcome=success train_count=8`을 확인했다.
+
+### 남은 과제
+
+`recovery_required` 작업을 기록된 이전 버전으로 되돌리는 CLI 복구 명령은 아직 없어 운영 가이드의 수동 절차로 복구한다.
+Git 설치의 운영 스크립트에는 umask 정규화와 적용 전 이미지 실행 점검이 없다.
+
 ## 2026년 11월 17일 · 공지 체크박스 설명 문구 변경으로 모든 KORAIL 조회가 조회 지연
 
 ### 증상

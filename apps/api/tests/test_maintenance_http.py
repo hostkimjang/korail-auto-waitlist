@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from rail_waitlist.config import get_settings
+from rail_waitlist.maintenance import application
 
 PLAN = "a" * 64
 IDEMPOTENCY = "b" * 32
@@ -67,6 +68,40 @@ async def test_unmanaged_install_displays_safe_reason(client):
     assert response.json()["reason"] == "managed_install_required"
     assert response.json()["available"] is False
     assert response.json()["managed"] is False
+
+
+def _hidden_during_rename(monkeypatch, name: str, misses: int) -> list[str]:
+    """Make one status file look missing for the first reads, as Lima shows a renamed file."""
+    reads: list[str] = []
+    original = application.read_management_file
+
+    def read(path, limit=16384):
+        if path.name == name:
+            reads.append(path.name)
+            if len(reads) <= misses:
+                raise FileNotFoundError(path)
+        return original(path, limit)
+
+    monkeypatch.setattr(application, "read_management_file", read)
+    monkeypatch.setattr(application, "STATUS_FILE_RETRY_SECONDS", 0)
+    return reads
+
+
+async def test_heartbeat_hidden_by_a_rename_is_read_again(client, management_ipc, monkeypatch):
+    reads = _hidden_during_rename(monkeypatch, "manager.json", application.STATUS_FILE_ATTEMPTS - 1)
+    response = await client.get("/api/v1/system/update")
+    assert response.json()["manager_available"] is True
+    assert response.json()["available"] is True
+    assert len(reads) == application.STATUS_FILE_ATTEMPTS
+
+
+async def test_missing_heartbeat_still_means_unavailable_after_retries(
+    client, management_ipc, monkeypatch
+):
+    reads = _hidden_during_rename(monkeypatch, "manager.json", application.STATUS_FILE_ATTEMPTS)
+    response = await client.get("/api/v1/system/update")
+    assert response.json()["reason"] == "manager_unavailable"
+    assert len(reads) == application.STATUS_FILE_ATTEMPTS
 
 
 async def test_management_status_stays_available_during_maintenance(client, management_ipc):

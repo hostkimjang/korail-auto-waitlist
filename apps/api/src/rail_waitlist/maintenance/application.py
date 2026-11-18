@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import stat
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,6 +56,23 @@ def read_management_file(path: Path, limit: int = 16384) -> bytes:
     return payload
 
 
+# The host manager replaces its status files by rename. Lima and Docker Desktop file sharing
+# can show the replaced name as missing for a moment (up to about 1 s per heartbeat measured on
+# Lima), so a missing status file is read again for up to about 2 s, one heartbeat interval,
+# before it counts as absent.
+STATUS_FILE_ATTEMPTS = 14
+STATUS_FILE_RETRY_SECONDS = 0.15
+
+
+def read_status_file(path: Path, limit: int = 16384) -> bytes:
+    for _ in range(STATUS_FILE_ATTEMPTS - 1):
+        try:
+            return read_management_file(path, limit)
+        except FileNotFoundError:
+            time.sleep(STATUS_FILE_RETRY_SECONDS)
+    return read_management_file(path, limit)
+
+
 def _fresh(value: datetime, seconds: int, now: datetime) -> bool:
     return value.tzinfo is not None and -5 <= (now - value).total_seconds() <= seconds
 
@@ -63,7 +81,7 @@ def live_manager(directory: Path, now: datetime) -> ManagerStatus | None:
     """Return the heartbeat only while the manager is ready and its heartbeat is fresh."""
     try:
         manager = ManagerStatus.model_validate_json(
-            read_management_file(directory / "status/manager.json")
+            read_status_file(directory / "status/manager.json")
         )
     except (OSError, ValueError, ValidationError):
         return None
@@ -127,7 +145,7 @@ def update_status() -> UpdateStatus:
     catalog = None
     try:
         catalog = UpdateCatalog.model_validate_json(
-            read_management_file(directory / "status/catalog.json")
+            read_status_file(directory / "status/catalog.json")
         )
         if not _fresh(catalog.checked_at, 1800, now):
             reason: UpdateReason = "checking"
@@ -196,7 +214,7 @@ def update_job(identifier: str) -> UpdateJob | None:
         return None
     try:
         job = UpdateJob.model_validate_json(
-            read_management_file(Path(configured) / f"status/jobs/{identifier}.json")
+            read_status_file(Path(configured) / f"status/jobs/{identifier}.json")
         )
         return job if job.id == identifier else None
     except FileNotFoundError:

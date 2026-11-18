@@ -17,7 +17,7 @@ from .application import (
     ManagementUnavailable,
     live_manager,
     publish_request,
-    read_management_file,
+    read_status_file,
 )
 from .schemas import (
     ManagerStatus,
@@ -97,7 +97,7 @@ def _current_settings(directory: Path, manager: ManagerStatus) -> _CurrentSettin
     """Read the snapshot written by the live manager process, or None if it is unusable."""
     try:
         snapshot = SettingsSnapshot.model_validate_json(
-            read_management_file(directory / "status/settings.json", SNAPSHOT_FILE_LIMIT)
+            read_status_file(directory / "status/settings.json", SNAPSHOT_FILE_LIMIT)
         )
         fields = [_project_field(definition, snapshot.fields) for definition in SETTING_DEFINITIONS]
     except (OSError, ValueError, ValidationError):

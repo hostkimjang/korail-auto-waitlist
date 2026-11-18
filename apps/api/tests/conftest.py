@@ -11,7 +11,14 @@ from rail_waitlist.auth import CSRF_COOKIE, SESSION_COOKIE, keyed_hash, sign_ses
 from rail_waitlist.config import get_settings
 from rail_waitlist.database import Base, get_session
 from rail_waitlist.main import create_app
+from rail_waitlist.maintenance import application as maintenance_application
 from rail_waitlist.models import AdminSession
+
+
+@pytest.fixture(autouse=True)
+def no_status_file_retry_delay(monkeypatch):
+    """Tests that read a missing status file count the retries without waiting between them."""
+    monkeypatch.setattr(maintenance_application, "STATUS_FILE_RETRY_SECONDS", 0)
 
 
 @pytest.fixture(autouse=True)

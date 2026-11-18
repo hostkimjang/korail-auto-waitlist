@@ -30,15 +30,18 @@ router = APIRouter(prefix="/api/v1/system/update", dependencies=[Depends(require
 settings_router = APIRouter(prefix="/api/v1/system/settings", dependencies=[Depends(require_admin)])
 NO_STORE = {"Cache-Control": "no-store"}
 
+# The handlers below are plain functions so FastAPI runs them in its thread pool: reading the
+# manager's status files may wait briefly for a file replaced by rename to become visible.
+
 
 @router.get("", response_model=UpdateStatus)
-async def read_update_status(response: Response) -> UpdateStatus:
+def read_update_status(response: Response) -> UpdateStatus:
     response.headers["Cache-Control"] = "no-store"
     return update_status()
 
 
 @router.post("", response_model=UpdateAccepted, status_code=202)
-async def request_update(data: UpdateSubmission, response: Response) -> UpdateAccepted:
+def request_update(data: UpdateSubmission, response: Response) -> UpdateAccepted:
     response.headers["Cache-Control"] = "no-store"
     try:
         return submit_update(data)
@@ -49,7 +52,7 @@ async def request_update(data: UpdateSubmission, response: Response) -> UpdateAc
 
 
 @router.get("/jobs/{identifier}", response_model=UpdateJob)
-async def read_update_job(identifier: str, response: Response) -> UpdateJob:
+def read_update_job(identifier: str, response: Response) -> UpdateJob:
     response.headers["Cache-Control"] = "no-store"
     try:
         job = update_job(identifier)
@@ -61,13 +64,13 @@ async def read_update_job(identifier: str, response: Response) -> UpdateJob:
 
 
 @settings_router.get("", response_model=SettingsStatus)
-async def read_settings_status(response: Response) -> SettingsStatus:
+def read_settings_status(response: Response) -> SettingsStatus:
     response.headers["Cache-Control"] = "no-store"
     return settings_status()
 
 
 @settings_router.post("", response_model=SettingsAccepted, status_code=202)
-async def request_settings_change(data: SettingsSubmission, response: Response) -> SettingsAccepted:
+def request_settings_change(data: SettingsSubmission, response: Response) -> SettingsAccepted:
     response.headers["Cache-Control"] = "no-store"
     try:
         return submit_settings(data)

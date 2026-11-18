@@ -237,9 +237,10 @@
 - [ ] 후속 후보: GitHub 러너의 Ubuntu apt 미러가 간헐적으로 느려 Playwright `--with-deps` 설치가 최장 경로가 됨(1.4.5
   릴리스에서 32.1MB를 9분 45초, 54.8kB/s). 브라우저 파일은 CDN에서 2초라 브라우저 캐시로는 해결되지 않음. 의존성이
   들어 있는 Playwright 컨테이너 이미지를 digest로 고정해 웹 검증에 쓰는 방안 검토
-- [ ] 후속 후보: repository-verify에는 릴리스 `verify-api`의 Chrome 사전 실행이 없어 Pydoll 브라우저 시작 시간 초과가
-  재발함(검토 브랜치 CI 44336476402의 `test_pydoll_real_browser_uses_visible_fixture_controls` 1건, 5811 통과). 같은
-  사전 실행을 CI에 넣는 방안 검토
+- [x] repository-verify에 릴리스 `verify-api`와 같은 Chrome 사전 실행 추가: 사전 실행이 없던 검토 브랜치 CI
+  44336476402에서 `test_pydoll_real_browser_uses_visible_fixture_controls`가 두 번 연속 브라우저 시작 시간 초과로
+  실패(각각 5811 통과·1 실패, 같은 러너 이미지·Chrome 157.0.8103.50에서 앞선 main CI는 통과). 사전 실행을 넣은 CI
+  44341155982는 사전 실행에 25초가 걸렸고(이전 같은 단계 약 1초) 전체 통과. 1회 통과라 재발 여부는 계속 관찰
 
 ## 2026년 11월 18~19일 원격 접속을 켠 설치의 로컬 주소 로그인 (v1.4.5)
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/release"
 	"golang.org/x/sys/windows"
 )
 
@@ -29,6 +30,22 @@ func holdFile(t *testing.T, path string) (release func()) {
 	release = func() { once.Do(func() { _ = windows.CloseHandle(handle) }) }
 	t.Cleanup(release)
 	return release
+}
+
+// holdFileWithoutDeleteSharing opens a file the way most programs do, without allowing
+// deletion, so Windows refuses to remove the file until the handle closes.
+func holdFileWithoutDeleteSharing(t *testing.T, path string) {
+	t.Helper()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := uint32(windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE)
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, share, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = windows.CloseHandle(handle) })
 }
 
 func shortPackageHandleWait(t *testing.T) {
@@ -119,4 +136,36 @@ func TestLocalPackageUpdateFailsBeforeTouchingServicesWhenTheSwapIsRefused(t *te
 	}
 	// The swap now runs before the gate closes, so a refused swap changes no service.
 	assertServicesUntouched(t, runner, state)
+}
+
+func TestLocalPackageUpdateNeedsRecoveryWhenADeferredDrainCannotRestoreThePackage(t *testing.T) {
+	shortPackageHandleWait(t)
+	i, runner, state := localUpdateFixture(t)
+	target := newLocalTestPackage(t, "1.4.1", "rev1", localTestServices("api-1.4.1"))
+	runner.next, runner.notDrained = target.images, true
+	plan, err := i.PlanLocalUpdate(context.Background(), state.Path, target.dir, target.key)
+	if err != nil || !plan.Allowed {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	preserved := filepath.Join(state.Path, ".railwait", "local-package")
+	result, err := i.Update(ctx, UpdateOptions{Path: state.Path, TargetReleaseID: plan.TargetReleaseID, PlanID: plan.PlanID, PackagePath: target.dir, TrustKey: target.key, Progress: func(stage string) error {
+		if stage == "draining" {
+			// The new package is in place by now; a handle without delete sharing blocks its removal.
+			holdFileWithoutDeleteSharing(t, filepath.Join(preserved, "local-manifest.json"))
+			cancel()
+		}
+		return nil
+	}})
+	if err == nil || result.State != "recovery_required" || result.PreviousPackage == "" {
+		t.Fatalf("a half-restored package was reported as %q: %+v err=%v", result.State, result, err)
+	}
+	if job, err := ReadUpdateJob(state.Path, result.JobID); err != nil || job.State != "recovery_required" || job.PreviousPackage != result.PreviousPackage {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	previous, err := release.OpenLocal(context.Background(), result.PreviousPackage, filepath.Join(result.PreviousPackage, "trust-key.pub"))
+	if err != nil || previous.Manifest.Version != "1.4.0" {
+		t.Fatalf("the previous package is not intact where the job record points: %v", err)
+	}
 }

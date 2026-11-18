@@ -595,6 +595,88 @@ func TestLocalPackageUpdateRestoresPreservedPackageWhenTheDrainIsDeferred(t *tes
 	}
 }
 
+// refusePackageMoves makes renamePackageDir refuse the moves that refuse selects for the rest
+// of the test, the way Windows refuses one while another process holds a file in the folder.
+func refusePackageMoves(t *testing.T, refuse func(from, to string) bool) {
+	t.Helper()
+	saved := renamePackageDir
+	t.Cleanup(func() { renamePackageDir = saved })
+	renamePackageDir = func(from, to string) error {
+		if refuse(from, to) {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: errors.New("refused by the test")}
+		}
+		return saved(from, to)
+	}
+}
+
+func assertPreviousLocalPackage(t *testing.T, path, version string) {
+	t.Helper()
+	previous, err := release.OpenLocal(context.Background(), path, filepath.Join(path, "trust-key.pub"))
+	if err != nil || previous.Manifest.Version != version {
+		t.Fatalf("the previous package is not intact where the job record points: %v", err)
+	}
+}
+
+func TestLocalPackageUpdateNeedsRecoveryWhenTheSwapRollbackIsRefused(t *testing.T) {
+	ctx := context.Background()
+	i, runner, state := localUpdateFixture(t)
+	target := newLocalTestPackage(t, "1.4.1", "rev1", localTestServices("api-1.4.1"))
+	runner.next = target.images
+	plan, err := i.PlanLocalUpdate(ctx, state.Path, target.dir, target.key)
+	if err != nil || !plan.Allowed {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	preserved := filepath.Join(state.Path, ".railwait", "local-package")
+	// Moving the new package in and moving the previous one back are both refused.
+	refusePackageMoves(t, func(_, to string) bool { return to == preserved })
+	result, err := i.Update(ctx, UpdateOptions{Path: state.Path, TargetReleaseID: plan.TargetReleaseID, PlanID: plan.PlanID, PackagePath: target.dir, TrustKey: target.key})
+	if err == nil || result.State != "recovery_required" || result.PreviousPackage == "" {
+		t.Fatalf("an empty preserved package was reported as %q: %+v err=%v", result.State, result, err)
+	}
+	if job, err := ReadUpdateJob(state.Path, result.JobID); err != nil || job.State != "recovery_required" || job.PreviousPackage != result.PreviousPackage {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	assertPreviousLocalPackage(t, result.PreviousPackage, "1.4.0")
+	for _, args := range runner.commands {
+		if strings.Contains(args, " stop ") || strings.Contains(args, " up ") || strings.Contains(args, "update-backup.sh") {
+			t.Fatal("touched the running services:", args)
+		}
+	}
+	if updated, err := ReadState(state.Path); err != nil || updated.Release != "1.4.0" {
+		t.Fatalf("state changed: %+v %v", updated, err)
+	}
+	assertGateClosed(t, state.Path, false)
+}
+
+func TestLocalPackageUpdateNeedsRecoveryWhenADeferredDrainCannotMoveThePreviousPackageBack(t *testing.T) {
+	i, runner, state := localUpdateFixture(t)
+	target := newLocalTestPackage(t, "1.4.1", "rev1", localTestServices("api-1.4.1"))
+	runner.next, runner.notDrained = target.images, true
+	plan, err := i.PlanLocalUpdate(context.Background(), state.Path, target.dir, target.key)
+	if err != nil || !plan.Allowed {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	preserved := filepath.Join(state.Path, ".railwait", "local-package")
+	refusePackageMoves(t, func(from, to string) bool {
+		return to == preserved && strings.HasPrefix(filepath.Base(from), previousLocalPackagePrefix)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result, err := i.Update(ctx, UpdateOptions{Path: state.Path, TargetReleaseID: plan.TargetReleaseID, PlanID: plan.PlanID, PackagePath: target.dir, TrustKey: target.key, Progress: func(stage string) error {
+		if stage == "draining" {
+			cancel()
+		}
+		return nil
+	}})
+	if err == nil || result.State != "recovery_required" || result.PreviousPackage == "" {
+		t.Fatalf("a failed restore after a deferred drain was reported as %q: %+v err=%v", result.State, result, err)
+	}
+	if job, err := ReadUpdateJob(state.Path, result.JobID); err != nil || job.State != "recovery_required" || job.PreviousPackage != result.PreviousPackage {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	assertPreviousLocalPackage(t, result.PreviousPackage, "1.4.0")
+}
+
 func TestLocalPackageUpdateRejectsPackageOrKeyChangedBeforeTheCopy(t *testing.T) {
 	ctx := context.Background()
 	for _, change := range []string{"package", "key"} {

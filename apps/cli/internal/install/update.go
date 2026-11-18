@@ -332,7 +332,8 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		return nil
 	}
 	defer func() {
-		if err != nil && result.State != "deferred" {
+		// A failed package restore has already marked the job for recovery by hand.
+		if err != nil && result.State != "deferred" && result.State != "recovery_required" {
 			if closed {
 				result.State = "recovery_required"
 			} else {
@@ -563,6 +564,10 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			// failed, so the job names a previous package only while that directory exists.
 			if _, statErr := os.Lstat(result.PreviousPackage); os.IsNotExist(statErr) {
 				result.PreviousPackage = ""
+			} else if _, statErr := os.Lstat(filepath.Join(abs, ".railwait", "local-package")); statErr != nil {
+				// The rollback was refused too and no package is preserved until the previous one
+				// is moved back by hand, so the job needs recovery although the gate never closed.
+				result.State = "recovery_required"
 			}
 			return result, err
 		}
@@ -570,6 +575,9 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			if !committed {
 				if restoreErr := restoreLocalPackage(abs, result.PreviousPackage); restoreErr != nil {
 					err = errors.Join(err, restoreErr)
+					// The preserved package is left half restored, so the job needs recovery by
+					// hand even when the drain was deferred or the gate never closed.
+					result.State = "recovery_required"
 				} else {
 					result.PreviousPackage = ""
 				}

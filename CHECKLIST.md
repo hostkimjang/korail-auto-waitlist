@@ -264,9 +264,22 @@
   교체 단계 실패 시 서비스·gate·기록·패키지 무변경, drain 연기(`deferred`) 시 패키지 복원, Windows 교체 거부 시 `failed`.
   이전 순서의 `update.go`로 되돌린 변이에서 새 회귀 2건 실패 확인. gofmt·3개 OS vet·Linux race 전체·Windows 테스트
   컴파일·6대상 빌드 통과
-- [ ] GitHub Actions windows-latest에서 바뀐 순서의 Windows 회귀 `-race` 통과
-- [ ] Windows 원격 채팅에서 바뀐 순서 재확인(교체 거부 시 `failed`·서비스 무변경, 30초 안의 짧은 잠금은 통과)
-- [ ] 관리자 그룹이 아닌 Windows 표준 계정 확인
+- [x] GitHub Actions windows-latest에서 바뀐 순서의 Windows 회귀 `-race` 통과(run 44273817107, 커밋 `8e93f5f`,
+  install 패키지 15.8초). ubuntu·macOS 네이티브 테스트와 6대상 컴파일, 같은 커밋의 repository-verify(44273817136)도 통과
+- [x] Windows 원격 채팅에서 바뀐 순서 재확인: `8e93f5f`에서 임시 폴더의 Go 1.27.4로 `go vet ./...` 종료 0, `go test ./...`
+  8개 패키지 통과, Defender를 켠 채 교체 관련 테스트 `-count=5` 통과. 가짜 runner로 실제 `Update`를 돌려 보존 패키지
+  파일을 끝까지 잡으면 30.1초 뒤 `failed`(gate 열림, stop·up·백업 0, 기록·패키지 1.4.0), 3초·25초 뒤 놓으면 `succeeded`,
+  staged 파일을 잡으면 되돌린 뒤 `failed`. 네 경우 모두 `previous_package`가 비고 잔여물 없음. C 컴파일러가 없어 Windows
+  `-race`는 CI 결과로 대신함
+- [x] 재확인 중 발견한 결함 수정: drain이 연기될 때 새 패키지 파일이 30초 넘게 잡혀 이전 패키지로 되돌리지 못해도 작업이
+  `deferred`로 남아, 반쯤 지워진 보존 패키지가 다시 시도하면 되는 상태처럼 보임(관리 서비스는 `deferred`를 정상 종료로
+  다룸). 되돌리기 실패를 단계와 관계없이 `recovery_required`로 표시하는 Windows 채팅의 diff를 파일 해시가 같게 반영하고,
+  같은 원칙으로 교체 자체의 되돌리기까지 거부돼 보존 패키지가 빈 경우도 `recovery_required`로 바꿈. 회귀: Windows 실제
+  파일 점유 1건(Windows에서 수정 전 `deferred`로 실패·수정 뒤 통과), 이동 거부를 주입한 교차 플랫폼 2건(수정 전 `update.go`에서
+  각각 `failed`·`deferred`로 실패 확인). gofmt·3개 OS vet·Linux race 전체·Windows 테스트 컴파일·6대상 빌드 통과
+- [ ] GitHub Actions windows-latest에서 되돌리기 실패 회귀 `-race` 통과
+- [ ] 관리자 그룹이 아닌 Windows 표준 계정 확인 (관리자 그룹 밖의 활성 계정은 Codex 샌드박스 계정 둘뿐이고 자격 증명이
+  없어 실행하지 못함)
 
 ## 2026년 11월 17일 공지 팝업 화면 기준 판정과 거부 사유 표시 (v1.4.1)
 

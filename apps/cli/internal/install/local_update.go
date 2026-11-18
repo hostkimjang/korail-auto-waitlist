@@ -31,6 +31,10 @@ const previousLocalPackagePrefix = ".local-package-previous-"
 // refused restore or cleanup leaves the previous package for recovery by hand.
 var packageHandleWait = 30 * time.Second
 
+// renamePackageDir moves a package folder. Tests replace it to refuse a chosen move, the way
+// Windows refuses one while another process holds a file in the folder.
+var renamePackageDir = os.Rename
+
 // PlanLocalUpdate plans an update of a local-package installation from a package and a
 // public key that the operator names explicitly on this host. The host manager and the
 // web never receive package paths, so they cannot create or apply this plan kind.
@@ -160,11 +164,11 @@ func replaceLocalPackage(installation, staged, previous string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := retryWhileFileHeld(func() error { return os.Rename(current, previous) }); err != nil {
+	if err := retryWhileFileHeld(func() error { return renamePackageDir(current, previous) }); err != nil {
 		return err
 	}
-	if err := retryWhileFileHeld(func() error { return os.Rename(staged, current) }); err != nil {
-		return errors.Join(err, retryWhileFileHeld(func() error { return os.Rename(previous, current) }))
+	if err := retryWhileFileHeld(func() error { return renamePackageDir(staged, current) }); err != nil {
+		return errors.Join(err, retryWhileFileHeld(func() error { return renamePackageDir(previous, current) }))
 	}
 	return nil
 }
@@ -174,7 +178,7 @@ func restoreLocalPackage(installation, previous string) error {
 	if err := retryWhileFileHeld(func() error { return os.RemoveAll(current) }); err != nil {
 		return fmt.Errorf("새 로컬 패키지를 되돌리지 못했습니다; 이전 패키지는 %s에 있습니다: %w", previous, err)
 	}
-	if err := retryWhileFileHeld(func() error { return os.Rename(previous, current) }); err != nil {
+	if err := retryWhileFileHeld(func() error { return renamePackageDir(previous, current) }); err != nil {
 		return fmt.Errorf("이전 로컬 패키지를 복원하지 못했습니다; %s를 확인하세요: %w", previous, err)
 	}
 	return nil

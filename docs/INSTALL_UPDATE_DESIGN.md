@@ -253,6 +253,8 @@ async waiter가 취소돼도 살아 있는 SRT 스레드·분리된 브라우저
 
 앱 교체 전후 실패를 같은 성공 상태로 합치지 않는다. gate를 닫은 뒤 문제가 생기면 `recovery_required` 또는
 `deferred`와 기존 기록을 보존한다. 자동 DB 복원·무조건 rollback·결과 불명 예약 재실행은 하지 않는다.
+로컬 패키지 업데이트에서 보존 패키지를 이전 패키지로 되돌리지 못하면 gate 상태나 종료 대기 연기와 관계없이
+`recovery_required`로 남긴다. `deferred`는 앱과 보존 패키지가 바뀌지 않은 상태로 끝난 경우에만 쓴다.
 `railwait status --job <id>`는 Docker가 중단돼도 호스트 작업 기록을 읽을 수 있다.
 
 복구키는 `.railwait/backup.env`, 암호화 백업은 Compose `backups` 볼륨에 작업 ID로 보존한다. 업데이트 백업은

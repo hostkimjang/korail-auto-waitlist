@@ -228,13 +228,13 @@ func TestExistingPushDERAndPEMPreserveRepresentation(t *testing.T) {
 }
 
 func TestPushSubjectCanonicalizationAndRepairPreservesKeys(t *testing.T) {
-	for _, tc := range []struct{ origin, want string }{{"", "https://github.com"}, {"https://macmini-server.tail374278.ts.net:8443/path?q=x", "https://macmini-server.tail374278.ts.net"}, {"https://github.com/hostkimjang/korail-auto-waitlist", "https://github.com"}} {
+	for _, tc := range []struct{ origin, want string }{{"", "https://github.com"}, {"https://fixture.tail12345.ts.net:8443/path?q=x", "https://fixture.tail12345.ts.net"}, {"https://github.com/hostkimjang/korail-auto-waitlist", "https://github.com"}} {
 		got, err := AutoPushSubject(tc.origin)
 		if err != nil || got != tc.want {
 			t.Fatal("automatic subject rejected", err)
 		}
 	}
-	for _, subject := range []string{"https://macmini-server.tail374278.ts.net:8443", "https://github.com/hostkimjang/korail-auto-waitlist", "https://localhost", "https://github.com/", "https://github.com?x=y", "https://github.com#"} {
+	for _, subject := range []string{"https://fixture.tail12345.ts.net:8443", "https://github.com/hostkimjang/korail-auto-waitlist", "https://localhost", "https://github.com/", "https://github.com?x=y", "https://github.com#"} {
 		if ValidatePushOptions(PushOptions{Subject: subject}) == nil {
 			t.Fatal("unsupported subject accepted")
 		}
@@ -249,14 +249,14 @@ func TestPushSubjectCanonicalizationAndRepairPreservesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	values, _ := ParseEnv(string(data))
-	invalid := []byte(strings.Replace(string(data), "WEBPUSH_VAPID_SUBJECT='https://github.com'", "WEBPUSH_VAPID_SUBJECT='https://macmini-server.tail374278.ts.net:8443'", 1))
+	invalid := []byte(strings.Replace(string(data), "WEBPUSH_VAPID_SUBJECT='https://github.com'", "WEBPUSH_VAPID_SUBJECT='https://fixture.tail12345.ts.net:8443'", 1))
 	if configured, err := PushConfigured(invalid); configured || err != nil {
 		t.Fatal("invalid subject not repairable", err)
 	}
 	if _, err := PushEnvironment(invalid, PushOptions{}); err == nil {
 		t.Fatal("invalid subject silently replaced")
 	}
-	repaired, err := PushEnvironment(invalid, PushOptions{Subject: "https://macmini-server.tail374278.ts.net"})
+	repaired, err := PushEnvironment(invalid, PushOptions{Subject: "https://fixture.tail12345.ts.net"})
 	if err != nil {
 		t.Fatal(err)
 	}

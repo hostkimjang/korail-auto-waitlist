@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -306,33 +305,7 @@ func connectRemote(ctx context.Context, ui *terminal.UI, i *install.Installer, s
 		VerifiedAt string `json:"verified_at"`
 	}{plan.URL, plan.LocalPort, plan.HTTPSPort, time.Now().UTC().Format(time.RFC3339)}
 	encoded, _ := json.MarshalIndent(record, "", "  ")
-	f, err := os.CreateTemp(filepath.Join(s.Path, ".railwait"), ".access-*")
-	if err != nil {
-		return err
-	}
-	temp := f.Name()
-	defer os.Remove(temp)
-	_, writeErr := f.Write(encoded)
-	closeErr := f.Close()
-	if err = errors.Join(writeErr, closeErr); err != nil {
-		return err
-	}
-	destination := filepath.Join(s.Path, ".railwait", "access.json")
-	if info, statErr := os.Lstat(destination); statErr == nil {
-		if !info.Mode().IsRegular() {
-			return errors.New("접속 기록 경로가 일반 파일이 아닙니다")
-		}
-		// This advisory record is reconstructible from live configuration; Windows
-		// cannot rename over it. Do not remove any operational or credential file.
-		if runtime.GOOS == "windows" {
-			if err := os.Remove(destination); err != nil {
-				return err
-			}
-		}
-	} else if !os.IsNotExist(statErr) {
-		return statErr
-	}
-	return os.Rename(temp, destination)
+	return writeAdvisoryRecord(s.Path, "access.json", encoded)
 }
 
 func removeWizardCandidate(path, planID string) error {

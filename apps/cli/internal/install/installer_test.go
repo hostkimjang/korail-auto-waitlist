@@ -15,14 +15,18 @@ import (
 )
 
 type fakeReleases struct {
-	fail  bool
-	calls int
+	fail   bool
+	calls  int
+	images map[string]string
 }
 
 func (f *fakeReleases) Resolve(context.Context, string) (release.Release, error) {
 	f.calls++
 	if f.fail {
 		return release.Release{}, errors.New("signature rejected")
+	}
+	if f.images != nil {
+		return release.Release{Version: "v1.2.3", Images: f.images}, nil
 	}
 	return release.Release{Version: "v1.2.3", Images: map[string]string{"api": "ghcr.io/example/api@sha256:" + strings.Repeat("a", 64)}}, nil
 }
@@ -43,6 +47,7 @@ type fakeRunner struct {
 	configured    bool
 	wrongImage    bool
 	mountFailures int
+	shareBroken   bool
 }
 
 func testInstaller(runner *fakeRunner, source *fakeReleases) Installer {
@@ -117,6 +122,28 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 			return []byte(`{"Service":"api","State":"running","Health":"unhealthy"}`), nil
 		}
 		return []byte(`{"Service":"api","State":"running","Health":"healthy"}`), nil
+	case strings.Contains(args, "/probe/host"):
+		// Emulate a container that sees the bind-mounted install folder.
+		if r.shareBroken {
+			return nil, nil
+		}
+		var folder, token string
+		for n, arg := range c.Args {
+			if arg == "-v" && n+1 < len(c.Args) {
+				folder = strings.TrimSuffix(c.Args[n+1], ":/probe")
+			}
+			if value, ok := strings.CutPrefix(arg, "RAILWAIT_PROBE_TOKEN="); ok {
+				token = value
+			}
+		}
+		data, err := os.ReadFile(filepath.Join(folder, "host"))
+		if err != nil {
+			return nil, err
+		}
+		if err = os.WriteFile(filepath.Join(folder, "container"), []byte(token), 0o644); err != nil {
+			return nil, err
+		}
+		return data, nil
 	default:
 		return nil, nil
 	}

@@ -432,6 +432,14 @@ func (i *Installer) Install(ctx context.Context, o Options) (State, error) {
 				return s, err
 			}
 		} else {
+			if image := s.ExpectedImages["log-init"]; image != "" {
+				if i.Progress != nil {
+					i.Progress("설치 폴더의 Docker 파일 공유 확인")
+				}
+				if err = i.checkFileSharing(ctx, s, image); err != nil {
+					return s, err
+				}
+			}
 			if _, err = i.compose(ctx, s, nil, "pull"); err != nil {
 				return s, err
 			}

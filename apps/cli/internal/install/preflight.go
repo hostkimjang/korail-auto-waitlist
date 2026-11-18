@@ -77,6 +77,23 @@ func checkPort(port int) error {
 	return listener.Close()
 }
 
+// PortAvailable reports whether this computer can still bind the loopback port
+// that the app proxy publishes.
+func PortAvailable(port int) error { return checkPort(port) }
+
+// FirstAvailablePort returns the first free loopback port in [start, start+count).
+func FirstAvailablePort(start, count int, available func(int) error) (int, error) {
+	if available == nil {
+		available = checkPort
+	}
+	for port := start; port < start+count && port <= 65535; port++ {
+		if available(port) == nil {
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("%d~%d 포트가 모두 사용 중입니다. --port로 비어 있는 포트를 지정하세요", start, start+count-1)
+}
+
 func checkSpace(path string) error {
 	available, err := platform.AvailableBytes(path)
 	if err != nil {

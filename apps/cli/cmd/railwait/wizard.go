@@ -29,15 +29,25 @@ type wizardOptions struct {
 }
 
 func parseWizardOptions(args []string) (wizardOptions, error) {
+	o, _, err := parseWizardCommand(args)
+	return o, err
+}
+
+// parseWizardCommand also reports whether --path was given. Without it the folder
+// is chosen after Docker is ready, because a Lima or Colima VM may not share the
+// platform default. The flag stays out of wizardOptions, whose JSON form is the
+// stored Windows auto-resume contract.
+func parseWizardCommand(args []string) (wizardOptions, bool, error) {
 	path, err := platform.DefaultInstallDir()
 	if err != nil {
-		return wizardOptions{}, err
+		return wizardOptions{}, false, err
 	}
 	var o wizardOptions
+	pathSet := false
 	f := flag.NewFlagSet("install", flag.ContinueOnError)
 	f.StringVar(&o.Path, "path", path, "설치 폴더. 같은 폴더로 다시 실행하면 이어서 설정")
 	f.StringVar(&o.DockerContext, "docker-context", "", "사용할 로컬 Docker 환경. 대화형 기본: 현재 환경")
-	f.IntVar(&o.Port, "port", 0, "이 컴퓨터의 접속 포트. 새 설치 기본 8080")
+	f.IntVar(&o.Port, "port", 0, "이 컴퓨터의 접속 포트. 새 설치는 8080부터 비어 있는 포트를 자동 선택")
 	f.StringVar(&o.Package, "package", "", "서명된 로컬 설치 패키지 폴더")
 	f.StringVar(&o.TrustKey, "trust-key", "", "직접 신뢰할 로컬 패키지 공개키 파일")
 	f.StringVar(&o.Input, "input", "", "보호된 관리자 입력 JSON 파일 또는 stdin(-)")
@@ -48,22 +58,27 @@ func parseWizardOptions(args []string) (wizardOptions, error) {
 	f.BoolVar(&o.Open, "open", false, "완료 후 접속 주소를 브라우저로 열기")
 	f.BoolVar(&o.Custom, "custom", false, "접속 방식·보안키·TAGO 키를 직접 선택하는 고급 설치")
 	if err = f.Parse(args); err != nil {
-		return o, err
+		return o, pathSet, err
 	}
 	if f.NArg() != 0 {
-		return o, errors.New("위치 인자를 사용할 수 없습니다")
+		return o, pathSet, errors.New("위치 인자를 사용할 수 없습니다")
 	}
+	f.Visit(func(set *flag.Flag) {
+		if set.Name == "path" {
+			pathSet = true
+		}
+	})
 	if o.Access != "" && o.Access != "local" && o.Access != "tailscale" {
-		return o, errors.New("--access는 local 또는 tailscale입니다")
+		return o, pathSet, errors.New("--access는 local 또는 tailscale입니다")
 	}
 	if o.Port < 0 || o.Port > 65535 || o.HTTPSPort < 0 || o.HTTPSPort > 65535 {
-		return o, errors.New("포트는 1~65535 범위입니다")
+		return o, pathSet, errors.New("포트는 1~65535 범위입니다")
 	}
 	if (o.Package == "") != (o.TrustKey == "") {
-		return o, errors.New("--package와 --trust-key를 함께 지정하세요")
+		return o, pathSet, errors.New("--package와 --trust-key를 함께 지정하세요")
 	}
 	if o.HTTPSPort != 0 && o.Access != "tailscale" {
-		return o, errors.New("--https-port에는 --access tailscale이 필요합니다")
+		return o, pathSet, errors.New("--https-port에는 --access tailscale이 필요합니다")
 	}
 	// Preserve file arguments across a reboot or a different shell working
 	// directory. Never read administrator input to construct a resume command.
@@ -73,10 +88,10 @@ func parseWizardOptions(args []string) (wizardOptions, error) {
 		}
 		*path, err = filepath.Abs(*path)
 		if err != nil {
-			return o, err
+			return o, pathSet, err
 		}
 	}
-	return o, nil
+	return o, pathSet, nil
 }
 
 // An unreadable record is not a fresh installation. Never ask for replacement
@@ -97,7 +112,7 @@ func existingInstallation(path string) (*install.State, error) {
 }
 
 func installCommand(ctx context.Context, args []string) (err error) {
-	o, err := parseWizardOptions(args)
+	o, pathSet, err := parseWizardCommand(args)
 	if err != nil {
 		return err
 	}
@@ -145,7 +160,9 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	interactive := term.IsTerminal(int(os.Stdin.Fd())) && o.Input == ""
 	ui.Header(version)
 	ui.KeyValue("환경", runtime.GOOS+" / "+runtime.GOARCH)
-	ui.KeyValue("설치 폴더", o.Path)
+	if pathSet {
+		ui.KeyValue("설치 폴더", o.Path)
+	}
 	if !o.Custom {
 		ui.Info("간편 설치 · 프로그램 준비와 보안키 생성은 자동으로 진행합니다.")
 		ui.Hint("열린 창의 권한·약관 승인과 로그인을 진행해 주세요. 직접 설정하려면 --custom을 사용하세요.")
@@ -154,7 +171,7 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	if existing != nil {
+	reuseExisting := func() error {
 		if o.DockerContext != "" && o.DockerContext != existing.DockerContext {
 			return errors.New("기록된 Docker 환경을 유지해 주세요")
 		}
@@ -163,12 +180,15 @@ func installCommand(ctx context.Context, args []string) (err error) {
 		}
 		o.DockerContext, o.Port = existing.DockerContext, existing.Port
 		ui.Info("재사용 · 기존 설치와 저장된 설정을 이어서 확인합니다.")
+		return nil
+	}
+	if existing != nil {
+		if err = reuseExisting(); err != nil {
+			return err
+		}
 	}
 	if (existing == nil || existing.Stage != "complete") && !interactive && o.Input == "" {
 		return errors.New("새 설치에는 대화형 터미널 또는 --input이 필요합니다")
-	}
-	if o.Port == 0 {
-		o.Port = 8080
 	}
 	if !interactive && o.DockerContext == "" {
 		o.DockerContext = "default"
@@ -185,6 +205,42 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	}
 	o.DockerContext = docker.Context
 	ui.Done("Docker 준비됨 · " + docker.Context)
+	folder := installFolderChoice{Path: o.Path}
+	if existing == nil && !pathSet {
+		vm, isVM, vmErr := setup.InspectDockerVM(ctx, docker.Endpoint)
+		if vmErr != nil {
+			ui.Hint(describeVM(vm) + "의 공유 폴더를 읽지 못했습니다. 설치 중 Docker 파일 공유를 따로 확인합니다.")
+			isVM = false
+		}
+		folder = chooseInstallFolder(o.Path, vm, isVM)
+		o.Path = folder.Path
+		if interactive && o.Custom && !o.Yes {
+			if o.Path, err = folderInputWith(ctx, ui, folder, readLine); err != nil {
+				return err
+			}
+		}
+		if existing, err = existingInstallation(o.Path); err != nil {
+			return err
+		}
+		if existing != nil {
+			if err = reuseExisting(); err != nil {
+				return err
+			}
+		}
+	}
+	automaticPort := false
+	if existing == nil {
+		requestedPort := o.Port
+		if o.Port, automaticPort, err = selectLocalPort(o.Port, install.PortAvailable); err != nil {
+			return err
+		}
+		if interactive && o.Custom && !o.Yes && requestedPort == 0 {
+			if o.Port, err = portInputWith(ctx, ui, o.Port, install.PortAvailable, readLine); err != nil {
+				return err
+			}
+			automaticPort = false
+		}
+	}
 	currentOrigin, err := installedOrigin(o.Path, existing)
 	if err != nil {
 		return err
@@ -192,6 +248,11 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	if o.Access == "" {
 		if currentOrigin != "" {
 			o.Access = "tailscale"
+		} else if recorded := recordedAccess(o.Path); existing != nil && recorded != "" {
+			o.Access = recorded
+			if recorded == "tailscale" {
+				ui.Info("재사용 · 이전 실행에서 고른 Tailscale 원격 접속 설정을 이어갑니다.")
+			}
 		} else if useAllInOneDefaults(o, interactive, existing != nil) {
 			o.Access = "tailscale"
 		} else if interactive && o.Custom && !o.Yes {
@@ -232,12 +293,23 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	} else {
 		ui.Info("설치 파일 검증 → 계정·설정 → 서비스 시작 → 접속 설정")
 	}
+	ui.KeyValue("설치 폴더", o.Path)
+	if folder.Moved && o.Path == folder.Path {
+		ui.Hint(describeVM(folder.VM) + "가 쓸 수 있는 공유 폴더 안으로 정했습니다. 다른 위치는 --path로 지정하세요.")
+	}
+	if folder.Unshared && o.Path == folder.Path {
+		ui.Hint(describeVM(folder.VM) + "에 쓰기 가능한 공유 폴더가 없습니다. 파일 공유 확인에서 멈추면 VM에 쓰기 가능한 공유 폴더를 추가하거나 --path로 공유된 폴더를 지정하세요.")
+	}
 	ui.KeyValue("이 컴퓨터", fmt.Sprintf("http://127.0.0.1:%d", o.Port))
+	if automaticPort && o.Port != firstLocalPort {
+		ui.Hint(fmt.Sprintf("%d 포트를 이미 쓰고 있어 비어 있는 %d 포트를 골랐습니다. 직접 정하려면 --port를 쓰세요.", firstLocalPort, o.Port))
+	}
 	if remote != nil {
 		ui.KeyValue("로그인 주소", remotePlan.URL)
 		ui.Hint("HTTPS 보안 쿠키를 사용하므로 로그인은 위 HTTPS 주소에서 진행합니다.")
 	} else {
 		ui.Info("건너뜀 · Tailscale 원격 접속")
+		ui.Hint("다른 기기에서도 쓰려면 같은 명령에 --access tailscale을 붙여 다시 실행하세요.")
 	}
 	if o.Package != "" || (existing != nil && existing.ReleaseSource == "local_package") {
 		ui.Hint("로컬 서명 패키지 · 정식 릴리스 자동 업데이트는 아직 제공되지 않습니다.")
@@ -291,6 +363,8 @@ func installCommand(ctx context.Context, args []string) (err error) {
 		}
 		s = status.Installation
 		ui.Done("재사용 · 앱 정상, 관리자 계정과 API 키 유지")
+		// Advisory: a failed write only means a later plain rerun decides again.
+		_ = rememberAccess(o.Path, o.Access)
 	} else {
 		opts := install.Options{Path: o.Path, Port: o.Port, DockerContext: o.DockerContext, PackagePath: o.Package, TrustKey: o.TrustKey}
 		if provided != nil {
@@ -320,7 +394,7 @@ func installCommand(ctx context.Context, args []string) (err error) {
 					opts.TAGOKey = strings.TrimSpace(key)
 				}
 				if opts.TAGOKey == "" {
-					ui.Info("건너뜀 · 시간표 검색 키는 나중에 설정")
+					ui.Info("건너뜀 · TAGO 키는 나중에 railwait configure로 설정할 수 있습니다")
 				} else {
 					ui.Done("시간표 검색 키 입력됨")
 				}
@@ -336,6 +410,9 @@ func installCommand(ctx context.Context, args []string) (err error) {
 		}
 		ui.Start("검증한 설치 준비")
 		s, err = i.Install(ctx, opts)
+		// Saved even after a failure once install.json exists, so a plain rerun
+		// keeps the chosen access mode. Advisory: a failed write only asks again.
+		_ = rememberAccess(o.Path, o.Access)
 		if err != nil {
 			return err
 		}

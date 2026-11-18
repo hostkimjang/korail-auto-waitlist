@@ -51,6 +51,8 @@ railwait doctor --path <설치 경로> --json
 railwait update check --json
 railwait update --path <설치 경로> --dry-run
 railwait update --path <설치 경로> --target <확인한 버전> --plan <계획 ID>
+railwait update --path <설치 경로> --package <새 로컬 패키지> --trust-key <직접 신뢰할 공개키 파일> --dry-run
+railwait update --path <설치 경로> --package <새 로컬 패키지> --trust-key <직접 신뢰할 공개키 파일> --target <확인한 버전> --plan <계획 ID>
 railwait configure --path <설치 경로>
 railwait configure --path <설치 경로> --plan <계획 ID>
 railwait manager status --path <설치 경로>
@@ -110,6 +112,27 @@ Compose는 immutable image ID와 `pull_policy: never`를 사용하고 네트워�
 트리 지문과 실제 이미지 identity는 별도 기록이며, 소스 지문만으로 이미지의 빌드 출처를 입증하지
 않습니다. 로컬 설치도 실제 Docker 서비스를 실행하지만 공개 안정 릴리스 설치와 구분합니다.
 공식 릴리스 업데이트는 차단하며 현재 설치의 상태 조회, TAGO·HTTPS 접속 설정과 누락된 알림 키 준비는 지원합니다.
+
+로컬 패키지 설치의 새 버전은 새 로컬 패키지로 업데이트합니다. 호스트에서 `--package`와 `--trust-key`를 붙여
+`railwait update --dry-run`으로 계획을 만들고, 출력된 `--target`·`--plan`을 붙여 같은 패키지·공개키로 다시
+실행합니다. 계획은 서명 manifest 전체와 공개키에 묶이므로 둘 중 하나라도 바뀌면 새 계획이 필요합니다. 패키지 안의
+공개키는 자동으로 신뢰하지 않으며 이전 패키지의 공개키와 같을 필요는 없습니다. 대상은 더 높은 버전이어야 하고
+DB revision·설정 schema·PostgreSQL·Redis 이미지·서비스 구성이 현재 설치와 같아야 합니다. 로컬 manifest에는
+공식 릴리스의 `compatible_from`이 없으므로 출발 버전 허용은 운영자가 패키지와 공개키를 직접 고른 것과 이
+조건들로 대신합니다. 기존 관리 서비스가 새 보존 패키지를 계속 읽을 수 있도록 manifest 형식은 그대로 둡니다.
+
+적용은 웹이나 호스트 관리 서비스를 거치지 않고 이 CLI 프로세스가 설치 잠금을 잡고 실행합니다. 패키지를
+`.railwait` 아래로 복사해 다시 검증하고 이미지를 불러온 뒤(`loading_package`), 새 작업 차단 → 기존 작업 종료
+확인 → 암호화 백업 검증 → 앱 교체 → 보존 패키지 교체(`replacing_package`) → health·이미지 확인 → 작업 재개
+순서로 진행합니다. 보존 패키지 `.railwait/local-package`는 새 서비스 확인 직전에 교체하고, 새 설치 기록을 쓰기
+전에 실패하면 이전 패키지로 되돌립니다. 교체 전에 이전 패키지의 임시 위치를 작업 기록에 남기므로 강제 종료된
+작업도 `railwait status --path <설치 경로> --job <작업 ID>`로 확인할 수 있습니다. 적용 중 터미널 연결이 끊겨도
+작업은 끝까지 진행하고 결과를 작업 기록에 남깁니다. Ctrl-C나 종료 신호는 실패 경로로 중단하며, 새 작업 차단 뒤라면
+`recovery_required`로 남습니다. 이전 이미지는 Docker에 남지만 자동 rollback은 하지 않습니다. 관리 서비스 실행 파일은
+바꾸지 않으므로 이 기능이 들어간 CLI를 따로 실행해야 합니다. 이미지만 바꾸는 임시 적용은 다음 설정·업데이트 작업이
+설치 기록의 이미지로 서비스를 다시 만들면서 사라지므로 이 경로로 대체합니다. 그런 임시 적용이 실행 중이면 현재
+서비스가 기록과 달라 계획이 차단되므로, 먼저 기록된 이미지로 되돌려 `railwait status`가 healthy인지 확인합니다.
+Windows에서 백신·색인 프로그램이 보존 패키지 폴더를 잡고 있을 때의 폴더 교체는 아직 실기기에서 확인하지 않았습니다.
 
 설치는 지정한 로컬 Docker context를 검사하고 실제 socket/pipe 주소를 고정합니다. 원격 context와
 기존 설치 파일·동일 프로젝트 자원은 차단합니다. `--docker-context`를 생략한 대화형 새 설치는 현재

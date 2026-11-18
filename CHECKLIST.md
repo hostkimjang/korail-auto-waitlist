@@ -238,6 +238,13 @@
   migration·log-init 종료 0, 장기 서비스 healthy, 재생성 뒤 앱 로그 오류 0. 운영 어댑터의 공개 조회 1건이
   `search_notice_dismissed strict=1` 뒤 `outcome=success train_count=8`로 끝나고 닫지 못한 팝업 기록이 정리됨.
   웹은 1.4.1 번들 제공. `railwait status`는 이미지가 서명 패키지와 달라 healthy=false로 표시(예상)
+- [x] 로컬 패키지 설치 업데이트(CLI): `railwait update --package --trust-key` 계획·적용, 서명 manifest·공개키 바인딩,
+  관리 서비스 경로 거부, 더 높은 버전·동일 DB revision·설정 schema·저장소 이미지·서비스 구성 조건, gate 전 이미지
+  load, 새 서비스 확인 직전 보존 패키지 교체와 실패 시 복원, 교체 전 작업 기록에 이전 패키지 위치 기록,
+  `status --job`의 CLI 작업 기록 조회, 터미널 끊김 무시·SIGTERM 취소, 계획 단계 패키지 공간 검사, dry-run 공개키 표시.
+  독립 리뷰(높음 0건) 지적을 반영하고 Go 회귀 10건 추가. 사본 공개키 검사를 끈 변이에서 회귀가 실패하는 것 확인.
+  gofmt·go vet·race 전체와 6개 OS/CPU vet·빌드 통과
+- [ ] Windows 실기기에서 백신·색인 프로그램이 보존 패키지 폴더를 잡고 있을 때의 폴더 교체 확인
 - [ ] 임시 적용을 정식 경로로 대체: 로컬 패키지 설치 업데이트(CLI) 또는 서명한 1.4.1 패키지 적용. 그 전에 CLI의
   업데이트·설정 작업을 실행하면 서비스가 1.4.0 이미지로 다시 만들어지므로 설치 경로의 핫픽스 기록을 먼저 확인
 - [ ] 예약 문맥의 늦은 공지 자연 발생 확인. 실예약·결제로 대체하지 않음

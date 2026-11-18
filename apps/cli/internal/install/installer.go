@@ -171,7 +171,7 @@ func (i *Installer) Install(ctx context.Context, o Options) (State, error) {
 				return s, openErr
 			}
 			if supplied.Manifest.Bundle.SHA256 != local.Manifest.Bundle.SHA256 || supplied.Manifest.ImageArchive.SHA256 != local.Manifest.ImageArchive.SHA256 {
-				return s, fmt.Errorf("기록된 로컬 설치 패키지와 다릅니다")
+				return s, fmt.Errorf("기록된 로컬 설치 패키지와 다릅니다; 새 버전은 railwait update --package와 --trust-key로 적용하세요")
 			}
 		}
 	} else if o.PackagePath != "" {

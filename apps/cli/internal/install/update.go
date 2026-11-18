@@ -37,14 +37,20 @@ type UpdatePlan struct {
 }
 type UpdateOptions struct {
 	Path, TargetReleaseID, PlanID, JobID string
-	Progress                             func(string) error
+	// PackagePath and TrustKey are set only by a host CLI applying a local package plan.
+	PackagePath, TrustKey string
+	Progress              func(string) error
 }
 type UpdateResult struct {
-	JobID          string `json:"job_id"`
-	State          string `json:"state"`
-	CurrentVersion string `json:"current_version"`
-	TargetVersion  string `json:"target_version"`
-	Stage          string `json:"stage"`
+	JobID          string   `json:"job_id"`
+	State          string   `json:"state"`
+	CurrentVersion string   `json:"current_version"`
+	TargetVersion  string   `json:"target_version"`
+	Stage          string   `json:"stage"`
+	Warnings       []string `json:"warnings,omitempty"`
+	// PreviousPackage is set while a local package update keeps the previous package aside,
+	// so an interrupted job can be recovered from its record.
+	PreviousPackage string `json:"previous_package,omitempty"`
 }
 type savedUpdatePlan struct {
 	Plan              UpdatePlan `json:"plan"`
@@ -57,13 +63,42 @@ type savedUpdatePlan struct {
 
 func hashBytes(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 
+// ReadUpdateJob reads a job record that Update wrote in this installation. Jobs run by the
+// host CLI itself, such as local package updates, are not in the manager's job folder.
+func ReadUpdateJob(path, id string) (UpdateResult, error) {
+	var result UpdateResult
+	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
+		return result, fmt.Errorf("작업 ID가 잘못되었습니다")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return result, err
+	}
+	file := filepath.Join(abs, ".railwait", "updates", id+".json")
+	info, err := os.Lstat(file)
+	if err != nil {
+		return result, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 64<<10 {
+		return result, fmt.Errorf("작업 기록이 잘못되었습니다")
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return result, err
+	}
+	if json.Unmarshal(data, &result) != nil || result.JobID != id {
+		return result, fmt.Errorf("작업 기록이 잘못되었습니다")
+	}
+	return result, nil
+}
+
 func (i *Installer) PlanUpdate(ctx context.Context, path string) (UpdatePlan, error) {
 	s, err := ReadState(path)
 	if err != nil {
 		return UpdatePlan{}, err
 	}
 	if s.ReleaseSource == "local_package" {
-		return UpdatePlan{Schema: 1, InstallationID: s.ID, CurrentReleaseID: s.Release, Allowed: false, Reason: "update_blocked", BlockedReasons: []string{"로컬 패키지 설치는 공식 릴리스 업데이트를 지원하지 않습니다"}, Steps: []string{}}, nil
+		return UpdatePlan{Schema: 1, InstallationID: s.ID, CurrentReleaseID: s.Release, Allowed: false, Reason: "update_blocked", BlockedReasons: []string{"로컬 패키지 설치는 공식 릴리스 대신 호스트에서 railwait update --package와 --trust-key로 업데이트합니다"}, Steps: []string{}}, nil
 	}
 	r, err := i.Releases.Resolve(ctx, "stable")
 	if err != nil {
@@ -319,10 +354,19 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		return result, fmt.Errorf("업데이트 계획이 잘못되었습니다")
 	}
 	configure := saved.Kind == "configure_tago" || saved.Kind == "configure_access" || saved.Kind == "configure_push"
-	if s.ReleaseSource == "local_package" && !configure {
-		return result, fmt.Errorf("로컬 패키지 설치의 릴리스 업데이트는 지원하지 않습니다")
+	local := saved.Kind == "local_package"
+	if local != (o.PackagePath != "" || o.TrustKey != "") {
+		// The host manager never forwards package paths, so only a host CLI caller that names
+		// the planned package and key again can apply a local package plan.
+		return result, fmt.Errorf("로컬 패키지 업데이트는 계획을 만든 --package와 --trust-key로만 적용합니다")
 	}
-	if saved.Kind != "release" && !configure {
+	if local && s.ReleaseSource != "local_package" {
+		return result, fmt.Errorf("로컬 패키지로 설치한 경로만 로컬 패키지로 업데이트합니다")
+	}
+	if s.ReleaseSource == "local_package" && !configure && !local {
+		return result, fmt.Errorf("로컬 패키지 설치의 공식 릴리스 업데이트는 지원하지 않습니다; --package와 --trust-key를 사용하세요")
+	}
+	if saved.Kind != "release" && !configure && !local {
 		return result, fmt.Errorf("지원하지 않는 관리 작업 종류입니다")
 	}
 	expiry, err := time.Parse(time.RFC3339, saved.Plan.ExpiresAt)
@@ -338,13 +382,27 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		return result, fmt.Errorf("설정이나 설치 상태가 변경되었습니다; 새 계획이 필요합니다")
 	}
 	r := installedRelease(s)
-	if !configure {
+	target := r.SHA256
+	if local {
+		selected, key, openErr := openSelectedLocalPackage(ctx, o.PackagePath, o.TrustKey, false)
+		if openErr != nil {
+			return result, openErr
+		}
+		if hashBytes(key) != saved.CandidateSHA256 {
+			return result, fmt.Errorf("신뢰 공개키가 계획과 다릅니다; 새 계획이 필요합니다")
+		}
+		if r, err = localUpdateRelease(ctx, selected, s); err != nil {
+			return result, err
+		}
+		target = localPackageIdentity(selected.Manifest)
+	} else if !configure {
 		r, err = i.Releases.Resolve(ctx, "stable")
 		if err != nil {
 			return result, err
 		}
+		target = r.SHA256
 	}
-	if r.Version != o.TargetReleaseID || r.SHA256 != saved.TargetSHA256 {
+	if r.Version != o.TargetReleaseID || target != saved.TargetSHA256 {
 		return result, fmt.Errorf("확인한 릴리스가 변경되었습니다; 새 계획이 필요합니다")
 	}
 	currentPlan, err := i.makePlanMode(ctx, s, r, configure)
@@ -360,6 +418,8 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	}
 	next := s
 	var candidate []byte
+	var staged *release.LocalSource
+	stagedPackage := ""
 	if configure {
 		candidatePath := filepath.Join(abs, ".railwait", "plans", o.PlanID+".candidate.env")
 		candidate, err = os.ReadFile(candidatePath)
@@ -384,7 +444,11 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			return result, err
 		}
 	} else {
-		if err = progress("downloading"); err != nil {
+		stage := "downloading"
+		if local {
+			stage = "loading_package"
+		}
+		if err = progress(stage); err != nil {
 			return result, err
 		}
 		next.Release = r.Version
@@ -400,7 +464,26 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			return result, err
 		}
 		defer func() { err = errors.Join(err, os.RemoveAll(staging)) }()
-		if err = i.Releases.DownloadAndExtract(ctx, r, staging); err != nil {
+		if local {
+			// Later steps read only this private copy, verified again and bound to the plan.
+			if staged, stagedPackage, err = stageLocalPackage(ctx, abs, o.PackagePath, o.TrustKey, ".local-package-update-*"); err != nil {
+				return result, err
+			}
+			defer func() { err = errors.Join(err, os.RemoveAll(stagedPackage)) }()
+			stagedKey, keyErr := localTrustKey(filepath.Join(stagedPackage, "trust-key.pub"))
+			if keyErr != nil {
+				return result, keyErr
+			}
+			if localPackageIdentity(staged.Manifest) != saved.TargetSHA256 || hashBytes(stagedKey) != saved.CandidateSHA256 {
+				return result, fmt.Errorf("보존할 로컬 패키지가 계획과 다릅니다; 새 계획이 필요합니다")
+			}
+			if err = staged.DownloadAndExtract(ctx, r, staging); err != nil {
+				return result, err
+			}
+			if err = validateLocalCompose(staging, staged.Manifest.Images); err != nil {
+				return result, err
+			}
+		} else if err = i.Releases.DownloadAndExtract(ctx, r, staging); err != nil {
 			return result, err
 		}
 		next.BundleHashes, err = bundleHashes(staging)
@@ -421,7 +504,11 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		if _, err = i.compose(ctx, next, nil, "config", "--quiet"); err != nil {
 			return result, err
 		}
-		if _, err = i.compose(ctx, next, nil, "pull"); err != nil {
+		if local {
+			if err = i.loadLocalImages(ctx, s, staged); err != nil {
+				return result, err
+			}
+		} else if _, err = i.compose(ctx, next, nil, "pull"); err != nil {
 			return result, err
 		}
 	}
@@ -519,6 +606,34 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	if _, err = i.compose(ctx, next, nil, append([]string{"up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "180"}, nextServices...)...); err != nil {
 		return result, err
 	}
+	committed := false
+	if local {
+		// Record where the previous package goes before it moves, so an interrupted job can be
+		// recovered by hand from its job record.
+		result.PreviousPackage = filepath.Join(abs, ".railwait", previousLocalPackagePrefix+o.JobID)
+		if err = progress("replacing_package"); err != nil {
+			return result, err
+		}
+		// Status verification reads the preserved package, so swap it before checking the new
+		// services. Restore it unless the new installation record is written; afterwards the
+		// previous package is only cleanup.
+		if err = replaceLocalPackage(abs, stagedPackage, result.PreviousPackage); err != nil {
+			return result, err
+		}
+		defer func() {
+			if !committed {
+				if restoreErr := restoreLocalPackage(abs, result.PreviousPackage); restoreErr != nil {
+					err = errors.Join(err, restoreErr)
+				} else {
+					result.PreviousPackage = ""
+				}
+			} else if removeErr := os.RemoveAll(result.PreviousPackage); removeErr != nil {
+				result.Warnings = append(result.Warnings, "설치 기록은 새 버전으로 바뀌었지만 이전 로컬 패키지를 지우지 못했습니다: "+result.PreviousPackage)
+			} else {
+				result.PreviousPackage = ""
+			}
+		}()
+	}
 	if err = progress("verifying"); err != nil {
 		return result, err
 	}
@@ -531,8 +646,14 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	}
 	next.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err = writeState(next); err != nil {
+		// A failed directory sync can follow a completed rename; keep the preserved package
+		// that matches the record actually on disk.
+		if written, readErr := ReadState(abs); readErr == nil && written.Release == next.Release && written.UpdatedAt == next.UpdatedAt {
+			committed = true
+		}
 		return result, err
 	}
+	committed = true
 	if err = progress("resuming"); err != nil {
 		return result, err
 	}

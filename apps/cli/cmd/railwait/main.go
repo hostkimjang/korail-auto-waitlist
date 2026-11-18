@@ -62,7 +62,7 @@ func run(ctx context.Context, args []string) error {
 		return previewCommand(ctx, args[1:])
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("railwait install|setup|status|doctor|update|configure|manager|package|preview|version\n간편 설치: railwait install [--path <경로>] [--plain]\n직접 설정: railwait install --custom / 로컬 전용: --access local\n로컬 패키지: railwait install --path <새 경로> --package <패키지 디렉터리> --trust-key <공개키 파일>\n업데이트: railwait update --path <경로> --dry-run / --target <버전> --plan <계획ID>\nTAGO 설정: railwait configure --path <경로>\n비대화형: railwait install --input - < protected-input.json")
+		fmt.Println("railwait install|setup|status|doctor|update|configure|manager|package|preview|version\n간편 설치: railwait install [--path <경로>] [--plain]\n직접 설정: railwait install --custom / 로컬 전용: --access local\n로컬 패키지: railwait install --path <새 경로> --package <패키지 디렉터리> --trust-key <공개키 파일>\n업데이트: railwait update --path <경로> --dry-run / --target <버전> --plan <계획ID>\n로컬 패키지 업데이트: railwait update --path <경로> --package <새 패키지> --trust-key <공개키 파일> [--dry-run]\nTAGO 설정: railwait configure --path <경로>\n비대화형: railwait install --input - < protected-input.json")
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" {
@@ -112,7 +112,23 @@ func run(ctx context.Context, args []string) error {
 		if *jobID != "" {
 			job, err := manager.ReadJob(abs, *jobID)
 			if err != nil {
-				return err
+				// Jobs that the host CLI ran itself, such as local package updates, are recorded
+				// by the installer rather than the manager.
+				local, localErr := install.ReadUpdateJob(abs, *jobID)
+				if localErr != nil {
+					return err
+				}
+				if *jsonOutput {
+					return json.NewEncoder(os.Stdout).Encode(local)
+				}
+				fmt.Printf("작업 %s: %s · 단계 %s\n현재: %s → 대상: %s\n", local.JobID, local.State, local.Stage, local.CurrentVersion, local.TargetVersion)
+				if local.PreviousPackage != "" {
+					fmt.Println("이전 로컬 패키지:", local.PreviousPackage)
+				}
+				for _, warning := range local.Warnings {
+					fmt.Println("주의:", warning)
+				}
+				return nil
 			}
 			if *jsonOutput {
 				return json.NewEncoder(os.Stdout).Encode(job)
@@ -180,6 +196,8 @@ func updateCommand(ctx context.Context, args []string) error {
 	dryRun := flags.Bool("dry-run", false, "적용 계획만 표시")
 	target := flags.String("target", "", "확인한 대상 버전")
 	planID := flags.String("plan", "", "확인한 계획 ID")
+	packagePath := flags.String("package", "", "로컬 패키지 설치에 적용할 새 로컬 패키지 디렉터리")
+	trustKey := flags.String("trust-key", "", "직접 신뢰할 새 로컬 패키지 공개키 파일")
 	if err = flags.Parse(args); err != nil {
 		return err
 	}
@@ -187,6 +205,15 @@ func updateCommand(ctx context.Context, args []string) error {
 		return fmt.Errorf("위치 인자를 사용할 수 없습니다")
 	}
 	i := newInstaller()
+	if *packagePath != "" || *trustKey != "" {
+		if *packagePath == "" || *trustKey == "" {
+			return fmt.Errorf("--package와 --trust-key를 함께 지정하세요")
+		}
+		if check {
+			return fmt.Errorf("update check는 로컬 패키지를 받지 않습니다")
+		}
+		return localUpdateCommand(ctx, &i, localUpdateOptions{Path: *path, Package: *packagePath, TrustKey: *trustKey, Target: *target, Plan: *planID, DryRun: *dryRun, JSON: *jsonOutput})
+	}
 	if check || *dryRun || *target == "" || *planID == "" {
 		if check {
 			if _, err := install.ReadState(*path); err != nil {

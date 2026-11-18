@@ -215,6 +215,19 @@ flowchart LR
 상태 흐름은 `checking → downloading → draining → backing_up → applying → verifying → resuming`이다.
 설정 변경은 같은 관리 작업에서 다운로드 대신 보호된 설정 후보를 준비한다.
 
+로컬 패키지 설치는 공식 resolver 대신 운영자가 호스트 CLI에 직접 지정한 서명 로컬 패키지와 공개키로만
+업데이트한다. 계획은 서명 manifest 전체 지문과 공개키 지문에 묶이고, 적용은 관리 서비스를 거치지 않고 CLI
+프로세스가 같은 설치 잠금으로 실행한다. 관리 서비스 요청에는 패키지 경로가 없으므로 이 계획을 적용할 수 없다.
+로컬 manifest에는 `compatible_from`이 없어 출발 버전 조건은 운영자의 명시적 선택과 위의 나머지 동일성 조건으로
+대신한다. 기존 관리 서비스 실행 파일이 새 보존 패키지를 계속 읽도록 manifest 형식은 바꾸지 않았다. 상태 흐름은
+`downloading` 대신 `loading_package`에서 패키지를 설치 경로로 복사·재검증하고 이미지를 불러온다. 보존 패키지는
+새 서비스 확인 직전의 `replacing_package`에서 교체하고 설치 기록 전에 실패하면 이전 패키지로 되돌린다. 교체 전에
+이전 패키지의 임시 위치를 작업 기록(`.railwait/updates/<작업 ID>.json`)에 남기고, `railwait status --job`은 관리
+서비스 기록이 없으면 이 기록을 읽는다. 설치 상태 검증이 실패할 때 남은 이전 패키지가 있으면 해당 작업 ID를 안내한다.
+CLI 프로세스에서 실행하므로 터미널 연결 끊김(SIGHUP)과 닫힌 출력 pipe는 무시해 작업을 끝까지 진행하고, SIGTERM과
+Ctrl-C는 context 취소로 바꿔 같은 실패 경로와 기록을 거친다. 설치 기록 파일 교체 뒤 디렉터리 동기화만 실패하면
+디스크의 기록을 다시 읽어 그 버전에 맞는 보존 패키지를 유지한다.
+
 다운로드·이미지 pull·복구키 준비를 먼저 끝내고, 변경 전 설치 기록을 보존한다. gate를 닫으면 새 HTTP·작업자·
 sidecar 작업과 provider 예열을 막는다. 공유 Linux `flock`은 실제 외부 작업이 끝날 때까지 유지하며,
 async waiter가 취소돼도 살아 있는 SRT 스레드·분리된 브라우저 작업은 drain 완료로 보지 않는다. SSE도 종료한다.
@@ -256,6 +269,7 @@ API·browser runtime은 `uv.lock`으로 설치하고 uv 도구도 digest를 고�
 [체크리스트](../CHECKLIST.md)에 수행한 결과와 공개 전 조건을 분리한다. 현재 확인한 범위는 다음과 같다.
 
 - CLI 서명·압축 해제·재개·키 보존·프로세스 잠금·상태·실패 주입·업데이트·설정 변경 회귀
+- 로컬 패키지 업데이트의 계획·패키지·공개키 바인딩, 관리 서비스 경로 거부, 차단 조건, 실패 시 보존 패키지 복원 회귀
 - macOS race/vet, Linux ARM 실제 실행, Windows/macOS/Linux amd64·arm64 빌드
 - API 전체 5,715건, strict mypy·Ruff·lock 검사와 Linux ARM browser fixture 415건
 - 웹 1,004건, lint·typecheck·build·Sites, 320px·200% 상당 폭·키보드 업데이트 확인 4건

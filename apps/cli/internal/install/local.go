@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/platform"
 	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/release"
 	"gopkg.in/yaml.v3"
 )
@@ -35,22 +34,42 @@ func importLocalPackage(ctx context.Context, installation, source, key string) (
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	available, err := platform.AvailableBytes(installation)
+	_, staging, err := stageLocalPackage(ctx, installation, source, key, ".local-package-*")
 	if err != nil {
 		return nil, err
 	}
-	required := uint64(verified.Manifest.Bundle.SizeBytes+verified.Manifest.ImageArchive.SizeBytes) + (4 << 30)
-	if available < required {
-		return nil, fmt.Errorf("로컬 패키지 보존과 설치에 필요한 여유 공간이 부족합니다 (최소 %d GiB)", (required+(1<<30)-1)>>30)
+	if err = os.Rename(staging, dest); err != nil {
+		return nil, errors.Join(err, os.RemoveAll(staging))
+	}
+	return release.OpenLocal(ctx, dest, filepath.Join(dest, "trust-key.pub"))
+}
+
+// stageLocalPackage copies a verified package and the explicitly selected public key
+// into a new private directory under .railwait and verifies the copy again. The caller
+// renames the directory into place or removes it.
+func stageLocalPackage(ctx context.Context, installation, source, key, pattern string) (*release.LocalSource, string, error) {
+	verified, err := release.OpenLocalMetadata(ctx, source, key)
+	if err != nil {
+		return nil, "", err
+	}
+	if err = checkLocalPackageSpace(installation, verified.Manifest); err != nil {
+		return nil, "", err
 	}
 	if err = verified.VerifyAssets(ctx); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	staging, err := os.MkdirTemp(filepath.Dir(dest), ".local-package-*")
+	staging, err := os.MkdirTemp(filepath.Join(installation, ".railwait"), pattern)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	defer os.RemoveAll(staging)
+	staged, err := copyLocalPackage(ctx, verified, source, key, staging)
+	if err != nil {
+		return nil, "", errors.Join(err, os.RemoveAll(staging))
+	}
+	return staged, staging, nil
+}
+
+func copyLocalPackage(ctx context.Context, verified *release.LocalSource, source, key, staging string) (*release.LocalSource, error) {
 	for _, name := range []string{"local-manifest.json", "local-manifest.sig", "railwait-bundle.tar.gz", "railwait-images.tar", "trust-key.pub"} {
 		path := filepath.Join(source, name)
 		if name == "trust-key.pub" {
@@ -85,13 +104,14 @@ func importLocalPackage(ctx context.Context, installation, source, key string) (
 			return nil, err
 		}
 	}
-	if _, err = release.OpenLocal(ctx, staging, filepath.Join(staging, "trust-key.pub")); err != nil {
+	staged, err := release.OpenLocal(ctx, staging, filepath.Join(staging, "trust-key.pub"))
+	if err != nil {
 		return nil, err
 	}
-	if err = os.Rename(staging, dest); err != nil {
-		return nil, err
+	if !reflect.DeepEqual(staged.Manifest, verified.Manifest) {
+		return nil, fmt.Errorf("복사한 로컬 패키지가 검증한 패키지와 다릅니다")
 	}
-	return release.OpenLocal(ctx, dest, filepath.Join(dest, "trust-key.pub"))
+	return staged, nil
 }
 
 type localContextReader struct {
@@ -181,10 +201,15 @@ func (i *Installer) loadLocalImages(ctx context.Context, s State, source *releas
 	return nil
 }
 
-func verifyLocalState(ctx context.Context, s State) error {
+func verifyLocalState(ctx context.Context, s State) (err error) {
 	if s.ReleaseSource != "local_package" {
 		return nil
 	}
+	defer func() {
+		if err != nil {
+			err = withInterruptedLocalUpdateHint(s.Path, err)
+		}
+	}()
 	source, err := release.OpenLocalMetadata(ctx, filepath.Join(s.Path, ".railwait", "local-package"), filepath.Join(s.Path, ".railwait", "local-package", "trust-key.pub"))
 	if err != nil {
 		return err

@@ -1,11 +1,44 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestLocalPackageUpdateRequiresPackageAndTrustKeyTogether(t *testing.T) {
+	path := t.TempDir()
+	for _, args := range [][]string{
+		{"--path", path, "--package", "package"},
+		{"--path", path, "--trust-key", "trust-key.pub"},
+		{"check", "--path", path, "--package", "package", "--trust-key", "trust-key.pub"},
+	} {
+		if err := updateCommand(context.Background(), args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}
+
+func TestStatusJobReadsRecordsOfJobsRunByTheHostCLI(t *testing.T) {
+	root := t.TempDir()
+	id := strings.Repeat("d", 32)
+	dir := filepath.Join(root, ".railwait", "updates")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"job_id":"` + id + `","state":"recovery_required","current_version":"1.4.0","target_version":"1.4.1","stage":"verifying"}`
+	if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(record), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(context.Background(), []string{"status", "--path", root, "--job", id, "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(context.Background(), []string{"status", "--path", root, "--job", strings.Repeat("e", 32)}); err == nil {
+		t.Fatal("reported a job without any record")
+	}
+}
 
 func TestProtectedInputRejectsUnknownFieldsAndTrailingObjects(t *testing.T) {
 	for _, data := range []string{`{"username":"admin","password":"do-not-print","unexpected":true}`, `{} {}`, strings.Repeat("x", 8193)} {

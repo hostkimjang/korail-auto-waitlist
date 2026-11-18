@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -39,10 +40,11 @@ func executableFile(path, goos string) bool {
 func executableCandidates(goos, name, home string, getenv func(string) string) []string {
 	switch goos {
 	case "darwin":
+		// macOS candidates use "/" regardless of the OS that evaluates this table.
 		if name == "docker" {
 			result := []string{"/Applications/Docker.app/Contents/Resources/bin/docker", "/usr/local/bin/docker", "/opt/homebrew/bin/docker"}
 			if strings.HasPrefix(home, "/") {
-				result = append([]string{filepath.Join(home, ".docker", "bin", "docker")}, result...)
+				result = append([]string{path.Join(home, ".docker", "bin", "docker")}, result...)
 			}
 			return result
 		}

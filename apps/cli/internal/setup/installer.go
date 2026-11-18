@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 
@@ -76,14 +77,16 @@ func dependencyPresent(tool string) bool {
 
 func nativeDependencyPresent(goos, tool string, getenv func(string) string, exists func(string) bool) bool {
 	if goos == "darwin" {
+		// macOS paths always use "/", so build them with package path. This keeps the
+		// result identical when the decision is tested on another host OS.
 		name := map[string]string{"docker": "Docker.app", "tailscale": "Tailscale.app"}[tool]
 		if name == "" {
 			return false
 		}
-		if exists(filepath.Join("/Applications", name)) {
+		if exists(path.Join("/Applications", name)) {
 			return true
 		}
-		if home := getenv("HOME"); filepath.IsAbs(home) && exists(filepath.Join(home, "Applications", name)) {
+		if home := getenv("HOME"); path.IsAbs(home) && exists(path.Join(home, "Applications", name)) {
 			return true
 		}
 	}

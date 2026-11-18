@@ -33,6 +33,7 @@ const expectedResponsiveApiPaths = [
   "/api/v1/preferences/ui",
   "/api/v1/provider-accounts",
   "/api/v1/provider-runtime-status",
+  "/api/v1/providers",
   "/api/v1/stations",
   "/api/v1/watches",
 ] as const;
@@ -218,6 +219,22 @@ async function installMockApi(page: Page, telemetry: BrowserTelemetry): Promise<
         observation_interval_seconds: 5,
         preferences_updated_at: timestamp(-60_000),
       });
+      return;
+    }
+    if (path.endsWith("/providers")) {
+      telemetry.handledApiPaths.add(path);
+      // The installation switch is on, so only the account state limits automatic reservation.
+      await json(route, ["korail", "srt"].map((provider) => ({
+        provider,
+        timetable: true,
+        official_booking_link: true,
+        official_waitlist_link: false,
+        seat_monitoring: true,
+        reservation_once: true,
+        experimental: false,
+        enabled: true,
+        note: null,
+      })));
       return;
     }
     if (path.endsWith("/stations")) {

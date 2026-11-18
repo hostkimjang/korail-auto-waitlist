@@ -250,7 +250,11 @@
 - [x] 사용자 Windows 설치의 자동 예매 스위치를 사용자 승인으로 켬: `.env`의 두 값만 바꾸고 앱 서비스 10개를 다시 만들어
   모두 healthy, API의 공식 KORAIL·SRT `reservation_once=true` 확인. 그때 활성 대기는 없었음(01:59·02:00에 등록한
   KTX 4053·210 대기는 사용자 취소로 끝남)
-- [ ] CI 확인과 1.4.7 서명 릴리스 게시
+- [x] CI 통과(커밋 `474a941`, `origin/main` `fd8815f` 기준): repository-verify 44378778492, CLI cross-platform
+  verification 44378778522, experimental-browser-verify 44378778486이 모두 첫 실행에서 통과. 같은 내용의 이전 기준 커밋
+  `b3250bf`에서는 우분투 Reservation controls가 테스트 준비 단계의 Chrome 시작 시간 초과(`FailedToStartBrowser`, 110 통과·1
+  오류)로 한 번 실패해 실패 작업만 다시 실행해 통과. 반응형 E2E 흉내 API의 `/providers` 누락은 테스트 커밋에서 고침
+- [ ] 1.4.7 서명 릴리스 게시
 - [ ] 게시 확인 뒤 설치 안내(README, 설치 CLI 안내, 운영 가이드) 별도 커밋
 - [ ] 사용자 Windows 설치의 Tailscale 원격 접속(설치 5단계) 마무리
 

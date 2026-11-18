@@ -12,6 +12,9 @@ from rail_waitlist.config import Settings
 from rail_waitlist.domain import Provider
 from rail_waitlist.providers import ProviderUnavailable, TagoClient
 from rail_waitlist.timetable_management import catalog_application
+from rail_waitlist.timetable_management.bundled_station_catalog import (
+    load_bundled_station_catalog,
+)
 from rail_waitlist.timetable_management.catalog_application import (
     CANONICAL_CACHE_KEY,
     STATION_CATALOG_SCHEMA_VERSION,
@@ -493,17 +496,31 @@ async def test_failed_or_empty_refresh_preserves_last_known_good(db_engine, cata
     assert "response body" not in (row.last_error_category or "")
 
 
-async def test_no_snapshot_failure_is_bounded_and_fails_closed(db_engine):
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    service = StationCatalogService(
-        factory,
-        FakeTagoClient(error=ProviderUnavailable("secret upstream response omitted")),
-        FakeStationVisibility(),
-    )
+def assert_bundled_catalog(catalog: StationCatalog) -> None:
+    bundled = load_bundled_station_catalog(STATION_CATALOG_SCHEMA_VERSION)
+    assert catalog.catalog_origin == "bundled_snapshot"
+    assert catalog.source == "TAGO"
+    assert catalog.retrieved_at == bundled.retrieved_at
+    assert catalog.stations == list(bundled.display_stations)
 
-    with pytest.raises(ProviderUnavailable, match="catalog is unavailable"):
-        await asyncio.wait_for(service.get_catalog(Provider.KORAIL), timeout=1)
+
+async def test_no_snapshot_failure_is_bounded_and_serves_bundled_snapshot(db_engine):
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    tago = FakeTagoClient(error=ProviderUnavailable("secret upstream response omitted"))
+    service = StationCatalogService(factory, tago, FakeStationVisibility())
+
+    catalog = await asyncio.wait_for(service.get_catalog(Provider.KORAIL), timeout=1)
+    persisted = await service.repository.load_snapshot()
+    async with factory() as session:
+        row = await session.get(StationCatalogCache, CANONICAL_CACHE_KEY)
     await service.close()
+
+    assert_bundled_catalog(catalog)
+    assert tago.fetch_count == 1
+    assert persisted is None
+    assert row is not None
+    assert row.payload is None
+    assert row.last_error_category == "provider_unavailable"
 
 
 async def test_preload_starts_collection_without_blocking_health_startup(db_engine):
@@ -545,16 +562,20 @@ async def test_close_cancels_owner_refresh_and_releases_database_lease(db_engine
     assert row.last_error_category == "cancelled"
 
 
-async def test_closed_service_rejects_new_refresh(db_engine):
+async def test_closed_service_serves_bundled_snapshot_without_new_refresh(db_engine):
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    service = StationCatalogService(factory, FakeTagoClient(), FakeStationVisibility())
+    tago = FakeTagoClient()
+    service = StationCatalogService(factory, tago, FakeStationVisibility())
     await service.close()
 
-    with pytest.raises(ProviderUnavailable, match="service is shutting down"):
-        await service.get_catalog(Provider.KORAIL)
+    catalog = await service.get_catalog(Provider.KORAIL)
+
+    assert_bundled_catalog(catalog)
+    assert tago.fetch_count == 0
+    assert service._refresh_task is None
 
 
-async def test_collection_timeout_is_bounded_and_fails_closed(db_engine, monkeypatch):
+async def test_collection_timeout_is_bounded_and_serves_bundled_snapshot(db_engine, monkeypatch):
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     gate = asyncio.Event()
     service = StationCatalogService(
@@ -564,13 +585,14 @@ async def test_collection_timeout_is_bounded_and_fails_closed(db_engine, monkeyp
     )
     monkeypatch.setattr(catalog_application, "COLLECTION_TIMEOUT_SECONDS", 0.01)
 
-    with pytest.raises(ProviderUnavailable, match="catalog is unavailable"):
-        await asyncio.wait_for(service.get_catalog(Provider.KORAIL), timeout=1)
+    catalog = await asyncio.wait_for(service.get_catalog(Provider.KORAIL), timeout=1)
     async with factory() as session:
         row = await session.get(StationCatalogCache, CANONICAL_CACHE_KEY)
     await service.close()
 
+    assert_bundled_catalog(catalog)
     assert row is not None
+    assert row.payload is None
     assert row.refresh_owner is None
     assert row.lease_until is None
     assert row.last_error_category == "upstream_timeout"

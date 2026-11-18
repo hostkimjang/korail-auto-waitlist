@@ -67,6 +67,7 @@ import {
   type SeatWatchCancellation,
   type SeatWatchRegistrationCompletion,
 } from "./useSeatWatchRegistration";
+import { stationCatalogNotice } from "./stationCatalogNotice";
 import { useStationCatalog } from "./useStationCatalog";
 import {
   useTimetableSearch,
@@ -263,7 +264,11 @@ export function NewWaitPage({
     form.selectedWeekdays.length !== 1 ? "출발 요일을 하나 선택해 주세요." : "",
   ].filter(Boolean);
   const stationNotice = stationCatalogReady
-    ? `${stationState.source === "mock" ? "데모" : "공식"} 역 목록 ${selectableStations.length}개를 불러왔습니다. 이 목록은 운영사별 운행 여부를 증명하지 않으며, 선택 날짜의 시간표 결과에서 실제 운행 열차를 확인합니다.`
+    ? stationCatalogNotice(
+      stationState.source,
+      selectableStations.length,
+      stationState.bundledSnapshotRetrievedAt,
+    )
     : "";
   const canContinue = step === 1
     ? stationCatalogReady

@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import type { RailProvider } from "../../api/providerAccounts";
+import type { StationCatalogOrigin } from "../../api/stations";
 import type { StationComboboxStation } from "./StationCombobox";
 import type { NewWaitForm } from "./newWaitForm";
 
@@ -20,6 +21,8 @@ export interface StationCatalogStation extends StationComboboxStation {
 
 export interface StationCatalogMetadata {
   source: string;
+  catalogOrigin: StationCatalogOrigin;
+  retrievedAt: string;
 }
 
 export interface StationCatalogResult {
@@ -31,7 +34,9 @@ export type StationCatalogState = {
   status: "idle" | "loading" | "ready" | "error";
   providerKey: string;
   stations: StationCatalogStation[];
-  source: "" | "mock" | "official";
+  source: "" | "mock" | "official" | "bundled_snapshot";
+  /** 내장 스냅샷을 받은 경우 그 원래 수집 시각(가장 오래된 값), 아니면 빈 문자열. */
+  bundledSnapshotRetrievedAt: string;
   error: string;
 };
 
@@ -54,6 +59,28 @@ export interface UseStationCatalogResult {
 
 function providerKey(providers: ReadonlyArray<RailProvider>): string {
   return [...providers].sort().join(",");
+}
+
+function catalogSource(
+  catalogs: ReadonlyArray<StationCatalogMetadata>,
+): Exclude<StationCatalogState["source"], ""> {
+  if (catalogs.every((catalog) => catalog.source === "mock")) return "mock";
+  return catalogs.some((catalog) => catalog.catalogOrigin === "bundled_snapshot")
+    ? "bundled_snapshot"
+    : "official";
+}
+
+function oldestBundledSnapshotRetrievedAt(
+  catalogs: ReadonlyArray<StationCatalogMetadata>,
+): string {
+  let oldest: { value: string; time: number } | null = null;
+  for (const catalog of catalogs) {
+    if (catalog.catalogOrigin !== "bundled_snapshot") continue;
+    const time = new Date(catalog.retrievedAt).getTime();
+    if (Number.isNaN(time)) continue;
+    if (oldest === null || time < oldest.time) oldest = { value: catalog.retrievedAt, time };
+  }
+  return oldest?.value ?? "";
 }
 
 function providersFromKey(key: string): RailProvider[] {
@@ -95,7 +122,14 @@ function initialState(
   loadDemoStations: UseStationCatalogOptions["loadDemoStations"],
 ): StationCatalogState {
   if (!key) {
-    return { status: "idle", providerKey: "", stations: [], source: "", error: "" };
+    return {
+      status: "idle",
+      providerKey: "",
+      stations: [],
+      source: "",
+      bundledSnapshotRetrievedAt: "",
+      error: "",
+    };
   }
   if (demo) {
     return {
@@ -103,10 +137,18 @@ function initialState(
       providerKey: key,
       stations: loadDemoStations(providersFromKey(key)),
       source: "mock",
+      bundledSnapshotRetrievedAt: "",
       error: "",
     };
   }
-  return { status: "loading", providerKey: key, stations: [], source: "", error: "" };
+  return {
+    status: "loading",
+    providerKey: key,
+    stations: [],
+    source: "",
+    bundledSnapshotRetrievedAt: "",
+    error: "",
+  };
 }
 
 export function useStationCatalog({
@@ -129,7 +171,14 @@ export function useStationCatalog({
     if (selectedProviders.length === 0) {
       queueMicrotask(() => {
         if (!active) return;
-        setState({ status: "idle", providerKey: "", stations: [], source: "", error: "" });
+        setState({
+          status: "idle",
+          providerKey: "",
+          stations: [],
+          source: "",
+          bundledSnapshotRetrievedAt: "",
+          error: "",
+        });
         setForm((form) => reconcileNewWaitStations(form, []));
       });
       return () => {
@@ -146,6 +195,7 @@ export function useStationCatalog({
           providerKey: key,
           stations,
           source: "mock",
+          bundledSnapshotRetrievedAt: "",
           error: "",
         });
         setForm((form) => reconcileNewWaitStations(form, stations));
@@ -162,6 +212,7 @@ export function useStationCatalog({
         providerKey: key,
         stations: [],
         source: "",
+        bundledSnapshotRetrievedAt: "",
         error: "",
       });
     });
@@ -173,9 +224,8 @@ export function useStationCatalog({
           status: "ready",
           providerKey: key,
           stations,
-          source: catalogs.every((catalog) => catalog.source === "mock")
-            ? "mock"
-            : "official",
+          source: catalogSource(catalogs),
+          bundledSnapshotRetrievedAt: oldestBundledSnapshotRetrievedAt(catalogs),
           error: "",
         });
         setForm((form) => reconcileNewWaitStations(form, stations));
@@ -187,6 +237,7 @@ export function useStationCatalog({
           providerKey: key,
           stations: [],
           source: "",
+          bundledSnapshotRetrievedAt: "",
           error: STATION_CATALOG_ERROR,
         });
         setForm((form) => reconcileNewWaitStations(form, []));

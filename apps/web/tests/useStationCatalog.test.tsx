@@ -12,6 +12,11 @@ import {
 } from "../src/features/new-wait/useStationCatalog";
 
 const station = (name: string, nodeId: string): StationCatalogStation => ({ name, nodeId });
+const collectedCatalog = {
+  source: "TAGO",
+  catalogOrigin: "collected",
+  retrievedAt: "2026-08-04T00:00:00Z",
+} as const;
 
 const initialForm = (overrides: Partial<NewWaitForm> = {}): NewWaitForm => ({
   provider: "KORAIL",
@@ -109,19 +114,20 @@ describe("NewWait station catalog hook", () => {
     await act(async () => {
       srt.resolve({
         stations: [station("수서", "SUSEO")],
-        catalogs: [{ source: "TAGO" }],
+        catalogs: [collectedCatalog],
       });
     });
     await waitFor(() => expect(result.current.catalog.state).toMatchObject({
       status: "ready",
       providerKey: "SRT",
       source: "official",
+      bundledSnapshotRetrievedAt: "",
     }));
 
     await act(async () => {
       korail.resolve({
         stations: [station("서울", "SEOUL")],
-        catalogs: [{ source: "TAGO" }],
+        catalogs: [collectedCatalog],
       });
     });
     expect(result.current.catalog.state.providerKey).toBe("SRT");
@@ -134,7 +140,7 @@ describe("NewWait station catalog hook", () => {
       .mockRejectedValueOnce(new Error("unavailable"))
       .mockResolvedValueOnce({
         stations: [station("서울", "SEOUL"), station("부산", "BUSAN")],
-        catalogs: [{ source: "TAGO" }],
+        catalogs: [collectedCatalog],
       });
     const loadDemoStations = vi.fn(() => []);
     const { result } = renderHook(() => useHarness({
@@ -170,5 +176,32 @@ describe("NewWait station catalog hook", () => {
     expect(result.current.catalog.state.status).toBe("idle");
     await waitFor(() => expect(result.current.form.origin_node_id).toBeNull());
     expect(result.current.form.destination_node_id).toBeNull();
+  });
+
+  it("marks a bundled snapshot catalog with its oldest collection time", async () => {
+    const loadStations = vi.fn<HarnessProps["loadStations"]>().mockResolvedValue({
+      stations: [station("서울", "SEOUL"), station("수서", "SUSEO")],
+      catalogs: [
+        { source: "TAGO", catalogOrigin: "bundled_snapshot", retrievedAt: "2026-11-18T12:35:53Z" },
+        { source: "TAGO", catalogOrigin: "bundled_snapshot", retrievedAt: "2026-11-17T09:00:00Z" },
+        collectedCatalog,
+      ],
+    });
+    const { result } = renderHook(() => useHarness({
+      demo: false,
+      providers: ["KORAIL", "SRT"],
+      loadStations,
+      loadDemoStations: vi.fn(() => []),
+    }));
+
+    await waitFor(() => expect(result.current.catalog.state).toMatchObject({
+      status: "ready",
+      source: "bundled_snapshot",
+      bundledSnapshotRetrievedAt: "2026-11-17T09:00:00Z",
+    }));
+    expect(result.current.catalog.stations).toEqual([
+      station("서울", "SEOUL"),
+      station("수서", "SUSEO"),
+    ]);
   });
 });

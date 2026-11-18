@@ -4,6 +4,7 @@ import type { RailProvider } from "./providerAccounts";
 type StationCatalogSource = "TAGO" | "mock";
 type StationCatalogScope = "intercity_station_guide_intersection" | "mock";
 type ProviderMembership = "not_verified_by_source" | "mock";
+export type StationCatalogOrigin = "collected" | "bundled_snapshot" | "mock";
 
 export interface StationCatalogStation {
   name: string;
@@ -17,6 +18,7 @@ export interface StationCatalog {
   source: StationCatalogSource;
   catalogScope: StationCatalogScope;
   providerMembership: ProviderMembership;
+  catalogOrigin: StationCatalogOrigin;
   note: string;
   retrievedAt: string;
   stations: StationCatalogStation[];
@@ -44,6 +46,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizedCatalogOrigin(
+  payload: Record<string, unknown>,
+  source: string,
+): StationCatalogOrigin | null {
+  // 이전 API는 catalog_origin을 보내지 않았으므로 출처가 뜻하던 기존 의미로 해석한다.
+  if (!Object.hasOwn(payload, "catalog_origin")) {
+    return source === "mock" ? "mock" : "collected";
+  }
+  const origin = String(payload.catalog_origin ?? "").trim();
+  if (source === "mock") return origin === "mock" ? "mock" : null;
+  return origin === "collected" || origin === "bundled_snapshot" ? origin : null;
+}
+
 function normalizedStationCatalog(payload: unknown, requestedProvider: RailProvider): StationCatalog {
   if (!isRecord(payload)) {
     throw new ApiError(`${requestedProvider} 역 목록 응답 형식을 확인할 수 없습니다.`);
@@ -55,9 +70,11 @@ function normalizedStationCatalog(payload: unknown, requestedProvider: RailProvi
   const note = String(payload.note ?? "").trim();
   const retrievedAt = String(payload.retrieved_at ?? "");
   const catalogTuple = `${source}|${catalogScope}|${providerMembership}`;
+  const catalogOrigin = normalizedCatalogOrigin(payload, source);
   if (
     provider !== requestedProvider
     || !ALLOWED_CATALOG_TUPLES.has(catalogTuple)
+    || catalogOrigin === null
     || (Object.hasOwn(payload, "note") && !note)
     || !retrievedAt
     || Number.isNaN(new Date(retrievedAt).getTime())
@@ -86,6 +103,7 @@ function normalizedStationCatalog(payload: unknown, requestedProvider: RailProvi
     source: source as StationCatalogSource,
     catalogScope: catalogScope as StationCatalogScope,
     providerMembership: providerMembership as ProviderMembership,
+    catalogOrigin,
     note,
     retrievedAt,
     stations,

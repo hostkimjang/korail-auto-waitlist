@@ -20,6 +20,12 @@ class StationItem(ApiModel):
     city_name: str = Field(min_length=1, max_length=80)
 
 
+# collected: this installation's TAGO + KORAIL station-guide collection (DB cache).
+# bundled_snapshot: the reviewed snapshot packaged with the release; retrieved_at is
+# its original collection time, not the time it was served.
+StationCatalogOrigin = Literal["collected", "bundled_snapshot", "mock"]
+
+
 class StationCatalog(ApiModel):
     provider: Provider
     source: Literal["TAGO", "mock"]
@@ -32,6 +38,7 @@ class StationCatalog(ApiModel):
     provider_membership: Literal["not_verified_by_source", "mock"]
     note: str = Field(min_length=1, max_length=240)
     stations: list[StationItem]
+    catalog_origin: StationCatalogOrigin = "collected"
 
     @field_validator("retrieved_at")
     @classmethod
@@ -39,6 +46,17 @@ class StationCatalog(ApiModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("retrieved_at must include a timezone")
         return value
+
+    @model_validator(mode="after")
+    def validate_catalog_origin(self) -> StationCatalog:
+        if (self.source == "mock") != (self.catalog_origin == "mock"):
+            raise ValueError("mock station catalogs must use the mock origin")
+        if (
+            self.catalog_origin == "bundled_snapshot"
+            and self.catalog_scope != "intercity_station_guide_intersection"
+        ):
+            raise ValueError("bundled station catalogs must use the reviewed intersection scope")
+        return self
 
 
 class SeatStatusRefreshRequest(ApiModel):

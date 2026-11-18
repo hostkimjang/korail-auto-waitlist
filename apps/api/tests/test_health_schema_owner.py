@@ -243,9 +243,16 @@ def test_health_owner_move_does_not_change_openapi() -> None:
     assert schema["paths"]["/api/v1/seat-status/status"]["get"]["description"] == (
         "Expose every hold that prevents seat I/O, including authentication protection."
     )
-    assert len(encoded) == 93522
+    # 1.4.4 added only the backward-compatible StationCatalog.catalog_origin field.
+    assert schema["components"]["schemas"]["StationCatalog"]["properties"]["catalog_origin"] == {
+        "default": "collected",
+        "enum": ["collected", "bundled_snapshot", "mock"],
+        "title": "Catalog Origin",
+        "type": "string",
+    }
+    assert len(encoded) == 93651
     assert hashlib.sha256(encoded).hexdigest() == (
-        "6e4811c68c5f9d85a4ead715332332537dad95988141ac881539b7ab57c56047"
+        "22b4eeb12c7f42384e5c56f43e04bd8a90ddab4078618fa64065772d994c8b16"
     )
 
 

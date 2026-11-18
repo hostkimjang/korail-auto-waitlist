@@ -138,6 +138,7 @@ class MockProviderAdapter(RailProviderAdapter):
             retrieved_at=datetime.now(timezone.utc),
             catalog_scope="mock",
             provider_membership="mock",
+            catalog_origin="mock",
             note="외부 요청 없이 상태 전이 검증에만 사용하는 mock 역 카탈로그입니다.",
             stations=[
                 StationItem(node_id="MOCK-SEOUL", name="서울", city_code="11", city_name="서울"),

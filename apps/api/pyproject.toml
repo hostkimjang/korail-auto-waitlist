@@ -96,6 +96,7 @@ files = [
   "src/rail_waitlist/station_catalog_cache.py",
   "src/rail_waitlist/station_visibility.py",
   "src/rail_waitlist/timetable_management/application.py",
+  "src/rail_waitlist/timetable_management/bundled_station_catalog.py",
   "src/rail_waitlist/timetable_management/catalog_application.py",
   "src/rail_waitlist/timetable_management/catalog_http.py",
   "src/rail_waitlist/timetable_management/contracts.py",

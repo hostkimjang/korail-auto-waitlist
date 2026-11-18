@@ -6,7 +6,8 @@
 ## 안전 경계
 
 - 공식 provider는 [TAGO 열차정보 API](https://www.data.go.kr/data/15098552/openapi.do)의
-  역 목록과 시간표만 조회합니다. 서비스 키가 없으면 합성 결과 대신 `503`을 반환합니다.
+  역 목록과 시간표만 조회합니다. 서비스 키가 없으면 합성 결과를 만들지 않습니다. 역 목록은 릴리스에
+  포함된 검토 스냅샷으로 대체하고(`catalog_origin=bundled_snapshot`), TAGO 시간표 대체 경로는 `503`으로 닫습니다.
 - 합성 시간표와 예약 상태 전이는 `mock` provider에서만 제공합니다.
 - 환경변수가 없는 `Settings`의 `EXPERIMENTAL_RAIL_ENABLED` 기본값은 `false`로 fail-closed합니다.
   저장소의 `.env.example`은 표준 Compose 운영을 위해 `experimental-rail`과 KORAIL Chromium·SRT provider
@@ -145,18 +146,34 @@ TAGO의 도시별 역 목록에는 없지만 같은 TAGO 시간표 API에서 현
 응답은 `catalog_scope=intercity_station_guide_intersection`,
 `provider_membership=not_verified_by_source`이며, 이 필터는 화면에서 역을 찾기 위한 기준이지
 운영사 소속이나 선택 날짜의 실제 운행 증거가 아닙니다.
+`catalog_origin`은 목록을 어디서 받았는지 구분합니다. `collected`는 이 설치본이 TAGO와 KORAIL 역 안내에서
+수집해 DB 스냅샷에 저장한 목록, `bundled_snapshot`은 API 패키지에 포함된 검토 스냅샷
+(`timetable_management/data/bundled_station_catalog.json`), `mock`은 데모 목록입니다. 내장 스냅샷의
+`source`는 원래 수집원인 `TAGO`이고 `retrieved_at`은 응답 시각이 아니라 스냅샷을 수집한 시각입니다.
+기본값이 있는 추가 필드라 이전 클라이언트는 무시해도 되며, 웹은 이 필드가 없는 이전 응답을 `collected`로
+해석합니다.
 
 migration `0007`의 PostgreSQL 스냅샷은 TAGO 원본과 검토된 보정을 합친 조회 identity 목록, 화면용
 교집합을 함께 저장합니다. 조회 identity는 시간표 요청의 node ID·역명 검증을 hydrate하고 API 응답에는
 화면용 교집합만 사용합니다.
 신선한 스냅샷으로 재시작하면 상류 호출이 없고, 24시간이 지난 스냅샷은 즉시 반환하면서 DB lease를
 획득한 한 replica가 갱신합니다. lease owner와 유효 시간으로 늦은 쓰기를 fencing하며, 갱신 실패·빈
-응답·손상 응답은 마지막 정상 스냅샷을 덮지 않습니다. 정상 스냅샷이 없거나 화면용 교집합을 만들지
-못하면 원본 목록으로 되돌아가지 않고 `503`으로 닫습니다. 화면 목록에서는 광운대·노량진·신도림·
+응답·손상 응답은 마지막 정상 스냅샷을 덮지 않습니다. 정상 DB 스냅샷이 없을 때 `TAGO_SERVICE_KEY`가
+비어 있으면 TAGO를 호출하거나 lease를 잡지 않고 내장 스냅샷을 바로 반환합니다. 키가 있으면 수집을 먼저
+시도하고, 실패하거나 대기 시간(65초)을 넘기면 원본 목록 대신 내장 스냅샷을 반환합니다. 내장 스냅샷은
+DB에 저장하지 않으므로 다음 요청과 키를 설정한 뒤의 재시작은 기존 수집 경로로 다시 TAGO를 조회합니다.
+키가 없으면 오래된 DB 스냅샷도 백그라운드 갱신 없이 그대로 사용합니다. 내장 스냅샷 파일이 없거나 계약을
+어기면 `503`으로 닫습니다. 화면 목록에서는 광운대·노량진·신도림·
 서빙고·왕십리·옥수를 제외하고 KORAIL 역 안내의 서울·수서·대전·부산 sentinel을 검증합니다.
 이름 등가와 검토된 identity 보정 정책도 애플리케이션 스냅샷 schema의 일부입니다. schema version 4와
 migration `0041`의 새 행 기본값은 이전 누락 snapshot을 무효화해 다음 요청에서 두 원천을 다시 수집합니다.
 기존 행의 version은 억지로 올리지 않아 보정 전 payload를 새 정책으로 잘못 재사용하지 않습니다.
+
+내장 스냅샷은 실행 중인 설치의 `station_catalog_cache` 행을 읽기 전용으로 내보낸 JSON에서
+`scripts/build_bundled_station_catalog.py`로 다시 만듭니다. 스크립트는 노드 ID 중복, 화면 목록 ⊆ 조회
+identity, 빈 목록, TAGO·KORAIL 역 안내 출처와 수집 시각을 검증한 뒤에만 파일을 바꾸며, 내보내기 명령은
+스크립트 docstring에 있습니다. station catalog schema version을 올리면 내장 스냅샷도 같은 version으로
+다시 만들어야 하며, 그 전에는 계약 테스트가 실패합니다.
 
 `GET /api/v1/timetables`의 KORAIL·SRT 요청에는 `origin_node_id`와 `destination_node_id`가 모두
 필수입니다. 역명과 ID 쌍을 공식 카탈로그로 검증한 뒤에만 TAGO를 조회하며, 누락·동일 ID·이름 불일치는

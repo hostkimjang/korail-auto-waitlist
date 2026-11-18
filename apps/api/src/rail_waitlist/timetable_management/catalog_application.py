@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,11 @@ from ..domain import Provider
 from ..maintenance.admission import create_admitted_task
 from ..provider_adapters.tago import TagoClient
 from ..provider_contracts import ProviderUnavailable
+from .bundled_station_catalog import (
+    BundledStationCatalog,
+    BundledStationCatalogError,
+    load_bundled_station_catalog,
+)
 from .models import StationCatalogCache
 from .schemas import StationCatalog, StationItem
 from .station_catalog_supplements import apply_reviewed_tago_station_supplements
@@ -31,6 +37,8 @@ REFRESH_LEASE = timedelta(seconds=75)
 COLLECTION_TIMEOUT_SECONDS = 60.0
 INITIAL_WAIT_SECONDS = 65.0
 OTHER_OWNER_POLL_SECONDS = 0.05
+
+LOGGER = logging.getLogger(__name__)
 
 _station_list_adapter = TypeAdapter(list[StationItem])
 
@@ -244,12 +252,39 @@ def _catalog_from_snapshot(snapshot: StationCatalogSnapshot, provider: Provider)
         retrieved_at=snapshot.retrieved_at,
         catalog_scope="intercity_station_guide_intersection",
         provider_membership="not_verified_by_source",
+        catalog_origin="collected",
         note=(
             "공개 철도역 식별자 중 일반·고속열차 여정 선택에 적합한 역만 표시합니다. "
             "운영사 소속과 특정 날짜의 정차 여부는 시간표 결과에서 확인합니다."
         ),
         stations=stations,
     )
+
+
+def _catalog_from_bundled(bundled: BundledStationCatalog, provider: Provider) -> StationCatalog:
+    return StationCatalog(
+        provider=provider,
+        source="TAGO",
+        retrieved_at=bundled.retrieved_at,
+        catalog_scope="intercity_station_guide_intersection",
+        provider_membership="not_verified_by_source",
+        catalog_origin="bundled_snapshot",
+        note=(
+            "릴리스에 포함된 검토된 역 목록입니다. 일반·고속열차 여정 선택에 적합한 역만 "
+            "표시하며, 운영사 소속과 특정 날짜의 정차 여부는 시간표 결과에서 확인합니다."
+        ),
+        stations=list(bundled.display_stations),
+    )
+
+
+def _bundled_catalog(provider: Provider, reason: str) -> StationCatalog:
+    try:
+        bundled = load_bundled_station_catalog(STATION_CATALOG_SCHEMA_VERSION)
+    except BundledStationCatalogError as error:
+        LOGGER.error("Bundled station catalog is unusable: %s", error)
+        raise ProviderUnavailable("station catalog is unavailable") from None
+    LOGGER.info("Serving bundled station catalog reason=%s", reason)
+    return _catalog_from_bundled(bundled, provider)
 
 
 def _error_category(error: BaseException) -> str:
@@ -288,19 +323,25 @@ class StationCatalogService:
 
     async def get_catalog(self, provider: Provider) -> StationCatalog:
         snapshot = await self.repository.load_snapshot()
+        tago_configured = self.tago_client.service_key_configured()
         if snapshot is not None:
             self._hydrate(snapshot)
-            if not snapshot.is_fresh:
+            if not snapshot.is_fresh and tago_configured:
                 await self._start_refresh()
             return _catalog_from_snapshot(snapshot, provider)
+        if not tago_configured:
+            # Without a key every collection fails before reaching TAGO; serve the reviewed
+            # snapshot without taking the refresh lease or recording a failure.
+            return _bundled_catalog(provider, "tago_not_configured")
 
-        task = await self._start_refresh()
         try:
+            task = await self._start_refresh()
             snapshot = await asyncio.wait_for(asyncio.shield(task), INITIAL_WAIT_SECONDS)
-        except TimeoutError:
+        except (TimeoutError, ProviderUnavailable):
             snapshot = None
         if snapshot is None:
-            raise ProviderUnavailable("station catalog is unavailable")
+            # The bundled snapshot is never persisted, so the next request still retries TAGO.
+            return _bundled_catalog(provider, "collection_unavailable")
         self._hydrate(snapshot)
         return _catalog_from_snapshot(snapshot, provider)
 
@@ -308,7 +349,9 @@ class StationCatalogService:
         snapshot = await self.repository.load_snapshot()
         if snapshot is not None:
             self._hydrate(snapshot)
-        if snapshot is None or not snapshot.is_fresh:
+        if self.tago_client.service_key_configured() and (
+            snapshot is None or not snapshot.is_fresh
+        ):
             await self._start_refresh()
 
     async def _start_refresh(self) -> asyncio.Task[StationCatalogSnapshot | None]:

@@ -257,7 +257,62 @@ describe("station catalog API boundary", () => {
 
     await expect(fetchStations(["KORAIL"])).resolves.toMatchObject({
       stations: [{ nodeId: "MOCK-N1", name: "서울" }],
-      catalogs: [{ source: "mock", catalogScope: "mock", providerMembership: "mock" }],
+      catalogs: [{
+        source: "mock",
+        catalogScope: "mock",
+        providerMembership: "mock",
+        catalogOrigin: "mock",
+      }],
     });
+  });
+
+  it("keeps the bundled snapshot origin and treats older responses as collected catalogs", async () => {
+    const seoul = { node_id: "N1", name: "서울", city_code: "11", city_name: "서울" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const provider = new URL(String(input), "https://railwait.local").searchParams.get("provider");
+      return provider === "korail"
+        ? jsonResponse({
+          ...catalog("korail", [seoul]),
+          retrieved_at: "2026-11-18T12:35:53.649310+00:00",
+          catalog_origin: "bundled_snapshot",
+        })
+        : jsonResponse(catalog("srt", [seoul]));
+    }));
+
+    const result = await fetchStations(["SRT"]);
+
+    expect(result.catalogs.map(({ provider, catalogOrigin, retrievedAt }) => (
+      { provider, catalogOrigin, retrievedAt }
+    ))).toEqual([
+      {
+        provider: "KORAIL",
+        catalogOrigin: "bundled_snapshot",
+        retrievedAt: "2026-11-18T12:35:53.649310+00:00",
+      },
+      { provider: "SRT", catalogOrigin: "collected", retrievedAt: "2026-08-04T00:00:00Z" },
+    ]);
+    expect(result.stations).toMatchObject([{ nodeId: "N1", sources: ["TAGO"] }]);
+  });
+
+  it.each([
+    ["an unknown origin", { catalog_origin: "live" }],
+    ["an empty origin", { catalog_origin: null }],
+    ["a mock origin for official data", { catalog_origin: "mock" }],
+    [
+      "a collected origin for mock data",
+      {
+        source: "mock",
+        catalog_scope: "mock",
+        provider_membership: "mock",
+        catalog_origin: "collected",
+      },
+    ],
+  ])("rejects %s instead of guessing the catalog provenance", async (_label, overrides) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      ...catalog("korail", [{ node_id: "N1", name: "서울", city_code: "11", city_name: "서울" }]),
+      ...overrides,
+    })));
+
+    await expect(fetchStations(["KORAIL"])).rejects.toThrow("역 목록 응답 형식");
   });
 });

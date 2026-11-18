@@ -750,6 +750,28 @@ describe("NewWaitPage behavior", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
 
+  it("labels the server's bundled station snapshot with its collection date", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {
+      const parsed = requestUrl(url);
+      if (parsed.pathname.endsWith("/stations")) {
+        return response({
+          ...stationCatalog(parsed.searchParams.get("provider")),
+          retrieved_at: "2026-11-18T12:35:53.649310+00:00",
+          catalog_origin: "bundled_snapshot",
+        });
+      }
+      return response([]);
+    }));
+
+    render(<OwnedNewWait demo={false} onComplete={vi.fn()} onCancel={vi.fn()} />);
+
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toMatch(/^기본 제공 역 목록 \d+개를 불러왔습니다\./);
+    expect(note.textContent).toContain("2026년 11월 18일 기준 목록");
+    expect(note.textContent).not.toContain("TAGO");
+    expect(inputElement(screen.getByRole("combobox", { name: "출발역" })).disabled).toBe(false);
+  });
+
   it("searches supplied stations with the combobox keyboard and swaps the route", async () => {
     const user = userEvent.setup();
     render(<OwnedNewWait demo onComplete={vi.fn()} onCancel={vi.fn()} />);

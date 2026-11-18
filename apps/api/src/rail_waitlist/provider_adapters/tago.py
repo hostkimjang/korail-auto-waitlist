@@ -86,6 +86,10 @@ class TagoClient:
             retrieved_at=retrieved_at,
         )
 
+    def service_key_configured(self) -> bool:
+        """Report whether upstream TAGO calls are possible without exposing the key."""
+        return bool(self.settings.tago_key())
+
     async def _request_page(
         self, operation: str, params: dict[str, Any], page_no: int, num_rows: int
     ) -> TagoPage:

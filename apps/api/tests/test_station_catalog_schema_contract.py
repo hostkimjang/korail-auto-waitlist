@@ -78,6 +78,7 @@ def test_station_schema_shape_base_and_nested_identity_are_preserved() -> None:
         "provider_membership",
         "note",
         "stations",
+        "catalog_origin",
     ]
     assert get_args(schemas.StationCatalog.model_fields["stations"].annotation) == (
         schemas.StationItem,
@@ -85,7 +86,14 @@ def test_station_schema_shape_base_and_nested_identity_are_preserved() -> None:
     assert schemas.StationItem.model_config["from_attributes"] is True
     assert schemas.StationCatalog.model_config["from_attributes"] is True
     assert all(field.is_required() for field in schemas.StationItem.model_fields.values())
-    assert all(field.is_required() for field in schemas.StationCatalog.model_fields.values())
+    # catalog_origin was added with a default so older producers and clients stay compatible.
+    assert all(
+        field.is_required()
+        for name, field in schemas.StationCatalog.model_fields.items()
+        if name != "catalog_origin"
+    )
+    assert not schemas.StationCatalog.model_fields["catalog_origin"].is_required()
+    assert schemas.StationCatalog.model_fields["catalog_origin"].default == "collected"
 
 
 def test_station_schema_json_fingerprint_is_preserved() -> None:
@@ -136,6 +144,12 @@ def test_station_schema_json_fingerprint_is_preserved() -> None:
     assert catalog_schema["properties"]["note"]["minLength"] == 1
     assert catalog_schema["properties"]["note"]["maxLength"] == 240
     assert catalog_schema["properties"]["stations"]["items"] == {"$ref": "#/$defs/StationItem"}
+    assert catalog_schema["properties"]["catalog_origin"]["enum"] == [
+        "collected",
+        "bundled_snapshot",
+        "mock",
+    ]
+    assert catalog_schema["properties"]["catalog_origin"]["default"] == "collected"
     assert catalog_schema["required"] == [
         "provider",
         "source",
@@ -160,6 +174,7 @@ def test_station_catalog_wire_timezone_and_attribute_contracts_are_preserved() -
         "provider_membership": "not_verified_by_source",
         "note": "공개 역 식별자와 표시 허용 목록의 교집합입니다.",
         "stations": [station_payload()],
+        "catalog_origin": "collected",
     }
 
     from_attributes = schemas.StationItem.model_validate(
@@ -196,6 +211,10 @@ def test_station_item_rejects_existing_length_violations(payload: dict[str, obje
         {"provider_membership": "verified"},
         {"note": ""},
         {"note": "x" * 241},
+        {"catalog_origin": "unknown"},
+        {"catalog_origin": "mock"},
+        {"source": "mock", "catalog_scope": "mock", "provider_membership": "mock"},
+        {"catalog_origin": "bundled_snapshot", "catalog_scope": "all_tago_train_stations"},
     ],
 )
 def test_station_catalog_rejects_existing_literal_and_note_violations(

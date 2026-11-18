@@ -228,8 +228,18 @@
   `ubuntu-24.04-arm`)에서 digest로만 올린 뒤 `images-merge`가 두 CPU index에 커밋 태그를 붙임. 서명하는 `bundle`은 세
   검증·CLI·이미지 병합이 모두 성공해야 시작(서명 경계 유지). `dry_run` 입력 추가: 검토 브랜치 허용, 저장소 서명 키
   대신 작업 안에서 만든 일회용 키, 게시 생략. actionlint 1.7.12(shellcheck 0.11.0) 통과, 작업 의존 관계 확인
-- [ ] 검토 브랜치 dry run 전체 통과와 소요 시간 측정
+- [x] 검토 브랜치 dry run 전체 통과(run 44336500280, 커밋 `8e11dda`, 전체 13.6분): 입력 확인 0.5분, 이미지 8개 빌드와
+  병합이 시작 3.1분 만에 끝남(browser 이미지 amd64 2.2분·arm64 1.8분), `verify-api` 6.7분·`verify-stack` 6.9분, 서명
+  0.6분, 두 CPU smoke 1.4분, 게시는 건너뜀. `verify-web`이 Playwright 설치에서 apt 미러 지연으로 8분을 기다려 최장
+  경로가 됨(지연이 없던 두 검증 기준 약 9.5분). 병합 index에 linux/amd64·arm64와 각 attestation이 있고 익명 조회됨.
+  서명 공개키가 일회용 `vSiZ…PRE=`이며 최신 Release는 `v1.4.5` 그대로
 - [ ] 다음 정식 릴리스에서 게시까지 걸린 시간 확인
+- [ ] 후속 후보: GitHub 러너의 Ubuntu apt 미러가 간헐적으로 느려 Playwright `--with-deps` 설치가 최장 경로가 됨(1.4.5
+  릴리스에서 32.1MB를 9분 45초, 54.8kB/s). 브라우저 파일은 CDN에서 2초라 브라우저 캐시로는 해결되지 않음. 의존성이
+  들어 있는 Playwright 컨테이너 이미지를 digest로 고정해 웹 검증에 쓰는 방안 검토
+- [ ] 후속 후보: repository-verify에는 릴리스 `verify-api`의 Chrome 사전 실행이 없어 Pydoll 브라우저 시작 시간 초과가
+  재발함(검토 브랜치 CI 44336476402의 `test_pydoll_real_browser_uses_visible_fixture_controls` 1건, 5811 통과). 같은
+  사전 실행을 CI에 넣는 방안 검토
 
 ## 2026년 11월 18~19일 원격 접속을 켠 설치의 로컬 주소 로그인 (v1.4.5)
 

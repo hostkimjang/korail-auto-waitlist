@@ -237,6 +237,9 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  // The web container writes the runtime settings at start. Ask the server every time so a changed
+  // .env applies on the next load instead of after an older cached copy.
+  if (url.pathname === "/runtime-config.js") return;
 
   if (event.request.mode === "navigate") {
     // 온라인 배포 직후에는 새 index와 새 해시 bundle을 한 세대로 받는다. 네트워크가

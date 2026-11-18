@@ -24,6 +24,7 @@ RUN npm run build
 FROM nginx:1.27-alpine
 COPY --from=build /app/dist/client /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --chmod=0755 docker/start.sh /usr/local/bin/railwait-web-start
 EXPOSE 8080
 USER nginx
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/usr/local/bin/railwait-web-start"]

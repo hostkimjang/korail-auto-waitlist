@@ -1,3 +1,5 @@
+import { runtimeSettings } from "./runtimeSettings";
+
 export const KORAIL_OFFICIAL_ENTRY_URL =
   "https://www.korail.com/ticket/search/general";
 export const KORAIL_OFFICIAL_RESERVATION_URL =
@@ -100,15 +102,18 @@ export function resolveRailDeepLinkConfig(
 }
 
 function browserRailDeepLinkConfig(): RailDeepLinkConfig {
+  // Runtime settings from the web container win over the build, so an official image follows the
+  // install's .env. A setting the container did not provide keeps its build-time value.
+  const runtime = runtimeSettings();
   return resolveRailDeepLinkConfig(
-    import.meta.env.VITE_KORAIL_BOOKING_DEEPLINK_ENABLED,
-    import.meta.env.VITE_KORAIL_BOOKING_VALIDATED_VERSION,
-    import.meta.env.VITE_KORAIL_TICKET_DEEPLINK_ENABLED,
-    import.meta.env.VITE_KORAIL_TICKET_VALIDATED_VERSION,
-    import.meta.env.VITE_SRT_MAIN_DEEPLINK_ENABLED,
-    import.meta.env.VITE_SRT_MAIN_VALIDATED_VERSION,
-    import.meta.env.VITE_SRT_TICKET_DEEPLINK_ENABLED,
-    import.meta.env.VITE_SRT_TICKET_VALIDATED_VERSION,
+    runtime.VITE_KORAIL_BOOKING_DEEPLINK_ENABLED ?? import.meta.env.VITE_KORAIL_BOOKING_DEEPLINK_ENABLED,
+    runtime.VITE_KORAIL_BOOKING_VALIDATED_VERSION ?? import.meta.env.VITE_KORAIL_BOOKING_VALIDATED_VERSION,
+    runtime.VITE_KORAIL_TICKET_DEEPLINK_ENABLED ?? import.meta.env.VITE_KORAIL_TICKET_DEEPLINK_ENABLED,
+    runtime.VITE_KORAIL_TICKET_VALIDATED_VERSION ?? import.meta.env.VITE_KORAIL_TICKET_VALIDATED_VERSION,
+    runtime.VITE_SRT_MAIN_DEEPLINK_ENABLED ?? import.meta.env.VITE_SRT_MAIN_DEEPLINK_ENABLED,
+    runtime.VITE_SRT_MAIN_VALIDATED_VERSION ?? import.meta.env.VITE_SRT_MAIN_VALIDATED_VERSION,
+    runtime.VITE_SRT_TICKET_DEEPLINK_ENABLED ?? import.meta.env.VITE_SRT_TICKET_DEEPLINK_ENABLED,
+    runtime.VITE_SRT_TICKET_VALIDATED_VERSION ?? import.meta.env.VITE_SRT_TICKET_VALIDATED_VERSION,
   );
 }
 

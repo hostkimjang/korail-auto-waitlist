@@ -95,6 +95,7 @@ describe("official Android app handoff", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    delete window.__RAILWAIT_RUNTIME_CONFIG__;
   });
 
   it("builds only the two evidence-backed Korail navigation intents", () => {
@@ -347,5 +348,56 @@ describe("official Android app handoff", () => {
     expect(link.getAttribute("href")).toBe(buildSrtMainIntentUrl(SRT_OFFICIAL_ENTRY_URL));
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("uses the container's runtime settings when the bundle was built without them", async () => {
+    window.__RAILWAIT_RUNTIME_CONFIG__ = {
+      VITE_KORAIL_BOOKING_DEEPLINK_ENABLED: "true",
+      VITE_KORAIL_BOOKING_VALIDATED_VERSION: "7.0.0+70000006",
+    };
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(ANDROID_CHROME_USER_AGENT);
+    const user = userEvent.setup();
+    render(<OfficialHandoff
+      train={{
+        id: "KORAIL:85:2026-08-06T14:11:00+09:00",
+        provider: "KORAIL",
+        name: "KTX 085",
+        origin: "대전",
+        destination: "서울",
+        departure: "14:11",
+      }}
+      onCopy={vi.fn()}
+    />);
+
+    await user.click(screen.getByRole("button", { name: /공식 좌석 확인 전 안내 열기/ }));
+    const dialog = screen.getByRole("dialog");
+    const link = within(dialog).getByRole("link", { name: /공식 앱 또는 홈페이지 열기/ });
+    expect(link.getAttribute("href")).toBe(
+      buildKorailNavigationIntentUrl("booking", KORAIL_OFFICIAL_ENTRY_URL),
+    );
+  });
+
+  it("lets a runtime switch turn off a link that the build enabled", async () => {
+    vi.stubEnv("VITE_KORAIL_BOOKING_DEEPLINK_ENABLED", "true");
+    vi.stubEnv("VITE_KORAIL_BOOKING_VALIDATED_VERSION", "7.0.0+70000006");
+    window.__RAILWAIT_RUNTIME_CONFIG__ = { VITE_KORAIL_BOOKING_DEEPLINK_ENABLED: "false" };
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(ANDROID_CHROME_USER_AGENT);
+    const user = userEvent.setup();
+    render(<OfficialHandoff
+      train={{
+        id: "KORAIL:85:2026-08-06T14:11:00+09:00",
+        provider: "KORAIL",
+        name: "KTX 085",
+        origin: "대전",
+        destination: "서울",
+        departure: "14:11",
+      }}
+      onCopy={vi.fn()}
+    />);
+
+    await user.click(screen.getByRole("button", { name: /공식 좌석 확인 전 안내 열기/ }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByRole("link", { name: /공식 앱 또는 홈페이지 열기/ })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: /공식 페이지 열기/ })).toBeTruthy();
   });
 });

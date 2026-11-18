@@ -163,6 +163,15 @@ services:
       - no-new-privileges:true
     environment:
       TZ: ${TZ:-Asia/Seoul}
+      # Read at container start (apps/web/docker/start.sh), so release images follow .env too.
+      VITE_KORAIL_BOOKING_DEEPLINK_ENABLED: "${VITE_KORAIL_BOOKING_DEEPLINK_ENABLED:-false}"
+      VITE_KORAIL_BOOKING_VALIDATED_VERSION: "${VITE_KORAIL_BOOKING_VALIDATED_VERSION:-}"
+      VITE_KORAIL_TICKET_DEEPLINK_ENABLED: "${VITE_KORAIL_TICKET_DEEPLINK_ENABLED:-false}"
+      VITE_KORAIL_TICKET_VALIDATED_VERSION: "${VITE_KORAIL_TICKET_VALIDATED_VERSION:-}"
+      VITE_SRT_MAIN_DEEPLINK_ENABLED: "${VITE_SRT_MAIN_DEEPLINK_ENABLED:-false}"
+      VITE_SRT_MAIN_VALIDATED_VERSION: "${VITE_SRT_MAIN_VALIDATED_VERSION:-}"
+      VITE_SRT_TICKET_DEEPLINK_ENABLED: "${VITE_SRT_TICKET_DEEPLINK_ENABLED:-false}"
+      VITE_SRT_TICKET_VALIDATED_VERSION: "${VITE_SRT_TICKET_VALIDATED_VERSION:-}"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
       interval: 30s

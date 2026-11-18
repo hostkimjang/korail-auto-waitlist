@@ -392,6 +392,28 @@ describe("service worker app shell performance contract", () => {
     expect(respondWith).not.toHaveBeenCalled();
     expect(worker.fetchRequest).not.toHaveBeenCalled();
   });
+
+  it("leaves the runtime settings script to the network so a changed .env applies on reload", () => {
+    const worker = loadServiceWorker();
+    worker.cachedResponses.set(
+      "https://railwait.test/runtime-config.js",
+      cacheableResponse("stale-runtime-config"),
+    );
+    const respondWith = vi.fn();
+    requireListener(worker.listeners, "fetch")({
+      request: {
+        url: "https://railwait.test/runtime-config.js",
+        method: "GET",
+        mode: "no-cors",
+        destination: "script",
+      },
+      respondWith,
+      waitUntil: vi.fn(),
+    });
+
+    expect(respondWith).not.toHaveBeenCalled();
+    expect(worker.fetchRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("service worker notification click contract", () => {

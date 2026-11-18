@@ -73,7 +73,7 @@ Samsung Internet은 Google Play에서 이 x86_64 AVD에 설치를 시도했지�
 - Android 16/API 36 일반 Chrome 탭의 실제 SRT `공식 결제 열기` 버튼은 새 웹 탭을 만들지 않고 SRT `승차권 확인`으로 전환했습니다.
 - 같은 일반 Chrome 탭에서 당시 코레일 `view=ticket` intent를 사용자 입력 이벤트로 누르면 `com.korail.talk/.MainActivity`로 전환했습니다. 이 검증은 앱 전환만 확인했으며, 이후 `나의 티켓`이 잘못된 목적지임을 확인해 `view=bookedTicket`으로 교체했습니다.
 
-일회성 셸 환경변수로만 QA 이미지를 만들면 다음 Compose build에서 기본값 `false`로 돌아갈 수 있습니다. 현재 장비에서 계속 검증할 값은 `.env`에 기록하고, 빌드 전 effective build args와 빌드 뒤 번들의 검증 버전을 모두 확인합니다. 이미 열려 있던 브라우저 탭은 이전 JavaScript를 계속 실행하므로 재배포 뒤 새로고침하거나 닫고 다시 열어야 합니다.
+일회성 셸 환경변수로만 값을 넣으면 다음 Compose 재생성에서 기본값 `false`로 돌아갈 수 있습니다. 현재 장비에서 계속 검증할 값은 `.env`에 기록합니다. 1.4.8부터 이 값은 웹 컨테이너가 시작할 때 읽어 `/runtime-config.js`로 내보내므로, 재생성 뒤 그 응답에 enabled 값과 검증 버전이 들어갔는지 확인합니다. 이미 열려 있던 브라우저 탭과 실행 중 PWA는 페이지를 연 때의 값을 계속 쓰므로 새로고침하거나 닫고 다시 열어야 합니다.
 
 ## 2026년 8월 8일 코레일 예약목록 목적지 보정
 
@@ -139,6 +139,8 @@ SRT 예매 홈과 승차권 확인 화면을 각각 확인합니다.
 
 경로별 검증을 모두 통과한 값만 실제 배포용 `.env`에 기록합니다. `.env.example`은 앱 업데이트 뒤 이전 검증 결과를 잘못 재사용하지 않도록 항상 모든 경로를 꺼 둡니다.
 
+1.4.8부터 웹 컨테이너가 시작할 때 `.env`의 여덟 값을 읽어 `/runtime-config.js`로 내보내고, 화면은 이 값을 빌드 값보다 우선합니다. 그래서 공식 서명 릴리스 설치도 `.env`를 따르고, 값을 바꾼 뒤 이미지를 다시 빌드하지 않고 `web` 서비스만 다시 만들면 됩니다. CLI 관리형 설치는 웹의 **설정 → 서버 설정 → Android 공식 앱 연결**에서 바꾸면 관리 서비스가 웹 컨테이너 재생성까지 처리합니다. 스위치가 `true`·`false`가 아니거나 버전이 영문·숫자와 `.+_-` 64자 이내가 아니면 그 값을 버리고 웹 컨테이너 로그에 `railwait-web: ignored …`를 남기므로, 그 경로는 꺼진 상태로 동작합니다. Git 설치는 빌드 때도 같은 값을 넣어 두므로, 브라우저가 `/runtime-config.js`를 받지 못한 경우(오프라인)에만 빌드 값으로 동작합니다.
+
 ### 네 경로 전체 QA 설정
 
 현재 기록된 앱 버전에서 코레일+ booking·ticket과 SRT main·ticket을 같은 QA 배포에서 모두 확인할 때는 커밋하지 않는 로컬 `.env`에 다음 값을 사용합니다.
@@ -172,12 +174,12 @@ VITE_SRT_TICKET_DEEPLINK_ENABLED=true
 VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
 ```
 
-코레일 ticket은 `bookedTicket` 제품 버튼, SRT main은 웜 실행 목적 화면, 삼성 인터넷 행렬을 통과하기 전까지 보수적 활성 후보에서 꺼 둡니다. Vite 빌드 입력이므로 값을 바꾸면 전체 이미지를 다시 만듭니다.
+코레일 ticket은 `bookedTicket` 제품 버튼, SRT main은 웜 실행 목적 화면, 삼성 인터넷 행렬을 통과하기 전까지 보수적 활성 후보에서 꺼 둡니다. Git 설치에서 `.env`를 직접 고쳤다면 웹 서비스만 다시 만들고, 응답한 실행 시점 설정을 확인합니다. 이 응답에는 여덟 값만 들어 있습니다.
 
 ```powershell
 docker compose config --quiet
-docker compose build
-docker compose up -d --force-recreate
+docker compose up -d --force-recreate web
+docker compose exec web wget -qO- http://127.0.0.1:8080/runtime-config.js
 ```
 
 PWA는 설치 앱 버전을 감지할 수 없습니다. 앱 업데이트가 확인되면 해당 경로 플래그를 먼저 끄고 새 버전에서 같은 절차를 반복합니다.

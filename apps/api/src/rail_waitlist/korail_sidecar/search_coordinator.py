@@ -94,6 +94,16 @@ class KorailBrowserAutomation:
             inflight.official_queue_entered_at = None
         inflight.progress = progress
 
+    def _notify_query_succeeded(self) -> None:
+        if self._on_query_succeeded is None:
+            return
+        try:
+            self._on_query_succeeded()
+        except Exception:  # noqa: BLE001 -- follow-up bookkeeping never changes a search result.
+            logger.warning(
+                "KORAIL 조회 성공 뒤 후속 처리를 하지 못했습니다 event=query_success_hook_failed"
+            )
+
     def __init__(
         self,
         client: BrowserClient,
@@ -107,9 +117,12 @@ class KorailBrowserAutomation:
         shutdown_cancel_timeout_seconds: float = 10,
         monotonic: Callable[[], float] = time.monotonic,
         provider_cooldown: ProviderCooldown | None = None,
+        on_query_succeeded: Callable[[], None] | None = None,
     ) -> None:
         self._client = client
         self._provider_cooldown = provider_cooldown
+        # Runs after each completed official query, e.g. to retire a stale popup diagnostic.
+        self._on_query_succeeded = on_query_succeeded
         self._cache_ttl_seconds = cache_ttl_seconds
         self._rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
         self._protection_cooldown_seconds = protection_cooldown_seconds
@@ -468,6 +481,7 @@ class KorailBrowserAutomation:
                 provider_call_id,
                 max(0, round((self._monotonic() - started_at) * 1000)),
             )
+            self._notify_query_succeeded()
             return result
         except TimeoutError:
             if query_started:

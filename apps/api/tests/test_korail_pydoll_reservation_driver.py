@@ -555,7 +555,7 @@ async def test_terminal_probe_dismisses_reopened_public_notice_then_reads_fresh_
 
     async def visible(selector: str, *, scope: object = None) -> list[object]:
         nonlocal layer_reads
-        if selector == ".layerWrap.emer_pop":
+        if selector == reservation_driver_module.PUBLIC_NOTICE_PRESENCE_SELECTOR:
             layer_reads += 1
             if late_public_layer and layer_reads == 1:
                 return []

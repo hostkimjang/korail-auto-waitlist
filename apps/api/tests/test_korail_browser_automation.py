@@ -1859,3 +1859,36 @@ async def test_duplicate_visible_station_trigger_fails_closed(
             await client.search(request())
 
     assert raised.value.stage == "station_trigger"
+
+
+async def test_completed_query_runs_the_success_hook_once_and_failures_do_not() -> None:
+    calls: list[str] = []
+    automation = KorailBrowserAutomation(
+        FakeClient(), on_query_succeeded=lambda: calls.append("completed")
+    )
+    first = await automation.search(request())
+    cached = await automation.search(request())
+    assert first == cached
+    # The cached answer did not reach the provider again, so it proves nothing new.
+    assert calls == ["completed"]
+
+    failing = KorailBrowserAutomation(
+        FakeClient(failure=BrowserSourceUnavailable("search_notice_unrecognized")),
+        on_query_succeeded=lambda: calls.append("failed"),
+    )
+    with pytest.raises(BrowserSourceUnavailable):
+        await failing.search(request())
+    assert calls == ["completed"]
+
+
+async def test_failing_success_hook_never_changes_the_search_result(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def broken_hook() -> None:
+        raise RuntimeError("redis-secret-detail")
+
+    automation = KorailBrowserAutomation(FakeClient(), on_query_succeeded=broken_hook)
+    with caplog.at_level(logging.WARNING, logger="rail_waitlist.korail_browser_automation"):
+        assert await automation.search(request()) == result()
+    assert "event=query_success_hook_failed" in caplog.text
+    assert "redis-secret-detail" not in caplog.text

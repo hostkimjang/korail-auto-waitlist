@@ -148,6 +148,20 @@ class OperationUnresolvedNotice(ApiModel):
     ]
     attempts: int = Field(ge=0, le=10)
     shape_summary: str = Field(min_length=1, max_length=400)
+    # Closed browser-side judgement categories; older records without reasons stay valid.
+    reasons: list[
+        Literal[
+            "no_public_evidence",
+            "no_close_control",
+            "ambiguous_close_label",
+            "close_unavailable",
+            "reminder_label_conflict",
+            "input_field",
+            "form_submission",
+            "embedded_frame",
+            "nested_dialog",
+        ]
+    ] = Field(default_factory=list, max_length=9)
 
 
 class OperationProviderCircuit(ApiModel):

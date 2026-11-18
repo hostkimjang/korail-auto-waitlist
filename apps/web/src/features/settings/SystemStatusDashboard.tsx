@@ -12,6 +12,7 @@ import {
   isOperationsSummaryEmpty,
   type OperationsSummary,
   type UnresolvedNoticeCloseMethod,
+  type UnresolvedNoticeReason,
   type UnresolvedNoticeStage,
   type OperationsEntry,
   type OperationsRate,
@@ -208,7 +209,7 @@ const limitationLabels: Record<string, string> = {
   http_and_process_errors_are_not_durably_recorded: "HTTP·프로세스 오류는 이 영속 집계에 포함되지 않습니다.",
   worker_and_scheduler_health_depend_on_redis_heartbeats: "작업 처리·일정 실행 상태는 워커·스케줄러가 Redis에 남기는 heartbeat를 따르며, heartbeat가 없으면 정상으로 추정하지 않습니다.",
   recent_entries_are_sanitized_categories_without_identifiers_or_raw_errors: "최근 기록은 내부 ID·노선·원문 오류를 제외하고 열차와 출발 시각 등 필요한 진행 문맥만 표시합니다.",
-  unresolved_notice_shape_captured: "닫지 못한 공식 창이 있어 그 구조 요약(마지막 관측)을 아래에 표시합니다. 공지 원문은 저장하지 않습니다.",
+  unresolved_notice_shape_captured: "닫지 못한 공식 창의 구조 요약과 자동으로 닫지 않은 이유(마지막 관측)를 아래에 표시합니다. 다음 공식 조회가 성공하면 사라지며 공지 원문은 저장하지 않습니다.",
 };
 const noticeStageLabels: Record<UnresolvedNoticeStage, string> = {
   search_notice_unrecognized: "알 수 없는 창 형태",
@@ -218,10 +219,21 @@ const noticeStageLabels: Record<UnresolvedNoticeStage, string> = {
   search_notice_close_unknown: "창닫기 전달 여부 확인 불가",
 };
 const noticeMethodLabels: Record<UnresolvedNoticeCloseMethod, string> = {
-  strict_close_button: "기존 창닫기 단추",
-  fallback_close_button: "완화 인식 단추",
+  strict_close_button: "기존 공지 틀 판정",
+  fallback_close_button: "변형 공지 판정",
   fallback_escape: "Esc 키 시도",
   none: "닫기 수단 없음",
+};
+const noticeReasonLabels: Record<UnresolvedNoticeReason, string> = {
+  no_public_evidence: "코레일 공지 틀이나 '오늘 그만 보기' 표시가 없는 창",
+  no_close_control: "닫기·창닫기·X 단추를 찾지 못함",
+  ambiguous_close_label: "닫기 단추 이름에 결제·동의 같은 다른 행동이 섞임",
+  close_unavailable: "닫기 단추가 가려졌거나 누를 수 없는 상태",
+  reminder_label_conflict: "체크박스 이름이 '그만 보기'와 다름",
+  input_field: "입력·선택 칸이 있는 창",
+  form_submission: "양식 제출과 연결된 창",
+  embedded_frame: "공지 본문 밖에 다른 화면이 삽입된 창",
+  nested_dialog: "창 안에 다른 창이 겹쳐 있음",
 };
 
 function displayTimestamp(value: string | null): string {
@@ -282,9 +294,14 @@ function UnresolvedNoticeCard({ notice }: { notice: NonNullable<OperationsSummar
       </div>
       <span className="operations-status is-warning">{noticeStageLabels[notice.stage]}</span>
       <p>
-        {noticeMethodLabels[notice.closeMethod]}으로 {notice.attempts}회 닫기 후 미해결 · {" "}
+        {noticeMethodLabels[notice.closeMethod]} · 닫기 {notice.attempts}회 후 미해결 · {" "}
         {notice.observedAt ? "관측 " + displayTimestamp(notice.observedAt) : "관측 시각 확인 불가"}
       </p>
+      {notice.reasons.length > 0 && (
+        <ul className="operations-notice-reasons" aria-label="자동으로 닫지 않은 이유">
+          {notice.reasons.map((reason) => <li key={reason}>{noticeReasonLabels[reason]}</li>)}
+        </ul>
+      )}
       <code className="operations-notice-shape">{notice.shapeSummary}</code>
     </article>
   );

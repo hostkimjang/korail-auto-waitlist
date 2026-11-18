@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import time
@@ -220,9 +221,14 @@ def build_automation(
         allow_fullstack_fixture=allow_fullstack_fixture,
         provider_cooldown=provider_cooldown,
     )
+    # Only the Pydoll client records unresolved popups; a later completed query retires them.
+    notice_observations = (
+        build_notice_observation_writer() if selected_engine is KorailBrowserEngine.PYDOLL else None
+    )
     return KorailBrowserAutomation(
         client,
         provider_cooldown=provider_cooldown,
+        on_query_succeeded=None if notice_observations is None else notice_observations.resolve,
         search_timeout_seconds=float_setting(
             "KORAIL_BROWSER_SEARCH_TIMEOUT_SECONDS", 590, minimum=30, maximum=590
         ),
@@ -245,11 +251,20 @@ def build_automation(
 
 
 def build_notice_observation_writer() -> RedisNoticeObservationWriter | None:
-    """Optional Redis sink for unresolved dialog shapes; unset env keeps diagnostics off."""
+    """Optional Redis sink for unresolved dialog shapes; unset env keeps diagnostics off.
+
+    The browser client records failures and the search coordinator clears them after a
+    completed query, so both must share one writer and its in-process record state.
+    """
 
     url = os.getenv("KORAIL_NOTICE_OBSERVATION_REDIS_URL")
     if not url:
         return None
+    return _notice_observation_writer_for_url(url)
+
+
+@functools.cache
+def _notice_observation_writer_for_url(url: str) -> RedisNoticeObservationWriter:
     from redis import Redis as SyncRedis
 
     try:

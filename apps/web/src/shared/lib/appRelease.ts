@@ -11,8 +11,8 @@ export interface AppRelease {
 }
 
 export const APP_RELEASE: AppRelease = {
-  version: "1.4.0",
-  releasedOn: "2026-11-13",
+  version: "1.4.1",
+  releasedOn: "2026-11-18",
 };
 
 export const CHANGELOG_URL =

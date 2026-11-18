@@ -176,6 +176,32 @@ def test_search_timeout_setting_accepts_only_the_internal_budget_range(monkeypat
             runtime.build_automation(browser_client=browser_client)
 
 
+def test_notice_observation_writer_is_shared_by_recorder_and_resolver(monkeypatch) -> None:
+    class FakeClient:
+        pass
+
+    runtime._notice_observation_writer_for_url.cache_clear()
+    monkeypatch.delenv("KORAIL_NOTICE_OBSERVATION_REDIS_URL", raising=False)
+    assert runtime.build_automation(browser_client=FakeClient())._on_query_succeeded is None
+
+    monkeypatch.setenv("KORAIL_NOTICE_OBSERVATION_REDIS_URL", "redis://127.0.0.1:6399/0")
+    try:
+        writer = runtime.build_notice_observation_writer()
+        assert writer is not None
+        # The client records with the same writer whose in-process state the resolver reads.
+        assert runtime.notice_report_sink_for_client() == writer.record
+        automation = runtime.build_automation(
+            runtime.KorailBrowserEngine.PYDOLL, browser_client=FakeClient()
+        )
+        assert automation._on_query_succeeded == writer.resolve
+        playwright = runtime.build_automation(
+            runtime.KorailBrowserEngine.PLAYWRIGHT_DIRECT_CDP, browser_client=FakeClient()
+        )
+        assert playwright._on_query_succeeded is None
+    finally:
+        runtime._notice_observation_writer_for_url.cache_clear()
+
+
 def test_sidecar_runtime_does_not_reverse_depend_on_http_or_the_compatibility_facade() -> None:
     module_path = (
         Path(__file__).parents[1] / "src" / "rail_waitlist" / "korail_sidecar" / "runtime.py"

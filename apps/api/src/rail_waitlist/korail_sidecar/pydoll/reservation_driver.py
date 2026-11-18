@@ -35,7 +35,11 @@ from .reservation_contracts import (
     KorailReservedSeat,
 )
 from .reservation_protection import classify_reservation_protection, log_reservation_protection
-from .search_notice import MAX_NOTICE_CLOSE_ACTIONS, dismiss_public_search_notices
+from .search_notice import (
+    MAX_NOTICE_CLOSE_ACTIONS,
+    PUBLIC_NOTICE_PRESENCE_SELECTOR,
+    dismiss_public_search_notices,
+)
 from .session_auth_policy import is_korail_session_authenticated
 
 _LOGIN_ROUTE_OFFICIAL_PROBE_INITIAL_BACKOFF_SECONDS = 0.25
@@ -1026,7 +1030,7 @@ class PydollReservationDomDriver:
         if (
             path.rstrip("/") in {"/ticket/search/general", "/ticket/search/list"}
             and attempt.public_notices_dismissed < MAX_NOTICE_CLOSE_ACTIONS
-            and await self._visible_elements(".layerWrap.emer_pop")
+            and await self._visible_elements(PUBLIC_NOTICE_PRESENCE_SELECTOR)
             and await dismiss_public_search_notices(
                 execute_script=lambda script, *, return_by_value: self._execute_script(
                     script,
@@ -1153,7 +1157,7 @@ class PydollReservationDomDriver:
             dialogs
             and path.rstrip("/") in {"/ticket/search/general", "/ticket/search/list"}
             and attempt.public_notices_dismissed < MAX_NOTICE_CLOSE_ACTIONS
-            and await self._visible_elements(".layerWrap.emer_pop")
+            and await self._visible_elements(PUBLIC_NOTICE_PRESENCE_SELECTOR)
             and await dismiss_public_search_notices(
                 execute_script=lambda script, *, return_by_value: self._execute_script(
                     script,

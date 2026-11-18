@@ -3,20 +3,30 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
+from typing import get_args
 
 import pytest
 
 from rail_waitlist import notice_observations
+from rail_waitlist.korail_sidecar.pydoll.search_notice import (
+    FALLBACK_OBSERVE_SCRIPT,
+    OBSERVE_NOTICE_SCRIPT,
+)
 from rail_waitlist.notice_observations import (
     NOTICE_OBSERVATION_KEY,
     NOTICE_OBSERVATION_TTL_SECONDS,
+    NOTICE_REJECTION_REASONS,
+    NOTICE_RESOLVE_RETRY_SECONDS,
     NoticeObservationRecord,
     RedisNoticeObservationReader,
     RedisNoticeObservationWriter,
     UnrecognizedNoticeReport,
     _parse_record,
 )
+from rail_waitlist.operation_summary.schemas import OperationUnresolvedNotice
+from rail_waitlist.operations import _unresolved_notice
 
 
 class FakeSyncRedis:
@@ -24,12 +34,19 @@ class FakeSyncRedis:
         self.values: dict[str, str] = {}
         self.ttls: dict[str, int] = {}
         self.fail = fail
+        self.deletes = 0
 
     def set(self, key: str, value: str, *, ex: int) -> None:
         if self.fail:
             raise notice_observations.RedisError("down")
         self.values[key] = value
         self.ttls[key] = ex
+
+    def delete(self, key: str) -> int:
+        if self.fail:
+            raise notice_observations.RedisError("down")
+        self.deletes += 1
+        return int(self.values.pop(key, None) is not None)
 
 
 class FakeAsyncRedis:
@@ -123,3 +140,90 @@ async def test_reader_returns_the_stored_record_or_none():
     assert missing is None
     broken = await RedisNoticeObservationReader(FakeAsyncRedis(fail=True)).read()
     assert broken is None
+
+
+def test_writer_keeps_only_the_closed_rejection_reasons():
+    redis = FakeSyncRedis()
+    RedisNoticeObservationWriter(redis).record(
+        _report(reasons=("input_field", "홍길동 회원번호", "input_field", "no_close_control"))
+    )
+    stored = json.loads(redis.values[NOTICE_OBSERVATION_KEY])
+    assert stored["reasons"] == ["input_field", "no_close_control"]
+
+
+def test_completed_search_clears_the_record_once_per_failure_episode():
+    redis = FakeSyncRedis()
+    writer = RedisNoticeObservationWriter(redis)
+    # A record may be left by an earlier adapter process, so the first success clears it.
+    redis.values[NOTICE_OBSERVATION_KEY] = "{}"
+    writer.resolve()
+    writer.resolve()
+    assert NOTICE_OBSERVATION_KEY not in redis.values
+    assert redis.deletes == 1
+
+    writer.record(_report())
+    writer.resolve()
+    writer.resolve()
+    assert NOTICE_OBSERVATION_KEY not in redis.values
+    assert redis.deletes == 2
+
+
+def test_resolve_outage_never_raises_and_retries_after_the_backoff():
+    now = [0.0]
+    redis = FakeSyncRedis(fail=True)
+    writer = RedisNoticeObservationWriter(redis, monotonic=lambda: now[0])
+    writer.resolve()
+
+    redis.fail = False
+    redis.values[NOTICE_OBSERVATION_KEY] = "{}"
+    writer.resolve()
+    assert NOTICE_OBSERVATION_KEY in redis.values
+
+    now[0] = NOTICE_RESOLVE_RETRY_SECONDS + 1
+    writer.resolve()
+    assert NOTICE_OBSERVATION_KEY not in redis.values
+
+
+def test_reader_keeps_known_reasons_and_accepts_records_without_them():
+    payload = {
+        "observed_at": "2026-11-17T07:14:18+00:00",
+        "stage": "search_notice_unrecognized",
+        "close_method": "fallback_close_button",
+        "attempts": 0,
+        "shape_summary": "div aria-modal=true dialog evidence=layer+reminder",
+    }
+    legacy = _parse_record(json.dumps(payload))
+    assert legacy is not None
+    assert legacy.reasons == ()
+    current = _parse_record(
+        json.dumps({**payload, "reasons": ["input_field", "unknown_reason", "input_field"]})
+    )
+    assert current is not None
+    assert current.reasons == ("input_field",)
+    assert _parse_record(json.dumps({**payload, "reasons": "input_field"})) is None
+
+
+def test_reason_vocabulary_is_shared_by_browser_script_writer_and_api():
+    emitted = set(
+        re.findall(
+            r"reasons\.push\('([a-z_]+)'\)|reasons: \['([a-z_]+)'\]",
+            OBSERVE_NOTICE_SCRIPT + FALLBACK_OBSERVE_SCRIPT,
+        )
+    )
+    assert {name for pair in emitted for name in pair if name} == set(NOTICE_REJECTION_REASONS)
+    (literal,) = get_args(OperationUnresolvedNotice.model_fields["reasons"].annotation)
+    assert get_args(literal) == NOTICE_REJECTION_REASONS
+
+
+def test_operations_summary_projects_reasons_from_the_record():
+    record = NoticeObservationRecord(
+        observed_at=datetime(2026, 11, 17, 7, 14, tzinfo=UTC),
+        stage="search_notice_unrecognized",
+        close_method="fallback_close_button",
+        attempts=0,
+        shape_summary="div aria-modal=true dialog evidence=none",
+        reasons=("no_public_evidence", "no_close_control"),
+    )
+    notice = _unresolved_notice(record)
+    assert notice is not None
+    assert notice.reasons == ["no_public_evidence", "no_close_control"]

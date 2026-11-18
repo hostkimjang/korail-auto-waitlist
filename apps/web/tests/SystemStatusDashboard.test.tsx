@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SystemStatusDashboard } from "../src/features/settings/SystemStatusDashboard";
 import { mapOperationsSummary } from "../src/features/settings/operationsSummary";
@@ -42,7 +42,7 @@ describe("SystemStatusDashboard", () => {
     expect(screen.queryByText(/https?:\/\/|서울|payload|token|watch-|candidate-/i)).toBeNull();
   });
 
-  it("shows the unresolved popup card with its structural summary", async () => {
+  it("shows the unresolved popup card with its reasons and structural summary", async () => {
     const loader = vi.fn().mockResolvedValue(mapOperationsSummary({
       ...operationsPayload(),
       unresolved_notice: {
@@ -51,13 +51,19 @@ describe("SystemStatusDashboard", () => {
         close_method: "fallback_close_button",
         attempts: 0,
         shape_summary: "div.korailPopup2027 aria-modal=true 1 controls [확인] no risky tags",
+        reasons: ["no_public_evidence", "no_close_control"],
       },
     }));
     render(<SystemStatusDashboard loader={loader} />);
 
     expect(await screen.findByText("닫지 못한 팝업")).toBeTruthy();
     expect(screen.getByText("알 수 없는 창 형태")).toBeTruthy();
-    expect(screen.getByText(/완화 인식 단추으로 0회 닫기 후 미해결/)).toBeTruthy();
+    expect(screen.getByText(/변형 공지 판정 · 닫기 0회 후 미해결/)).toBeTruthy();
+    const reasons = screen.getByRole("list", { name: "자동으로 닫지 않은 이유" });
+    expect(within(reasons).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "코레일 공지 틀이나 '오늘 그만 보기' 표시가 없는 창",
+      "닫기·창닫기·X 단추를 찾지 못함",
+    ]);
     expect(screen.getByText("div.korailPopup2027 aria-modal=true 1 controls [확인] no risky tags")).toBeTruthy();
   });
 

@@ -121,12 +121,25 @@ export type UnresolvedNoticeCloseMethod =
   | "fallback_escape"
   | "none";
 
+/** Closed browser-side judgement categories. Page text never becomes a reason. */
+export type UnresolvedNoticeReason =
+  | "no_public_evidence"
+  | "no_close_control"
+  | "ambiguous_close_label"
+  | "close_unavailable"
+  | "reminder_label_conflict"
+  | "input_field"
+  | "form_submission"
+  | "embedded_frame"
+  | "nested_dialog";
+
 export interface OperationsUnresolvedNotice {
   observedAt: string | null;
   stage: UnresolvedNoticeStage;
   closeMethod: UnresolvedNoticeCloseMethod;
   attempts: number;
   shapeSummary: string;
+  reasons: UnresolvedNoticeReason[];
 }
 
 export interface OperationsSummary {
@@ -198,6 +211,17 @@ const noticeCloseMethods = new Set<UnresolvedNoticeCloseMethod>([
   "fallback_close_button",
   "fallback_escape",
   "none",
+]);
+const noticeReasons = new Set<UnresolvedNoticeReason>([
+  "no_public_evidence",
+  "no_close_control",
+  "ambiguous_close_label",
+  "close_unavailable",
+  "reminder_label_conflict",
+  "input_field",
+  "form_submission",
+  "embedded_frame",
+  "nested_dialog",
 ]);
 const knownLimitations = new Set([
   "http_and_process_errors_are_not_durably_recorded",
@@ -326,6 +350,16 @@ function services(value: unknown): OperationsServiceState[] {
   }));
 }
 
+function isNoticeReason(value: unknown): value is UnresolvedNoticeReason {
+  return typeof value === "string" && noticeReasons.has(value as UnresolvedNoticeReason);
+}
+
+/** Unknown or repeated reasons are dropped; an older payload without reasons stays valid. */
+function unresolvedNoticeReasons(value: unknown): UnresolvedNoticeReason[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.slice(0, 20).filter(isNoticeReason))];
+}
+
 function unresolvedNotice(value: unknown): OperationsUnresolvedNotice | null {
   if (!isRecord(value)) return null;
   if (typeof value.stage !== "string" || !noticeStages.has(value.stage as UnresolvedNoticeStage)) {
@@ -349,6 +383,7 @@ function unresolvedNotice(value: unknown): OperationsUnresolvedNotice | null {
     closeMethod: value.close_method as UnresolvedNoticeCloseMethod,
     attempts: value.attempts,
     shapeSummary: shape,
+    reasons: unresolvedNoticeReasons(value.reasons),
   };
 }
 

@@ -451,6 +451,14 @@
   color: inherit;
 }
 
+.operations-notice-reasons {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 @keyframes operations-shimmer {
   to { background-position: -220% 0; }
 }

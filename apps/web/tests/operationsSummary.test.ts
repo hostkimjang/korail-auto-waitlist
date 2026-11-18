@@ -247,10 +247,37 @@ describe("operations summary API contract", () => {
       closeMethod: "fallback_escape",
       attempts: 1,
       shapeSummary: "div.korailPopup2027 aria-modal=true 1 controls [확인] no risky tags",
+      reasons: [],
     });
     expect(result.unresolvedNotice?.shapeSummary).toContain("aria-modal=true");
     expect(result.limitations).toContain("unresolved_notice_shape_captured");
     expect(result.isPartial).toBe(false);
+  });
+
+  it("keeps only known unresolved notice reasons once each", () => {
+    const result = mapOperationsSummary({
+      ...operationsPayload(),
+      unresolved_notice: {
+        observed_at: "2026-11-17T07:14:18Z",
+        stage: "search_notice_unrecognized",
+        close_method: "fallback_close_button",
+        attempts: 0,
+        shape_summary: "div aria-modal=true dialog evidence=none 1 controls [close] inputs []",
+        reasons: ["no_public_evidence", "brand_new_reason", "no_public_evidence", 7, "input_field"],
+      },
+    });
+
+    expect(result.unresolvedNotice?.reasons).toEqual(["no_public_evidence", "input_field"]);
+    expect(mapOperationsSummary({
+      ...operationsPayload(),
+      unresolved_notice: {
+        stage: "search_notice_unrecognized",
+        close_method: "fallback_close_button",
+        attempts: 0,
+        shape_summary: "x",
+        reasons: "input_field",
+      },
+    }).unresolvedNotice?.reasons).toEqual([]);
   });
 
   it("drops malformed or absent unresolved notice payloads without failing the summary", () => {

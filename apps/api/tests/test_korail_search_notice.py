@@ -628,7 +628,7 @@ async def test_new_public_notice_content_is_closed_using_real_dom(
         await page.close()
 
 
-async def dismiss_fixture_notices(page, *, context="search"):
+async def dismiss_fixture_notices(page, *, context="search", report_unrecognized=None):
     async def execute(script, *, return_by_value):
         assert return_by_value
         return script_result(await page.evaluate(script))
@@ -645,6 +645,7 @@ async def dismiss_fixture_notices(page, *, context="search"):
         sleep=asyncio.sleep,
         timeout_seconds=5,
         context=context,
+        report_unrecognized=report_unrecognized,
     )
 
 
@@ -930,29 +931,25 @@ async def test_strict_and_fallback_dialogs_close_in_any_order_using_real_dom(not
         await page.close()
 
 
-async def test_multiple_close_controls_block_fallback_using_real_dom(notice_browser):
+async def test_equivalent_close_controls_close_the_notice_once_using_real_dom(notice_browser):
     page = await notice_fixture_page(
-        notice_browser, generic_modal_markup("닫기가 둘", extra="<button>닫기</button>")
+        notice_browser,
+        generic_modal_markup(
+            "닫기가 둘",
+            extra='<button aria-label="팝업 닫기" '
+            "onclick=\"this.closest('[role=dialog]').remove()\">×</button>",
+        ),
     )
     try:
         observed = await page.evaluate(FALLBACK_OBSERVE_SCRIPT)
-        assert observed["state"] == "unrecognized"
-        controls = AsyncMock()
-
-        async def execute(script, *, return_by_value):
-            return script_result(await page.evaluate(script))
-
-        with pytest.raises(BrowserSourceUnavailable) as raised:
-            await dismiss_public_search_notices(
-                execute_script=execute,
-                find_controls=controls,
-                monotonic=lambda: 0,
-                sleep=AsyncMock(),
-                timeout_seconds=5,
-            )
-        assert raised.value.stage == "search_notice_unrecognized"
-        controls.assert_not_awaited()
-        assert await page.evaluate("document.querySelectorAll('[role=dialog]').length") == 1
+        assert observed["state"] == "fallback_notice"
+        assert observed["control_count"] == 1
+        await page.evaluate("""() => {window.closeClicks = 0;
+          document.querySelectorAll('button').forEach(node =>
+            node.addEventListener('click', () => window.closeClicks++));}""")
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate("window.closeClicks") == 1
+        assert await page.evaluate("document.querySelectorAll('[role=dialog]').length") == 0
     finally:
         await page.close()
 
@@ -1084,14 +1081,11 @@ async def test_session_passes_notice_reports_to_the_configured_sink(monkeypatch)
 @pytest.mark.parametrize(
     "markup",
     [
-        notice_markup("공지", extra="<button>새 예약</button>"),
-        notice_markup("공지", extra='<a href="/ticket/reservation/list">예약 확인</a>'),
         notice_markup("공지", extra='<input type="checkbox" aria-label="약관 동의">'),
         notice_markup("공지", extra='<input type="checkbox"><span>오늘 그만 보기</span>'),
         notice_markup(
             "공지", extra='<label><input type="checkbox">약관 동의</label><p>오늘 그만 보기</p>'
         ),
-        notice_markup("결제 진행에 동의해 주세요"),
         notice_markup("공지", close="동의하고 닫기"),
         notice_markup("공지", close="결제 후 닫기"),
         notice_markup("공지").replace(">창닫기</button>", ' aria-label="결제">X</button>'),
@@ -1105,9 +1099,6 @@ async def test_session_passes_notice_reports_to_the_configured_sink(monkeypatch)
         generic_modal_markup("공지").replace(
             '<label><input type="checkbox">오늘 그만 보기</label>', ""
         ),
-        generic_modal_markup("공지", extra="<button>확인</button>"),
-        generic_modal_markup("공지", extra='<a href="/ticket/payment">자세히 보기</a>'),
-        generic_modal_markup("공지", extra="<button>처리</button>"),
         generic_modal_markup("공지")
         .replace("<button ", '<a href="/event" ')
         .replace("</button>", "</a>"),
@@ -1123,6 +1114,38 @@ async def test_ambiguous_payment_consent_and_unknown_controls_never_close(notice
         with pytest.raises(BrowserSourceUnavailable):
             await dismiss_fixture_notices(page)
         assert await page.evaluate("window.clicks") == 0
+    finally:
+        await page.close()
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        notice_markup("공지", extra="<button>새 예약</button>"),
+        notice_markup("공지", extra='<a href="/ticket/reservation/list">예약 확인</a>'),
+        notice_markup("결제 진행에 동의해 주세요"),
+        notice_markup("새 설문", extra="<button>설문 참여하기</button>"),
+        generic_modal_markup("공지", extra="<button>확인</button>"),
+        generic_modal_markup("공지", extra='<a href="/ticket/payment">자세히 보기</a>'),
+        generic_modal_markup("공지", extra="<button>처리</button>"),
+        generic_modal_markup("특가", extra='<a href="/ticket/search/general">예매하러 가기</a>'),
+    ],
+)
+@pytest.mark.parametrize("context", ["search", "reservation"])
+async def test_verified_notice_closes_without_pressing_its_other_controls(
+    notice_browser, markup, context
+):
+    # Promotions add calls to action every few weeks. With public-notice evidence and an
+    # unambiguous close, their wording never blocks the search, and they are never pressed.
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        await page.evaluate("""() => {window.otherClicks = 0;
+          document.addEventListener('click', event => {
+            if (event.target.innerText !== '창닫기') window.otherClicks++;
+          }, true);}""")
+        assert await dismiss_fixture_notices(page, context=context)
+        assert await page.locator("[role=dialog]").count() == 0
+        assert await page.evaluate("window.otherClicks") == 0
     finally:
         await page.close()
 
@@ -1240,13 +1263,21 @@ async def test_conflicting_or_unresolved_reminder_labels_never_close(notice_brow
         await page.close()
 
 
-async def test_survey_without_reminder_does_not_escape_strict_rejection(notice_browser):
+async def test_survey_in_known_layer_closes_through_the_fixed_selector(notice_browser):
     page = await notice_fixture_page(
-        notice_browser, notice_markup("새 설문", extra="<button>설문 참여하기</button>")
+        notice_browser,
+        notice_markup(
+            "새 설문",
+            extra='<button onclick="window.surveyClicks=(window.surveyClicks||0)+1">'
+            "설문 참여하기</button>",
+        ),
     )
     try:
-        with pytest.raises(BrowserSourceUnavailable):
-            await dismiss_fixture_notices(page)
+        observed = await page.evaluate(OBSERVE_NOTICE_SCRIPT)
+        assert observed["state"] == "public_search_notice"
+        assert (observed["close_index"], observed["control_count"]) == (1, 2)
+        assert await dismiss_fixture_notices(page)
+        assert await page.evaluate("window.surveyClicks || 0") == 0
     finally:
         await page.close()
 
@@ -1273,6 +1304,212 @@ async def test_fallback_same_layer_new_promotion_is_revalidated(notice_browser):
         await page.evaluate("""() => {document.querySelector('button').onclick = function() {
           document.querySelector('p').textContent = '다음 프로모션';
           this.onclick = () => this.closest('[role=dialog]').remove();};}""")
+        assert await dismiss_fixture_notices(page)
+        assert await page.locator("[role=dialog]").count() == 0
+    finally:
+        await page.close()
+
+
+# Captured 2026-11-17 from www.korail.com/ticket/search/general. The announcement kept the
+# known layer, but its reminder checkbox gained title="1일간 그만보기 선택". Requiring every
+# label to equal the reminder vocabulary rejected it and stopped every KORAIL search.
+LIVE_2026_11_17_NOTICE = """
+<div class="ReactModalPortal">
+  <div class="ReactModal__Overlay ReactModal__Overlay--after-open modal layerPopup m-full"
+    style="position:fixed;inset:0;z-index:9999;overflow:auto;background:rgba(0,0,0,.6)">
+    <div class="ReactModal__Content ReactModal__Content--after-open" tabindex="-1"
+      role="dialog" aria-modal="true"
+      style="position:static;inset:40px;background:none;overflow:auto;padding:20px">
+      <div class="layerWrap emer_pop" style="position:absolute;left:50%;top:40px;
+        transform:translateX(-50%);width:720px;background:white;padding:20px">
+        <div class="pop_content"><p><img alt="철도지하화통합개발 종합계획 공청회"
+          style="display:block;width:680px;height:700px"></p></div>
+        <div class="chkecboxWrap"><input type="checkbox" id="popClose124"
+          title="1일간 그만보기 선택"><label for="popClose124" class="txt">1일간 그만보기</label>
+        </div>
+        <ul class="btnWrap clear"><li><button class="btn_by-blue btn_pop-close"
+          onclick="this.closest('.ReactModalPortal').remove()">창닫기</button></li></ul>
+      </div>
+    </div>
+  </div>
+</div>"""
+
+
+@pytest.mark.parametrize("context", ["search", "reservation"])
+async def test_live_notice_with_decorated_reminder_title_is_closed_using_real_dom(
+    notice_browser, context
+):
+    page = await notice_fixture_page(notice_browser, LIVE_2026_11_17_NOTICE)
+    try:
+        script = OBSERVE_NOTICE_SCRIPT if context == "search" else RESERVATION_NOTICE_SCRIPT
+        assert (await page.evaluate(script))["state"] == "public_search_notice"
+        await page.evaluate("""() => {window.checkboxChanges = 0; window.otherClicks = 0;
+          document.addEventListener('change', () => window.checkboxChanges++);
+          document.addEventListener('click', event => {
+            if (event.target.innerText !== '창닫기') window.otherClicks++;
+          }, true);}""")
+        assert await dismiss_fixture_notices(page, context=context)
+        assert await page.evaluate(script) == "absent"
+        assert await page.evaluate("window.checkboxChanges") == 0
+        assert await page.evaluate("window.otherClicks") == 0
+    finally:
+        await page.close()
+
+
+@pytest.mark.parametrize(
+    ("label", "attributes"),
+    [
+        ("1일간 그만보기", 'title="1일간 그만보기 선택"'),
+        ("오늘 하루 보지 않기", ""),
+        ("오늘 하루 이 창을 열지 않음", ""),
+        ("7일간 보지 않기", 'title="7일간 보지 않기 체크"'),
+        ("일주일 동안 다시 보지 않기", ""),
+        ("[오늘 그만 보기]", 'aria-label="오늘 그만 보기 선택"'),
+    ],
+)
+async def test_reminder_wording_variants_prove_a_public_notice(notice_browser, label, attributes):
+    markup = generic_modal_markup("새 프로모션").replace(
+        '<label><input type="checkbox">오늘 그만 보기</label>',
+        f'<label><input type="checkbox" {attributes}>{label}</label>',
+    )
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        assert (await page.evaluate(FALLBACK_OBSERVE_SCRIPT))["state"] == "fallback_notice"
+        assert await dismiss_fixture_notices(page)
+        assert await page.locator("[role=dialog]").count() == 0
+    finally:
+        await page.close()
+
+
+@pytest.mark.parametrize("label", ["이메일 수신 동의", "자세히 보기", "오늘 하루 보기"])
+async def test_other_checkbox_wording_is_reported_with_closed_reasons(notice_browser, label):
+    markup = generic_modal_markup("새 프로모션").replace("오늘 그만 보기", label)
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        observed = await page.evaluate(FALLBACK_OBSERVE_SCRIPT)
+        assert observed["state"] == "unrecognized"
+        assert observed["reasons"] == ["no_public_evidence", "reminder_label_conflict"]
+        reports = []
+        with pytest.raises(BrowserSourceUnavailable):
+            await dismiss_fixture_notices(page, report_unrecognized=reports.append)
+        assert reports[-1].reasons == ("no_public_evidence", "reminder_label_conflict")
+        assert label.replace(" ", "") not in reports[-1].shape_summary.replace(" ", "")
+        assert await page.locator("[role=dialog]").count() == 1
+    finally:
+        await page.close()
+
+
+async def test_rejection_reasons_reach_the_report_without_page_text(notice_browser):
+    page = await notice_fixture_page(
+        notice_browser,
+        notice_markup("회원번호 1234 안내", extra='<input type="text" value="private-value">'),
+    )
+    try:
+        reports = []
+        with pytest.raises(BrowserSourceUnavailable) as raised:
+            await dismiss_fixture_notices(page, report_unrecognized=reports.append)
+        assert raised.value.stage == "search_notice_unrecognized"
+        assert reports[-1].reasons == ("input_field",)
+        summary = reports[-1].shape_summary
+        assert "evidence=layer" in summary
+        assert "inputs [field]" in summary
+        assert "1234" not in summary
+        assert "private" not in summary
+    finally:
+        await page.close()
+
+
+async def test_unknown_reason_values_never_reach_reports():
+    reports = []
+    with pytest.raises(BrowserSourceUnavailable):
+        await dismiss_public_search_notices(
+            execute_script=AsyncMock(
+                return_value=script_result(
+                    {
+                        "state": "unrecognized",
+                        "shape": "div aria-modal=true dialog evidence=none 0 controls []",
+                        "reasons": ["input_field", "홍길동 010-0000-0000", "input_field", 7],
+                    }
+                )
+            ),
+            find_controls=AsyncMock(),
+            monotonic=lambda: 0,
+            sleep=AsyncMock(),
+            timeout_seconds=5,
+            report_unrecognized=reports.append,
+        )
+    assert reports[-1].reasons == ("input_field",)
+
+
+NON_ARIA_LAYER = """
+<div class="popup-layer" style="position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.5)">
+  <div class="popup-panel" style="position:absolute;left:200px;top:120px;width:480px;
+    background:white;padding:16px">
+    <p>새 형식의 공지</p>
+    <label><input type="checkbox">오늘 하루 보지 않기</label>
+    CLOSE
+  </div>
+</div>"""
+
+
+async def test_covering_layer_without_dialog_role_is_closed_from_its_reminder(notice_browser):
+    markup = NON_ARIA_LAYER.replace(
+        "CLOSE", "<button onclick=\"this.closest('.popup-layer').remove()\">닫기</button>"
+    )
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        assert (await page.evaluate(OBSERVE_NOTICE_SCRIPT))["state"] == "unrecognized"
+        assert (await page.evaluate(FALLBACK_OBSERVE_SCRIPT))["state"] == "fallback_notice"
+        assert await dismiss_fixture_notices(page)
+        assert await page.locator(".popup-layer").count() == 0
+    finally:
+        await page.close()
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        # A fixed banner beside the search form does not block it and stays untouched.
+        '<div style="position:fixed;left:0;right:0;bottom:0;height:56px;z-index:5;'
+        'background:#eee"><label><input type="checkbox">오늘 하루 보지 않기</label>'
+        "<button>닫기</button></div>",
+        # A covering layer without a verified close is left to the caller's own checks.
+        NON_ARIA_LAYER.replace("CLOSE", "<button>설문 참여</button>"),
+    ],
+)
+async def test_unannounced_layers_stay_untouched_unless_verified(notice_browser, markup):
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        await page.evaluate(
+            "() => {window.clicks=0; document.addEventListener('click', () => window.clicks++);}"
+        )
+        assert await page.evaluate(FALLBACK_OBSERVE_SCRIPT) == "absent"
+        assert await dismiss_fixture_notices(page) is False
+        assert await page.evaluate("window.clicks") == 0
+    finally:
+        await page.close()
+
+
+@pytest.mark.parametrize(
+    "close",
+    [
+        '<button class="btn_close" onclick="this.closest(\'[role=dialog]\').remove()"></button>',
+        "<button onclick=\"this.closest('[role=dialog]').remove()\">"
+        '<img alt="닫기" width="16" height="16"></button>',
+        '<a href="#" onclick="this.closest(\'[role=dialog]\').remove(); return false;">닫기</a>',
+        '<a href="javascript:void(0)" onclick="this.closest(\'[role=dialog]\').remove()">'
+        "팝업 닫기</a>",
+        "<script>function closePop() {document.querySelector('[role=dialog]').remove();}</script>"
+        '<a href="javascript:closePop();">닫기</a>',
+    ],
+)
+async def test_icon_and_non_navigating_anchor_closes_are_recognized(notice_browser, close):
+    markup = generic_modal_markup("새 프로모션").replace(
+        "<button onclick=\"this.closest('[role=dialog]').remove()\">창닫기</button>", close
+    )
+    page = await notice_fixture_page(notice_browser, markup)
+    try:
+        assert (await page.evaluate(FALLBACK_OBSERVE_SCRIPT))["state"] == "fallback_notice"
         assert await dismiss_fixture_notices(page)
         assert await page.locator("[role=dialog]").count() == 0
     finally:

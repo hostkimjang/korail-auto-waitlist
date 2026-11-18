@@ -608,6 +608,7 @@ def _unresolved_notice(record: NoticeObservationRecord | None) -> OperationUnres
         close_method=record.close_method,
         attempts=record.attempts,
         shape_summary=record.shape_summary,
+        reasons=list(record.reasons),
     )
 
 

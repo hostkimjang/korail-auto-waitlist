@@ -366,7 +366,7 @@ def test_provider_failure_owner_move_does_not_change_openapi() -> None:
     assert schema["paths"]["/api/v1/seat-status/status"]["get"]["description"] == (
         "Expose every hold that prevents seat I/O, including authentication protection."
     )
-    assert len(encoded) == 93254
+    assert len(encoded) == 93522
     assert hashlib.sha256(encoded).hexdigest() == (
-        "a04ffb747e6aef9c745750f7a15f841a931ac7c6612090b7924ebf83a088abbe"
+        "6e4811c68c5f9d85a4ead715332332537dad95988141ac881539b7ab57c56047"
     )

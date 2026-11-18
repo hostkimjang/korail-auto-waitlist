@@ -40,6 +40,24 @@ describe("system update", () => {
     expect(posts).toHaveLength(1);
     expect(JSON.parse(String(posts[0]?.[1]?.body))).toMatchObject({ target_release_id: "1.4.0", plan_id: payload.plan_id, idempotency_key: expect.stringMatching(/^[a-f0-9]{32}$/) });
   });
+  it.each([
+    ["untrusted or missing Origin", /지금 접속한 주소는 서버가 허용한 접속 주소가 아니어서/],
+    ["CSRF validation failed", /보안 확인 값이 만료되었습니다/],
+  ])("keeps a rejected update request visible after the follow-up refresh (%s)", async (detail, message) => {
+    const user = userEvent.setup();
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, options) =>
+      options?.method === "POST" ? response({ detail }, 403) : response(payload));
+    render(<SystemUpdateSettings demo={false} />);
+    const update = await screen.findByRole("button", { name: "v1.4.0 업데이트" });
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(update);
+    // The failed submission refreshes the update information. That successful refresh used to erase
+    // the rejection, so the button looked unresponsive.
+    await waitFor(() => expect(fetcher.mock.calls.filter((call) => call[1]?.method !== "POST")).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(fetcher.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(1);
+  });
   it("shows actionable legacy installation state without a failing button", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(response({ detail: "Not Found" }, 404));
     render(<SystemUpdateSettings demo={false} />);

@@ -217,6 +217,18 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 18일 로컬 설치 한 번에 업데이트와 Windows CLI 테스트 수정 (v1.4.2)
+
+- [x] `scripts/update-local-install.sh` 추가: 커밋 고정 worktree, 화면 버전·CHANGELOG·설치 버전·DB revision 사전
+  확인, Compose build 정의대로 작업 전용 태그 빌드, 빌드하지 않는 이미지 존재 확인, 일회성 키 서명 패키지(서명 직후
+  개인키 삭제), Docker 안 Go로 같은 커밋 CLI 빌드, 계획·적용, 새 CLI status·HTTP 3종·web 화면 파일 버전 확인,
+  선택 KORAIL 공개 조회. 적용 실패·중단 때는 새 CLI·패키지를 남기고 그 밖에는 worktree·작업 폴더 정리. macOS bash 3.2 문법 확인
+- [x] 사전 실패 경로: 없는 경로, 설치 기록 없음, 설치본과 같은 1.4.1 차단 뒤 worktree·작업 폴더 잔여 0 확인
+- [x] Windows CLI 테스트 3건: SDDL이 CI 계정 SID를 `LA` 별칭으로 쓰는 차이를 기대값도 같은 변환으로 맞춰 비교하고,
+  macOS 앱·Docker 경로를 `path`로 계산. gofmt·vet·race 전체, Windows vet·테스트 컴파일, 6대상 빌드 통과
+- [ ] GitHub Actions windows-latest CLI 테스트 통과
+- [ ] 관리형 설치(18080)에 스크립트로 1.4.2 적용과 상태·조회 확인
+
 ## 2026년 11월 17일 공지 팝업 화면 기준 판정과 거부 사유 표시 (v1.4.1)
 
 - [x] 원인 확인: 1.4.0 관리형 설치의 KORAIL 조회 3건이 모두 `search_notice_unrecognized`. 로그인 없는 로컬 Chrome으로
@@ -514,6 +526,8 @@ Windows·macOS·Linux를 함께 구현했으며, 실제 OS 지원 검증과 공�
 - [ ] Windows·macOS Docker Desktop 새 설치·실제 서비스 등록·로그인/재부팅·실패 복구 검증
 - [ ] Linux 두 CPU의 실제 공개 릴리스 설치·업데이트 통합 검증과 원격 CI 성공
 - [ ] 서명 secret·공개 GHCR·정식 CLI 6종·안정 릴리스 게시 (이번 작업에서 게시하지 않음)
+- [ ] 공식 릴리스로 설치한 구버전에서 웹 **앱 업데이트** 버튼으로 새 버전 적용 확인. 정식 릴리스 두 개(구버전 설치 뒤
+  `compatible_from`에 구버전을 넣은 새 버전 게시)가 필요하다. 로컬 패키지 설치는 이 버튼을 의도적으로 막는다
 - [x] 현재 experimental-rail 전체 프로필 최종 재빌드·강제 재생성, 12서비스 healthy·migration/log-init exit 0·실행 이미지/최종 API 소스 일치·시작 traceback 0 확인
 - [x] 작업용 Go SDK·테스트 바이너리·IPC 임시 상태·백업 테스트 컨테이너/볼륨/네트워크/이미지·검증 서버 정리 및 잔여 없음 확인
 - [x] CLI README·운영 가이드·아키텍처·설계 문서에 현재 구현과 남은 제약 구분

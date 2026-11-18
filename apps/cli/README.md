@@ -134,6 +134,20 @@ DB revision·설정 schema·PostgreSQL·Redis 이미지·서비스 구성이 현
 서비스가 기록과 달라 계획이 차단되므로, 먼저 기록된 이미지로 되돌려 `railwait status`가 healthy인지 확인합니다.
 Windows에서 백신·색인 프로그램이 보존 패키지 폴더를 잡고 있을 때의 폴더 교체는 아직 실기기에서 확인하지 않았습니다.
 
+저장소의 커밋을 로컬 패키지 설치에 반영할 때는 macOS·Linux에서
+`bash scripts/update-local-install.sh --path <설치 경로>`로 위 과정을 한 번에 실행합니다. 스크립트는 지정한
+커밋(`--ref`, 기본 `HEAD`)을 임시 worktree로 꺼내 화면 버전과 `CHANGELOG.md` 맨 위가 같고 설치된 버전보다 높은지,
+DB revision이 같은지 먼저 확인합니다. 그다음 Compose의 build 정의대로 앱 이미지를
+`railwait-local-install-<이름>:<버전>` 태그로 빌드하고, 빌드하지 않는 이미지가 Docker에 있는지 확인한 뒤 일회성
+키로 서명한 로컬 패키지를 만듭니다. 개인키는 서명 직후 지웁니다. 같은 커밋의 CLI를 Docker 안의 Go로 빌드해
+계획을 확인하고 적용한 다음, 새 CLI의 `status`, `/healthz`·`/readyz`·`/` 응답, web 컨테이너 화면 파일의 버전을
+확인합니다. `--dry-run`은 계획 확인까지만 하고, `--korail-smoke`는 적용 뒤 설치된 KORAIL 어댑터로 로그인·예약 없는
+공개 좌석 조회를 한 번 실행합니다. 끝나면 임시 worktree와 작업 폴더를 지우고, 적용이 실패하거나 중단되면 작업
+기록을 확인할 새 CLI와 패키지를 남겨 경로를 알려 줍니다. uv(Python 3.12 실행)와 Docker가 필요하며 uv 경로는
+`UV` 환경변수로 지정할 수 있습니다. 웹 빌드 인자는 `.env`를 읽지 않고 Dockerfile 기본값을 씁니다. 이 값은
+Compose 기본값과 같습니다. 커밋하지 않은 변경은 들어가지 않고, 이전 버전 이미지는 되돌리기용으로 남겨 자동으로
+지우지 않습니다.
+
 설치는 지정한 로컬 Docker context를 검사하고 실제 socket/pipe 주소를 고정합니다. 원격 context와
 기존 설치 파일·동일 프로젝트 자원은 차단합니다. `--docker-context`를 생략한 대화형 새 설치는 현재
 로컬 context를 확인해 사용합니다. 비대화형 새 설치는 기존과 같이 `default`를 사용합니다.

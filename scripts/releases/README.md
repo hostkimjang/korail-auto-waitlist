@@ -78,6 +78,8 @@ python scripts/releases/build_local_package.py \
 API를 선택한다. 같은 원본 API를 쓰는 worker·migration·SRT sidecar도 같은 이미지를 사용한다.
 새 코드를 검증하려면 기존 `:local`을 덮어쓰지 않고 작업 전용 이름으로 별도 빌드한 뒤 선택한다.
 출력 경로와 공개키 경로는 기존 파일을 덮어쓰지 않는다. 실패하면 이번 실행이 만든 불완전 패키지만 정리한다.
+로컬 패키지 설치를 저장소 커밋으로 업데이트할 때는 `scripts/update-local-install.sh`가 이 생성기를 호출한다.
+커밋별 임시 worktree에서 작업 전용 태그로 빌드한 이미지, 일회성 서명키, 임시 출력 경로를 쓰고 적용 뒤 정리한다.
 
 패키지는 다음 네 파일로 구성된다.
 

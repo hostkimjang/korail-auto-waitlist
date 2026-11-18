@@ -13,6 +13,7 @@
 
 - Node.js 22
 - Python 3.12와 `uv`
+- Go 1.27 이상 (설치 CLI `apps/cli`를 바꿀 때)
 - Docker Engine 또는 Docker Desktop + Compose v2
 - Chromium을 사용하는 테스트에는 Playwright 브라우저 설치가 필요합니다.
 
@@ -53,8 +54,10 @@ API 개발과 전체 실행 방법은 [apps/api/README.md](apps/api/README.md)�
 사용자가 화면에서 최신 배포를 받았는지 확인할 수 있도록, 사용자에게 보이는 변경을 배포할 때는 버전을 함께 올립니다.
 
 1. `apps/web/src/shared/lib/appRelease.ts`의 `APP_RELEASE`에서 `version`과 KST 기준 배포 날짜 `releasedOn`을 갱신합니다.
-2. `CHANGELOG.md` 맨 위에 `## 1.1.0 — 2026-09-19 (토)` 형식으로 항목을 추가하고, 무엇이 달라졌는지 사용자 관점으로 적습니다. 항목 끝에는 `적용할 때:` 줄로 `.env` 새 항목·DB migration 여부와 다시 만들어야 하는 범위를 적어, 서버를 업데이트하는 사람이 `git pull` 뒤 할 일을 알 수 있게 합니다. 이 파일에서 `## `로 시작하는 줄은 릴리스 제목만 쓸 수 있습니다.
+2. `CHANGELOG.md` 맨 위에 `## 1.1.0 — 2026-09-19 (토)` 형식으로 항목을 추가하고, 무엇이 달라졌는지 사용자 관점으로 적습니다. 항목 끝에는 `적용할 때:` 줄로 `.env` 새 항목·DB migration 여부와 다시 만들어야 하는 범위를 적어, 서버를 업데이트하는 사람이 할 일을 알 수 있게 합니다. Git 설치와 로컬 패키지 설치에서 할 일이 다르면 둘 다 적습니다. 이 파일에서 `## `로 시작하는 줄은 릴리스 제목만 쓸 수 있습니다.
 3. `cd apps/web` 후 `npm test`로 두 기록이 일치하는지 확인합니다. 버전·날짜·요일이 어긋나면 `tests/appRelease.test.ts`가 실패합니다.
+4. 커밋한 뒤 로컬 패키지로 설치한 관리형 설치에는 `bash scripts/update-local-install.sh --path <설치 폴더>`로 반영합니다. 스크립트는 커밋한 내용만 사용합니다. Git 설치는 [Git으로 새 버전 받아 재가동하기](docs/OPERATIONS.md#git으로-새-버전-받아-재가동하기)를 따릅니다.
+5. 공식 서명 릴리스는 `main`에서 `Signed release publication` 워크플로를 수동 실행해 게시합니다. 입력 버전은 `CHANGELOG.md` 맨 위와 같아야 하고, 저장소 secret `RAILWAIT_RELEASE_SIGNING_KEY`와 공개 GHCR 패키지가 필요합니다. 이 워크플로가 `v<버전>` 태그와 GitHub Release를 만들고 설치 CLI는 최신 Release의 서명 manifest를 읽으므로, 태그나 Release를 손으로 만들지 않습니다. 자세한 내용은 [릴리스 도구 안내](scripts/releases/README.md)에 있습니다.
 
 버전은 `주.부.수` 형식입니다. 사용 방식이나 운영 절차가 달라지면 주, 새 기능과 눈에 띄는 개선은 부, 버그 수정과 안정화는 수를 올립니다. 문서나 내부 정리만 바꾼 변경에는 버전을 올리지 않습니다.
 
@@ -96,6 +99,26 @@ uv run --extra test pytest
 uvx --from ruff==0.12.12 ruff check --select E,F,I .
 uv run --frozen --extra test mypy
 ```
+
+설치 CLI 변경:
+
+```console
+cd apps/cli
+gofmt -l .
+go vet ./...
+go test -race ./...
+```
+
+`gofmt -l`은 아무것도 출력하지 않아야 합니다. OS별 코드를 바꿨다면 `GOOS=windows go vet ./...`와 `GOOS=darwin go vet ./...`로 다른 OS의 컴파일도 확인합니다. GitHub Actions는 Ubuntu·macOS·Windows에서 같은 검사를 실행하고 6개 OS·CPU 조합을 빌드합니다.
+
+릴리스 도구와 로컬 설치 업데이트 스크립트 변경:
+
+```console
+uv run --no-project --python 3.12 --with-requirements scripts/releases/requirements.txt python -m unittest discover -s scripts/releases -v
+bash -n scripts/update-local-install.sh
+```
+
+업데이트 스크립트는 macOS 기본 bash 3.2에서도 돌아야 하므로 연관 배열과 `mapfile`을 쓰지 않습니다.
 
 실행하지 않은 검증을 통과했다고 기록하지 마세요. 외부 철도사, 공개 도메인, 실제 알림 채널, 실기기 확인은 로컬 자동 테스트와 분리해 표시합니다.
 

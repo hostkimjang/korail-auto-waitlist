@@ -6,6 +6,7 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 
 [![핵심 저장소 검증 상태](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/web-journey.yml/badge.svg)](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/web-journey.yml)
 [![실험 Chromium 검증 상태](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/experimental-browser.yml/badge.svg)](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/experimental-browser.yml)
+[![설치 CLI 검증 상태](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/cli.yml/badge.svg)](https://github.com/hostkimjang/korail-auto-waitlist/actions/workflows/cli.yml)
 
 [![여정 등록부터 알림과 공식 채널 안내까지 보여주는 레일웨잇 소개 영상](docs/media/railwait-intro.gif)](docs/media/railwait-intro.mp4)
 
@@ -22,7 +23,7 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 
 - 공공데이터 API 키를 설정한 KTX·SRT 열차 검색
 - 코레일 공식 조회가 접속 대기에 들어가면 대기 상태와 앱에서 측정한 경과 시간을 표시
-- 코레일 프로모션 내용·클래스·닫기 아이콘이 바뀌어도 공지 근거가 확인되면 닫기만 처리하고, 알 수 없는 결제·동의창은 멈춘 뒤 원문 없는 구조 진단으로 구분
+- 코레일 공지 팝업의 문구·클래스·닫기 아이콘이 바뀌어도 화면에 그려진 창과 보이는 라벨에서 공지 근거를 찾아 닫기 단추만 누르고, 결제·동의·입력이 섞인 창은 닫지 않은 채 설정의 `닫지 못한 팝업` 카드에 이유를 표시
 - 좌석 확인 기능을 켰을 때 일반실·특실별 대기 등록
 - 좌석 상태와 확인 시각 표시
 - 감시 중인 열차의 실제 열차 종류·번호와 결제 필요 항목을 한눈에 확인
@@ -30,12 +31,7 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 - Chrome·Edge·모바일 등 연결한 각 기기에 함께 보내는 Web Push와 Telegram·Discord·Webhook 알림
 - 공식 예약·결제 페이지를 새 브라우저 창으로 여는 안전한 인계와, 경로별 실기기 검증 뒤에만 켤 수 있는 코레일+·SRT 앱 인계
 - 모바일 PWA와 데스크톱 반응형 화면
-
-## 지금 버전 확인하기
-
-모든 화면 아래 푸터에 `레일웨잇 v1.0.0`과 `2026-09-18 (금) 업데이트`처럼 릴리스 버전과 업데이트 날짜가 요일과 함께 표시됩니다. 재배포한 뒤 브라우저를 새로고침했을 때 이 값이 [업데이트 노트](CHANGELOG.md) 맨 위 항목과 같으면 최신 화면을 받은 것입니다. 값이 그대로면 새로고침을 한 번 더 하고, 그래도 바뀌지 않으면 웹 이미지를 다시 만들었는지 확인하세요.
-
-설치한 서버를 새 버전으로 올리는 순서(`git pull`, 설정 확인, 재빌드·재가동, 확인)는 [설치·운영 가이드](docs/OPERATIONS.md#git으로-새-버전-받아-재가동하기)에 있습니다.
+- Windows·macOS·Linux용 설치 CLI와, 작업 종료 대기·암호화 백업·상태 확인을 거치는 업데이트(공식 배포 준비 중)
 
 ## 화면 미리 보기
 
@@ -69,10 +65,15 @@ npm run dev
 
 ## 설치
 
-Windows·macOS·Linux용 간편 CLI 설치와 웹 업데이트 경로를 추가했습니다. 공식 서명 릴리스가
-게시된 뒤에는 `railwait install`로 설치하고, 웹의 **설정 → 로그·진행 상태 → 앱 업데이트**에서
-업데이트할 수 있습니다. 현재 구현 범위와 공개 전 검증 항목은 [CLI 안내](apps/cli/README.md)에
-있습니다. 기존 Git 설치를 자동으로 이전하는 기능은 아직 제공하지 않습니다.
+지금 쓸 수 있는 방법은 저장소를 Git으로 받아 Docker Compose로 운영하는 방법과, 설치 CLI에 직접 만든 로컬 패키지를 쓰는 방법입니다. 실행 파일 하나로 설치하고 웹에서 업데이트하는 공식 서명 릴리스는 아직 게시하지 않았습니다.
+
+| 설치 방법 | 알맞은 경우 | 상태 | 업데이트 |
+| --- | --- | --- | --- |
+| Git + Docker Compose | 저장소를 받아 직접 운영 | 사용 가능 | `git pull` 뒤 운영 스크립트로 재빌드 |
+| 설치 CLI + 로컬 패키지 | 직접 빌드·서명한 패키지로 관리형 설치 | 사용 가능(macOS에서 확인) | `scripts/update-local-install.sh` |
+| 설치 CLI + 공식 서명 릴리스 | Git·Python·Node.js 없이 설치 | 게시 전 | 웹 **앱 업데이트** 버튼 |
+
+### Git으로 설치하기
 
 Docker Compose로 실행합니다. 처음 설치하는 방법은 [시작하기](docs/GETTING_STARTED.md)에 순서대로 정리했습니다.
 
@@ -97,23 +98,64 @@ notepad .env
 
 공통 대기 저장용 비밀값은 `experimental-rail`에서 필수이며, 이 프로필을 실행하지 않는 구성에서는 선택 항목입니다. KORAIL sidecar의 준비 상태는 저장소와 설정 오류도 확인하지만 정상 준비 상태가 실제 코레일 로그인 성공을 뜻하지는 않습니다.
 
-## Android 공식 앱 인계 QA
+### 설치 CLI로 설치하기
 
-`.env.example`은 검증되지 않은 앱 업데이트에서 딥링크가 자동으로 활성화되지 않도록 네 경로를 모두 꺼 둡니다. 현재 기록된 코레일+·SRT 버전으로 네 경로를 함께 검증하거나, 해당 검증 결과를 승인한 배포를 만들 때는 커밋하지 않는 로컬 `.env`에 다음 값을 사용합니다.
+`railwait` CLI는 실행 환경 확인, 설치 계획, 앱·계정 설정, 자동 시작, 접속 확인의 다섯 단계로 설치합니다. Windows·macOS에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 받아 배포자 서명을 확인한 뒤 OS 설치 창으로 이어 줍니다. 새 대화형 설치는 Tailscale HTTPS 연결과 보안·알림 키 생성을 기본으로 하므로 관리자 계정만 직접 정하면 됩니다. 로컬 전용 접속은 `--access local`, 접속 방식과 키를 직접 고르려면 `--custom`을 씁니다.
 
-```dotenv
-# Android 공식 앱 인계 QA. 앱 버전 변경 시 먼저 끄고 경로별로 다시 검증합니다.
-VITE_KORAIL_BOOKING_DEEPLINK_ENABLED=true
-VITE_KORAIL_BOOKING_VALIDATED_VERSION=7.0.0+70000006
-VITE_KORAIL_TICKET_DEEPLINK_ENABLED=true
-VITE_KORAIL_TICKET_VALIDATED_VERSION=7.0.0+70000006
-VITE_SRT_MAIN_DEEPLINK_ENABLED=true
-VITE_SRT_MAIN_VALIDATED_VERSION=2.0.41+150
-VITE_SRT_TICKET_DEEPLINK_ENABLED=true
-VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
+공식 서명 릴리스를 게시하기 전에는 저장소에서 빌드한 CLI로, 직접 만든 로컬 패키지와 그 공개키를 명시적으로 신뢰해 설치합니다.
+
+```console
+railwait install --path <새 설치 폴더> --package <로컬 패키지 폴더> --trust-key <공개키 파일>
 ```
 
-앱 업데이트를 확인하면 대응하는 `VITE_*_DEEPLINK_ENABLED`를 먼저 `false`로 바꾸고 웹 이미지를 다시 만드세요. 새 버전에서 resolver, 목적 화면, 설치·미설치 브라우저 동작을 경로별로 다시 확인한 뒤 검증 버전과 플래그를 갱신합니다. 전체 절차와 아직 남은 환경별 확인 항목은 [Android 공식 앱 인계 검증](docs/ANDROID_APP_HANDOFF_QA.md)을 따릅니다.
+CLI를 빌드하는 방법과 명령 전체는 [설치 CLI 안내](apps/cli/README.md), 로컬 패키지를 만드는 방법은 [릴리스 도구 안내](scripts/releases/README.md#로컬-오프라인-설치-패키지)에 있습니다. 기존 Git 설치를 CLI 설치로 옮기는 기능은 아직 없으므로 다른 폴더와 포트에 설치하세요.
+
+## 업데이트
+
+설치한 방법에 따라 업데이트 방법이 다릅니다. 어느 방법이든 DB와 `.env`의 비밀값은 그대로 유지합니다. 올리기 전에 [업데이트 노트](CHANGELOG.md)에서 새 버전 항목 끝의 `적용할 때`를 읽고 새 설정이나 DB migration이 있는지 확인하세요.
+
+### Git 설치
+
+새 커밋을 fast-forward로만 받은 뒤 사용 중인 프로필 전체를 다시 빌드하고 재가동합니다.
+
+Linux Bash:
+
+```bash
+git pull --ff-only origin main
+bash ./scripts/ops.sh experimental
+```
+
+Windows PowerShell:
+
+```powershell
+git pull --ff-only origin main
+./scripts/ops.ps1 experimental
+```
+
+운영 스크립트는 새 외부 요청과 주기 작업을 먼저 막고 진행 중인 작업이 끝나기를 기다린 뒤 서비스를 다시 만듭니다. 받기 전에 확인할 것과 되돌리는 방법은 [설치·운영 가이드](docs/OPERATIONS.md#git으로-새-버전-받아-재가동하기)에 있습니다.
+
+### 로컬 패키지로 설치한 CLI 설치
+
+반영할 커밋을 저장소에서 받은 뒤 macOS·Linux에서 스크립트 하나로 올립니다. 먼저 `--dry-run`으로 계획만 확인할 수 있습니다.
+
+```bash
+bash scripts/update-local-install.sh --path <설치 폴더> --dry-run
+bash scripts/update-local-install.sh --path <설치 폴더>
+```
+
+스크립트는 앱 이미지 빌드, 일회성 키로 서명한 패키지와 같은 커밋의 CLI 생성, 업데이트 계획 확인과 적용, 설치 상태·HTTP·화면 버전 확인을 이어서 실행합니다. 적용할 때는 새 작업을 막고 진행 중인 작업이 끝나기를 기다린 뒤 DB와 설정을 암호화 백업하고 앱을 교체합니다. 커밋하지 않은 변경은 들어가지 않으며, DB 구조가 바뀌는 버전은 이 방법으로 올릴 수 없습니다. uv와 Docker가 필요합니다. macOS에서 확인했고 Linux 호스트 실행은 아직 확인하지 않았습니다. Windows에서는 새 로컬 패키지를 만든 뒤 `railwait update --package … --trust-key …`로 계획 확인과 적용을 직접 실행합니다. 자세한 동작은 [설치 CLI 안내](apps/cli/README.md#railwait-설치-패키지)에 있습니다.
+
+### 공식 서명 릴리스로 설치한 CLI 설치
+
+웹의 **설정 → 로그·진행 상태 → 앱 업데이트**에서 새 버전을 확인하고 적용합니다. 같은 작업을 `railwait update`로도 실행할 수 있고, 진행 화면을 닫아도 작업은 계속됩니다. 공식 릴리스는 아직 게시하지 않았습니다. 로컬 패키지 설치에서는 이 버튼이 의도적으로 막혀 있습니다.
+
+### 지금 버전 확인하기
+
+모든 화면 아래 푸터에 지금 실행 중인 릴리스 버전과 업데이트 날짜가 요일과 함께 표시됩니다. 업데이트한 뒤 새로고침한 화면의 값이 [업데이트 노트](CHANGELOG.md) 맨 위 항목과 같으면 최신 화면을 받은 것입니다. 값이 그대로면 새로고침을 한 번 더 하고, 그래도 바뀌지 않으면 웹 이미지를 다시 만들었는지 확인하세요.
+
+## Android 공식 앱 인계
+
+`.env.example`은 코레일+·SRT 앱을 바로 여는 네 경로를 모두 꺼 둡니다. 검증하지 않은 앱 업데이트에서 딥링크가 저절로 켜지지 않게 하기 위해서입니다. 경로별 검증 절차, QA용 설정값, 앱이 업데이트됐을 때 다시 끄는 순서는 [Android 공식 앱 인계 검증](docs/ANDROID_APP_HANDOFF_QA.md#기능-플래그)을 따르세요.
 
 ## 사용 흐름
 
@@ -136,67 +178,22 @@ VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
 
 자세한 원칙은 [안전 원칙과 사용 범위](docs/POLICY_AND_SAFETY.md)에서 확인할 수 있습니다.
 
-## 현재 확인 범위
+## 현재 상태
 
-v1.3.3은 프로모션 공지 구조 변경 대응과 예약 클릭 전달·보호 응답 판정을 보강했습니다.
-v1.4.1은 공지 팝업을 화면에 그려진 창과 보이는 라벨 기준으로 판정하고, 닫지 못한 이유를 설정 화면에 보여 줍니다.
-고정 fixture·전체 API·웹 검증의 범위와 남은 확인은
-[공개 검증 기록](docs/NOTICE_ADAPTATION_VERIFICATION.md)을 따릅니다.
-이 기록은 실제 예약·결제 또는 개별 운영 서버의 배포 성공을 뜻하지 않습니다.
+2026년 11월 18일, v1.4.2 기준입니다. 확인한 범위와 남은 일을 나눠 적었습니다.
 
-v1.2.14는 현재 자동 로그인에서 보호 응답을 받은 같은 인증 상태의 반복 제출을 멈추고, HTTP 200으로
-반환된 열차 조회 보호 JSON도 판독합니다. 10월 16일 운영 서버의 정상 검색 폼 단회 조회는
-`macro_err1`과 결과 0건으로 끝났습니다. 이 판독·재시도 수정과 실제 예매 가능·매진 수집 복구는 다르며,
-현재 공식 좌석 수집 복구는 미완료입니다. 세부 근거는 [운영 장애 기록](docs/INCIDENTS.md)을 참고하세요.
+- **좌석 조회와 감시**: 11월 18일 관리형 설치에서 공지를 닫은 뒤 KORAIL 공개 좌석 조회가 성공하는 것을 확인했습니다. 코레일이 보호 응답(`macro_err1` 등)을 보내면 자동 로그인과 조회를 정해진 시간 동안 멈추며 우회하지 않으므로, 그동안 감시 관측도 멈출 수 있습니다.
+- **공지 팝업**: v1.4.1부터 화면 기준으로 판정합니다. 실제 공개 화면의 세 가지 화면 폭에서 인식과 닫기를 확인했고, 예약 도중 늦게 뜨는 공지는 아직 실제로 마주쳐 확인하지 못했습니다. 범위는 [공개 검증 기록](docs/NOTICE_ADAPTATION_VERIFICATION.md)에 있습니다.
+- **예약**: 계정 기반 예매 시도는 별도 gate로 꺼져 있습니다. 출발 전 열차로 좌석 관측부터 결제 전 예약까지 다시 확인하는 일이 남아 있습니다.
+- **설치 CLI**: macOS(Apple Silicon)의 기존 Lima Docker에서 로컬 패키지 설치와 스크립트 업데이트(1.4.1 → 1.4.2)를 확인했고, CLI 테스트는 GitHub Actions의 Ubuntu·macOS·Windows에서 통과합니다. 공식 서명 릴리스 게시, 웹 **앱 업데이트** 버튼으로 실제 새 버전을 받는 확인, Windows·macOS Docker Desktop 새 설치와 재부팅 뒤 복구는 아직 확인하지 않았습니다.
 
-v1.2.12는 설정 화면의 과거 로그인 성공 이력과 현재 상주 세션을 분리합니다. 런타임 조회 실패·늦은 응답·계정 세대 불일치는 `재사용 가능`으로 표시하지 않으며, 가장 최근의 같은 세대 응답만 현재 상태로 사용합니다. 웹·API 전체 회귀와 로컬 전체 프로필 검증을 통과하고 운영 서버에도 최신 소스를 설치했습니다.
-
-2026년 10월 16일에는 최신 작업 트리로 로컬과 Oracle을 다시 빌드·재생성하고, 운영 주소의 502를
-해소했습니다. Oracle 장기 서비스 12개 healthy와 설치 소스 일치를 확인했으며 로컬은 검증 후 중지했습니다.
-당시 Oracle의 KORAIL 세션은 `blocked`·재사용 불가였습니다. 11월 3일에는 Oracle도 로컬과 같은 1.3.0으로 다시
-올렸지만 재생성 직후 자동 로그인이 `macro_err1`로 차단돼, Oracle의 실제 인증·좌석 조회·예약 복구는 미완료입니다.
-
-10월 10일의 제한된 운영 관찰에서는 공개 번들의 실제 로그인 제출 호출을 확인했지만, 공식 응답이 HTTP 200 JSON의 `macro_err1` 보호 상태로 끝났습니다. 서비스는 이를 `provider_access_restricted`로 분류해 공유 900초 대기를 열었고 외부 호출 경로를 즉시 중지했습니다. 보호를 우회하거나 좌석 조회·예약으로 진행하지 않았습니다. 이 표본은 새 임시 profile의 결과이며, 당시에는 자동 로그인·좌석 조회·자동 예약이 복구되지 않았습니다.
-
-같은 서버와 headed Chrome 151에서 컨트롤러만 Playwright로 바꾼 제한 비교도 인증에 성공하지 못했습니다. 관측한 2xx POST 한 건은 DynaPath 실제 역할을 확정할 근거가 부족해 정상 로그인으로 올리지 않았고, 추가 엔진·표식 은폐 실험 없이 보호 대기를 다시 열었습니다.
-
-Windows 호스트의 headed Chrome 154도 새 임시 profile에서는 문자별 입력과 버튼 클릭을 정상 완료한 뒤 같은 `macro_err1` 보호 응답을 받았습니다. 앞선 호스트 actionability 시간 초과는 KORAIL 화면이 아니라 별도 CDP `Debugger.enable` 계측과 Playwright의 충돌이었습니다. 사용자가 비밀번호 관리자 자동입력으로 로그인한 일반 Chrome은 현재 `로그아웃` 표시가 확인됐지만, 자격증명·쿠키·profile은 읽거나 복사하지 않았습니다. 따라서 Docker나 입력 로직을 원인으로 보지 않으며, 사용자 profile 복사나 automation 표식 은폐로 보호를 우회하지 않습니다.
-
-무인 서버에는 `dedicated_auto`를 사용합니다. 이 모드는 일반 사용자 Chrome을 복사하지 않고 앱 전용 영속
-profile에서 서버에 저장된 철도 계정으로 기존 자동 로그인 흐름을 실행합니다. Chrome 비밀번호 관리자를
-읽거나 조작하지 않으며, 공식 보호·호출 제한 응답이면 다른 입력 방식으로 우회하지 않고 공유 cooldown에서
-멈춥니다. 10월 11일 현재 Docker 표본에서는 noVNC를 끈 채 adapter와 API를 재생성한 뒤 저장 계정으로
-자동 로그인이 완료돼 `authenticated`·`ready`·재사용 가능 상태가 됐습니다. 이어 adapter만 재시작했을 때도
-약 12초 안에 공식 세션을 자동 확인해 같은 상태로 복구했습니다. 사람이 VNC에 접속하는 단계는 없습니다.
-profile은 브라우저 상태의 연속성을 제공하지만 로그인 성공을 보장하는 우회 수단은 아닙니다.
-
-이 차이를 안전하게 검증하기 위해 앱 전용 Docker Chrome에서 사용자가 공식 화면에 직접 로그인하고,
-adapter가 그 브라우저를 닫지 않은 채 이어받는 `dedicated_manual` 모드를 추가했습니다. 실제 확인에서는
-전용 profile 재시작 뒤 세션이 사라진 표본과 유지된 표본이 모두 있었으므로 복원을 전제로 삼지 않습니다.
-일반 Chrome profile이나 쿠키를 가져오지 않으며 세션이 없으면 저장된 비밀번호를 자동 제출하지 않습니다.
-10월 11일 새 이미지에서는 사용자가 직접 로그인한 뒤 수동 새로고침 없이 같은 계정 세대의 재확인이
-`authenticated`·`ready`·재사용 가능 상태로 전환됐고, 두 탭 모두 조회 화면으로 정리됐습니다. 로그인 대기가
-일반 30분 재사용 창을 넘으면 확인 전에 Chrome을 교체하던 경합도 이 과정에서 발견해, 같은 세대의
-`auth_required` 수동 인계는 시간 제한보다 현재 live Chrome을 먼저 확인하도록 고쳤습니다. 로그인 완료가
-새 탭에서 끝나 기존 조회 탭의 DOM이 낡아 있던 경우에는 읽기 전용 공식 세션 확인을 양성 근거로 사용합니다.
-최초 직접 로그인 뒤에는 API의 session manager가 만료 전 공식 세션을 자동 재확인합니다. 같은 자격증명
-지문이면 재사용 시간이 이미 지났거나 계정 세대 표기가 갱신돼도 live Chrome을 먼저 재검증해 이어 쓰고,
-아이디·비밀번호가 달라진 경우에만 기존 세션을 폐기합니다. `dedicated_manual`의 `manual`은 최초 인증 방식을
-뜻하며 이후 조회·세션 갱신을 사람이 반복한다는 뜻이 아닙니다.
-이는 로그인 세션 인계만 확인한 결과이며 좌석 조회·예약 복구를 뜻하지 않습니다. 절차는
-[KORAIL 브라우저 화면 진단](apps/api/KORAIL_BROWSER_DIAGNOSTICS.md)을 따릅니다.
-
-공개된 코레일 승차권 API는 승차 후 진위 확인용으로 실시간 로그인·좌석·예약 기능을 제공하지 않습니다. 자동 연동은 운영사의 승인된 경로가 확인되기 전까지 복구된 것으로 보지 않고, 현재는 공식 홈페이지·앱 인계를 사용합니다.
-
-운영 DB의 KORAIL `UNKNOWN` 99건은 모두 출발 시각이 지난 기록이며 진행 중 예약과 미래 대상은 0건입니다. 기존 기록은 공식 근거 없이 바꾸거나 재제출하지 않습니다. 현재 근거와 안전한 재개 조건은 [이슈 분석·개발 계획](docs/DEVELOPMENT_PLAN.md), 세부 검증은 [체크리스트](CHECKLIST.md)와 [장애 기록](docs/INCIDENTS.md)을 참고하세요.
+지난 장애의 원인과 조치는 [운영 장애 기록](docs/INCIDENTS.md), 보호 경계와 안전한 재개 조건은 [이슈 분석·개발 계획](docs/DEVELOPMENT_PLAN.md), 남은 검증 전체는 [체크리스트](CHECKLIST.md)에 있습니다.
 
 ## 문서
 
-- [시작하기](docs/GETTING_STARTED.md)
-- [사용 안내](docs/USAGE.md)
-- [설치·운영 가이드](docs/OPERATIONS.md)
-- [Android 공식 앱 인계 검증](docs/ANDROID_APP_HANDOFF_QA.md)
-- [시스템 구조](docs/ARCHITECTURE.md)
+- 처음 쓰는 분: [시작하기](docs/GETTING_STARTED.md), [사용 안내](docs/USAGE.md), [안전 원칙과 사용 범위](docs/POLICY_AND_SAFETY.md), [업데이트 노트](CHANGELOG.md)
+- 직접 운영하는 분: [설치·운영 가이드](docs/OPERATIONS.md), [설치 CLI 안내](apps/cli/README.md), [운영 장애 기록](docs/INCIDENTS.md), [Android 공식 앱 인계 검증](docs/ANDROID_APP_HANDOFF_QA.md)
+- 개발에 참여하는 분: [시스템 구조](docs/ARCHITECTURE.md), [CLI 설치·업데이트 설계](docs/INSTALL_UPDATE_DESIGN.md), [릴리스 도구 안내](scripts/releases/README.md), [기여 가이드](CONTRIBUTING.md)
 - [문서 전체 보기](docs/README.md)
 
 ## 개발
@@ -215,9 +212,9 @@ Windows PowerShell:
 ./scripts/ops.ps1 verify
 ```
 
-GitHub Actions의 핵심 검증은 Compose 설정, API, 웹, PostgreSQL 경합 계약을 확인합니다. GitHub runner 환경에 민감한 KORAIL Chromium 컨테이너 검증은 별도 실험 워크플로에서 실행하며, 로컬의 `verify` 명령은 두 범위를 모두 확인합니다.
+GitHub Actions의 핵심 검증은 Compose 설정, API, 웹, PostgreSQL 경합 계약을 확인합니다. GitHub runner 환경에 민감한 KORAIL Chromium 컨테이너 검증은 별도 실험 워크플로에서 실행하며, 로컬의 `verify` 명령은 두 범위를 모두 확인합니다. 설치 CLI는 또 다른 워크플로가 Ubuntu·macOS·Windows에서 `go test -race`를 실행하고 6개 OS·CPU 조합의 빌드를 확인합니다.
 
-변경 방법과 테스트 기준은 [기여 가이드](CONTRIBUTING.md)를 참고하세요. 보안 문제는 공개 이슈 대신 [보안 정책](SECURITY.md)의 비공개 신고 절차를 이용해 주세요.
+변경 방법, 테스트 기준, 릴리스 버전을 올리는 방법은 [기여 가이드](CONTRIBUTING.md)를 참고하세요. 보안 문제는 공개 이슈 대신 [보안 정책](SECURITY.md)의 비공개 신고 절차를 이용해 주세요.
 
 ## 라이선스
 

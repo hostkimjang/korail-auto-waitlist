@@ -4,6 +4,15 @@
 
 ## CLI 관리형 설치와 업데이트
 
+설치 방법별 설치·업데이트 명령은 다음과 같습니다. 이 절의 나머지는 CLI 관리형 설치의 세부 동작이며, Git 설치의
+업데이트 절차는 [Git으로 새 버전 받아 재가동하기](#git으로-새-버전-받아-재가동하기)에 있습니다.
+
+| 설치 방법 | 설치 | 업데이트 | 상태 |
+| --- | --- | --- | --- |
+| Git + Docker Compose | [시작하기](GETTING_STARTED.md) | `git pull --ff-only origin main` 뒤 `ops.sh experimental` 또는 `ops.ps1 experimental` | 사용 가능 |
+| CLI + 로컬 패키지 | `railwait install --package <패키지> --trust-key <공개키>` | `bash scripts/update-local-install.sh --path <설치 폴더>` 또는 `railwait update --package … --trust-key …` | 사용 가능. 스크립트는 macOS에서 확인, Linux 호스트는 미확인 |
+| CLI + 공식 서명 릴리스 | `railwait install` | 웹 **설정 → 로그·진행 상태 → 앱 업데이트** 또는 `railwait update` | 릴리스 게시 전 |
+
 `railwait install` 또는 `railwait setup`의 다섯 단계 마법사에서 필수 프로그램 설치, 앱·관리자 설정,
 자동 시작과 선택적인 Tailscale HTTPS 연결을 이어갈 수 있습니다. Windows·macOS 대화형 실행에서는 없는
 Docker Desktop·Tailscale의 공식 패키지를 내려받아 배포자 서명을 확인하고 실제 OS 설치 창을 엽니다.
@@ -42,32 +51,9 @@ Railwait 설치와 브라우저 쿠키가 겹칠 수 있으므로 병행 로그�
 사용자는 HTTPS만 승인하며 공개 Funnel을 선택하지 않습니다. 승인 후 기존 노드·경로를 다시 확인합니다.
 권한이 부족하거나 시간이 지나면 같은 설치 명령으로 재개합니다. 일회용 승인 주소는 설치 기록에 저장하지 않습니다.
 
-2026-11-17 macOS Lima의 신규 관리형 설치(18080)에 이 흐름을 실제 적용했습니다. 새 Tailscale HTTPS
-8443 경로, 암호화 백업 검증·서비스 재시작·12서비스 healthy·관리자 구성 API 200·maintenance gate
-재개를 확인했고, 기존 HTTPS 443·SSH 22의 설정과 운영 프로젝트 컨테이너 ID는 유지했습니다.
-Windows·macOS의 Docker Desktop·Tailscale 최초 설치, OS 승인·SSO·재부팅 및 별도 원격 기기에서의
-로그인은 이 검증에 포함하지 않습니다.
-
-같은 날 사용자의 선택에 따라 기존 `rail-waitlist-macmini`를 백업 후 제거했습니다. DB를 격리된 PostgreSQL에
-복원해 행 수·시퀀스를 비교했고, PostgreSQL이 다시 표현한 22개 CHECK 제약의 차이는 원본 DDL을 빈 DB에
-적용한 결과와 전체 스키마를 비교해 검증했습니다. 전용 볼륨 5개·설정·소스·로그를 암호화하고 복호화 전체
-해시·tar 본문·설정 파일 해시를 확인한 뒤 컨테이너 14개·네트워크 5개·볼륨 5개를 제거했습니다.
-API와 proxy는 300초 종료 대기 뒤 종료 코드 137이었으며, 작업자 종료·남은 DB 클라이언트 0 확인 후
-덤프를 만들었습니다. 이 결과는 백업 폴더의 `shutdown-verification.json`에 구분해 기록했습니다.
-
-백업은 서비스 상위 폴더의 `railwait-retired-backup-20261117-c7r4o761`에 있으며 `RESTORE.md`와
-`retirement-result.json`을 함께 보관합니다. `recovery.agekey`는 복구에 필요하므로 0600 권한으로 유지합니다.
-소스 저장소는 보존했고 오래된 `.env`와 로그 원문은 암호화 백업 확인 후 제거했습니다. 현재 실행 경로는
-`railwait-local-20261117`입니다. 예전 HTTPS 443 경로만 제거했으며 새 HTTPS 8443·SSH 22·Lima·공유 이미지는 유지했습니다.
-
 초기 설치의 보안·알림 키는 자동 생성이 기본이며 직접 입력도 지원합니다. 기존 관리형 설치에 같은 경로로
 `railwait setup`을 실행하면 계정·앱 보안키는 유지하고 누락된 VAPID 키와 사용할 수 없는 발신자 주소를
 백업·작업 종료 대기·서비스 재생성 절차로 보완합니다. 브라우저·OS 알림 권한은 사용자가 직접 허용합니다.
-
-현재 설치에는 VAPID 설정을 실제 적용했고 API의 키 반환, 공개키·비밀키 일치와 `py_vapid` 서명 생성을
-확인했습니다. 발송 라이브러리가 HTTPS subject의 포트·경로를 거부해 자동 subject를 호스트명으로
-맞췄으며 앱 접속 주소는 그대로 유지했습니다. 12서비스 healthy·migration/log-init 종료 0·maintenance
-재개를 확인했습니다. 최종 CLI 재실행은 설정·컨테이너 ID를 유지했으며 실제 기기 알림 발송은 수행하지 않았습니다.
 
 Windows·macOS·Linux의 초기 설정은 `railwait install`로 처리하며, 명령·파일 권한·Docker 사전조건은
 [CLI 안내](../apps/cli/README.md)를 참고합니다. 개발용 CLI에는 신뢰 공개키가 없으므로 공개 설치에
@@ -107,6 +93,33 @@ DB·설정 암호화 백업 및 복호화 검증 → 앱 교체 → health·dige
 기존 소스 설치는 아래 Git 절차를 유지합니다. 관리형 `adopt`가 없으므로 기존 경로에 CLI 설치를
 덮어쓰지 않습니다. Windows·macOS의 서비스는 로그인 세션과 Docker 실행에 의존합니다.
 
+### 관리형 설치 검증 기록
+
+아래는 위 흐름을 실제 설치에 적용한 기록입니다. 설치 폴더 이름은 해당 작업의 기록이며 다른 설치에서는 다릅니다.
+
+2026-11-17 macOS Lima의 신규 관리형 설치(18080)에 이 흐름을 실제 적용했습니다. 새 Tailscale HTTPS
+8443 경로, 암호화 백업 검증·서비스 재시작·12서비스 healthy·관리자 구성 API 200·maintenance gate
+재개를 확인했고, 기존 HTTPS 443·SSH 22의 설정과 운영 프로젝트 컨테이너 ID는 유지했습니다.
+Windows·macOS의 Docker Desktop·Tailscale 최초 설치, OS 승인·SSO·재부팅 및 별도 원격 기기에서의
+로그인은 이 검증에 포함하지 않습니다.
+
+같은 날 사용자의 선택에 따라 기존 `rail-waitlist-macmini`를 백업 후 제거했습니다. DB를 격리된 PostgreSQL에
+복원해 행 수·시퀀스를 비교했고, PostgreSQL이 다시 표현한 22개 CHECK 제약의 차이는 원본 DDL을 빈 DB에
+적용한 결과와 전체 스키마를 비교해 검증했습니다. 전용 볼륨 5개·설정·소스·로그를 암호화하고 복호화 전체
+해시·tar 본문·설정 파일 해시를 확인한 뒤 컨테이너 14개·네트워크 5개·볼륨 5개를 제거했습니다.
+API와 proxy는 300초 종료 대기 뒤 종료 코드 137이었으며, 작업자 종료·남은 DB 클라이언트 0 확인 후
+덤프를 만들었습니다. 이 결과는 백업 폴더의 `shutdown-verification.json`에 구분해 기록했습니다.
+
+백업은 서비스 상위 폴더의 `railwait-retired-backup-20261117-c7r4o761`에 있으며 `RESTORE.md`와
+`retirement-result.json`을 함께 보관합니다. `recovery.agekey`는 복구에 필요하므로 0600 권한으로 유지합니다.
+소스 저장소는 보존했고 오래된 `.env`와 로그 원문은 암호화 백업 확인 후 제거했습니다. 현재 실행 경로는
+`railwait-local-20261117`입니다. 예전 HTTPS 443 경로만 제거했으며 새 HTTPS 8443·SSH 22·Lima·공유 이미지는 유지했습니다.
+
+현재 설치에는 VAPID 설정을 실제 적용했고 API의 키 반환, 공개키·비밀키 일치와 `py_vapid` 서명 생성을
+확인했습니다. 발송 라이브러리가 HTTPS subject의 포트·경로를 거부해 자동 subject를 호스트명으로
+맞췄으며 앱 접속 주소는 그대로 유지했습니다. 12서비스 healthy·migration/log-init 종료 0·maintenance
+재개를 확인했습니다. 최종 CLI 재실행은 설정·컨테이너 ID를 유지했으며 실제 기기 알림 발송은 수행하지 않았습니다.
+
 2026-11-17 Windows amd64 검증용 패키지는 해당 Windows 작업 폴더
 `output/railwait-clean-install-20261117-hww6x3mo/amd64-local-package-v2`에 보존했습니다.
 명시적으로 신뢰할 공개키는 같은 작업 폴더의 `amd64-test-trust-key-v2.pub`이며 Mac ARM 패키지의
@@ -117,6 +130,10 @@ DB·설정 암호화 백업 및 복호화 검증 → 앱 교체 → health·dige
 `package-build-receipt.json`, `package-verification-v2.json`, `package-cleanup-receipt.json`입니다.
 이 결과는 기존 Docker를 이용한 패키지 준비 검증이며 신규 Windows 설치·OS 로그인·HTTPS 최초 승인·
 관리자 등록·서비스 health·HKCU Run 재부팅 재개 검증을 포함하지 않습니다.
+
+2026-11-18에는 같은 18080 설치를 `scripts/update-local-install.sh`로 1.4.1에서 1.4.2로 올렸습니다. 첫 시도는
+작업 폴더의 파일 권한 문제로 `recovery_required`에서 멈춰 기록된 1.4.1 구성으로 복구했고(앱 중단 약 3분), 스크립트를
+고친 뒤 다시 적용해 서비스 healthy와 화면 v1.4.2를 확인했습니다. 경위는 [운영 장애 기록](INCIDENTS.md)에 있습니다.
 
 ## 최근 운영 서버 배포 확인
 
@@ -1864,8 +1881,6 @@ KORAIL 어댑터가 이 기록을 지우므로, 카드가 남아 있으면 그 �
 새 형식을 지원할 때는 카드의 구조 요약과 이유를 근거로 공개 검색 화면을 로그인 없이 다시 열어 실제 DOM과 화면을
 확인하고, 고정 fixture 회귀를 먼저 추가합니다. 정상 동작은 어댑터 로그의
 `event=search_notice_dismissed strict=N fallback=M` 다음 `event=provider_query_completed outcome=success`로 확인합니다.
-
-### 운행·예매 상태 관측 안내가 보임
 
 ### 운행·예매 상태 관측 안내가 보임
 

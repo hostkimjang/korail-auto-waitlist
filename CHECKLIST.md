@@ -711,7 +711,9 @@ Windows·macOS·Linux를 함께 구현했으며, 실제 OS 지원 검증과 공�
 - [x] MIT 라이선스와 패키지 메타데이터 반영
 - [x] `docs/research/`와 `docs/design/`을 현재 공개 후보에서 제거
 - [x] 공개 제외 자료를 로컬·원격 브랜치와 태그의 전체 Git 이력에서 제거
-- [ ] GitHub 비공개 취약점 신고 기능 활성화
+- [ ] GitHub 비공개 취약점 신고 기능 활성화 (2026-11-18 확인 때 꺼짐. 비밀값 검사·푸시 차단과 main 보호 규칙도 꺼져 있음)
+- [x] README를 설치 방법 세 가지와 방법별 업데이트 중심으로 재구성하고, 문서 목록·시작하기·기여 가이드·공개 릴리스
+  체크리스트·보안 정책을 현재 공개 상태와 설치 CLI에 맞게 갱신(2026-11-18). 바꾼 문서의 상대 링크·앵커 145개 확인
 - [x] 커밋 `fe4b364`의 OCI Ubuntu 20.04 ARM64 clean clone에서 운영 `.env`를 별도 프로젝트·포트로 격리한 뒤 README 최초 설치 절차 재검증
 - [ ] 네이티브 Ubuntu `linux/amd64` Docker Engine clean clone에서 기본 build·migration·장기 서비스 health·로컬 접속 확인
 - [x] OCI ARM64 clean clone의 전체 프로필 최초 기동, migration·log-init `exited 0`, 11개 장기 서비스 `healthy`, 웹 200과 최초 관리자 등록·등록 잠금·새 세션 로그인 확인

@@ -277,7 +277,8 @@
   같은 원칙으로 교체 자체의 되돌리기까지 거부돼 보존 패키지가 빈 경우도 `recovery_required`로 바꿈. 회귀: Windows 실제
   파일 점유 1건(Windows에서 수정 전 `deferred`로 실패·수정 뒤 통과), 이동 거부를 주입한 교차 플랫폼 2건(수정 전 `update.go`에서
   각각 `failed`·`deferred`로 실패 확인). gofmt·3개 OS vet·Linux race 전체·Windows 테스트 컴파일·6대상 빌드 통과
-- [ ] GitHub Actions windows-latest에서 되돌리기 실패 회귀 `-race` 통과
+- [x] GitHub Actions windows-latest에서 되돌리기 실패 회귀 `-race` 통과(run 44278736617, 커밋 `ac1cb93`, install 패키지
+  17.6초). ubuntu·macOS 네이티브 테스트와 6대상 컴파일, 같은 커밋의 repository-verify(44278736476)도 통과
 - [ ] 관리자 그룹이 아닌 Windows 표준 계정 확인 (관리자 그룹 밖의 활성 계정은 Codex 샌드박스 계정 둘뿐이고 자격 증명이
   없어 실행하지 못함)
 

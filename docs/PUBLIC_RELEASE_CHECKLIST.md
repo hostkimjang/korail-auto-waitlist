@@ -52,7 +52,7 @@
 공식 릴리스는 `main`에서 `Signed release publication` 워크플로를 수동 실행해 게시합니다. 워크플로가 `v<버전>` 태그와 GitHub Release를 직접 만듭니다. 설치 CLI는 최신 Release에서 서명된 `release-manifest.json`을 찾으므로, 서명 자산이 없는 Release를 손으로 만들면 설치와 업데이트 확인이 그 Release에서 멈춥니다. 태그나 Release를 손으로 만들지 않습니다.
 
 - [x] 서명용 Ed25519 private seed를 만들어 저장소 secret `RAILWAIT_RELEASE_SIGNING_KEY`에 등록하고 저장소 밖 안전한 곳에 따로 보관 (2026-11-18, 관리자 맥 키체인. 비밀번호 관리자 등 맥 밖 사본은 관리자가 따로 보관. 키를 바꾸면 기존 CLI가 새 서명을 거절함)
-- [x] 첫 실행 뒤 GHCR에 생기는 앱 이미지 패키지 4종을 공개로 설정 (2026-11-18)
+- [x] 첫 실행 뒤 GHCR에 생긴 앱 이미지 패키지 4종이 익명으로 받아지는지 확인 (2026-11-18, 익명 pull 토큰으로 `tags/list` 200. 따로 공개로 바꾸는 단계는 필요하지 않았음)
 - [x] 첫 릴리스는 `compatible_from`을 비워 새 설치만 허용 (1.4.2·1.4.3)
 - [x] 게시한 CLI로 실제 GitHub의 최신 Release를 조회하고 서명 확인 (1.4.3. 1.4.2의 CLI는 HTTP 415로 실패해 1.4.3에서 수정)
 - [ ] 정식 CLI로 새 설치를 확인한 뒤, 다음 릴리스를 `compatible_from`에 이전 버전을 넣어 게시하고 웹 **앱 업데이트** 버튼으로 업데이트 확인

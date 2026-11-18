@@ -5,6 +5,27 @@ Compose 2.24 이상이 필요합니다. Docker Desktop/VM에서 설치 경로의
 사용자는 Go를 설치할 필요가 없습니다. `railwait install` 또는 `railwait setup`은 실행 환경 → 설치 계획 →
 앱·계정 → 자동 시작 → 접속 확인의 다섯 단계로 진행합니다. 대화형 터미널에서 인자 없이 실행해도 시작합니다.
 
+공식 릴리스는 한 줄 설치 스크립트로 시작할 수 있습니다(1.4.4부터). 스크립트 원본은
+[`scripts/install/`](../../scripts/install/)에 있고 Release 자산으로 `.sha256`과 함께 게시합니다.
+
+```console
+curl -fsSL https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download/install.sh | sh -s -- --custom --port 9090
+irm https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download/install.ps1 | iex
+```
+
+스크립트는 OS·CPU에 맞는 `railwait-<OS>-<CPU>`와 `.sha256`을 같은 Release에서 받아, 자산 이름이 정확히 일치하는
+한 줄의 해시와 비교합니다. 맞을 때만 `${RAILWAIT_BIN_DIR:-$HOME/.local/bin}/railwait`(Windows
+`%LOCALAPPDATA%\Programs\Railwait\railwait.exe`)에 같은 폴더의 임시 파일을 거쳐 원자적으로 교체하고, 이어서
+`railwait install`을 실행합니다. sudo는 쓰지 않고, 앱 설치 폴더 안의 경로는 거부하며, PATH와 셸 설정 파일은
+바꾸지 않습니다. `curl … | sh`로 실행해도 `/dev/tty`로 마법사와 대화하고, 대화형 터미널이 없으면 마법사 대신
+다음에 실행할 명령을 보여 줍니다. Windows의 마법사 인자는 `RAILWAIT_INSTALL_ARGS`로 넘깁니다.
+`RAILWAIT_VERSION`은 설치 CLI 실행 파일의 버전만 고정하며, 마법사는 항상 최신 안정 릴리스를 설치합니다.
+`RAILWAIT_DOWNLOAD_BASE`는 테스트용으로 https 또는 127.0.0.1·localhost의 http 주소만 받습니다. 스크립트는 함수
+하나로 감싸 마지막 줄에서만 실행하므로 내려받기가 중간에 끊기면 아무 단계도 실행하지 않습니다.
+`install.ps1`은 Windows PowerShell 5.1이 `irm` 응답을 ISO-8859-1로 읽어도 깨지지 않게 순수 ASCII로 두고,
+한국어 안내는 실행할 때 복원합니다. 테스트는 `scripts/install/tests/`에 있습니다.
+
 Windows·macOS의 대화형 설치에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 내려받고 배포자
 서명을 검증한 뒤 OS 설치 창으로 이어갑니다. Docker Desktop의 약관, OS 권한, VPN 허용과 SSO는 열린
 창에서 직접 처리합니다. 설치 후에는 실행·로그인 상태를 다시 확인합니다. 이미 설치된 프로그램은 덮어쓰지
@@ -13,9 +34,13 @@ Windows·macOS의 대화형 설치에서는 없는 Docker Desktop·Tailscale을 
 
 새 대화형 설치는 간편 모드로 진행합니다. Tailscale HTTPS와 앱 보안키 6종·브라우저 알림용 VAPID 자동
 생성을 기본으로 하고, 계획 확인·키 선택·TAGO 입력 질문을 생략합니다. 관리자 계정은 사용자가 설정하며
-완료 후 앱을 브라우저로 엽니다. 로컬 전용은 `--access local`, 접속 방식·보유 키·TAGO 키를 직접
-선택하려면 `--custom`을 사용합니다. TAGO 발급은 자동화하지 않으며 시간표 검색은 별도 키 설정 뒤
-사용할 수 있습니다. 기존 설치의 접속 방식과 비대화형 설치의 로컬 기본값은 유지합니다.
+완료 후 앱을 브라우저로 엽니다. 로컬 전용은 `--access local`, 설치 폴더·포트·접속 방식·보유 키·TAGO 키를
+직접 선택하려면 `--custom`을 사용합니다. `--custom`의 폴더·포트 질문은 기본값을 함께 보여 주고 Enter를 누르면
+그 값을 씁니다. TAGO 발급은 자동화하지 않습니다. 키가 없어도 새 대기 등록의 역 목록은 앱에 포함된 공개
+역 목록을, 열차 시간표는 코레일·SRT 공식 조회를 씁니다. 키는 나중에 `railwait configure`로 넣을 수 있습니다.
+기존 설치의 접속 방식과 비대화형 설치의 로컬 기본값은 유지합니다. 새 설치에서 고른 접속 방식은
+`.railwait/wizard.json`에 기록하므로, Tailscale 단계에서 멈춘 설치를 같은 명령으로 다시 실행하면 원격 접속
+설정을 이어갑니다. 원격 접속 없이 끝나면 `--access tailscale`로 다시 실행하는 방법을 안내합니다.
 숨김 입력 중에는 내용을 표시하지 않으며 비밀번호는 API와 같은 12~128자 기준을 사용합니다. 완료된 설치에 같은 경로로
 실행하면 관리자·API 키를 다시 묻지 않고 상태 확인과 접속 설정을 이어갑니다. 중단된 설치는 기존 설치
 기록과 설정을 보존하고 필요한 관리자 입력만 요청합니다. 누락된 브라우저 알림 키는 별도 설정 작업으로
@@ -41,7 +66,9 @@ Windows 명령은 PowerShell용으로 표시합니다. Windows 준비 중 재부
 현재 구현한 명령은 다음과 같습니다.
 
 ```console
-railwait install --path <새 설치 경로> --port 8080
+railwait install
+railwait install --custom
+railwait install --path <새 설치 경로> --port 9090
 railwait install --path <설치 경로> --access tailscale --open
 railwait setup --path <설치 경로> --plain
 railwait install --path <새 설치 경로> --package <로컬 패키지 디렉터리> --trust-key <직접 신뢰할 공개키 파일>
@@ -171,14 +198,27 @@ Compose 기본값과 같습니다. 커밋하지 않은 변경은 들어가지 �
 기존 설치 파일·동일 프로젝트 자원은 차단합니다. `--docker-context`를 생략한 대화형 새 설치는 현재
 로컬 context를 확인해 사용합니다. 비대화형 새 설치는 기존과 같이 `default`를 사용합니다.
 중단 뒤 같은 경로로 다시 실행하면 기록한 context와 포트를 유지합니다.
-Docker Desktop이나 로컬 VM에서는 설치 경로를 파일 공유 대상으로 허용해야 합니다. 이미지 다운로드
-뒤 실제 API 컨테이너에서 관리 파일과 잠금 파일을 읽는지 확인하고, 실패하면 DB를 만들기 전에
-중지합니다. 파일 공유의 짧은 전파 지연은 최대 세 차례 확인합니다.
+
+`--port`를 생략한 새 설치는 8080부터 8099까지 이 컴퓨터에서 비어 있는 loopback 포트 중 첫 포트를 씁니다.
+8080이 아니면 설치 계획에 이유를 표시합니다. 기존 설치는 기록한 포트를 유지합니다.
+
+`--path`를 생략한 새 설치는 Docker가 준비된 뒤 설치 폴더를 정합니다. Docker가 Lima·Colima VM에서 돌면
+`limactl list <VM> --format '{{json .Config.Mounts}}'`로 VM 공유 폴더를 읽고, 같은 경로로 공유되지 않은
+폴더는 제외합니다. 기본 폴더가 쓰기 가능 공유 안에 없으면 첫 번째 쓰기 가능 공유 폴더(`/tmp` 같은 임시
+폴더 제외) 아래의 `railwait` 폴더를 쓰고, 계획에 그 이유를 표시합니다. 공유 폴더를 읽지 못하면 기본 폴더로
+진행하고 아래 파일 공유 확인에 맡깁니다. 이미 설치한 폴더는 옮기지 않으며, 재개 명령에는 정한 폴더가
+`--path`로 고정됩니다.
+
+Docker Desktop이나 로컬 VM에서는 설치 경로를 파일 공유 대상으로 허용해야 합니다. 공식 릴리스 설치는
+앱 이미지를 받기 전에 릴리스의 고정 digest 작은 이미지(`log-init`)로 네트워크 없는 컨테이너를 띄워 설치
+폴더를 읽고 쓰는지 먼저 확인합니다. 실패하면 수 GB 이미지를 받지 않고 멈추며, 생성한 설정은 보존해 같은
+명령으로 이어갈 수 있습니다. 이미지 다운로드 뒤에는 실제 API 컨테이너에서 관리 파일과 잠금 파일을 읽는지
+다시 확인하고, 실패하면 DB를 만들기 전에 중지합니다. 파일 공유의 짧은 전파 지연은 최대 세 차례 확인합니다.
 
 접속은 loopback 전용이며 관리자 공개 등록은 꺼 둡니다. 검증한 배포 묶음의 좌석 감시·sidecar
 기본값과 `experimental-rail` 프로필을 유지하고 자동 예약은 꺼 둡니다. TAGO 키와 관리자 비밀번호는
 숨김 입력으로 받습니다. TAGO는 외부 서비스에서 직접 발급받아야 하며 CLI가 대신 발급하지 않습니다.
-TAGO는 생략할 수 있으며, 철도사 계정은 설치 후 웹 설정에서 연결합니다.
+TAGO는 생략할 수 있으며(역 목록은 앱에 포함된 목록 사용), 철도사 계정은 설치 후 웹 설정에서 연결합니다.
 일반 설치가 공식 철도사 인증·좌석 조회의 성공을 보장하지는 않습니다.
 
 ## 보안 키와 브라우저 알림 키

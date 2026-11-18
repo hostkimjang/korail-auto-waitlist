@@ -113,10 +113,10 @@ API와 proxy는 300초 종료 대기 뒤 종료 코드 137이었으며, 작업�
 
 백업은 서비스 상위 폴더의 `railwait-retired-backup-20261117-c7r4o761`에 있으며 `RESTORE.md`와
 `retirement-result.json`을 함께 보관합니다. `recovery.agekey`는 복구에 필요하므로 0600 권한으로 유지합니다.
-소스 저장소는 보존했고 오래된 `.env`와 로그 원문은 암호화 백업 확인 후 제거했습니다. 현재 실행 경로는
+소스 저장소는 보존했고 오래된 `.env`와 로그 원문은 암호화 백업 확인 후 제거했습니다. 그 시점의 실행 경로는
 `railwait-local-20261117`입니다. 예전 HTTPS 443 경로만 제거했으며 새 HTTPS 8443·SSH 22·Lima·공유 이미지는 유지했습니다.
 
-현재 설치에는 VAPID 설정을 실제 적용했고 API의 키 반환, 공개키·비밀키 일치와 `py_vapid` 서명 생성을
+그 설치(18080)에는 VAPID 설정을 실제 적용했고 API의 키 반환, 공개키·비밀키 일치와 `py_vapid` 서명 생성을
 확인했습니다. 발송 라이브러리가 HTTPS subject의 포트·경로를 거부해 자동 subject를 호스트명으로
 맞췄으며 앱 접속 주소는 그대로 유지했습니다. 12서비스 healthy·migration/log-init 종료 0·maintenance
 재개를 확인했습니다. 최종 CLI 재실행은 설정·컨테이너 ID를 유지했으며 실제 기기 알림 발송은 수행하지 않았습니다.
@@ -135,6 +135,23 @@ API와 proxy는 300초 종료 대기 뒤 종료 코드 137이었으며, 작업�
 2026-11-18에는 같은 18080 설치를 `scripts/update-local-install.sh`로 1.4.1에서 1.4.2로 올렸습니다. 첫 시도는
 작업 폴더의 파일 권한 문제로 `recovery_required`에서 멈춰 기록된 1.4.1 구성으로 복구했고(앱 중단 약 3분), 스크립트를
 고친 뒤 다시 적용해 서비스 healthy와 화면 v1.4.2를 확인했습니다. 경위는 [운영 장애 기록](INCIDENTS.md)에 있습니다.
+
+같은 날 21시 26분에는 공식 서명 릴리스 1.4.3을 설치 CLI로 맥미니의 `services/railwait`(포트 8080)에 새로
+설치했습니다. 이 Lima VM은 `services` 폴더만 쓰기 가능으로 공유하므로 설치 폴더를 그 아래로 지정했고, 서비스 14개
+(장기 12개는 healthy, 일회성 2개는 종료 코드 0), 관리 서비스 heartbeat, 웹 응답을 확인했습니다. 설치는
+Tailscale 단계를 건너뛴 채 끝나서 `railwait install --path … --access tailscale`로 원격 접속을 이어 설정했습니다
+(HTTPS 443, 18080과 같은 Tailscale 노드, 원격 주소의 `/healthz`·`/readyz` 200). 키 없는 간편 설치라 역 목록 API가
+503이었으므로 18080의 TAGO 키를 `railwait configure --input -`로 값을 출력하지 않고 옮겼고, 같은 코드 경로로
+역 279개 수집을 확인했습니다. 이 두 문제는 1.4.4에서 접속 방식 기록과 내장 역 목록으로 고쳤습니다.
+
+새 설치를 확인한 뒤 18080 설치를 백업하고 정리했습니다. 관리 서비스를 해제하고 앱, DB 순서로 멈췄으며
+종료 코드는 0과 SIGTERM 정상 종료 143뿐이었습니다. DB 덤프, 볼륨 6개, 설치 폴더는 평문을 디스크에 남기지 않고
+age로 암호화했습니다. 모든 암호문을 복호화해 평문 해시와 tar 구조를 확인했고, DB는 네트워크 없는 임시
+PostgreSQL에 복원해 행 수·시퀀스·컬럼·인덱스·리비전 일치와 텍스트만 다른 CHECK 제약 22개의 파서 정규화 일치를
+확인했습니다. 그다음 컨테이너 14개, 볼륨 6개, 네트워크 5개, LaunchAgent, Tailscale 8443 경로, 설치 폴더, 18080 전용
+앱 이미지 8개를 지웠습니다. 새 설치의 컨테이너 ID와 HTTPS 443, SSH 22는 그대로입니다. 백업은
+`railwait-retired-backup-20261118-rad2aydn`에 `RESTORE.md`·`retirement-result.json`과 함께 있고, 복구에는 0600 권한의
+`recovery.agekey`가 필요합니다. 정리 시점의 18080에는 감시·철도 계정·알림 채널이 없었습니다.
 
 ## 최근 운영 서버 배포 확인
 
@@ -306,9 +323,12 @@ Linux의 `bash ./scripts/ops.sh down`은 모든 Compose 프로필을 대상으�
 
 - `AUTH_INITIAL_REGISTRATION_ENABLED`
 
-실제 시간표 검색에 필요한 값:
+선택 값:
 
-- 공공 시간표: `TAGO_SERVICE_KEY`
+- 공공 시간표·역 목록: `TAGO_SERVICE_KEY`. 없으면 새 대기 등록의 역 목록은 앱에 포함된 스냅샷
+  (`catalog_origin=bundled_snapshot`)을 쓰고, 열차 시간표는 코레일·SRT 공식 조회만 씁니다. 키가 있으면 TAGO와
+  코레일 공개 역 안내로 역 목록을 24시간마다 다시 수집하고, 공식 조회가 안 될 때 TAGO 시간표로 대신합니다.
+  관리형 설치는 `railwait configure --path <설치 폴더>`로 넣습니다.
 
 ### 역 카탈로그 전수 점검
 
@@ -339,6 +359,27 @@ KORAIL-only·TAGO-only 이름을 모두 보여 주지만 TAGO-only 역을 자동
 보정값을 바꾸거나 추가할 때는 KORAIL 공개 역 이름·4자리 코드와 공식 최신 시간표의 실제 정차를 확인하고,
 TAGO 시간표 API의 양방향 대표 구간에서 응답 역명과 열차 행을 확인해야 합니다. KORAIL 코드를 TAGO
 `depPlaceId`·`arrPlaceId`로 복사하거나, 옛 역의 ID를 개명 alias로 추정하지 않습니다.
+
+### 내장 역 목록 스냅샷 갱신
+
+TAGO 키가 없거나 첫 수집이 실패할 때 쓰는 역 목록은
+`apps/api/src/rail_waitlist/timetable_management/data/bundled_station_catalog.json`입니다. 현재 파일은
+2026-11-18에 실제 설치에서 수집한 목록(식별 역 350개, 표시 역 279개)입니다. 역이 새로 생기거나 이름이
+바뀌었거나 역 목록 cache schema version을 올렸다면, TAGO 키가 있는 설치에서 최신 수집이 끝난 cache 행을
+읽기 전용으로 내보낸 뒤 다시 만듭니다.
+
+```bash
+docker exec <postgres 컨테이너> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SELECT json_build_object(
+  '"'"'schema_version'"'"', schema_version, '"'"'station_count'"'"', station_count,
+  '"'"'retrieved_at'"'"', retrieved_at, '"'"'refresh_after'"'"', refresh_after, '"'"'payload'"'"', payload)
+  FROM station_catalog_cache WHERE cache_key = '"'"'tago_station_catalog_all'"'"'"' > cache.json
+cd apps/api
+uv run --python 3.12 --frozen python scripts/build_bundled_station_catalog.py ../../cache.json
+```
+
+스크립트는 노드 ID 중복, 표시 역이 식별 역에 포함되는지, 0개가 아닌지, TAGO·코레일 역 안내 출처와 수집
+시각이 있는지를 모두 확인한 뒤에만 파일을 바꿉니다. 바뀐 파일은 관련 API 테스트와 함께 커밋하고,
+내보낸 `cache.json`은 지웁니다.
 
 선택 기능에 필요한 값:
 

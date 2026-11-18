@@ -217,6 +217,30 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 18일 한 줄 설치, 설치 포트·폴더 자동 선택, TAGO 없는 역 목록 (v1.4.4)
+
+- [x] 설치 마법사: 8080~8099 중 비어 있는 포트 자동 선택, `--custom`의 폴더·포트 질문(Enter 기본값), Lima·Colima VM의
+  같은 경로 공유 폴더를 읽어 기본 설치 폴더 결정, 앱 이미지를 받기 전 고정 digest `log-init` 이미지로 설치 폴더
+  읽기·쓰기 확인, 고른 접속 방식을 `.railwait/wizard.json`에 기록해 Tailscale 단계 재개. 단위 테스트를 추가하고
+  파일 공유 확인 생략·포트 자동 선택 제거·공유 안 된 폴더 허용으로 깨뜨린 사본에서 새 테스트가 실패함을 확인
+- [x] Windows 자동 재개 상태의 옵션 JSON 계약 유지: 새 `--path` 지정 여부를 `wizardOptions` 밖에 두어 1.4.3이 저장한
+  재개 상태도 그대로 검증됨(처음 구조체에 넣었을 때 기존 재개 테스트 5건이 실패해 확인)
+- [x] CLI: gofmt·Linux/Windows/macOS vet·race 전체 8개 패키지·Windows 테스트 컴파일·6대상 빌드 통과
+- [x] API: 내장 역 목록 스냅샷(식별 350·표시 279, 2026-11-18 수집)과 대체 규칙(cache 우선, 키 없으면 TAGO 미호출,
+  수집 실패 시 503 대신 스냅샷, DB 미저장), `catalog_origin`, 재생성 스크립트. 관련 테스트·ruff·포맷 ratchet·mypy
+  통과. 이 맥의 전체 pytest는 Playwright Chromium 미설치로 실패 10·오류 106(브라우저 자동화 테스트)이며 나머지 5681
+  통과. CI에서 전체 재확인 필요. 컨테이너 이미지 빌드에서 데이터 파일 포함 확인
+- [x] 웹: `bundled_snapshot`이면 "기본 제공 역 목록"과 KST 기준 날짜 안내, 이전 응답 호환. typecheck·test·lint·build 통과
+- [x] 한 줄 설치 스크립트 `install.sh`·`install.ps1`: OS·CPU 감지(Rosetta 셸도 arm64), 자산 이름 한 줄 해시 검사,
+  같은 폴더 임시 파일로 원자적 교체, sudo 거부, `/dev/tty` 마법사 연결과 비대화형 안내, 부분 다운로드 시 미실행.
+  `install.ps1`은 순수 ASCII. 로컬에서 sh·dash·bash 각 37사례(macOS·Debian), shellcheck·PSScriptAnalyzer·actionlint 0건,
+  PowerShell 7 테스트 20건 통과, 일부러 깨뜨린 사본 5종 검출. 릴리스 워크플로가 스크립트를 검사 뒤 `.sha256`과 함께
+  게시하고 설치 CLI 버전을 릴리스 버전으로 빌드(매니페스트 최소 CLI 버전 0.1.0 유지로 1.4.3 관리 서비스 업데이트 가능)
+- [ ] CI 통과와 1.4.4 서명 릴리스 게시(`compatible_from=1.4.3`)
+- [ ] 1.4.3 공식 설치(`services/railwait`)에서 웹 **앱 업데이트**로 1.4.4 적용 확인
+- [ ] 운영 확인: TAGO 키 없는 실제 설치에서 역 목록 안내와 공식 시간표 검색, Docker Desktop·Colima 실설치의 폴더 선택과
+  파일 공유 확인, Windows PowerShell 5.1의 한 줄 설치
+
 ## 2026년 11월 18일 첫 공식 서명 릴리스와 릴리스 조회 수정 (v1.4.3)
 
 - [x] 릴리스 서명키: Ed25519 seed를 사용자 전용 임시 폴더에서 만들어 저장소 secret `RAILWAIT_RELEASE_SIGNING_KEY`로
@@ -226,7 +250,8 @@
   차단, 예외 없음)를 활성. 기존 `default rule`은 대상이 비어 있고 모든 푸시를 막는 규칙이 있어 비활성으로 둠
 - [x] 1.4.2 서명 릴리스 게시(run 44288860894, 커밋 `b166d5b`). 첫 실행(44288468947)은 ubuntu-latest(Ubuntu 26.04)에서
   API의 Playwright 1.55가 Chromium 의존성 설치를 거부해 실패해 verify를 ubuntu-24.04로 고정. 그 실행의 첫 시도는
-  Pydoll 실제 Chrome 시작 시간 초과 1건으로 실패하고 같은 커밋 재시도에서 통과. GHCR 네 패키지 공개 전환(사용자),
+  Pydoll 실제 Chrome 시작 시간 초과 1건으로 실패하고 같은 커밋 재시도에서 통과. GHCR 네 패키지가 첫 게시 직후부터
+  익명 조회 가능함을 확인(따로 공개로 바꾸는 단계는 필요 없었음),
   익명 조회·서명, 두 CPU 이미지 실행 확인, CLI 6종, Release 게시
 - [x] 게시 뒤 확인에서 결함 발견: Release의 CLI가 모든 요청에 `Accept: application/octet-stream`을 보내 GitHub API
   `releases/latest`가 415를 돌려줘 공식 설치·`update check`·웹 업데이트 확인이 불가. API에는
@@ -240,7 +265,11 @@
   `compatible_from` 없음·DB revision `0042_protection_halt`·두 CPU 이미지 digest 고정
 - [x] main CI(`30222c4`): repository-verify 44295655712, experimental-browser-verify 44295655657, CLI cross-platform
   verification 44295655790 통과
-- [ ] 1.4.3 공식 CLI로 맥미니 새 설치(사용자가 직접 진행) 확인 뒤 18080 로컬 패키지 설치 백업·정리
+- [x] 1.4.3 공식 CLI로 맥미니 새 설치(사용자가 직접 진행, `services/railwait`·포트 8080) 확인 뒤 18080 로컬 패키지 설치
+  백업·정리. 새 설치는 14서비스 정상·heartbeat·웹 응답 확인. 건너뛴 Tailscale을 `install --access tailscale`로 이어
+  설정(HTTPS 443, 원격 `/healthz`·`/readyz` 200)하고 TAGO 키를 값 비출력으로 옮겨 역 279개 수집 확인. 18080은
+  암호화 백업·복호화 해시·격리 DB 복원 비교 뒤 컨테이너 14·볼륨 6·네트워크 5·LaunchAgent·8443 경로·설치 폴더·전용
+  이미지 8개 제거(백업 `railwait-retired-backup-20261118-rad2aydn`, [운영 가이드](docs/OPERATIONS.md#관리형-설치-검증-기록))
 - [ ] 다음 릴리스에서 `compatible_from`에 1.4.3을 넣어 웹 **앱 업데이트** 버튼으로 실제 업데이트 확인
 
 ## 2026년 11월 18일 로컬 설치 한 번에 업데이트와 Windows CLI 테스트 수정 (v1.4.2)

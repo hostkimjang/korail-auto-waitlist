@@ -149,18 +149,29 @@ HTTPS 접속 설정은 `install --path <기존 경로> --access tailscale` 마�
 
 ## 최초 설치
 
+공식 릴리스는 `install.sh`(macOS·Linux)·`install.ps1`(Windows) 한 줄 스크립트로 시작할 수 있다. 스크립트는 같은
+Release에서 OS·CPU에 맞는 설치 CLI와 `.sha256`을 받아 확인하고 사용자 폴더에 둔 뒤 설치 마법사를 실행한다.
+버전 지정은 설치 CLI에만 적용되며, 마법사는 항상 최신 안정 릴리스를 설치한다.
+
 1. OS·CPU, Docker Linux daemon·Compose 버전, 로컬 socket/pipe, 포트·파일시스템 여유 공간을 검사한다.
    Docker 대상 주소를 설치 기록에 고정하며 shell의 `DOCKER_HOST`·Compose 환경변수로 대상을 바꾸지 않는다.
 2. 새 설치 ID와 프로젝트명을 만들고 커널 잠금으로 동시 설치를 막는다. 기존 파일이나 프로젝트 자원은
    덮어쓰지 않는다. 기본 저장소는 Windows `%LOCALAPPDATA%/Railwait`, macOS 사용자 Application Support,
-   Linux XDG data home이다. `--path`로 Docker VM에 공유된 위치를 선택할 수 있다.
+   Linux XDG data home이다. `--path`가 없으면 Docker가 준비된 뒤 폴더를 정한다. Docker가 Lima·Colima VM이면
+   `limactl list <VM> --format '{{json .Config.Mounts}}'`로 같은 경로로 공유된 폴더를 읽고, 기본 폴더가 쓰기 가능
+   공유 밖이면 첫 쓰기 가능 공유(임시 폴더 제외) 아래 `railwait`를 쓴다. 이미 설치한 폴더는 옮기지 않는다.
+   포트를 지정하지 않은 새 설치는 8080~8099 중 비어 있는 첫 loopback 포트를 쓰고, `--custom`은 폴더와 포트를
+   기본값과 함께 묻는다. 고른 접속 방식은 설치 기록이 생긴 뒤 `.railwait/wizard.json`에 남겨, 원격 접속 단계에서
+   멈춘 설치를 같은 명령으로 다시 실행해도 원격 접속 설정을 이어간다.
 3. 공식 안정 Release의 manifest 서명, 버전·아키텍처·최소 CLI 버전, 번들 SHA-256·크기를 검사한다.
    tar 경로 탈출·symlink·중복 파일·크기 초과를 거절하고 배포 파일 지문을 설치 기록에 보존한다.
 4. `.env`의 암호화키·세션키·DB 비밀번호·내부 token 여섯 개는 직접 입력값을 검증하거나 각각 별도 난수로
    생성한다. VAPID P-256 키 쌍과 subject도 준비한다. 기본 접속은 loopback 전용이며 공개 관리자 가입은
    비활성화한다. 재실행 때 기존 키를 재생성하지 않는다.
-5. 이미지 다운로드 후 API 원샷 명령으로 컨테이너에서 읽은 관리 gate generation이 호스트와 같은지 확인한다.
-   Docker Desktop/VM 파일 공유가 안 되면 DB 기동·migration·관리자 생성 전에 중단한다.
+5. 공식 릴리스는 앱 이미지를 받기 전에 고정 digest의 작은 `log-init` 이미지로 네트워크 없는 컨테이너를 띄워
+   설치 폴더의 임시 파일을 읽고 쓰는지 확인한다. 실패하면 이미지를 받지 않고 중단하며 생성한 설정은 보존한다.
+   이미지 다운로드 후에는 API 원샷 명령으로 컨테이너에서 읽은 관리 gate generation이 호스트와 같은지 다시
+   확인한다. Docker Desktop/VM 파일 공유가 안 되면 DB 기동·migration·관리자 생성 전에 중단한다.
 6. DB·Redis 준비 → migration → stdin 관리자 bootstrap → 전체 서비스 기동 → digest·health 확인 순서로 진행한다.
    관리자 생성 commit 뒤 CLI가 종료됐다면 계정 존재를 먼저 확인하고 재생성하지 않는다. 생성 전이면 다시
    입력받는다. migration 도중 중단돼 결과가 불명확하면 자동 재실행하지 않는다.

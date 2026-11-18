@@ -157,7 +157,7 @@ docker compose -f compose.yml config --quiet
 docker compose -f compose.yml up -d --force-recreate api notification-worker
 ```
 
-실제 KTX·SRT 시간표를 검색하려면 공공데이터포털에서 발급받은 일반 인증키를 `TAGO_SERVICE_KEY`에 설정해야 합니다. 키가 없어도 데모는 실행할 수 있지만 실제 시간표 검색은 사용할 수 없습니다.
+`TAGO_SERVICE_KEY`는 선택입니다. 키가 없으면 새 대기 등록의 역 목록은 릴리스에 포함된 공개 역 목록을 쓰고, 화면에 "기본 제공 역 목록"과 기준 날짜를 표시합니다. 기본 설정(`experimental-rail` 프로필)에서는 열차 시간표를 코레일·SRT 공식 조회로 먼저 가져옵니다. 공공데이터포털에서 발급받은 일반 인증키를 넣으면 최신 역 목록을 받아 쓰고, 공식 조회가 안 될 때 TAGO 시간표로 대신합니다.
 
 ## 3. 구성 확인하기
 

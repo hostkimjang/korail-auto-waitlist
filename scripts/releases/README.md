@@ -44,7 +44,9 @@ stable로 공개한다. smoke는 import·실행파일·웹 정적 파일 검증�
 안정 릴리스를 게시하지 않는다. 이 파일의 추가나 로컬 테스트는 실제 이미지 게시·릴리스 공개를 뜻하지 않는다.
 
 현재 서명 공개키는 2026-11-18에 만든 `qeR7RDhD9a1lF0YVpMX5PbiHmrVU+nm7Fstt9UbB5nM=`이고, 개인 seed는 저장소
-secret과 관리자의 오프라인 백업에만 있다. GHCR의 `api`·`web`·`browser`·`backup` 네 패키지는 공개로 설정했다.
+secret과 관리자의 오프라인 백업에만 있다. GHCR의 `api`·`web`·`browser`·`backup` 네 패키지는 첫 게시 직후부터 익명
+pull 토큰으로 `tags/list` 200을 돌려줘 따로 공개로 바꿀 필요가 없었다. `gh` 토큰에 packages 권한이 없어 패키지
+공개 설정 값 자체는 API로 확인하지 않았다.
 verify 작업은 repository-verify와 같은 ubuntu-24.04에서 돈다. ubuntu-latest가 고르는 Ubuntu 26.04에는 API의
 Playwright 1.55가 Chromium 의존성을 설치하지 못한다. 병렬 테스트 전에 Chrome을 한 번 띄워, 첫 시작이 Pydoll의
 시작 대기 시간을 넘기지 않게 한다.

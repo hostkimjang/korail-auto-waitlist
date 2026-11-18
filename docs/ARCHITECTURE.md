@@ -1570,6 +1570,18 @@ DB cache, `TagoClient` 검증 cache에 동일하게 사용합니다. 상류가 �
 변경된 KORAIL 코드를 반환하면 추측하지 않고 갱신을 실패시켜 마지막 정상 snapshot을 유지합니다. cache schema
 v4와 migration `0041_station_cache_v4`는 보정 전 v2/v3 snapshot을 stale로 남겨 재수집하게 하며 기존 payload의
 version을 데이터 migration으로 올리지 않습니다. KORAIL 4자리 역 코드는 TAGO node ID로 변환하지 않습니다.
+
+릴리스에 포함하는 역 목록 스냅샷은 `timetable_management/bundled_station_catalog.py`가 소유합니다. 데이터 파일
+`timetable_management/data/bundled_station_catalog.json`은 실제 설치의 DB cache payload에서
+`apps/api/scripts/build_bundled_station_catalog.py`로 만들고, 출처(TAGO·코레일 역 안내 URL)·수집 시각·catalog
+schema version을 함께 기록합니다. 로더는 형식·schema version·출처·노드 ID 중복·표시 역 ⊆ 식별 역을 검증하고,
+어기면 스냅샷을 쓰지 않습니다. application은 유효한 DB cache를 항상 우선합니다. TAGO 키가 없으면 수집·lease·실패
+기록 없이 스냅샷을 바로 돌려주고, 키가 있는데 cache가 없고 수집이 실패하거나 시간을 넘기면 503 대신 스냅샷을
+돌려줍니다. 스냅샷은 DB cache에 저장하지 않으므로 키를 설정한 뒤에는 기존 수집 경로가 곧바로 최신 목록을
+받습니다. `TagoClient` 검증 cache도 스냅샷으로 채우지 않아, 공식 조회 실패 때의 TAGO 대체 시간표에는 여전히
+실제 TAGO 키가 필요합니다. 응답의 `catalog_origin`(`collected`·`bundled_snapshot`·`mock`, 기본값 `collected`)이
+이 구분을 전달하고, `retrieved_at`은 스냅샷의 원래 수집 시각입니다. catalog schema version을 올리면 스냅샷도
+다시 만들어야 하며 계약 테스트가 이를 강제합니다.
 웹의
 `features/new-wait/stationSearch.ts`는 같은 명시적 대응의 현재·이전 이름을 검색 alias로 유지하되, 선택값과
 API 요청에는 서버가 반환한 현재 표시명과 TAGO `node_id`를 그대로 사용합니다.

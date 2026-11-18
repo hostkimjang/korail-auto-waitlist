@@ -91,12 +91,13 @@ Windows PowerShell 5.1에서 `요청이 중단되었습니다. 예기치 않게 
 
 스크립트는 운영체제와 CPU에 맞는 설치 CLI를 같은 Release에서 받아 SHA-256을 확인하고, `~/.local/bin/railwait`(Windows는 `%LOCALAPPDATA%\Programs\Railwait\railwait.exe`)에 둔 뒤 설치 마법사를 바로 시작합니다. sudo나 관리자 권한을 쓰지 않고, PATH와 셸 설정 파일은 바꾸지 않습니다. PATH에 없으면 추가할 명령만 안내합니다. 마법사 옵션은 `sh -s --` 뒤에 붙입니다. 예를 들어 설치 폴더와 포트를 직접 고르려면 `curl -fsSL …/install.sh | sh -s -- --custom`을 실행하고, Windows에서는 `$env:RAILWAIT_INSTALL_ARGS = '--custom'`을 먼저 지정합니다. `RAILWAIT_VERSION=1.4.4`처럼 지정하면 그 버전의 설치 CLI를 받지만, 설치되는 앱은 항상 최신 공식 릴리스입니다. 한 줄 설치는 1.4.4부터 쓸 수 있습니다.
 
-설치 마법사는 실행 환경 확인, 설치 계획, 앱·계정 설정, 자동 시작, 접속 확인의 다섯 단계로 진행합니다. Windows·macOS에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 받아 배포자 서명을 확인한 뒤 OS 설치 창으로 이어 줍니다. 간편 설치는 Tailscale HTTPS 연결과 보안·알림 키 생성을 기본으로 하므로 관리자 계정만 직접 정하면 됩니다. 실행 파일에 들어 있는 공식 공개키로 서명을 확인한 배포 묶음과 이미지만 설치합니다.
+설치 마법사는 실행 환경 확인, 설치 계획, 앱·계정 설정, 자동 시작, 접속 확인의 다섯 단계로 진행합니다. Windows·macOS에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 받아 배포자 서명을 확인한 뒤 OS 설치 창으로 이어 줍니다. 간편 설치는 Tailscale HTTPS 연결, 보안·알림 키 생성, 자동 예매 켜기를 기본으로 하므로 선택 항목인 TAGO 키와 관리자 계정만 물어봅니다. 실행 파일에 들어 있는 공식 공개키로 서명을 확인한 배포 묶음과 이미지만 설치합니다.
 
 - **설치 폴더**: 운영체제의 사용자 앱 데이터 폴더(macOS `~/Library/Application Support/Railwait`)가 기본입니다. Docker가 Lima·Colima VM에서 돌고 그 VM이 기본 폴더를 쓸 수 없으면, VM이 쓰기 가능으로 공유한 폴더 안의 `railwait` 폴더로 자동으로 정합니다. 수 GB의 이미지를 받기 전에 Docker 컨테이너가 설치 폴더를 읽고 쓸 수 있는지 먼저 확인합니다. 직접 정하려면 `--path`를 씁니다.
 - **포트**: 이 컴퓨터의 접속 주소는 8080부터 비어 있는 포트를 자동으로 고릅니다. 직접 정하려면 `--port 9090`처럼 지정하고, `--custom`을 쓰면 설치 폴더와 포트를 물어봅니다. Enter를 누르면 표시된 기본값을 씁니다.
 - **원격 접속**: 로컬 전용은 `--access local`입니다. Tailscale 단계에서 멈췄다면 같은 명령을 다시 실행하면 원격 접속 설정을 이어갑니다. 로컬 전용으로 설치했다가 나중에 켜려면 `--access tailscale`을 붙여 다시 실행합니다. 원격 접속을 켜면 다른 기기는 완료 화면의 HTTPS 주소로 접속하고, 이 컴퓨터에서는 로컬 주소(`http://127.0.0.1:<포트>`)도 계속 쓸 수 있습니다(1.4.5부터).
-- **TAGO 키**: 없어도 됩니다. 새 대기 등록의 역 목록은 앱에 포함된 공개 역 목록을 쓰고, 열차 시간표는 코레일·SRT 공식 조회를 먼저 씁니다. 공공데이터포털 TAGO 키를 `railwait configure`로 넣으면 최신 역 목록을 받아 쓰고, 공식 조회가 안 될 때 TAGO 시간표로 대신합니다.
+- **TAGO 키**: 없어도 됩니다. 새 대기 등록의 역 목록은 앱에 포함된 공개 역 목록을 쓰고, 열차 시간표는 코레일·SRT 공식 조회를 먼저 씁니다. 공공데이터포털 TAGO 일반 인증키(Decoding)를 설치 중에 넣거나 나중에 `railwait configure`로 넣으면 최신 역 목록을 받아 쓰고, 공식 조회가 안 될 때 TAGO 시간표로 대신합니다. 설치 중에는 Enter를 누르면 건너뜁니다.
+- **자동 예매**: 새 설치는 켜 둡니다. 새 대기에서 **좌석 재발견마다 자동 예매**를 고른 대기만 좌석을 찾으면 저장한 철도 계정으로 결제 직전까지 예매하고, 결제는 하지 않습니다. 설치할 때 끄려면 `--custom`을 쓰고, 설치한 뒤에는 `railwait configure reservation off`·`on`으로 바꿉니다. 지연승낙 안내의 자동 선택은 따로 꺼 둡니다.
 
 스크립트 없이 직접 받으려면 [최신 Release](https://github.com/hostkimjang/korail-auto-waitlist/releases/latest)에서 `railwait-<OS>-<CPU>` 실행 파일과 같은 이름의 `.sha256` 파일을 받아 `shasum -a 256 -c`(Linux는 `sha256sum -c`, Windows는 `Get-FileHash`)로 확인한 뒤 `install`을 실행합니다. 이때 받은 실행 파일은 설치가 끝날 때까지 옮기거나 지우지 마세요. 중단된 설치를 이어갈 때 같은 파일을 씁니다. 명령 전체는 [설치 CLI 안내](apps/cli/README.md)에 있습니다. 기존 Git 설치를 CLI 설치로 옮기는 기능은 아직 없으므로 다른 폴더와 포트에 설치하세요.
 

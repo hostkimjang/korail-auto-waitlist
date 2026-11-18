@@ -24,10 +24,10 @@ Docker context와 설치된 도구를 재사용하고, Linux·비대화형 실�
 `--plain`으로 안정적인 일반 텍스트 출력을,
 `railwait preview`로 상태를 변경하지 않는 설치 화면 예시를 볼 수 있습니다.
 
-새 대화형 설치의 기본값은 Tailscale HTTPS와 보안·알림 키 자동 생성입니다. 관리자 계정 설정 외의 기술
-질문은 생략하며 완료 후 브라우저를 엽니다. 직접 키 입력·접속 선택·TAGO 입력은 `--custom`, 로컬 전용은
-`--access local`로 선택합니다. TAGO는 외부 발급 키이므로 간편 설치에서는 나중에 설정하며 시간표 검색도
-그 뒤 사용할 수 있습니다. 기존 설치와 비대화형 명령의 접속 기본값은 바꾸지 않습니다.
+새 대화형 설치의 기본값은 Tailscale HTTPS, 보안·알림 키 자동 생성, 자동 예매 켜기입니다. 관리자 계정과
+선택 항목인 TAGO 키(Enter로 건너뜀) 외의 질문은 생략하며 완료 후 브라우저를 엽니다. 직접 키 입력·접속
+선택·자동 예매 끄기는 `--custom`, 로컬 전용은 `--access local`로 선택합니다. TAGO 키는 설치한 뒤
+`railwait configure`로 넣을 수도 있습니다. 기존 설치와 비대화형 명령의 접속 기본값은 바꾸지 않습니다.
 Docker 최초 실행과 Tailscale 초기화·로그인·기기 승인은 최대 5분 자동 확인하며 Enter로 재확인하지 않습니다.
 첫 로그인은 공식 인증 페이지를 한 번 열고 사용자 입력을 기다립니다.
 
@@ -397,6 +397,12 @@ uv run --python 3.12 --frozen python scripts/build_bundled_station_catalog.py ..
 - Web Push: `WEBPUSH_VAPID_PRIVATE_KEY`, `WEBPUSH_VAPID_PUBLIC_KEY`, `WEBPUSH_VAPID_SUBJECT`
 - 모니터링: `GRAFANA_ADMIN_PASSWORD`
 - 암호화 백업: `BACKUP_AGE_IDENTITY`, `BACKUP_AGE_RECIPIENT`
+
+설치 CLI는 새 설치에서 `KORAIL_RESERVATION_ONCE_ENABLED`·`SRT_RESERVATION_ONCE_ENABLED`를 켜 두고, 설치한 뒤에는
+`railwait configure reservation on|off --path <설치 폴더>`로 두 값을 함께 바꿉니다. 이 명령은 작업 종료 대기·암호화
+백업·재시작을 거치는 계획을 보여 주고, 출력한 `--plan` 명령으로 적용합니다. 스위치가 꺼진 설치에서는 웹의 새 대기
+화면이 자동 예매를 고르지 못하게 하고, 이미 자동 예매로 걸린 대기에는 알림만 보낸다고 표시합니다. Git 설치는
+`.env.example`의 기본값(꺼짐)을 그대로 두므로 `.env`를 직접 바꾼 뒤 아래와 같이 프로필 전체를 다시 만듭니다.
 
 `KORAIL_RESERVATION_ONCE_ENABLED`는 KORAIL 단발 예매 전체 기능 스위치이며 지연승낙 동의를 대신하지
 않습니다. 정확한 `이용안내/확인`과 예약 결과의 `안내메세지/확인`은 기본 허용 목록으로 처리합니다. 그 밖의
@@ -1797,6 +1803,20 @@ Windows PowerShell 5.1에서 `irm …/install.ps1 | iex`가 `요청이 중단되
 
 이 실패는 `install.ps1`을 받기 전에 일어나므로 스크립트를 고쳐서는 해결할 수 없습니다. 스크립트가 받은 뒤 CLI
 실행 파일 다운로드에 실패하면 그때는 실패한 주소를 함께 보여 줍니다.
+
+### Windows 설치가 자동 시작 단계에서 멈출 때
+
+Windows 설치 4단계 **자동 시작**이 `user service command failed: exit status 1`로 멈추고 웹 **앱 업데이트**에
+"관리 서비스와 Docker 실행 상태를 확인해 주세요"만 보이면, 1.4.6 이하 CLI가 만든 작업 정의를 작업 스케줄러가
+거부한 것입니다(`The task XML is malformed. (1,40)::오류: 인코딩을 전환할 수 없습니다`). 앱은 정상이고 관리
+서비스만 등록되지 않은 상태입니다.
+
+- 한 줄 설치 명령으로 새 CLI를 받은 뒤 같은 설치 명령을 다시 실행합니다. 새 CLI는 거부된 정의와 그 옆에서 한 번도
+  실행되지 않은 관리 실행 파일을 교체하고 작업을 다시 등록합니다.
+- 화면에 나온 재개 명령은 PowerShell에서 맨 앞의 `&`부터 줄 끝까지 그대로 복사해 실행합니다. 경로부터 복사하면
+  `CommandNotFoundException`이 납니다.
+- `railwait manager status --path <설치 폴더>`가 `관리 서비스 실행 중`을 보여 주면 웹 **앱 업데이트**도 다시
+  동작합니다.
 
 ### 서비스가 시작되지 않음
 

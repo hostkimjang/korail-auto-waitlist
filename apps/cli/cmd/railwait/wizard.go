@@ -306,7 +306,7 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	}
 	if remote != nil {
 		ui.KeyValue("로그인 주소", remotePlan.URL)
-		ui.Hint("HTTPS 보안 쿠키를 사용하므로 로그인은 위 HTTPS 주소에서 진행합니다.")
+		ui.Hint("다른 기기에서는 위 HTTPS 주소로 로그인합니다. 이 컴퓨터에서는 위 로컬 주소도 쓸 수 있습니다.")
 	} else {
 		ui.Info("건너뜀 · Tailscale 원격 접속")
 		ui.Hint("다른 기기에서도 쓰려면 같은 명령에 --access tailscale을 붙여 다시 실행하세요.")
@@ -480,6 +480,9 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	}
 	ui.Success("레일웨잇 준비가 끝났습니다")
 	ui.KeyValue("접속 주소", address)
+	if remote != nil {
+		ui.KeyValue("이 컴퓨터", fmt.Sprintf("http://127.0.0.1:%d", s.Port))
+	}
 	ui.KeyValue("버전", s.Release)
 	ui.Hint("입력한 관리자 계정으로 로그인하세요.")
 	ui.Hint("상태 확인")

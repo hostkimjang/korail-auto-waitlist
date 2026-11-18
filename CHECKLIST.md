@@ -217,6 +217,22 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 18~19일 원격 접속을 켠 설치의 로컬 주소 로그인 (v1.4.5)
+
+- [x] 원인: 원격 접속 설정이 허용 출처를 HTTPS 주소 하나로 바꾸고 보안 쿠키를 켜서, 같은 컴퓨터의 로컬 주소에서 보낸
+  저장 요청이 `untrusted or missing Origin`(403)으로 거부됨. 사용자 설치 API 로그의 `POST /api/v1/notifications/channels`
+  403으로 확인
+- [x] API: Origin이 브라우저가 요청한 loopback 주소(Host)와 정확히 같으면 신뢰하고, 평문 HTTP loopback이면 쿠키 Secure를
+  생략. 브라우저가 `Sec-Fetch-Site`를 보내면 `same-origin`일 때만 인정. 다른 포트·이름·DNS 재바인딩 이름·LAN 주소·`null`·
+  경로 포함 Origin과 cross-site·same-site 요청 거부, `localhost`·`[::1]`·`127.0.0.2` 허용, 원격 HTTPS·HTTPS loopback의 Secure
+  유지, CSRF 확인 유지. 새 테스트 15건 포함 관련 API 테스트 119건 통과, 이 맥의 전체 pytest는 Chromium 미설치 116건 외 통과.
+  신뢰 판정 제거·Secure 고정·Fetch Metadata 무시로 깨뜨린 사본에서 각각 새 테스트가 실패함을 확인. 실제 설치 프록시
+  로그에서 Tailscale serve가 원래 Host와 `X-Forwarded-Proto: https`를, 로컬 요청이 `127.0.0.1:8080` Host를 넘기는 것을 확인
+- [x] CLI: 원격 접속 계획 안내를 "다른 기기는 HTTPS, 이 컴퓨터는 로컬 주소도 가능"으로 바꾸고 완료 화면에 로컬 주소 표시
+- [ ] CI 통과와 1.4.5 서명 릴리스 게시(`compatible_from=1.4.3,1.4.4`)
+- [ ] 사용자 설치에서 웹 **앱 업데이트** 뒤 로컬 주소에서 저장 확인
+- [ ] 게시 확인 뒤 설치·운영 안내(CLI 안내, 운영 가이드)의 "로그인은 HTTPS 주소에서만" 문구 갱신(새 공개 순서)
+
 ## 2026년 11월 18일 한 줄 설치, 설치 포트·폴더 자동 선택, TAGO 없는 역 목록 (v1.4.4)
 
 - [x] 설치 마법사: 8080~8099 중 비어 있는 포트 자동 선택, `--custom`의 폴더·포트 질문(Enter 기본값), Lima·Colima VM의

@@ -4,11 +4,13 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import secrets
 import time
 from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
@@ -100,11 +102,61 @@ def verify_session_token(token: str, settings: Settings | None = None) -> str | 
     return raw if hmac.compare_digest(supplied, expected) else None
 
 
+def loopback_same_origin(request: Request) -> str | None:
+    """Return the request's own loopback origin when a browser on this computer calls the app.
+
+    The installed proxy publishes only on loopback and forwards the browser's Host header.
+    A browser sends the address it requested as Host and the page origin as Origin, so an
+    exact match on a loopback host means the page itself came from this app at that address.
+    Another local port, a rebinding hostname or a remote origin yields a different Origin or
+    a non-loopback Host and must still be listed in AUTH_ALLOWED_ORIGINS. The CSRF token
+    check that follows is unchanged. When the browser sends Fetch Metadata, it must also say
+    same-origin, so a proxy that rewrote Host to the loopback backend cannot widen this trust.
+    """
+    origin = request.headers.get("origin", "").rstrip("/")
+    host = request.headers.get("host", "")
+    if not origin or not host:
+        return None
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site is not None and fetch_site != "same-origin":
+        return None
+    try:
+        parts = urlsplit(origin)
+        hostname = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme not in {"http", "https"} or origin != f"{parts.scheme}://{host}":
+        return None
+    if hostname == "localhost":
+        return origin
+    try:
+        loopback = hostname is not None and ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return None
+    return origin if loopback else None
+
+
 def require_trusted_origin(request: Request, settings: Settings | None = None) -> None:
     configured = settings or get_settings()
     origin = request.headers.get("origin", "").rstrip("/")
-    if not origin or origin not in configured.auth_allowed_origins:
-        raise HTTPException(403, "untrusted or missing Origin")
+    if origin and (
+        origin in configured.auth_allowed_origins or loopback_same_origin(request) is not None
+    ):
+        return
+    raise HTTPException(403, "untrusted or missing Origin")
+
+
+def auth_cookie_secure(request: Request, settings: Settings) -> bool:
+    """Mark auth cookies Secure except for plain-HTTP loopback same-origin requests.
+
+    Secure keeps a remote HTTPS session cookie off plain-text networks. A loopback request
+    never leaves this computer, and some browsers refuse a Secure cookie sent over plain HTTP
+    even on loopback, which would make local sign-in silently fail.
+    """
+    if not settings.auth_cookie_secure:
+        return False
+    origin = loopback_same_origin(request)
+    return origin is None or not origin.startswith("http://")
 
 
 async def resolve_admin_session(
@@ -153,7 +205,7 @@ async def require_admin(
 
 
 def set_auth_cookies(
-    response: Response, token: str, csrf: str, expires_at: datetime, settings: Settings
+    response: Response, token: str, csrf: str, expires_at: datetime, *, secure: bool
 ) -> None:
     max_age = max(0, int((expires_at - utcnow()).total_seconds()))
     response.set_cookie(
@@ -161,7 +213,7 @@ def set_auth_cookies(
         token,
         max_age=max_age,
         expires=expires_at,
-        secure=settings.auth_cookie_secure,
+        secure=secure,
         httponly=True,
         samesite="strict",
         path="/",
@@ -171,24 +223,24 @@ def set_auth_cookies(
         csrf,
         max_age=max_age,
         expires=expires_at,
-        secure=settings.auth_cookie_secure,
+        secure=secure,
         httponly=False,
         samesite="strict",
         path="/",
     )
 
 
-def clear_auth_cookies(response: Response, settings: Settings) -> None:
+def clear_auth_cookies(response: Response, *, secure: bool) -> None:
     response.delete_cookie(
         SESSION_COOKIE,
-        secure=settings.auth_cookie_secure,
+        secure=secure,
         httponly=True,
         samesite="strict",
         path="/",
     )
     response.delete_cookie(
         CSRF_COOKIE,
-        secure=settings.auth_cookie_secure,
+        secure=secure,
         httponly=False,
         samesite="strict",
         path="/",
@@ -253,7 +305,13 @@ async def register(
         await session.rollback()
         raise HTTPException(409, "admin account is already configured") from None
 
-    set_auth_cookies(response, signed_token, csrf, admin_session.expires_at, get_settings())
+    set_auth_cookies(
+        response,
+        signed_token,
+        csrf,
+        admin_session.expires_at,
+        secure=auth_cookie_secure(request, get_settings()),
+    )
     return LoginResult(authenticated=True, expires_at=admin_session.expires_at)
 
 
@@ -280,18 +338,25 @@ async def login(
     account.last_login_at = utcnow()
     admin_session, signed_token, csrf = prepare_session(session)
     await session.commit()
-    set_auth_cookies(response, signed_token, csrf, admin_session.expires_at, get_settings())
+    set_auth_cookies(
+        response,
+        signed_token,
+        csrf,
+        admin_session.expires_at,
+        secure=auth_cookie_secure(request, get_settings()),
+    )
     return LoginResult(authenticated=True, expires_at=admin_session.expires_at)
 
 
 @router.post("/logout", status_code=204)
 async def logout(
+    request: Request,
     response: Response,
     session: SessionDependency,
     current: Annotated[AdminSession, Depends(require_admin)],
 ) -> Response:
     current.revoked_at = utcnow()
     await session.commit()
-    clear_auth_cookies(response, get_settings())
+    clear_auth_cookies(response, secure=auth_cookie_secure(request, get_settings()))
     response.status_code = 204
     return response

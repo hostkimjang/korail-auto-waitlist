@@ -1703,8 +1703,14 @@ default·enum 저장값·relationship·transaction 계약을 바꾸지 않습니
 
 - 관리자 비밀번호는 Argon2id 해시로 저장합니다.
 - 철도 계정과 알림 채널의 비밀값은 애플리케이션 키로 암호화합니다.
-- 세션 쿠키는 HttpOnly와 SameSite 정책을 사용합니다.
-- 상태 변경 요청은 허용된 출처와 CSRF 값을 확인합니다.
+- 세션 쿠키는 HttpOnly와 SameSite 정책을 사용합니다. `AUTH_COOKIE_SECURE=true`이면 Secure를 붙이되, 평문 HTTP
+  loopback 같은 출처 요청에는 붙이지 않습니다. 이 요청은 같은 컴퓨터 밖으로 나가지 않고, 일부 브라우저는 평문
+  HTTP로 받은 Secure 쿠키를 저장하지 않아 로컬 로그인이 풀리기 때문입니다.
+- 상태 변경 요청은 출처(Origin)와 CSRF 값을 확인합니다. 출처는 `AUTH_ALLOWED_ORIGINS`에 있거나, 브라우저가
+  요청한 자기 loopback 주소(`127.0.0.0/8`·`localhost`·`::1`의 Host)와 정확히 같아야 합니다(`auth.loopback_same_origin`).
+  설치 프록시는 loopback에만 열리고 Host를 그대로 넘기므로, 원격 HTTPS 접속을 켠 설치에서도 같은 컴퓨터의
+  로컬 주소를 쓸 수 있습니다. 브라우저가 `Sec-Fetch-Site`를 보내면 `same-origin`이어야 합니다. 다른 포트·다른
+  이름·DNS 재바인딩 이름·LAN 주소는 이 예외에 들지 않습니다.
 - 비밀번호, 쿠키, 토큰, 결제정보를 URL·로그·이벤트에 넣지 않습니다.
 
 관리자 인증의 HTTP schema 3개와 `AdminAccount`·`AdminSession` mapper는 각각

@@ -236,7 +236,16 @@
   `install.ps1`은 순수 ASCII. 로컬에서 sh·dash·bash 각 37사례(macOS·Debian), shellcheck·PSScriptAnalyzer·actionlint 0건,
   PowerShell 7 테스트 20건 통과, 일부러 깨뜨린 사본 5종 검출. 릴리스 워크플로가 스크립트를 검사 뒤 `.sha256`과 함께
   게시하고 설치 CLI 버전을 릴리스 버전으로 빌드(매니페스트 최소 CLI 버전 0.1.0 유지로 1.4.3 관리 서비스 업데이트 가능)
-- [ ] CI 통과와 1.4.4 서명 릴리스 게시(`compatible_from=1.4.3`)
+- [x] CI 통과(커밋 `fd1dbbc`): CLI cross-platform 44313044040·44313043851(설치 스크립트 job의 Windows PowerShell 5.1·7,
+  macOS·Linux `install.sh`, shellcheck 포함), repository-verify 44313044278·44313044109, experimental-browser-verify
+  44313044074·44313044062. 마지막 것은 Pydoll Chrome 시작 시간 초과 1건(110 통과·1 오류, 브라우저 코드 변경 없음)으로
+  실패해 실패 job만 다시 실행해 통과
+- [x] 1.4.4 서명 릴리스 게시(run 44315361403, 커밋 `fd1dbbc`, 2026-11-18 23:01 KST): verify의 API·웹·브라우저 전체 검증,
+  두 CPU 이미지 smoke 통과. 자산 19개(설치 스크립트 2개와 `.sha256` 포함). manifest `compatible_from=["1.4.3"]`·DB revision
+  `0042_protection_halt`·최소 CLI 0.1.0. Release 노트를 한국어로 정리
+- [x] 게시 뒤 공개 주소로 `curl … install.sh | sh -s -- --custom` 실행(macOS arm64, 비대화형, 임시 `RAILWAIT_BIN_DIR`):
+  SHA-256 확인·설치·인자 보존 안내 확인, 설치된 CLI가 `railwait 1.4.4`로 표시되고 실제 GitHub에서 1.4.4 서명 확인
+- [x] 1.4.3 공식 설치(`services/railwait`)의 관리 서비스가 게시 4분 뒤 1.4.4를 `update_available`로 인식
 - [ ] 1.4.3 공식 설치(`services/railwait`)에서 웹 **앱 업데이트**로 1.4.4 적용 확인
 - [ ] 운영 확인: TAGO 키 없는 실제 설치에서 역 목록 안내와 공식 시간표 검색, Docker Desktop·Colima 실설치의 폴더 선택과
   파일 공유 확인, Windows PowerShell 5.1의 한 줄 설치
@@ -270,7 +279,8 @@
   설정(HTTPS 443, 원격 `/healthz`·`/readyz` 200)하고 TAGO 키를 값 비출력으로 옮겨 역 279개 수집 확인. 18080은
   암호화 백업·복호화 해시·격리 DB 복원 비교 뒤 컨테이너 14·볼륨 6·네트워크 5·LaunchAgent·8443 경로·설치 폴더·전용
   이미지 8개 제거(백업 `railwait-retired-backup-20261118-rad2aydn`, [운영 가이드](docs/OPERATIONS.md#관리형-설치-검증-기록))
-- [ ] 다음 릴리스에서 `compatible_from`에 1.4.3을 넣어 웹 **앱 업데이트** 버튼으로 실제 업데이트 확인
+- [ ] 다음 릴리스에서 `compatible_from`에 1.4.3을 넣어 웹 **앱 업데이트** 버튼으로 실제 업데이트 확인. 1.4.4를
+  `compatible_from=1.4.3`으로 게시했고 설치가 업데이트를 인식함. 관리자 로그인이 필요한 버튼 적용은 아래 v1.4.4 절
 
 ## 2026년 11월 18일 로컬 설치 한 번에 업데이트와 Windows CLI 테스트 수정 (v1.4.2)
 

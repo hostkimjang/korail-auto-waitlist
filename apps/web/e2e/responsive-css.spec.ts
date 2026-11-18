@@ -923,3 +923,33 @@ for (const viewport of viewportCases) {
     expect(telemetry.pageErrors).toEqual([]);
   });
 }
+
+for (const viewport of viewportCases) {
+  test(`${viewport.name} keeps the manager upgrade guidance within bounds`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const telemetry = observeBrowser(page);
+    await installMockApi(page, telemetry);
+    await page.route("**/api/v1/system/settings", (route) => json(route, {
+      schema: 1, managed: true, manager_available: true, available: false, reason: "manager_upgrade_required",
+      revision: null, fields: [], raw: null, secret_keys: [], locked_keys: [],
+    }));
+    await page.goto("/");
+    await page.locator(usesCompactShell(viewport) ? ".bottom-nav .bottom-item" : ".side-nav .nav-item")
+      .filter({ hasText: "설정" }).click();
+    await page.getByRole("navigation", { name: "설정 메뉴" })
+      .getByRole("button", { name: "서버 설정" }).click();
+    const region = page.getByRole("region", { name: "서버 설정" });
+    await expect(region.getByText("서버 설정을 바꾸려면 설치한 컴퓨터의 관리 서비스를 한 번 교체해야 합니다.")).toBeVisible();
+
+    await expectWithinViewport(region, viewport.width, "manager upgrade guidance");
+    for (const label of ["macOS·Linux", "Windows PowerShell"]) {
+      await expectVisibleActionTarget(region.getByRole("button", { name: `${label} 명령 복사` }), `${label} copy action`);
+    }
+    const widths = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+    }));
+    expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+    expect(telemetry.pageErrors).toEqual([]);
+  });
+}

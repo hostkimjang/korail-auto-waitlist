@@ -66,9 +66,10 @@ export function ManagerUpgradeGuidance() {
         <CopyableCommand key={id} label={label} command={command} />
       ))}
       <p className="server-settings-help">
-        기본 위치가 아닌 폴더에 설치했다면 설치 때와 같은 <code>--path</code> 옵션을 붙여 실행하세요.{" "}
-        <code>railwait</code> 명령을 쓸 수 있다면 <code>railwait manager upgrade --path &lt;설치 폴더&gt;</code>로도
-        교체할 수 있습니다.
+        기본 위치가 아닌 폴더에 설치했다면 같은 폴더를 지정하세요. macOS·Linux는 명령 끝을{" "}
+        <code>| sh -s -- --path &lt;설치 폴더&gt;</code>로 바꾸고, Windows는 먼저{" "}
+        <code>$env:RAILWAIT_INSTALL_ARGS = '--path &lt;설치 폴더&gt;'</code>를 실행합니다. <code>railwait</code> 명령을
+        쓸 수 있다면 <code>railwait manager upgrade --path &lt;설치 폴더&gt;</code>로도 교체할 수 있습니다.
       </p>
     </div>
   );

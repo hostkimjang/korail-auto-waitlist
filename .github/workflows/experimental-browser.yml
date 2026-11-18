@@ -54,6 +54,9 @@ jobs:
           uv run --frozen --extra test --extra browser python - <<'PY'
           import os
           import shutil
+          import subprocess
+          import sys
+          import tempfile
           from pathlib import Path
 
           candidates = [
@@ -66,6 +69,17 @@ jobs:
           binary = next((str(Path(p)) for p in candidates if p and Path(p).is_file()), None)
           if binary is None:
               raise RuntimeError("Fixture Chrome is unavailable")
+          # Start Chrome once before the tests, as repository-verify and the release do. The first
+          # start on a fresh runner can outlast Pydoll's start timeout. Only Linux runs unsandboxed.
+          sandbox = ["--no-sandbox"] if sys.platform.startswith("linux") else []
+          with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:
+              subprocess.run(
+                  [binary, "--headless=new", *sandbox, "--disable-gpu", "--no-first-run",
+                   f"--user-data-dir={profile}", "--dump-dom", "about:blank"],
+                  check=True,
+                  capture_output=True,
+                  timeout=120,
+              )
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
               environment.write(f"KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH={binary}\n")
           PY

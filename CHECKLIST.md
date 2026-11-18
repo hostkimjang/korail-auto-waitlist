@@ -277,6 +277,9 @@
   44336476402에서 `test_pydoll_real_browser_uses_visible_fixture_controls`가 두 번 연속 브라우저 시작 시간 초과로
   실패(각각 5811 통과·1 실패, 같은 러너 이미지·Chrome 157.0.8103.50에서 앞선 main CI는 통과). 사전 실행을 넣은 CI
   44341155982는 사전 실행에 25초가 걸렸고(이전 같은 단계 약 1초) 전체 통과. 1회 통과라 재발 여부는 계속 관찰
+- [x] experimental-browser-verify의 Reservation controls(Ubuntu·macOS·Windows)에도 같은 사전 실행 추가: `613d716`의
+  브랜치 실행 44373288674에서 같은 Pydoll 시작 시간 초과 1건(110 통과·1 오류, apt 캐시와 무관한 작업) 재발. sandbox는
+  Linux에서만 끄고, Windows에서 Chrome이 잠시 붙잡은 임시 프로필은 정리 오류를 무시함
 
 ## 2026년 11월 18~19일 원격 접속을 켠 설치의 로컬 주소 로그인 (v1.4.5)
 

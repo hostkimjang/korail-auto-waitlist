@@ -88,6 +88,7 @@ railwait update --path <설치 경로> --package <새 로컬 패키지> --trust-
 railwait configure --path <설치 경로>
 railwait configure --path <설치 경로> --plan <계획 ID>
 railwait manager status --path <설치 경로>
+railwait manager upgrade --path <설치 경로>
 railwait version
 railwait preview --plain
 ```
@@ -329,6 +330,14 @@ Windows 작업 정의는 UTF-16으로 저장하고 `conhost.exe --headless`로 �
 다시 실행하면 그 정의와 그 옆에서 한 번도 실행되지 않은 관리 실행 파일을 교체하고 등록을 이어갑니다. 그 밖의
 다른 정의나 실행 파일은 교체하지 않습니다. 등록이 실패하면 서비스 관리자가 남긴 오류 문구를 함께 보여 줍니다.
 
+관리 서비스 실행 파일은 앱 업데이트로 바뀌지 않습니다. 더 새 공식 CLI로 `railwait install`을 다시 실행하거나
+`railwait manager upgrade --path <설치 경로>`를 실행하면, 설치 잠금을 잡아 진행 중인 업데이트·설정 작업과 겹치지
+않게 기존 관리 서비스를 멈추고 `.railwait/bin`의 실행 파일을 이 CLI로 바꾼 뒤 다시 시작합니다. 새 관리 서비스의
+heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌립니다. 설치된 관리 서비스가 이 CLI와 같거나 더 새
+버전이면 아무것도 바꾸지 않습니다. 버전을 비교할 수 없는 개발용 CLI로 바꿀 때만 `--force`를 붙입니다. 웹의
+**설정 → 서버 설정**은 1.4.8 이상 관리 서비스가 게시하는 설정 스냅숏(`status/settings.json`)과 설정 요청
+(`requests/<id>.settings.json`)을 사용하므로, 그보다 오래된 관리 서비스에서는 이 교체를 먼저 안내합니다.
+
 업데이트는 15분간 유효한 계획에서 확인한 버전만 적용합니다. CLI와 웹은 같은 호스트 관리 작업을
 사용하므로 진행 화면을 닫아도 제출한 작업은 유지됩니다. 현재 DB revision과 설정 schema가 같고,
 출발 버전을 명시적으로 허용하며 PostgreSQL·Redis 이미지와 서비스 구성이 같은 릴리스만 적용합니다.
@@ -353,7 +362,7 @@ Windows 작업 정의는 UTF-16으로 저장하고 `conhost.exe --headless`로 �
 
 설치 파일시스템에는 최소 4 GiB 여유 공간을 요구합니다. Docker 저장소·Docker Desktop VM 내부의
 여유 공간과 이미지 전체의 압축 해제 크기는 별도로 확인해야 합니다. DB schema·저장소 이미지 변경,
-기존 소스 설치의 `adopt`, 자동 복원과 관리 서비스 자체 업데이트는 아직 제공하지 않습니다.
+기존 소스 설치의 `adopt`, 자동 복원과 앱 업데이트가 관리 서비스까지 자동으로 바꾸는 기능은 아직 제공하지 않습니다.
 
 개발 검증에는 Go 1.27 이상을 사용합니다.
 

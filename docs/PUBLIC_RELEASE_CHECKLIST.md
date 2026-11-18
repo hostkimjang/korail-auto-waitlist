@@ -16,7 +16,8 @@
 - [ ] 기본 브랜치 보호 규칙 설정 (2026-11-18 확인 때 보호 없음, 저장소 ruleset은 비활성)
 - [x] 새로 내려받은 저장소에서 설치와 첫 관리자 등록 절차 재현 (커밋 `fe4b364`, OCI Ubuntu 20.04 ARM64 clean clone)
 - [ ] 네이티브 Ubuntu `linux/amd64` clean clone에서 데모와 설치 절차 재현
-- [ ] 기본 브랜치의 전체 자동 검증 통과 확인
+- [x] 기본 브랜치의 전체 자동 검증 통과 확인 (커밋 `af08acc`: repository-verify 44280712839, experimental-browser-verify
+  44280712879, CLI cross-platform verification 44280712952)
 
 ## 공개에서 제외한 자료
 

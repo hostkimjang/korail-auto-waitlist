@@ -281,6 +281,9 @@
   17.6초). ubuntu·macOS 네이티브 테스트와 6대상 컴파일, 같은 커밋의 repository-verify(44278736476)도 통과
 - [ ] 관리자 그룹이 아닌 Windows 표준 계정 확인 (관리자 그룹 밖의 활성 계정은 Codex 샌드박스 계정 둘뿐이고 자격 증명이
   없어 실행하지 못함)
+- [x] main 반영: `410c8c1`(1.3.2)에서 `af08acc`(1.4.2)로 fast-forward하고 main의 repository-verify(44280712839)·
+  experimental-browser-verify(44280712879)·CLI cross-platform verification(44280712952) 통과 확인. 서명 릴리스는 게시하지
+  않았고 태그·GitHub Release도 만들지 않음(공식 서명 워크플로가 만듦)
 
 ## 2026년 11월 17일 공지 팝업 화면 기준 판정과 거부 사유 표시 (v1.4.1)
 

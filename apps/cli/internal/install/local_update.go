@@ -18,15 +18,17 @@ import (
 
 // localUpdateSteps replaces the download stage: the package is copied into the
 // installation, verified again and its untagged images are loaded before the gate closes.
-// replacing_package records the previous package path before the preserved package moves.
-var localUpdateSteps = []string{"checking", "loading_package", "draining", "backing_up", "applying", "replacing_package", "verifying", "resuming"}
+// replacing_package then swaps the preserved package while the gate is still open, so a
+// refused swap leaves services untouched, and records the previous package path first.
+var localUpdateSteps = []string{"checking", "loading_package", "replacing_package", "draining", "backing_up", "applying", "verifying", "resuming"}
 
 const previousLocalPackagePrefix = ".local-package-previous-"
 
 // packageHandleWait bounds how long a package folder swap waits for another process to close
 // a file inside the folder. Windows refuses to rename a folder while any file inside it is
 // open, even when that process allows deletion, and antivirus scans or the search indexer
-// hold such files briefly. A refused swap leaves the update in recovery_required.
+// hold such files briefly. A refused swap fails the update before it touches services; a
+// refused restore or cleanup leaves the previous package for recovery by hand.
 var packageHandleWait = 30 * time.Second
 
 // PlanLocalUpdate plans an update of a local-package installation from a package and a

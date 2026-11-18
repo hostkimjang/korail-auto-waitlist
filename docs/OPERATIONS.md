@@ -1742,11 +1742,15 @@ Linux 운영 계정의 `umask`가 `0077`처럼 제한적이면 fast-forward 갱�
 
 `railwait update --package …`나 `scripts/update-local-install.sh`의 적용이 실패하면 작업이 `failed` 또는
 `recovery_required`로 남습니다. `failed`는 새 작업 차단 전에 멈춘 경우라 서비스가 그대로입니다.
+Windows에서 보존 패키지 교체가 거부된 경우도 새 작업 차단 전이라 `failed`로 끝납니다.
 `recovery_required`는 유지보수 gate를 닫은 뒤 멈춘 경우이며 CLI가 자동으로 되돌리지 않습니다. 이때 앱 서비스가
 멈춰 있을 수 있으므로 다음 순서로 기록된 이전 버전을 다시 띄웁니다.
 
 1. 새 CLI로 `railwait status --path <설치 폴더> --job <작업 ID>`를 실행해 멈춘 단계를 확인하고,
    `.railwait/install.json`의 `release`가 이전 버전인지 봅니다. 설치 기록은 새 서비스 확인이 끝난 뒤에만 바뀝니다.
+   작업 기록에 `previous_package`가 남아 있으면 보존 패키지를 바꾼 뒤 프로세스가 강제 종료된 것입니다.
+   `.railwait/local-package`(새 패키지)를 다른 이름으로 옮겨 두고 `previous_package` 폴더를 `.railwait/local-package`로
+   되돌린 다음 진행합니다.
 2. 실패한 one-shot 로그(`docker logs <compose_project>-migration-1`)로 DB를 바꾸기 전에 멈췄는지 확인합니다.
    migration이 일부라도 실행됐다면 이 절차를 진행하지 말고, `backups` 볼륨의 업데이트 직전 암호화 백업을 기준으로
    복구 방법을 따로 정합니다.

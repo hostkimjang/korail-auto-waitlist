@@ -143,6 +143,7 @@ type localUpdateRunner struct {
 	unhealthyAfterUp bool
 	unhealthy        bool
 	gateClosedAtLoad bool
+	notDrained       bool
 	commands         []string
 }
 
@@ -163,7 +164,7 @@ func (r *localUpdateRunner) Run(ctx context.Context, c Command) ([]byte, error) 
 		if err = json.Unmarshal(data, &gate); err != nil {
 			return nil, err
 		}
-		gate["drained"] = true
+		gate["drained"] = !r.notDrained
 		return json.Marshal(gate)
 	case strings.Contains(args, "update-backup.sh"):
 		if c.Input == nil {
@@ -330,19 +331,33 @@ func assertGateClosed(t *testing.T, root string, closed bool) {
 func assertLocalUpdateDidNotStart(t *testing.T, runner *localUpdateRunner, state State) {
 	t.Helper()
 	for _, args := range runner.commands {
-		if strings.Contains(args, "image load") || strings.Contains(args, " stop ") || strings.Contains(args, "update-backup.sh") {
+		if strings.Contains(args, "image load") {
 			t.Fatal("changed the installation for a rejected plan:", args)
+		}
+	}
+	assertServicesUntouched(t, runner, state)
+}
+
+// assertServicesUntouched checks that an update stopped before the maintenance gate closed:
+// no backup ran, no service was stopped or recreated, and the installation record, the
+// preserved package and the open gate are unchanged.
+func assertServicesUntouched(t *testing.T, runner *localUpdateRunner, state State) {
+	t.Helper()
+	for _, args := range runner.commands {
+		if strings.Contains(args, " stop ") || strings.Contains(args, " up ") || strings.Contains(args, "update-backup.sh") {
+			t.Fatal("touched the running services:", args)
 		}
 	}
 	updated, err := ReadState(state.Path)
 	if err != nil || updated.Release != state.Release {
 		t.Fatalf("state changed: %+v %v", updated, err)
 	}
+	assertPreservedLocalPackage(t, state.Path, state.Release)
 	assertGateClosed(t, state.Path, false)
 	assertNoLocalPackageLeftovers(t, state.Path)
 }
 
-func TestLocalPackageUpdateLoadsImagesAndReplacesPreservedPackageAfterVerification(t *testing.T) {
+func TestLocalPackageUpdateLoadsImagesAndSwapsPreservedPackageBeforeClosingTheGate(t *testing.T) {
 	ctx := context.Background()
 	i, runner, state := localUpdateFixture(t)
 	target := newLocalTestPackage(t, "1.4.1", "rev1", localTestServices("api-1.4.1"))
@@ -354,9 +369,20 @@ func TestLocalPackageUpdateLoadsImagesAndReplacesPreservedPackageAfterVerificati
 	if !plan.Allowed || plan.TargetReleaseID != "1.4.1" {
 		t.Fatalf("plan=%+v", plan)
 	}
+	preserved := filepath.Join(state.Path, ".railwait", "local-package")
 	stages := []string{}
+	gateAtSwap, packageAtDrain := "", ""
 	result, err := i.Update(ctx, UpdateOptions{Path: state.Path, TargetReleaseID: plan.TargetReleaseID, PlanID: plan.PlanID, PackagePath: target.dir, TrustKey: target.key, Progress: func(stage string) error {
 		stages = append(stages, stage)
+		switch stage {
+		case "replacing_package":
+			data, _ := os.ReadFile(filepath.Join(state.Path, ".railwait", "manager", "control", "maintenance.json"))
+			gateAtSwap = string(data)
+		case "draining":
+			if source, openErr := release.OpenLocalMetadata(ctx, preserved, filepath.Join(preserved, "trust-key.pub")); openErr == nil {
+				packageAtDrain = source.Manifest.Version
+			}
+		}
 		return nil
 	}})
 	if err != nil || result.State != "succeeded" || len(result.Warnings) != 0 {
@@ -364,6 +390,10 @@ func TestLocalPackageUpdateLoadsImagesAndReplacesPreservedPackageAfterVerificati
 	}
 	if strings.Join(stages, ",") != strings.Join(localUpdateSteps, ",") {
 		t.Fatal(stages)
+	}
+	// A refused swap must surface while the gate is open and before any service changes.
+	if gateAtSwap == "" || strings.Contains(gateAtSwap, `"closed":true`) || packageAtDrain != "1.4.1" {
+		t.Fatalf("the preserved package must be swapped before the gate closes: gate=%s package=%q", gateAtSwap, packageAtDrain)
 	}
 	if runner.gateClosedAtLoad {
 		t.Fatal("loaded images after closing the maintenance gate")
@@ -379,7 +409,6 @@ func TestLocalPackageUpdateLoadsImagesAndReplacesPreservedPackageAfterVerificati
 	if updated.Release != "1.4.1" || updated.ComposeFile != filepath.Join(state.Path, "releases", "1.4.1", "compose.release.yml") || !reflect.DeepEqual(updated.ExpectedImages, target.images) {
 		t.Fatalf("state=%+v", updated)
 	}
-	preserved := filepath.Join(state.Path, ".railwait", "local-package")
 	source, err := release.OpenLocal(ctx, preserved, filepath.Join(preserved, "trust-key.pub"))
 	if err != nil || source.Manifest.Version != "1.4.1" {
 		t.Fatalf("preserved package was not replaced: %v", err)
@@ -508,6 +537,61 @@ func TestLocalPackageUpdateRestoresPreservedPackageWhenNewServicesFail(t *testin
 	assertGateClosed(t, state.Path, true)
 	if job, err := ReadUpdateJob(state.Path, result.JobID); err != nil || job.State != "recovery_required" || job.PreviousPackage != "" {
 		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
+func TestLocalPackageUpdateFailingAtThePackageSwapLeavesServicesUntouched(t *testing.T) {
+	ctx := context.Background()
+	i, runner, state := localUpdateFixture(t)
+	target := newLocalTestPackage(t, "1.4.1", "rev1", localTestServices("api-1.4.1"))
+	runner.next = target.images
+	plan, err := i.PlanLocalUpdate(ctx, state.Path, target.dir, target.key)
+	if err != nil || !plan.Allowed {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	result, err := i.Update(ctx, UpdateOptions{Path: state.Path, TargetReleaseID: plan.TargetReleaseID, PlanID: plan.PlanID, PackagePath: target.dir, TrustKey: target.key, Progress: func(stage string) error {
+		if stage == "replacing_package" {
+			return errors.New("injected failure at the package swap")
+		}
+		return nil
+	}})
+	if err == nil || result.State != "failed" || result.PreviousPackage != "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if job, err := ReadUpdateJob(state.Path, result.JobID); err != nil || job.State != "failed" || job.PreviousPackage != "" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	assertServicesUntouched(t, runner, state)
+}
+
+func TestLocalPackageUpdateRestoresPreservedPackageWhenTheDrainIsDeferred(t *testing.T) {
+	i, runner, state := localUpdateFixture(t)
+	target := newLocalTestPackage(t, "1.4.1", "rev1", localTestServices("api-1.4.1"))
+	runner.next, runner.notDrained = target.images, true
+	plan, err := i.PlanLocalUpdate(context.Background(), state.Path, target.dir, target.key)
+	if err != nil || !plan.Allowed {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result, err := i.Update(ctx, UpdateOptions{Path: state.Path, TargetReleaseID: plan.TargetReleaseID, PlanID: plan.PlanID, PackagePath: target.dir, TrustKey: target.key, Progress: func(stage string) error {
+		if stage == "draining" {
+			cancel()
+		}
+		return nil
+	}})
+	if err == nil || result.State != "deferred" || result.PreviousPackage != "" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if updated, err := ReadState(state.Path); err != nil || updated.Release != "1.4.0" {
+		t.Fatalf("committed a deferred update: %+v %v", updated, err)
+	}
+	assertPreservedLocalPackage(t, state.Path, "1.4.0")
+	assertNoLocalPackageLeftovers(t, state.Path)
+	for _, args := range runner.commands {
+		if strings.Contains(args, " stop ") || strings.Contains(args, "update-backup.sh") {
+			t.Fatal("continued past a deferred drain:", args)
+		}
 	}
 }
 

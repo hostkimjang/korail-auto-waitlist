@@ -94,7 +94,7 @@ func TestLocalPackageSwapKeepsThePreservedPackageWhileAHandleStaysOpen(t *testin
 	}
 }
 
-func TestLocalPackageUpdateNamesNoPreviousPackageWhenTheSwapIsRefused(t *testing.T) {
+func TestLocalPackageUpdateFailsBeforeTouchingServicesWhenTheSwapIsRefused(t *testing.T) {
 	shortPackageHandleWait(t)
 	ctx := context.Background()
 	i, runner, state := localUpdateFixture(t)
@@ -111,13 +111,12 @@ func TestLocalPackageUpdateNamesNoPreviousPackageWhenTheSwapIsRefused(t *testing
 		}
 		return nil
 	}})
-	if err == nil || result.State != "recovery_required" || result.PreviousPackage != "" {
+	if err == nil || result.State != "failed" || result.PreviousPackage != "" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if job, err := ReadUpdateJob(state.Path, result.JobID); err != nil || job.PreviousPackage != "" {
+	if job, err := ReadUpdateJob(state.Path, result.JobID); err != nil || job.State != "failed" || job.PreviousPackage != "" {
 		t.Fatalf("job names a previous package that never moved: %+v %v", job, err)
 	}
-	assertPreservedLocalPackage(t, state.Path, "1.4.0")
-	assertNoLocalPackageLeftovers(t, state.Path)
-	assertGateClosed(t, state.Path, true)
+	// The swap now runs before the gate closes, so a refused swap changes no service.
+	assertServicesUntouched(t, runner, state)
 }

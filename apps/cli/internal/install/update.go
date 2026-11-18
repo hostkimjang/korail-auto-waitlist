@@ -544,6 +544,42 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	if err = verifyBundle(filepath.Dir(next.ComposeFile), next.BundleHashes); err != nil {
 		return result, err
 	}
+	committed := false
+	if local {
+		// Swap the preserved package before the gate closes, so a swap that the OS refuses, for
+		// example while antivirus holds a file open on Windows, fails the job before any service
+		// or maintenance state changes. Status verification reads the preserved package, so it
+		// holds the new package by the verifying stage. Until the new installation record is
+		// written every later failure restores the previous package; afterwards the previous
+		// package is only cleanup. Record where it goes before it moves, so an interrupted job
+		// can be recovered by hand from its job record.
+		result.PreviousPackage = filepath.Join(abs, ".railwait", previousLocalPackagePrefix+o.JobID)
+		if err = progress("replacing_package"); err != nil {
+			result.PreviousPackage = ""
+			return result, err
+		}
+		if err = replaceLocalPackage(abs, stagedPackage, result.PreviousPackage); err != nil {
+			// A refused swap leaves the preserved package in place unless the rollback also
+			// failed, so the job names a previous package only while that directory exists.
+			if _, statErr := os.Lstat(result.PreviousPackage); os.IsNotExist(statErr) {
+				result.PreviousPackage = ""
+			}
+			return result, err
+		}
+		defer func() {
+			if !committed {
+				if restoreErr := restoreLocalPackage(abs, result.PreviousPackage); restoreErr != nil {
+					err = errors.Join(err, restoreErr)
+				} else {
+					result.PreviousPackage = ""
+				}
+			} else if removeErr := retryWhileFileHeld(func() error { return os.RemoveAll(result.PreviousPackage) }); removeErr != nil {
+				result.Warnings = append(result.Warnings, "설치 기록은 새 버전으로 바뀌었지만 이전 로컬 패키지를 지우지 못했습니다: "+result.PreviousPackage)
+			} else {
+				result.PreviousPackage = ""
+			}
+		}()
+	}
 	if err = writeGate(controlDir, true, generation); err != nil {
 		return result, err
 	}
@@ -605,39 +641,6 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	sort.Strings(nextServices)
 	if _, err = i.compose(ctx, next, nil, append([]string{"up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "180"}, nextServices...)...); err != nil {
 		return result, err
-	}
-	committed := false
-	if local {
-		// Record where the previous package goes before it moves, so an interrupted job can be
-		// recovered by hand from its job record.
-		result.PreviousPackage = filepath.Join(abs, ".railwait", previousLocalPackagePrefix+o.JobID)
-		if err = progress("replacing_package"); err != nil {
-			return result, err
-		}
-		// Status verification reads the preserved package, so swap it before checking the new
-		// services. Restore it unless the new installation record is written; afterwards the
-		// previous package is only cleanup.
-		if err = replaceLocalPackage(abs, stagedPackage, result.PreviousPackage); err != nil {
-			// A refused swap leaves the preserved package in place unless the rollback also
-			// failed, so the job names a previous package only while that directory exists.
-			if _, statErr := os.Lstat(result.PreviousPackage); os.IsNotExist(statErr) {
-				result.PreviousPackage = ""
-			}
-			return result, err
-		}
-		defer func() {
-			if !committed {
-				if restoreErr := restoreLocalPackage(abs, result.PreviousPackage); restoreErr != nil {
-					err = errors.Join(err, restoreErr)
-				} else {
-					result.PreviousPackage = ""
-				}
-			} else if removeErr := retryWhileFileHeld(func() error { return os.RemoveAll(result.PreviousPackage) }); removeErr != nil {
-				result.Warnings = append(result.Warnings, "설치 기록은 새 버전으로 바뀌었지만 이전 로컬 패키지를 지우지 못했습니다: "+result.PreviousPackage)
-			} else {
-				result.PreviousPackage = ""
-			}
-		}()
 	}
 	if err = progress("verifying"); err != nil {
 		return result, err

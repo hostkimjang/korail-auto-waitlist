@@ -220,8 +220,11 @@ flowchart LR
 프로세스가 같은 설치 잠금으로 실행한다. 관리 서비스 요청에는 패키지 경로가 없으므로 이 계획을 적용할 수 없다.
 로컬 manifest에는 `compatible_from`이 없어 출발 버전 조건은 운영자의 명시적 선택과 위의 나머지 동일성 조건으로
 대신한다. 기존 관리 서비스 실행 파일이 새 보존 패키지를 계속 읽도록 manifest 형식은 바꾸지 않았다. 상태 흐름은
+`checking → loading_package → replacing_package → draining → backing_up → applying → verifying → resuming`이다.
 `downloading` 대신 `loading_package`에서 패키지를 설치 경로로 복사·재검증하고 이미지를 불러온다. 보존 패키지는
-새 서비스 확인 직전의 `replacing_package`에서 교체하고 설치 기록 전에 실패하면 이전 패키지로 되돌린다. 교체 전에
+gate를 닫기 전의 `replacing_package`에서 교체해, OS가 교체를 거부하면 서비스와 유지보수 상태를 바꾸지 않은 `failed`로
+끝낸다. 그 뒤 단계가 실패하면 설치 기록 전까지 이전 패키지로 되돌린다. 교체부터 설치 기록까지는 보존 패키지와 설치
+기록의 버전이 달라 상태 검증이 진행 중인 작업을 안내하고, verifying은 새 기록 기준으로 새 패키지를 읽는다. 교체 전에
 이전 패키지의 임시 위치를 작업 기록(`.railwait/updates/<작업 ID>.json`)에 남기고, `railwait status --job`은 관리
 서비스 기록이 없으면 이 기록을 읽는다. 설치 상태 검증이 실패할 때 남은 이전 패키지가 있으면 해당 작업 ID를 안내한다.
 CLI 프로세스에서 실행하므로 터미널 연결 끊김(SIGHUP)과 닫힌 출력 pipe는 무시해 작업을 끝까지 진행하고, SIGTERM과

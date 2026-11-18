@@ -52,7 +52,7 @@ func localUpdateCommand(ctx context.Context, i *install.Installer, o localUpdate
 			fmt.Println("차단:", strings.Join(plan.BlockedReasons, "; "))
 			return nil
 		}
-		fmt.Printf("검증 → 패키지 보존·이미지 불러오기 → 작업 종료 대기 → 암호화 백업 → 교체 → 확인 → 재개\n적용: railwait update --path %q --package %q --trust-key %q --target %s --plan %s\n", o.Path, o.Package, o.TrustKey, plan.TargetReleaseID, plan.PlanID)
+		fmt.Printf("검증 → 패키지 복사·이미지 불러오기 → 보존 패키지 교체 → 작업 종료 대기 → 암호화 백업 → 앱 교체 → 확인 → 재개\n적용: railwait update --path %q --package %q --trust-key %q --target %s --plan %s\n", o.Path, o.Package, o.TrustKey, plan.TargetReleaseID, plan.PlanID)
 		return nil
 	}
 	raw := make([]byte, 16)

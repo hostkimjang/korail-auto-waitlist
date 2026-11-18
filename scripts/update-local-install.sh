@@ -492,7 +492,7 @@ fi
 
 # 적용 중 실패하거나 중단되면 작업 기록을 확인할 새 CLI와 패키지를 남긴다.
 keep_work=1
-log "업데이트 적용: 새 작업 차단 → 기존 작업 종료 대기 → 암호화 백업 → 교체 → 확인 → 재개"
+log "업데이트 적용: 보존 패키지 교체 → 새 작업 차단 → 기존 작업 종료 대기 → 암호화 백업 → 앱 교체 → 확인 → 재개"
 if ! "$cli" update --path "$install_path" --package "$package_dir" --trust-key "$trust_key" \
     --target "$plan_target" --plan "$plan_id"; then
     die "업데이트가 끝나지 않았습니다. 위에 표시된 작업 ID로 \"$cli\" status --path \"$install_path\" --job <작업 ID>를 실행해 상태를 확인하고, docs/OPERATIONS.md의 '로컬 패키지 업데이트가 멈췄을 때' 절차로 복구하세요"

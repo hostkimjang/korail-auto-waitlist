@@ -258,8 +258,15 @@
 - [x] GitHub Actions `CLI cross-platform verification`(run 44260788142, 커밋 `62ba195`): windows-latest의
   `go test -race -count=1 ./...`에서 새 Windows 회귀 3건이 든 install 패키지 통과(20.1초, 직전 13.7초). ubuntu·macOS 네이티브
   테스트와 6대상 컴파일도 통과
-- [ ] 30초를 넘게 잡혀 있으면 새 서비스 교체 뒤라 여전히 `recovery_required`. 교체 실패가 서비스 교체 전에 드러나도록 순서 조정 검토.
-  관리자 그룹이 아닌 Windows 표준 계정은 미확인
+- [x] 패키지 교체 순서 조정: 보존 패키지 교체(`replacing_package`)를 유지보수 gate를 닫기 전으로 옮겨, 교체가 거부되면
+  서비스·gate를 바꾸지 않은 `failed`로 끝나고 그 뒤 단계의 실패는 설치 기록 전까지 이전 패키지로 복원. 교체 단계 진입이
+  실패해도 작업 기록에 이전 패키지를 남기지 않음. 회귀: 성공 경로의 단계 순서·교체 시점 gate 열림·drain 시점 새 패키지,
+  교체 단계 실패 시 서비스·gate·기록·패키지 무변경, drain 연기(`deferred`) 시 패키지 복원, Windows 교체 거부 시 `failed`.
+  이전 순서의 `update.go`로 되돌린 변이에서 새 회귀 2건 실패 확인. gofmt·3개 OS vet·Linux race 전체·Windows 테스트
+  컴파일·6대상 빌드 통과
+- [ ] GitHub Actions windows-latest에서 바뀐 순서의 Windows 회귀 `-race` 통과
+- [ ] Windows 원격 채팅에서 바뀐 순서 재확인(교체 거부 시 `failed`·서비스 무변경, 30초 안의 짧은 잠금은 통과)
+- [ ] 관리자 그룹이 아닌 Windows 표준 계정 확인
 
 ## 2026년 11월 17일 공지 팝업 화면 기준 판정과 거부 사유 표시 (v1.4.1)
 

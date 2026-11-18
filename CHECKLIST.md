@@ -217,6 +217,34 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 19일 웹 서버 설정 창과 앱 연결 실행 시점 설정 (v1.4.8)
+
+- [x] 원인: Android 공식 앱 연결 값(`VITE_*` 8개)은 Vite 빌드 입력이라, build args 없이 만드는 공식 이미지에서는
+  `.env`에 적어도 항상 꺼져 있었음. Git 설치만 Compose build args로 반영됨
+- [x] 웹 실행 시점 설정: 웹 컨테이너 시작 스크립트(`apps/web/docker/start.sh`)가 `.env` 값을 검증해
+  `/runtime-config.js`로 내보내고 화면이 빌드 값보다 우선함. nginx `no-store`, 서비스 워커는 이 파일을 가로채지 않음.
+  파서·화면 우선순위·서비스 워커·시작 스크립트 테스트 추가, shellcheck 통과. 실제 이미지를 읽기 전용·nginx 사용자로 띄워
+  생성 내용, 잘못된 스위치 제외와 로그, `Cache-Control: no-store`, health 확인 뒤 컨테이너·이미지 삭제
+- [x] 관리 서비스: 비밀값 없는 설정 스냅숏(`status/settings.json`, 게시한 관리 서비스의 `started_at` 포함)과 설정 요청
+  (`requests/<id>.settings.json`) 처리. 요청은 계획(`configure_settings`)으로 바꿔 일반 작업처럼 실행하고, 앱 연결 값만
+  바뀌면 웹 컨테이너만 다시 만듦. 원문 편집은 가린 비밀값을 되살리고 비밀값·잠긴 값의 변경·삭제·추가를 거부. 후보는
+  Compose `config --quiet` 통과가 필요. 새 `.env`를 쓴 뒤 실패하면 이전 `.env`로 서비스를 다시 만들어 `rolled_back`
+  (다른 설정 변경 계획에도 적용)
+- [x] `railwait manager upgrade`와 설치 명령 재실행의 관리 서비스 교체: 더 새 릴리스 CLI일 때만 교체(개발용은
+  `--force`), 설치 잠금으로 진행 중인 작업과 겹치지 않음, 새 heartbeat가 오지 않으면 이전 실행 파일로 복원.
+  `scripts/update-local-install.sh`는 적용 뒤 같은 커밋의 CLI로 관리 서비스를 교체
+- [x] API: 관리자·Origin·CSRF 보호의 `GET/POST /api/v1/system/settings`, 유지보수 gate 예외, 422 입력값 숨김, 비밀값은
+  `SecretStr`. 오래된 관리 서비스는 `manager_upgrade_required`로 안내
+- [x] 웹: **설정 → 서버 설정**(자동 예매·열차정보 인증키·알림 발신자·Android 앱 연결 네 경로, 바뀐 항목과 재시작 범위
+  요약, 앱 재시작 동의, `.env` 원문 편집, 작업 진행·거부 사유, 관리 서비스 교체 안내)
+- [x] 검증: Go gofmt·vet(linux·darwin·windows)·전체 테스트, API 설정·유지보수·OpenAPI 고정 테스트 194건, Ruff·mypy
+  (`maintenance`), 웹 타입 검사·lint(오류 0)·전체 1,114건·빌드·Sites·반응형 E2E 24건(320px·200% 포함). Go가 만든
+  스냅숏을 API 스키마로, API가 만든 요청 파일을 Go 검증으로 교차 확인
+- [ ] 임시 로컬 패키지 설치에서 전체 흐름 확인(옛 관리 서비스의 교체 안내 → `manager upgrade` → 앱 연결 값 → 자동 예매)
+- [ ] macOS·Windows·Linux 실제 서비스 관리자에서 `railwait manager upgrade` 확인(단위 테스트는 가짜 서비스 관리자)
+- [ ] CI 확인과 1.4.8 서명 릴리스 게시(1.4.7 게시 뒤)
+- [ ] 후속: 앱 업데이트가 관리 서비스까지 바꾸는 자동 교체(서명 manifest에 CLI 해시를 넣고 서비스 재시작을 OS별로 검증해야 함)
+
 ## 2026년 11월 19일 Windows 자동 시작 등록, 설치 중 TAGO 키와 자동 예매 기본값 (v1.4.7)
 
 - [x] 원인: Windows 설치 4단계에서 `schtasks /Create /XML`이 CLI가 만든 UTF-8 작업 정의를
@@ -796,7 +824,7 @@ Windows·macOS·Linux를 함께 구현했으며, 실제 OS 지원 검증과 공�
 - [x] Mac Lima 실제 2컨테이너 공유 잠금과 API 관리자·CSRF 요청→호스트 Go manager→API 작업 조회 통합 통과. 공유경로 제한·약 1초 rename 지연을 mount 사전검사·bounded retry에 반영
 - [x] API/browser uv.lock 기반 이미지 빌드, 고정 uv digest, Linux ARM browser fixture 415건·이미지 계약 4건·운영 스크립트 통과
 - [ ] 기존 설치의 설정·프로필·volume·암호화키를 보존하는 `adopt`와 DB 변경 update·자동 rollback (초기 구현 제외)
-- [ ] 실행 시점 웹 딥링크 설정 제공 (현재 정식 공통 이미지의 기본 비활성 유지)
+- [x] 실행 시점 웹 딥링크 설정 제공: 1.4.8부터 웹 컨테이너가 시작할 때 `.env`에서 읽음(위 v1.4.8 절). 공통 이미지의 기본값은 계속 꺼짐
 - [ ] Windows·macOS Docker Desktop 새 설치·실제 서비스 등록·로그인/재부팅·실패 복구 검증
 - [ ] Linux 두 CPU의 실제 공개 릴리스 설치·업데이트 통합 검증과 원격 CI 성공
 - [x] 서명 secret·공개 GHCR·정식 CLI 6종·안정 릴리스 게시 (2026-11-18 1.4.3, 위 v1.4.3 절)

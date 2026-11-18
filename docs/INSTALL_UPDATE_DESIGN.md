@@ -188,7 +188,7 @@ Release에서 OS·CPU에 맞는 설치 CLI와 `.sha256`을 받아 확인하고 �
 ```mermaid
 flowchart LR
   CLI[railwait CLI] --> Queue[인증된 요청 파일]
-  Web[웹 업데이트] --> API[관리자 인증 · Origin · CSRF]
+  Web[웹 업데이트 · 서버 설정] --> API[관리자 인증 · Origin · CSRF]
   API --> Queue
   Queue --> Manager[호스트 관리 프로세스]
   Manager --> Plan[계획 · 영속 작업 기록]
@@ -213,6 +213,8 @@ flowchart LR
 | `GET /api/v1/system/update` | 관리 상태·현재/최신 버전·적용 가능한 계획과 사유 |
 | `POST /api/v1/system/update` | 관리자·CSRF 검증 후 `202`와 작업 ID 반환 |
 | `GET /api/v1/system/update/jobs/{id}` | 비밀값 없는 작업 단계·결과 조회 |
+| `GET /api/v1/system/settings` | 관리 서비스가 게시한 비밀값 없는 `.env` 스냅숏과 사용 가능 여부 |
+| `POST /api/v1/system/settings` | 허용한 설정값 또는 가린 원문을 검증해 `202`와 작업 ID 반환 |
 
 ## 업데이트와 설정 변경
 
@@ -227,6 +229,28 @@ flowchart LR
 
 상태 흐름은 `checking → downloading → draining → backing_up → applying → verifying → resuming`이다.
 설정 변경은 같은 관리 작업에서 다운로드 대신 보호된 설정 후보를 준비한다.
+
+### 웹 설정 창
+
+웹의 **설정 → 서버 설정**은 1.4.8 관리 서비스가 처리한다. 관리 서비스는 `.env`를 읽어 비밀값 없는 스냅숏
+`status/settings.json`을 게시한다. 스냅숏에는 `.env` SHA-256 지문(`revision`), 화면 항목 12개의 값(비밀값은 설정
+여부만), 비밀값을 `••••••`로 가린 원문, 가린 키·잠긴 키 목록과 게시한 관리 서비스의 `started_at`이 들어 있다.
+API는 이 값이 살아 있는 heartbeat의 `started_at`과 같을 때만 화면을 연다. 이전 관리 서비스는 이 파일을 쓰지 않으므로
+`manager_upgrade_required`로 안내하고, 사용자는 새 CLI로 `railwait manager upgrade`를 한 번 실행하거나 한 줄 설치
+명령을 다시 실행해 관리 실행 파일을 바꾼다. 교체는 설치 잠금을 잡아 진행 중인 작업과 겹치지 않고, 새 관리 서비스의
+heartbeat가 오지 않으면 이전 실행 파일로 되돌린다.
+
+API는 화면 항목 값 또는 가린 원문 하나를 `requests/<id>.settings.json`으로 쓴다. 이전 관리 서비스는 `<id>.json`만
+읽으므로 이 파일을 건드리지 않는다. 관리 서비스는 token과 형식을 확인하고 작업 기록을 만든 뒤 요청 파일을 지우고,
+화면이 본 지문과 현재 `.env`가 같은지 확인한다. 원문은 가린 줄을 원래 줄로 되살리고, 비밀값·잠긴 값의 변경·삭제·추가와
+허용 형식 밖의 값은 거부한다(`E_SETTINGS_FORBIDDEN`·`E_SETTINGS_INVALID`·`E_SETTINGS_CHANGED`·`E_SETTINGS_UNCHANGED`).
+후보는 Compose `config --quiet`를 통과해야 `configure_settings` 계획으로 저장되고, 이 계획을 일반 작업처럼 실행한다.
+바뀐 키가 모두 `VITE_`이면 웹 컨테이너만 다시 만들고(`checking → preparing_config → applying → verifying`), 아니면
+업데이트와 같은 종료 대기·암호화 백업·재시작을 거친다. 새 `.env`를 쓴 뒤 실패하면 이전 `.env`로 서비스를 다시 만들고
+gate를 열어 `failed`·`rolled_back`으로 끝낸다. 이 되돌리기는 다른 설정 변경 계획에도 적용한다.
+
+웹 컨테이너는 시작할 때 `.env`의 앱 연결 값 여덟 개를 `/runtime-config.js`로 내보내고 화면은 이 값을 빌드 값보다
+우선한다. 그래서 공식 이미지도 설치별 앱 연결 설정을 따른다.
 
 로컬 패키지 설치는 공식 resolver 대신 운영자가 호스트 CLI에 직접 지정한 서명 로컬 패키지와 공개키로만
 업데이트한다. 계획은 서명 manifest 전체 지문과 공개키 지문에 묶이고, 적용은 관리 서비스를 거치지 않고 CLI
@@ -265,14 +289,16 @@ async waiter가 취소돼도 살아 있는 SRT 스레드·분리된 브라우저
 ## 실패와 복구
 
 앱 교체 전후 실패를 같은 성공 상태로 합치지 않는다. gate를 닫은 뒤 문제가 생기면 `recovery_required` 또는
-`deferred`와 기존 기록을 보존한다. 자동 DB 복원·무조건 rollback·결과 불명 예약 재실행은 하지 않는다.
+`deferred`와 기존 기록을 보존한다. 자동 DB 복원·무조건 rollback·결과 불명 예약 재실행은 하지 않는다. 설정 변경만은
+새 `.env`를 쓴 뒤 실패하면 이전 `.env`로 서비스를 다시 만들고, 이것까지 실패할 때 `recovery_required`로 남긴다.
 로컬 패키지 업데이트에서 보존 패키지를 이전 패키지로 되돌리지 못하면 gate 상태나 종료 대기 연기와 관계없이
 `recovery_required`로 남긴다. `deferred`는 앱과 보존 패키지가 바뀌지 않은 상태로 끝난 경우에만 쓴다.
 `railwait status --job <id>`는 Docker가 중단돼도 호스트 작업 기록을 읽을 수 있다.
 
 복구키는 `.railwait/backup.env`, 암호화 백업은 Compose `backups` 볼륨에 작업 ID로 보존한다. 업데이트 백업은
 자동 회전하지 않는다. 수동 진단·복원이 필요한 실패를 일반 사용자가 완전히 해결하는 `repair` UX는 후속 범위다.
-관리 CLI 자체 교체·서명키 교체·기존 Git 설치의 `adopt`도 아직 제공하지 않는다. 기존 설치는 기존 Git 운영
+관리 서비스는 웹 업데이트로 바뀌지 않는다. 새 CLI의 `railwait manager upgrade`나 설치 명령 재실행이 한 번 교체하며,
+앱 업데이트가 관리 서비스까지 자동으로 바꾸는 기능·서명키 교체·기존 Git 설치의 `adopt`는 아직 제공하지 않는다. 기존 설치는 기존 Git 운영
 절차를 유지하고, 새 CLI 설치를 기존 경로에 덮어쓰지 않는다.
 
 ## 릴리스 제작
@@ -284,7 +310,7 @@ CLI 6종과 서명된 자산이 모두 준비된 뒤 안정 Release로 공개한
 
 API·browser runtime은 `uv.lock`으로 설치하고 uv 도구도 digest를 고정한다. Python base·OS package·Chrome
 `stable_current`까지 완전한 빌드 재현성을 보장하지는 않는다. 공통 웹 이미지는 검증 전 공식 앱 딥링크를 기본
-비활성화하며 호스트별 실행 시점 웹 설정은 후속 작업이다.
+비활성화하고, 설치별 값은 웹 컨테이너가 시작할 때 `.env`에서 읽는다.
 
 ## 검증과 남은 완료 조건
 

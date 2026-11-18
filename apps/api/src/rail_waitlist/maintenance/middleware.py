@@ -8,6 +8,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from .gate import MaintenanceClosed, MaintenanceGate
 
 EXEMPT_PATHS = frozenset({"/healthz", "/readyz", "/api/v1/auth/login", "/api/v1/auth/status"})
+# Management screens must keep working while the manager drains and restarts the app.
+MANAGEMENT_PATHS = frozenset({"/api/v1/system/update", "/api/v1/system/settings"})
 
 
 class MaintenanceMiddleware:
@@ -19,7 +21,7 @@ class MaintenanceMiddleware:
         if (
             scope["type"] != "http"
             or scope["path"] in self.exempt_paths
-            or scope["path"] == "/api/v1/system/update"
+            or scope["path"] in MANAGEMENT_PATHS
             or scope["path"].startswith("/api/v1/system/update/jobs/")
         ):
             await self.app(scope, receive, send)

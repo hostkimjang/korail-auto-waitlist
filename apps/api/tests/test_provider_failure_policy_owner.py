@@ -317,6 +317,22 @@ def test_cooldown_until_uses_the_classified_duration(
     assert actual == expected
 
 
+MANAGEMENT_PATH_PREFIXES = ("/api/v1/system/update", "/api/v1/system/settings")
+MANAGEMENT_SCHEMAS = frozenset(
+    {
+        "UpdateStatus",
+        "UpdateSubmission",
+        "UpdateJob",
+        "UpdateAccepted",
+        "SettingsStatus",
+        "SettingsField",
+        "SettingsSubmission",
+        "SettingsFieldValues",
+        "SettingsAccepted",
+    }
+)
+
+
 def test_provider_failure_owner_move_does_not_change_openapi() -> None:
     # Keep the existing API fingerprint; management routes have separate contract tests.
     original = app.openapi()
@@ -325,14 +341,14 @@ def test_provider_failure_owner_move_does_not_change_openapi() -> None:
         "paths": {
             name: value
             for name, value in original["paths"].items()
-            if not name.startswith("/api/v1/system/update")
+            if not name.startswith(MANAGEMENT_PATH_PREFIXES)
         },
         "components": {
             **original["components"],
             "schemas": {
                 name: value
                 for name, value in original["components"]["schemas"].items()
-                if name not in {"UpdateStatus", "UpdateSubmission", "UpdateJob", "UpdateAccepted"}
+                if name not in MANAGEMENT_SCHEMAS
             },
         },
     }

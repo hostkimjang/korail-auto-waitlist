@@ -33,6 +33,7 @@ from .korail_browser_seat_source import KorailBrowserSeatSource
 from .korail_sidecar.provider_cooldown import RedisProviderCooldown
 from .maintenance.gate import MaintenanceClosed, MaintenanceGate
 from .maintenance.http import router as maintenance_router
+from .maintenance.http import settings_router as maintenance_settings_router
 from .maintenance.middleware import MaintenanceMiddleware
 from .metrics import HTTP_DURATION, HTTP_REQUESTS, OUTBOX_PENDING
 from .notice_observations import RedisNoticeObservationReader
@@ -132,7 +133,13 @@ def create_app(
         request: Request,
         error: RequestValidationError,
     ) -> Response:
-        if request.url.path.startswith(("/api/v1/provider-accounts/", "/api/v1/system/update")):
+        if request.url.path.startswith(
+            (
+                "/api/v1/provider-accounts/",
+                "/api/v1/system/update",
+                "/api/v1/system/settings",
+            )
+        ):
             return JSONResponse(
                 status_code=422,
                 content={"detail": "request_validation_failed"},
@@ -219,6 +226,7 @@ def create_app(
     app.add_middleware(MaintenanceMiddleware)
     app.include_router(auth_router)
     app.include_router(maintenance_router)
+    app.include_router(maintenance_settings_router)
     app.include_router(browser_bridge_router)
     app.include_router(browser_companion_admin_router)
     app.include_router(notification_management_router)

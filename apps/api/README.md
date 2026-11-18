@@ -68,6 +68,14 @@ DB 조회·다중 revision·파싱 오류는 원문 없는 오류와 비정상 �
 만듭니다. 인증 token은 API 전용 `RAILWAIT_UPDATE_TOKEN_FILE`로 읽고 응답·로그에 포함하지 않습니다.
 설치되지 않은 관리 서비스, 오래된 정보, 달라진 계획은 업데이트 실행을 허용하지 않습니다.
 
+같은 보호를 적용한 `GET/POST /api/v1/system/settings`는 웹의 서버 설정 화면을 제공합니다. GET은 관리 서비스가
+게시한 `status/settings.json`을 엄격히 검증하고, 그 `manager_started_at`이 살아 있는 heartbeat와 같을 때만 허용한
+12개 항목·가린 원문·지문을 돌려줍니다. 비밀값 항목은 설정 여부만 반환합니다. POST는 허용한 항목 값 또는 가린 원문
+하나를 검증해 `requests/<id>.settings.json`을 원자적으로 쓰고 `202`를 반환합니다. 관리 서비스가 없거나 오래되었으면
+`503 settings_manager_unavailable`·`409 settings_manager_upgrade_required`, 화면이 본 지문이 바뀌었으면
+`409 settings_changed`를 반환합니다. 본문 검증 오류는 `422 request_validation_failed`로만 답해 입력값을 되돌려 주지
+않습니다. 작업 진행은 `GET /api/v1/system/update/jobs/{id}`로 조회하며, 두 경로 모두 유지보수 gate가 닫혀도 응답합니다.
+
 ## 개발
 
 Linux Bash:

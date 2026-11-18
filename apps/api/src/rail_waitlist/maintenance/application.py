@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import stat
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -41,7 +42,7 @@ class UpdatePlanChanged(Exception):
     pass
 
 
-def _read_file(path: Path, limit: int = 16384) -> bytes:
+def read_management_file(path: Path, limit: int = 16384) -> bytes:
     descriptor = os.open(
         path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     )
@@ -58,6 +59,58 @@ def _fresh(value: datetime, seconds: int, now: datetime) -> bool:
     return value.tzinfo is not None and -5 <= (now - value).total_seconds() <= seconds
 
 
+def live_manager(directory: Path, now: datetime) -> ManagerStatus | None:
+    """Return the heartbeat only while the manager is ready and its heartbeat is fresh."""
+    try:
+        manager = ManagerStatus.model_validate_json(
+            read_management_file(directory / "status/manager.json")
+        )
+    except (OSError, ValueError, ValidationError):
+        return None
+    if manager.state != "ready" or not _fresh(manager.heartbeat_at, 10, now):
+        return None
+    return manager
+
+
+def _request_token(path: Path) -> str:
+    token = read_management_file(path, 128).decode("ascii").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+        raise ValueError("invalid management token")
+    if len(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))) != 32:
+        raise ValueError("invalid management token")
+    return token
+
+
+def publish_request(build: Callable[[str, str], Mapping[str, object]], final_suffix: str) -> str:
+    """Atomically publish a manager request and return its new identifier.
+
+    `build` receives the identifier and the management token. The file becomes visible
+    under its final name only after the complete payload is synced.
+    """
+    settings = get_settings()
+    if settings.railwait_management_dir is None or settings.railwait_update_token_file is None:
+        raise ManagementUnavailable()
+    try:
+        token = _request_token(Path(settings.railwait_update_token_file))
+        identifier = secrets.token_hex(16)
+        payload = json.dumps(build(identifier, token)).encode("utf-8")
+        directory = Path(settings.railwait_management_dir) / "requests"
+        temporary = directory / f".{identifier}.tmp"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+                os.fchmod(stream.fileno(), 0o644)
+            os.link(temporary, directory / f"{identifier}{final_suffix}")
+        finally:
+            temporary.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        raise ManagementUnavailable() from None
+    return identifier
+
+
 def update_status() -> UpdateStatus:
     configured = get_settings().railwait_management_dir
     if configured is None:
@@ -70,15 +123,12 @@ def update_status() -> UpdateStatus:
         )
     directory = Path(configured)
     now = datetime.now(UTC)
-    manager_available = False
-    try:
-        manager = ManagerStatus.model_validate_json(_read_file(directory / "status/manager.json"))
-        manager_available = manager.state == "ready" and _fresh(manager.heartbeat_at, 10, now)
-    except (OSError, ValueError, ValidationError):
-        pass
+    manager_available = live_manager(directory, now) is not None
     catalog = None
     try:
-        catalog = UpdateCatalog.model_validate_json(_read_file(directory / "status/catalog.json"))
+        catalog = UpdateCatalog.model_validate_json(
+            read_management_file(directory / "status/catalog.json")
+        )
         if not _fresh(catalog.checked_at, 1800, now):
             reason: UpdateReason = "checking"
         else:
@@ -128,38 +178,15 @@ def submit_update(data: UpdateSubmission) -> UpdateAccepted:
         or status.plan_id != data.plan_id
     ):
         raise UpdatePlanChanged()
-    settings = get_settings()
-    if settings.railwait_management_dir is None or settings.railwait_update_token_file is None:
-        raise ManagementUnavailable()
-    try:
-        token = _read_file(Path(settings.railwait_update_token_file), 128).decode("ascii").strip()
-        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
-            raise ValueError("invalid management token")
-        if len(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))) != 32:
-            raise ValueError("invalid management token")
-        identifier = secrets.token_hex(16)
-        payload = json.dumps(
-            {
-                "schema": 1,
-                "id": identifier,
-                **data.model_dump(),
-                "auth_token": token,
-            }
-        ).encode("utf-8")
-        directory = Path(settings.railwait_management_dir) / "requests"
-        temporary = directory / f".{identifier}.tmp"
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-                os.fchmod(stream.fileno(), 0o644)
-            os.link(temporary, directory / f"{identifier}.json")
-        finally:
-            temporary.unlink(missing_ok=True)
-    except (OSError, ValueError):
-        raise ManagementUnavailable() from None
+    identifier = publish_request(
+        lambda identifier, token: {
+            "schema": 1,
+            "id": identifier,
+            **data.model_dump(),
+            "auth_token": token,
+        },
+        ".json",
+    )
     return UpdateAccepted(id=identifier)
 
 
@@ -169,7 +196,7 @@ def update_job(identifier: str) -> UpdateJob | None:
         return None
     try:
         job = UpdateJob.model_validate_json(
-            _read_file(Path(configured) / f"status/jobs/{identifier}.json")
+            read_management_file(Path(configured) / f"status/jobs/{identifier}.json")
         )
         return job if job.id == identifier else None
     except FileNotFoundError:

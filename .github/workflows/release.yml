@@ -22,7 +22,9 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Same runner as repository-verify: Playwright 1.55 cannot install Chromium dependencies on
+    # the Ubuntu 26.04 image that ubuntu-latest now selects.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       POSTGRES_PASSWORD: release-ci-only-postgres-not-a-secret

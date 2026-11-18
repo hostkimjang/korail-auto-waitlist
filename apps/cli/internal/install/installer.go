@@ -42,6 +42,9 @@ type Options struct {
 	Push                         PushOptions
 	Secrets                      map[string]string
 	Credentials                  func() (Credentials, error)
+	// AutomaticReservation turns on the installation-wide reservation switches in
+	// the first .env. Off by default; a resumed install keeps its existing .env.
+	AutomaticReservation bool
 }
 type Installer struct {
 	Runner   Runner
@@ -371,6 +374,11 @@ func (i *Installer) Install(ctx context.Context, o Options) (State, error) {
 		env, err := InitialEnvWithSetup(string(template), nil, s.Project, s.Port, o.TAGOKey, o.Secrets, o.Push)
 		if err != nil {
 			return s, err
+		}
+		if o.AutomaticReservation {
+			if env, err = ReservationEnvironment(env, true); err != nil {
+				return s, err
+			}
 		}
 		env = append(env, []byte("RAILWAIT_INSTALL_DIR='"+filepath.ToSlash(abs)+"'\n")...)
 		if strings.ContainsAny(abs, "'\r\n") {

@@ -217,6 +217,43 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 19일 Windows 자동 시작 등록, 설치 중 TAGO 키와 자동 예매 기본값 (v1.4.7)
+
+- [x] 원인: Windows 설치 4단계에서 `schtasks /Create /XML`이 CLI가 만든 UTF-8 작업 정의를
+  `(1,40)::오류: 인코딩을 전환할 수 없습니다`로 거부함. CLI가 명령 출력을 버려 화면에는 `exit status 1`만 남았고,
+  관리 서비스 heartbeat가 없어 웹 **앱 업데이트**가 `manager_unavailable` 안내만 보임. 1.4.3~1.4.6의 작업 정의 코드가
+  같아(1.4.0 이후 변경 없음) 모든 공식 Windows CLI에 해당
+- [x] CLI: 작업 정의를 UTF-16LE(BOM)로 저장하고 `%SystemRoot%\System32\conhost.exe --headless`로 관리 서비스를 창 없이
+  실행. 등록 실패 오류에 서비스 관리자 출력 한 줄(최대 240자)을 포함. 이전 CLI가 남긴 UTF-8 정의와 그 옆에서 한 번도
+  실행되지 않은 관리 실행 파일만 교체하고, 그 밖의 다른 정의·실행 파일은 지금처럼 교체하지 않음
+- [x] 실제 작업 스케줄러 확인(Windows 11, 선택 실행 테스트 `RAILWAIT_TEST_TASK_SCHEDULER=1`): 새 정의는 등록되고
+  `conhost.exe --headless`로 저장됨, 1.4.5 정의는 같은 오류로 거부. 임시 작업은 테스트가 지움
+- [x] 사용자 Windows 설치(1.4.5) 수동 복구: UTF-16 정의로 같은 이름의 작업을 다시 등록해 관리 서비스 실행과 heartbeat
+  확인. 디스크의 정의 파일은 1.4.5 그대로 둠
+- [ ] 이전 CLI로 4단계에서 멈춘 실제 설치를 새 CLI로 다시 실행해 이어지는지 확인(단위 테스트와 실제 등록 테스트만 통과)
+- [x] 설치 중 TAGO 키: 간편·`--custom`의 모든 새 대화형 설치에서 숨김 입력으로 한 번 묻고 Enter로 건너뜀
+- [x] 자동 예매 기본값(사용자 결정): 새 설치(대화형·`--input`)는 `KORAIL_RESERVATION_ONCE_ENABLED`·
+  `SRT_RESERVATION_ONCE_ENABLED`를 켬. `--custom`만 끌지 묻고 Enter는 켬. 지연승낙 대화상자 자동 선택
+  (`KORAIL_RESERVATION_DIALOG_AUTO_ACTION_ENABLED`)과 Git 설치의 `.env.example`은 그대로 꺼짐
+- [x] `railwait configure reservation on|off`: 두 스위치만 바꾸는 `configure_reservation` 계획(작업 종료 대기·암호화
+  백업·재시작·확인). 관리 서비스는 스스로 업데이트되지 않고 이전 관리 서비스는 모르는 작업 종류를 거부하므로,
+  로컬 패키지 업데이트처럼 CLI 프로세스가 직접 적용. 계획과 다른 on/off로는 적용하지 않음
+- [x] 안내 명령: 적용·상태·재개 명령을 실행 파일 전체 경로와 셸 인용으로 표시하고, Windows에서는 `&`부터 복사하라고
+  안내. 완료 화면에 TAGO 키 넣기와 자동 예매 끄기(꺼져 있으면 켜기) 명령 표시
+- [x] 웹: `GET /api/v1/providers`의 공식 KORAIL·SRT `reservation_once`를 읽어, 꺼졌거나 확인 전이면 새 대기의 자동 예매를
+  막고 알림만 받기를 기본으로 함(로그인보다 스위치 사유를 먼저 안내). 자동 예매로 걸린 대기 카드에 알림만 보낸다는 안내를
+  표시하고, 꺼진 설치에서는 정책 켜기와 수동 재시도를 열지 않음
+- [x] 검증: Go 1.27.4로 Windows 전체 테스트 통과(TAGO·자동 예매 변경 전). 이후 Windows Defender가 임시 폴더의 Go 도구를
+  `Behavior:Win32/Execution.A!ml`로 막아, Docker `golang:1.27.4-alpine`에서 gofmt·vet(linux·windows·darwin)·전체
+  테스트 통과. 웹은 타입 검사, lint(오류 0), 빌드 통과. 전체 테스트는 Windows CRLF 체크아웃에서만 나는 기존 실패
+  2건(`styles.css` 비교, `check-eslint-ratchet.mjs` 읽기) 외 통과
+- [x] 사용자 Windows 설치의 자동 예매 스위치를 사용자 승인으로 켬: `.env`의 두 값만 바꾸고 앱 서비스 10개를 다시 만들어
+  모두 healthy, API의 공식 KORAIL·SRT `reservation_once=true` 확인. 그때 활성 대기는 없었음(01:59·02:00에 등록한
+  KTX 4053·210 대기는 사용자 취소로 끝남)
+- [ ] CI 확인과 1.4.7 서명 릴리스 게시
+- [ ] 게시 확인 뒤 설치 안내(README, 설치 CLI 안내, 운영 가이드) 별도 커밋
+- [ ] 사용자 Windows 설치의 Tailscale 원격 접속(설치 5단계) 마무리
+
 ## 2026년 11월 19일 앱 업데이트 버튼이 반응하지 않음 (v1.4.6)
 
 - [x] 원인: 사용자 설치(1.4.3, 원격 접속 켬)의 로컬 주소에서 누른 `POST /api/v1/system/update` 5건이 모두 403

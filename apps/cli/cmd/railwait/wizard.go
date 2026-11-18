@@ -366,7 +366,8 @@ func installCommand(ctx context.Context, args []string) (err error) {
 		// Advisory: a failed write only means a later plain rerun decides again.
 		_ = rememberAccess(o.Path, o.Access)
 	} else {
-		opts := install.Options{Path: o.Path, Port: o.Port, DockerContext: o.DockerContext, PackagePath: o.Package, TrustKey: o.TrustKey}
+		// New installs turn automatic reservation on; --custom may turn it off.
+		opts := install.Options{Path: o.Path, Port: o.Port, DockerContext: o.DockerContext, PackagePath: o.Package, TrustKey: o.TrustKey, AutomaticReservation: true}
 		if provided != nil {
 			input := *provided
 			opts.TAGOKey = input.TAGOKey
@@ -386,17 +387,22 @@ func installCommand(ctx context.Context, args []string) (err error) {
 				if err != nil {
 					return err
 				}
-				if o.Custom {
-					key, keyErr := secretInput(ctx, ui, "TAGO API 키: ", "열차 시간표 검색에 사용합니다. 나중에 설정하려면 Enter를 누르세요.")
-					if keyErr != nil {
-						return keyErr
+				if interactive {
+					optional, optionalErr := optionalSettingsInputWith(ctx, ui, secretInput, readLine, o.Custom && !o.Yes)
+					if optionalErr != nil {
+						return optionalErr
 					}
-					opts.TAGOKey = strings.TrimSpace(key)
+					opts.TAGOKey, opts.AutomaticReservation = optional.TAGOKey, optional.AutomaticReservation
 				}
 				if opts.TAGOKey == "" {
-					ui.Info("건너뜀 · TAGO 키는 나중에 railwait configure로 설정할 수 있습니다")
+					ui.Info("건너뜀 · TAGO 키는 설치를 마친 뒤 넣을 수 있습니다")
 				} else {
 					ui.Done("시간표 검색 키 입력됨")
+				}
+				if opts.AutomaticReservation {
+					ui.Done("자동 예매 켬 · 설치를 마친 뒤 끌 수도 있습니다")
+				} else {
+					ui.Info("자동 예매 끔 · 좌석을 찾으면 알림만 보냅니다")
 				}
 				credentials, credErr := administratorInput(ctx, ui)
 				if credErr != nil {
@@ -485,11 +491,14 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	}
 	ui.KeyValue("버전", s.Release)
 	ui.Hint("입력한 관리자 계정으로 로그인하세요.")
-	ui.Hint("상태 확인")
 	if runtime.GOOS == "windows" {
-		ui.Hint("PowerShell에서 실행하세요.")
+		ui.Hint(windowsCommandHint)
 	}
+	ui.Hint("상태 확인")
 	showWizardStatusCommand(ui, s.Path)
+	if env, envErr := os.ReadFile(filepath.Join(s.Path, ".env")); envErr == nil {
+		showOptionalSettingCommands(ui, s.Path, env)
+	}
 	if o.Open || useAllInOneDefaults(o, interactive, existing != nil) {
 		if openErr := setup.OpenURL(ctx, address); openErr != nil {
 			ui.Hint("브라우저를 열지 못했습니다. 위 접속 주소를 직접 열어 주세요.")
@@ -546,6 +555,7 @@ func previewCommand(ctx context.Context, args []string) error {
 	ui.KeyValue("접속 방식", "내 Tailscale 기기 · HTTPS")
 	ui.Section("3 / 5  앱과 계정")
 	ui.KeyValue("보안·알림 키", "자동 생성 · 직접 입력은 --custom")
+	ui.KeyValue("자동 예매", "켬 · 결제 직전까지 · 끄기는 --custom")
 	ui.Start("설치 파일 서명 확인 · 예시")
 	if !*plain {
 		select {

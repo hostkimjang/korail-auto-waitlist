@@ -157,6 +157,9 @@ export function WatchRow({
               {presentation.policyAccountLinkLabel}
             </button>
           ) : null}
+          {presentation.policyNote ? (
+            <span className="watch-policy-note">{presentation.policyNote}</span>
+          ) : null}
         </div>
         {(seatFoundAction || (
           rearmContext && rearmMode && onManualReservationRearm

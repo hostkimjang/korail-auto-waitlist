@@ -3,11 +3,14 @@ package manager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/platform"
 )
@@ -80,6 +83,72 @@ func TestServiceDefinitionPreservesExistingDifferingFile(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "first definition" {
 		t.Fatal("existing definition modified")
+	}
+}
+
+func TestServiceDefinitionReplacesOnlyKnownLegacyRendering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "service", "railwait-manager.xml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Task>released</Task>\n")
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := platform.ServicePlan{Definition: path, Content: []byte("\xff\xfecurrent"), Legacy: [][]byte{legacy}}
+	if found, err := HasLegacyDefinition(plan); err != nil || !found {
+		t.Fatalf("legacy definition not recognized: %v %v", found, err)
+	}
+	if err := WriteServiceDefinition(plan); err != nil {
+		t.Fatal("known earlier rendering was not migrated", err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != string(plan.Content) {
+		t.Fatal("legacy definition not replaced")
+	}
+	if found, err := HasLegacyDefinition(plan); err != nil || found {
+		t.Fatalf("current definition reported as legacy: %v %v", found, err)
+	}
+	edited := []byte("<Task>edited by the user</Task>")
+	if err := os.WriteFile(path, edited, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := HasLegacyDefinition(plan); err != nil || found {
+		t.Fatalf("edited definition reported as legacy: %v %v", found, err)
+	}
+	if err := WriteServiceDefinition(plan); err == nil {
+		t.Fatal("replaced a definition that is not a known Railwait rendering")
+	}
+	if data, _ := os.ReadFile(path); string(data) != string(edited) {
+		t.Fatal("unknown definition modified")
+	}
+	plan.Definition = filepath.Join(filepath.Dir(path), "missing.xml")
+	if found, err := HasLegacyDefinition(plan); err != nil || found {
+		t.Fatalf("missing definition reported as legacy: %v %v", found, err)
+	}
+}
+
+// TestServiceCommandHelper is not a test: ExecServiceRunner runs this binary as a
+// stand-in service manager that prints the way schtasks does and fails.
+func TestServiceCommandHelper(t *testing.T) {
+	if os.Getenv("RAILWAIT_SERVICE_HELPER") != "1" {
+		return
+	}
+	fmt.Fprint(os.Stderr, "ERROR: The task XML is malformed.\r\n\r\n(1,40)::\xbf\xc0\xb7\xf9: \x1b[31mencoding\r\n")
+	os.Exit(1)
+}
+
+func TestExecServiceRunnerReportsServiceManagerMessage(t *testing.T) {
+	t.Setenv("RAILWAIT_SERVICE_HELPER", "1")
+	err := ExecServiceRunner{}.Run(context.Background(), platform.ServiceCommand{Program: os.Args[0], Args: []string{"-test.run=^TestServiceCommandHelper$"}})
+	if err == nil {
+		t.Fatal("failing service manager reported success")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "exit status 1") || !strings.Contains(message, "ERROR: The task XML is malformed. (1,40)::") {
+		t.Fatalf("service manager message missing: %q", message)
+	}
+	if !utf8.ValidString(message) || strings.ContainsAny(message, "\r\n\x1b") {
+		t.Fatalf("message must be one printable line: %q", message)
 	}
 }
 

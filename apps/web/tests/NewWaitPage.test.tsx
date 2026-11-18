@@ -1063,6 +1063,7 @@ describe("NewWaitPage behavior", () => {
       <OwnedNewWait
         demo={false}
         providerAccounts={[account]}
+        automaticReservation={{ KORAIL: true, SRT: true }}
         onComplete={vi.fn()}
         onCancel={vi.fn()}
       />,
@@ -1079,11 +1080,62 @@ describe("NewWaitPage behavior", () => {
       <OwnedNewWait
         demo={false}
         providerAccounts={[{ ...account }]}
+        automaticReservation={{ KORAIL: true, SRT: true }}
         onComplete={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: /알림만 받기/ }).getAttribute("aria-pressed"))
+      .toBe("true");
+  });
+  it("keeps a verified account on notifications while the installation switch is off", async () => {
+    const user = userEvent.setup();
+    const account: ProviderAccount = {
+      provider: "KORAIL",
+      configured: true,
+      enabled: true,
+      loginMethod: "phone",
+      maskedLoginId: "0*********6",
+      credentialVersion: 1,
+      lastAuthStatus: "authenticated",
+      lastAuthenticatedAt: "2026-08-01T12:00:00Z",
+      updatedAt: "2026-08-01T12:00:00Z",
+    };
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => {
+      const parsed = requestUrl(url);
+      if (parsed.pathname.endsWith("/stations")) {
+        return response(stationCatalog(parsed.searchParams.get("provider")));
+      }
+      return response([]);
+    }));
+    const { rerender } = render(
+      <OwnedNewWait
+        demo={false}
+        providerAccounts={[account]}
+        automaticReservation={{ KORAIL: false, SRT: false }}
+        onComplete={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await selectStation(user, "출발역", "서울");
+    await selectStation(user, "도착역", "부산");
+    await user.click(screen.getByRole("button", { name: /다음/ }));
+
+    const automatic = screen.getByRole("button", { name: /자동 예매/ });
+    expect(automatic.getAttribute("aria-pressed")).toBe("false");
+    expect(automatic.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/KORAIL 자동 예매가 꺼져 있어/)).toBeTruthy();
+    rerender(
+      <OwnedNewWait
+        demo={false}
+        providerAccounts={[account]}
+        automaticReservation={{ KORAIL: true, SRT: false }}
+        onComplete={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /자동 예매/ }).getAttribute("aria-pressed"))
       .toBe("true");
   });
   it("shows every provider result in time order and preserves already registered waits after a range change", async () => {

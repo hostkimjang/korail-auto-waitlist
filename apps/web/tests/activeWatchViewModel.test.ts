@@ -200,6 +200,44 @@ describe("active watch view model", () => {
     });
   });
 
+  it("says an automatic watch only notifies while the installation switch is off", () => {
+    const automatic = presentActiveWatchRow(activeWatch({
+      reservationPolicy: "reserve_once_before_payment",
+      automaticReservationAvailable: false,
+      latestReservationAttempt: {
+        outcome: "payment_required",
+        startedAt: "2026-08-08T13:00:00Z",
+        finishedAt: "2026-08-08T13:01:00Z",
+        retryable: true,
+        manualCheckRequired: false,
+        retryCondition: "new_availability_episode",
+        paymentHoldEndedAt: "2026-08-08T13:02:00Z",
+        paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
+        manualRearmAvailable: true,
+        manualRearmReason: "payment_hold_ended",
+      },
+    }), false);
+    const notifyOnly = presentActiveWatchRow(mapActiveWatch(mappedWatch(), "not_checked", false), false);
+    const unknown = presentActiveWatchRow(mapActiveWatch(mappedWatch({
+      reservationPolicy: "reserve_once_before_payment",
+    }), "authenticated"), false);
+
+    expect(automatic).toMatchObject({
+      automaticReservationEnabled: true,
+      policyNote: "이 설치는 자동 예매가 꺼져 있어 알림만 보냅니다",
+      policySwitchDisabled: false,
+      canManualRearmReservation: false,
+    });
+    expect(notifyOnly).toMatchObject({
+      policyNote: null,
+      policySwitchDisabled: true,
+      policySwitchTitle: "이 설치는 자동 예매가 꺼져 있습니다.",
+      shouldShowPolicyAccountLink: false,
+    });
+    expect(unknown.policyNote).toBeNull();
+    expect(unknown.policySwitchDisabled).toBe(false);
+  });
+
   it.each([
     [
       "auth_required",

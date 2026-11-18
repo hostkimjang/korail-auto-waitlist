@@ -127,7 +127,7 @@ func savePlan(s State, plan UpdatePlan, targetSHA, kind string, candidate []byte
 	if err = cleanupExpiredPlans(dir); err != nil {
 		return plan, err
 	}
-	if kind == "configure_tago" || kind == "configure_access" || kind == "configure_push" {
+	if configureKind(kind) {
 		if err = atomicWrite(filepath.Join(dir, plan.PlanID+".candidate.env"), candidate); err != nil {
 			return plan, err
 		}
@@ -137,6 +137,16 @@ func savePlan(s State, plan UpdatePlan, targetSHA, kind string, candidate []byte
 		return plan, err
 	}
 	return plan, nil
+}
+
+// configureKind lists the plans that change one group of .env settings and keep the
+// installed release. Update validates each candidate with that group's own check.
+func configureKind(kind string) bool {
+	switch kind {
+	case "configure_tago", "configure_access", "configure_push", "configure_reservation":
+		return true
+	}
+	return false
 }
 
 func cleanupExpiredPlans(dir string) error {
@@ -165,7 +175,7 @@ func cleanupExpiredPlans(dir string) error {
 		if saved.Plan.PlanID+".json" != entry.Name() {
 			continue
 		}
-		if saved.Kind == "configure_tago" || saved.Kind == "configure_access" || saved.Kind == "configure_push" {
+		if configureKind(saved.Kind) {
 			candidate := filepath.Join(dir, saved.Plan.PlanID+".candidate.env")
 			if info, err := os.Lstat(candidate); err == nil {
 				if !info.Mode().IsRegular() {
@@ -354,7 +364,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	if json.Unmarshal(savedData, &saved) != nil {
 		return result, fmt.Errorf("업데이트 계획이 잘못되었습니다")
 	}
-	configure := saved.Kind == "configure_tago" || saved.Kind == "configure_access" || saved.Kind == "configure_push"
+	configure := configureKind(saved.Kind)
 	local := saved.Kind == "local_package"
 	if local != (o.PackagePath != "" || o.TrustKey != "") {
 		// The host manager never forwards package paths, so only a host CLI caller that names
@@ -430,11 +440,14 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		if hashBytes(candidate) != saved.CandidateSHA256 {
 			return result, fmt.Errorf("설정 후보가 계획과 일치하지 않습니다")
 		}
-		if saved.Kind == "configure_access" {
+		switch saved.Kind {
+		case "configure_access":
 			err = validateAccessCandidate(env, candidate)
-		} else if saved.Kind == "configure_push" {
+		case "configure_push":
 			err = validatePushCandidate(env, candidate)
-		} else {
+		case "configure_reservation":
+			err = validateReservationCandidate(env, candidate)
+		default:
 			err = validateTAGOCandidate(env, candidate)
 		}
 		if err != nil {

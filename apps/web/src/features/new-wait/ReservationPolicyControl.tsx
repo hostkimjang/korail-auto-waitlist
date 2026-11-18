@@ -1,8 +1,11 @@
 import { CheckCircle, CreditCard, Info } from "@phosphor-icons/react";
 
 import type { ProviderAccount, RailProvider } from "../../api/providerAccounts";
+import type { AutomaticReservationAvailability } from "../../api/providerCapabilities";
 import {
-  canReserveWithAuthenticatedAccounts,
+  canReserveAutomatically,
+  providersNeedingAccountLogin,
+  providersWithoutAutomaticReservation,
   type ReservationPolicy,
 } from "./reservationPolicy";
 
@@ -10,15 +13,34 @@ export interface ReservationPolicyControlProps {
   value: ReservationPolicy;
   selectedProviders: ReadonlyArray<RailProvider>;
   accounts: ReadonlyArray<ProviderAccount>;
+  automaticReservation: AutomaticReservationAvailability | null;
   onChange: (value: ReservationPolicy) => void;
 }
 
-export function ReservationPolicyControl({ value, selectedProviders, accounts, onChange }: ReservationPolicyControlProps) {
-  const missingProviders = selectedProviders.filter((provider) => {
-    const account = accounts.find((item) => item.provider === provider);
-    return !account?.configured || !account.enabled || account.lastAuthStatus !== "authenticated";
-  });
-  const canReserve = canReserveWithAuthenticatedAccounts(selectedProviders, accounts);
+// Signing in cannot help while the installation switch is off, so that reason comes first.
+function unavailableReason(
+  selectedProviders: ReadonlyArray<RailProvider>,
+  accounts: ReadonlyArray<ProviderAccount>,
+  automaticReservation: AutomaticReservationAvailability | null,
+): string {
+  if (automaticReservation === null) {
+    return "이 설치의 자동 예매 설정을 아직 확인하지 못했습니다. 확인되면 이 옵션을 고를 수 있습니다.";
+  }
+  const switchedOff = providersWithoutAutomaticReservation(selectedProviders, automaticReservation);
+  if (switchedOff.length > 0) {
+    return `이 설치는 ${switchedOff.join(" · ")} 자동 예매가 꺼져 있어 알림만 받을 수 있습니다. 설치한 컴퓨터에서 railwait configure reservation on으로 켤 수 있습니다.`;
+  }
+  return `${providersNeedingAccountLogin(selectedProviders, accounts).join(" · ")} 계정 로그인을 확인해야 이 옵션을 사용할 수 있습니다.`;
+}
+
+export function ReservationPolicyControl({
+  value,
+  selectedProviders,
+  accounts,
+  automaticReservation,
+  onChange,
+}: ReservationPolicyControlProps) {
+  const canReserve = canReserveAutomatically(selectedProviders, accounts, automaticReservation);
   const automaticSelected = value === "reserve_once_before_payment";
 
   return (
@@ -50,7 +72,7 @@ export function ReservationPolicyControl({ value, selectedProviders, accounts, o
         <p id="reservation-policy-payment-help">자동 결제는 하지 않습니다. 결제 필요 알림을 받은 뒤 공식 플랫폼에서 직접 결제하세요.</p>
       ) : (
         <p id="reservation-policy-account-help" className="reservation-policy-warning">
-          {missingProviders.join(" · ")} 계정 로그인을 확인해야 이 옵션을 사용할 수 있습니다.
+          {unavailableReason(selectedProviders, accounts, automaticReservation)}
         </p>
       )}
     </fieldset>

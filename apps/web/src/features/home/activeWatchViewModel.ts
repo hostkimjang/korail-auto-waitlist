@@ -52,6 +52,11 @@ export interface ActiveWatch {
   status: WatchStatus;
   statusLabel: string;
   accountAuthStatus?: RailAccountAuthStatus | null;
+  /**
+   * Whether this installation runs automatic reservation for the watch's provider.
+   * `null` or absent means not known yet; the card then makes no claim either way.
+   */
+  automaticReservationAvailable?: boolean | null;
   seatClass: WatchSeatClass;
   seatClassLabel: string;
   seatEvidenceLabel: string;
@@ -86,6 +91,8 @@ export interface ActiveWatchRowPresentation {
   nextCheckLabel: string | null;
   nextReservationPolicy: ReservationPolicy;
   policyAccountLinkLabel: string;
+  /** Shown when the watch chose automatic reservation that this installation does not run. */
+  policyNote: string | null;
   policySwitchDisabled: boolean;
   policySwitchTitle: string | undefined;
   reservationAttemptLabel: string | null;
@@ -297,6 +304,7 @@ function reconciliationAuthenticationOutcome(
 export function mapActiveWatch(
   watch: WatchReadModel,
   accountAuthStatus: RailAccountAuthStatus | null,
+  automaticReservationAvailable: boolean | null = null,
 ): ActiveWatch {
   const latestReservationAttemptContext = watch.latestReservationAttempt !== null
     && watch.latestReservationAttemptCandidateId !== null
@@ -318,6 +326,7 @@ export function mapActiveWatch(
     status: watch.status,
     statusLabel: watch.statusLabel,
     accountAuthStatus,
+    automaticReservationAvailable,
     seatClass: watch.seatClass,
     seatClassLabel: watch.seatClassLabel,
     seatEvidenceLabel: watch.seatEvidenceLabel,
@@ -379,15 +388,18 @@ export function presentActiveWatchRow(
   const confirmedAbsentRecoveryConsumed = watch.latestReservationAttempt
     ?.automaticReservationRetryFenceReason === "confirmed_absent_recovery_consumed";
   const automaticReservationEnabled = watch.reservationPolicy === "reserve_once_before_payment";
+  const reservationSwitchedOff = watch.automaticReservationAvailable === false;
   const reservationPolicyEditable = reservationPolicyEditableStatuses.has(watch.status);
   const policySwitchDisabled = isReservationPolicyUpdating
     || !reservationPolicyEditable
-    || (!automaticReservationEnabled && !hasAuthenticatedAccount);
+    || (!automaticReservationEnabled && (reservationSwitchedOff || !hasAuthenticatedAccount));
   const policySwitchTitle = !reservationPolicyEditable
     ? "예약 시도가 시작된 뒤에는 실행 방식을 변경할 수 없습니다."
-    : !automaticReservationEnabled && !hasAuthenticatedAccount
-      ? "로그인 확인된 철도 계정이 필요합니다."
-      : undefined;
+    : !automaticReservationEnabled && reservationSwitchedOff
+      ? "이 설치는 자동 예매가 꺼져 있습니다."
+      : !automaticReservationEnabled && !hasAuthenticatedAccount
+        ? "로그인 확인된 철도 계정이 필요합니다."
+        : undefined;
 
   return {
     authSummary: isProviderReverificationPending
@@ -403,6 +415,7 @@ export function presentActiveWatchRow(
     canPause: pausableWatchStatuses.has(watch.status),
     canManualRearmReservation: watch.status === "watching"
       && automaticReservationEnabled
+      && !reservationSwitchedOff
       && manualRearmReason !== null,
     manualRearmReason,
     canRenderSeatFoundAction: (
@@ -421,6 +434,9 @@ export function presentActiveWatchRow(
       ? "notify_only"
       : "reserve_once_before_payment",
     policyAccountLinkLabel: isProviderReverificationPending ? "운영사 상태 확인" : "로그인 필요",
+    policyNote: automaticReservationEnabled && reservationSwitchedOff
+      ? "이 설치는 자동 예매가 꺼져 있어 알림만 보냅니다"
+      : null,
     policySwitchDisabled,
     policySwitchTitle,
     reservationAttemptLabel: watch.latestReservationAttempt
@@ -430,7 +446,10 @@ export function presentActiveWatchRow(
         )
       : null,
     seatEvidenceLabel,
-    shouldShowPolicyAccountLink: !automaticReservationEnabled && !hasAuthenticatedAccount,
+    // Signing in cannot enable a reservation the installation switch keeps off.
+    shouldShowPolicyAccountLink: !automaticReservationEnabled
+      && !hasAuthenticatedAccount
+      && !reservationSwitchedOff,
     shouldShowRegistrationEvidence: Boolean(
       watch.registrationEvidenceLabel && watch.registrationEvidenceLabel !== seatEvidenceLabel,
     ),

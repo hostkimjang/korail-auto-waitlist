@@ -3,6 +3,7 @@ package platform
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 type ServiceCommand struct {
@@ -19,10 +21,14 @@ type ServiceCommand struct {
 }
 
 type ServicePlan struct {
-	OS           string           `json:"os"`
-	Name         string           `json:"name"`
-	Definition   string           `json:"definition"`
-	Content      []byte           `json:"-"`
+	OS         string `json:"os"`
+	Name       string `json:"name"`
+	Definition string `json:"definition"`
+	Content    []byte `json:"-"`
+	// Legacy holds earlier Railwait renderings of this same service that the OS
+	// rejected. Only an exact match may be replaced; any other differing file
+	// still needs review.
+	Legacy       [][]byte         `json:"-"`
 	Register     []ServiceCommand `json:"register"`
 	Start        ServiceCommand   `json:"start"`
 	Status       ServiceCommand   `json:"status"`
@@ -109,14 +115,40 @@ func RenderService(goos, home, identity, executable, installation string) (Servi
 		}
 		plan.Definition = windowsJoin(installation, ".railwait", "manager", "service", name+".xml")
 		args := strings.Join([]string{"manager", "serve", "--path", windowsQuote(installation)}, " ")
-		plan.Content = []byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\"><Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + xmlText(identity) + "</UserId></LogonTrigger></Triggers><Principals><Principal id=\"Author\"><UserId>" + xmlText(identity) + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings><Actions Context=\"Author\"><Exec><Command>" + xmlText(executable) + "</Command><Arguments>" + xmlText(args) + "</Arguments><WorkingDirectory>" + xmlText(installation) + "</WorkingDirectory></Exec></Actions></Task>\n")
+		// schtasks /XML rejects UTF-8 files ("The task XML is malformed ... unable to
+		// switch the encoding"), so the definition is UTF-16LE with a byte order mark.
+		// conhost --headless runs the console manager without opening a console or
+		// Windows Terminal window at logon; closing such a window would stop it.
+		hosted := strings.Join([]string{"--headless", windowsQuote(executable), args}, " ")
+		plan.Content = utf16LE(windowsTaskDocument("UTF-16", identity, windowsConsoleHost, hosted, installation))
+		// 1.4.5 wrote this UTF-8 definition, which Task Scheduler never accepted.
+		plan.Legacy = [][]byte{[]byte(windowsTaskDocument("UTF-8", identity, executable, args, installation))}
 		plan.Register = []ServiceCommand{{"schtasks.exe", []string{"/Create", "/TN", name, "/XML", plan.Definition, "/F"}}}
 		plan.Start = ServiceCommand{"schtasks.exe", []string{"/Run", "/TN", name}}
 		plan.Status = ServiceCommand{"schtasks.exe", []string{"/Query", "/TN", name, "/XML"}}
 		plan.Stop = ServiceCommand{"schtasks.exe", []string{"/End", "/TN", name}}
-		plan.Availability = "현재 사용자 로그인 시 최소 권한의 Task Scheduler 작업으로 실행합니다. 로그아웃 상태에서는 실행하지 않습니다."
+		plan.Availability = "현재 사용자 로그인 시 최소 권한의 Task Scheduler 작업으로 창 없이 실행합니다. 로그아웃 상태에서는 실행하지 않습니다."
 	}
 	return plan, nil
+}
+
+// windowsConsoleHost is expanded by Task Scheduler, like the built-in tasks that
+// start %windir%\system32 programs, so the definition does not embed a drive.
+const windowsConsoleHost = `%SystemRoot%\System32\conhost.exe`
+
+func windowsTaskDocument(encoding, identity, command, arguments, workingDirectory string) string {
+	return "<?xml version=\"1.0\" encoding=\"" + encoding + "\"?>\n<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\"><Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + xmlText(identity) + "</UserId></LogonTrigger></Triggers><Principals><Principal id=\"Author\"><UserId>" + xmlText(identity) + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings><Actions Context=\"Author\"><Exec><Command>" + xmlText(command) + "</Command><Arguments>" + xmlText(arguments) + "</Arguments><WorkingDirectory>" + xmlText(workingDirectory) + "</WorkingDirectory></Exec></Actions></Task>\n"
+}
+
+// utf16LE encodes text as UTF-16 little endian with a byte order mark.
+func utf16LE(text string) []byte {
+	units := utf16.Encode([]rune(text))
+	out := make([]byte, 2+2*len(units))
+	out[0], out[1] = 0xFF, 0xFE
+	for n, unit := range units {
+		binary.LittleEndian.PutUint16(out[2+2*n:], unit)
+	}
+	return out
 }
 
 func absoluteForOS(goos, path string) bool {

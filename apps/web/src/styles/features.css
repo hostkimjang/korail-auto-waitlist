@@ -617,6 +617,15 @@
   cursor: pointer;
 }
 
+.watch-policy-note {
+  grid-column: 1 / -1;
+  min-width: 0;
+  color: #9a5b17;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
 .watch-booking-action,
 .watch-control-actions {
   display: flex;

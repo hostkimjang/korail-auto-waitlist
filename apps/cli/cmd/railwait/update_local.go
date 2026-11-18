@@ -52,7 +52,7 @@ func localUpdateCommand(ctx context.Context, i *install.Installer, o localUpdate
 			fmt.Println("차단:", strings.Join(plan.BlockedReasons, "; "))
 			return nil
 		}
-		fmt.Printf("검증 → 패키지 복사·이미지 불러오기 → 보존 패키지 교체 → 작업 종료 대기 → 암호화 백업 → 앱 교체 → 확인 → 재개\n적용: railwait update --path %q --package %q --trust-key %q --target %s --plan %s\n", o.Path, o.Package, o.TrustKey, plan.TargetReleaseID, plan.PlanID)
+		fmt.Printf("검증 → 패키지 복사·이미지 불러오기 → 보존 패키지 교체 → 작업 종료 대기 → 암호화 백업 → 앱 교체 → 확인 → 재개\n적용: %s\n", pasteableCommand("update", "--path", o.Path, "--package", o.Package, "--trust-key", o.TrustKey, "--target", plan.TargetReleaseID, "--plan", plan.PlanID))
 		return nil
 	}
 	raw := make([]byte, 16)
@@ -75,7 +75,7 @@ func localUpdateCommand(ctx context.Context, i *install.Installer, o localUpdate
 		fmt.Fprintln(os.Stderr, "주의:", warning)
 	}
 	if err != nil {
-		return fmt.Errorf("업데이트가 %s 상태입니다; railwait status --path %q --job %s 로 확인하세요: %w", result.State, o.Path, id, err)
+		return fmt.Errorf("업데이트가 %s 상태입니다; %s 로 확인하세요: %w", result.State, pasteableCommand("status", "--path", o.Path, "--job", id), err)
 	}
 	if o.JSON {
 		return json.NewEncoder(os.Stdout).Encode(result)

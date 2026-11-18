@@ -34,11 +34,14 @@ const authenticatedAccounts = [
   providerAccount("SRT", true),
 ];
 
+const reservationOn = { KORAIL: true, SRT: true } as const;
+
 function initialForm(overrides: Partial<NewWaitForm> = {}): NewWaitForm {
   return {
     ...createInitialNewWaitForm({
       demo: false,
       providerAccounts: [],
+      automaticReservation: reservationOn,
       demoOriginNodeId: null,
       demoDestinationNodeId: null,
       now: new Date("2026-08-04T03:00:00.000Z"),
@@ -85,6 +88,7 @@ describe("new wait form model", () => {
     const form = createInitialNewWaitForm({
       demo,
       providerAccounts: accounts,
+      automaticReservation: reservationOn,
       demoOriginNodeId: "demo:서울",
       demoDestinationNodeId: "demo:부산",
       now: new Date("2026-08-04T03:00:00.000Z"),
@@ -135,10 +139,24 @@ describe("new wait form model", () => {
     expect(createInitialNewWaitForm({
       demo: false,
       providerAccounts: [],
+      automaticReservation: reservationOn,
       demoOriginNodeId: null,
       demoDestinationNodeId: null,
       now: new Date(now),
     })).toMatchObject(expected);
+  });
+
+  it("starts with notifications when the installation switch is off or unknown", () => {
+    for (const automaticReservation of [{ KORAIL: false, SRT: false }, null]) {
+      expect(createInitialNewWaitForm({
+        demo: false,
+        providerAccounts: authenticatedAccounts,
+        automaticReservation,
+        demoOriginNodeId: null,
+        demoDestinationNodeId: null,
+        now: new Date("2026-08-04T03:00:00.000Z"),
+      }).reservationPolicy).toBe("notify_only");
+    }
   });
 
   it("swaps station labels and catalog identities together", () => {
@@ -233,6 +251,18 @@ describe("new wait form model", () => {
       expectedProviders: ["KORAIL", "SRT"],
       expectedProvider: "KORAIL",
       expectedPolicy: "notify_only",
+      automaticReservation: reservationOn,
+    },
+    {
+      name: "fails a manual reservation choice closed when the added provider is switched off",
+      form: initialForm({ reservationPolicy: "reserve_once_before_payment" }),
+      provider: "SRT" as const,
+      accounts: authenticatedAccounts,
+      manuallySelected: true,
+      expectedProviders: ["KORAIL", "SRT"],
+      expectedProvider: "KORAIL",
+      expectedPolicy: "notify_only",
+      automaticReservation: { KORAIL: true, SRT: false },
     },
   ])("$name", ({
     form,
@@ -242,10 +272,12 @@ describe("new wait form model", () => {
     expectedProviders,
     expectedProvider,
     expectedPolicy,
+    automaticReservation = reservationOn,
   }) => {
     expect(toggleNewWaitProvider(form, provider, {
       demo: false,
       providerAccounts: accounts,
+      automaticReservation,
       reservationPolicyManuallySelected: manuallySelected,
     })).toMatchObject({
       providers: expectedProviders,

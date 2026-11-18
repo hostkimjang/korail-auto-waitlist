@@ -74,24 +74,46 @@ func TestManagerExecutableIsPersistedAndDifferentExistingBinaryIsPreserved(t *te
 	if err := os.WriteFile(source, []byte("verified-cli-fixture"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	dest, err := copyManagerExecutable(root, source)
+	dest, err := copyManagerExecutable(root, source, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if filepath.Dir(dest) != filepath.Join(root, ".railwait", "bin") {
 		t.Fatal(dest)
 	}
-	if _, err = copyManagerExecutable(root, source); err != nil {
+	if _, err = copyManagerExecutable(root, source, false); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.WriteFile(source, []byte("different-build"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = copyManagerExecutable(root, source); err == nil {
+	if _, err = copyManagerExecutable(root, source, false); err == nil {
 		t.Fatal("replaced existing manager without update workflow")
 	}
 	data, _ := os.ReadFile(dest)
 	if string(data) != "verified-cli-fixture" {
 		t.Fatal("existing manager executable changed")
+	}
+	// A manager whose service definition the OS rejected never ran, so this build replaces it.
+	if _, err = copyManagerExecutable(root, source, true); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ = os.ReadFile(dest); string(data) != "different-build" {
+		t.Fatal("never started manager executable was not replaced")
+	}
+}
+
+func TestConfigureReservationNeedsAnExplicitDirection(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"reservation"},
+		{"reservation", "maybe", "--path", root},
+		{"reservation", "--path", root, "on"},
+		{"reservation", "on", "--path", root, "extra"},
+		{"reservation", "on", "--path", root, "--plan", "not-a-plan"},
+	} {
+		if err := configureCommand(context.Background(), args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
 	}
 }

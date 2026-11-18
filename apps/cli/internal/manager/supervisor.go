@@ -5,11 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/platform"
 )
@@ -19,14 +20,57 @@ type ServiceRunner interface {
 }
 type ExecServiceRunner struct{}
 
+// serviceOutputLimit bounds what a host service manager may print into memory.
+// Only a short summary of it is shown; it never contains Railwait secrets.
+const serviceOutputLimit = 4 << 10
+
 func (ExecServiceRunner) Run(ctx context.Context, command platform.ServiceCommand) error {
 	cmd := exec.CommandContext(ctx, command.Program, command.Args...)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	output := &boundedOutput{limit: serviceOutputLimit}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("user service command failed: %w", err)
+		// A bare "exit status 1" hid why schtasks rejected the Windows task. The
+		// service manager's own message is the actionable part of the failure.
+		if detail := serviceOutputSummary(output.Bytes()); detail != "" {
+			return fmt.Errorf("user service command failed: %s: %w: %s", command.Program, err, detail)
+		}
+		return fmt.Errorf("user service command failed: %s: %w", command.Program, err)
 	}
 	return nil
+}
+
+type boundedOutput struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *boundedOutput) Write(p []byte) (int, error) {
+	if room := b.limit - b.Len(); room > 0 {
+		if len(p) > room {
+			b.Buffer.Write(p[:room])
+		} else {
+			b.Buffer.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+// serviceOutputSummary keeps one readable line. Windows tools print in the
+// console code page, so bytes that are not UTF-8 become "?" instead of mojibake.
+func serviceOutputSummary(data []byte) string {
+	text := strings.ToValidUTF8(string(data), "?")
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, text)
+	text = strings.Join(strings.Fields(text), " ")
+	if runes := []rune(text); len(runes) > 240 {
+		text = string(runes[:240]) + "…"
+	}
+	return text
 }
 
 // InstallService writes only this installation's deterministic service definition.
@@ -80,10 +124,13 @@ func WriteServiceDefinition(plan platform.ServicePlan) error {
 		return errors.New("service definition is required")
 	}
 	if data, err := readBounded(plan.Definition, 64<<10); err == nil {
-		if !bytes.Equal(data, plan.Content) {
+		if bytes.Equal(data, plan.Content) {
+			return nil
+		}
+		if !matchesLegacyDefinition(data, plan.Legacy) {
 			return errors.New("existing service definition differs; review it before replacing")
 		}
-		return nil
+		// An earlier Railwait rendering of this same service is replaced in place.
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -91,6 +138,32 @@ func WriteServiceDefinition(plan platform.ServicePlan) error {
 		return err
 	}
 	return writeFile(plan.Definition, plan.Content, 0o600)
+}
+
+func matchesLegacyDefinition(data []byte, legacy [][]byte) bool {
+	for _, candidate := range legacy {
+		if len(candidate) > 0 && bytes.Equal(data, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasLegacyDefinition reports whether the definition on disk is an earlier Railwait
+// rendering that the OS rejected, such as the 1.4.5 Windows task. The manager
+// executable it names was then never started as a service.
+func HasLegacyDefinition(plan platform.ServicePlan) (bool, error) {
+	if plan.Definition == "" || len(plan.Legacy) == 0 {
+		return false, nil
+	}
+	data, err := readBounded(plan.Definition, 64<<10)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return matchesLegacyDefinition(data, plan.Legacy), nil
 }
 
 func StartService(ctx context.Context, installation, executable string, runner ServiceRunner) error {

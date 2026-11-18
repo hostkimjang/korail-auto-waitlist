@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/install"
@@ -62,7 +63,7 @@ func run(ctx context.Context, args []string) error {
 		return previewCommand(ctx, args[1:])
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("railwait install|setup|status|doctor|update|configure|manager|package|preview|version\n간편 설치: railwait install [--path <경로>] [--plain]\n직접 설정: railwait install --custom / 로컬 전용: --access local\n로컬 패키지: railwait install --path <새 경로> --package <패키지 디렉터리> --trust-key <공개키 파일>\n업데이트: railwait update --path <경로> --dry-run / --target <버전> --plan <계획ID>\n로컬 패키지 업데이트: railwait update --path <경로> --package <새 패키지> --trust-key <공개키 파일> [--dry-run]\nTAGO 설정: railwait configure --path <경로>\n비대화형: railwait install --input - < protected-input.json")
+		fmt.Println("railwait install|setup|status|doctor|update|configure|manager|package|preview|version\n간편 설치: railwait install [--path <경로>] [--plain]\n직접 설정: railwait install --custom / 로컬 전용: --access local\n로컬 패키지: railwait install --path <새 경로> --package <패키지 디렉터리> --trust-key <공개키 파일>\n업데이트: railwait update --path <경로> --dry-run / --target <버전> --plan <계획ID>\n로컬 패키지 업데이트: railwait update --path <경로> --package <새 패키지> --trust-key <공개키 파일> [--dry-run]\nTAGO 설정: railwait configure --path <경로>\n자동 예매: railwait configure reservation on|off --path <경로>\n비대화형: railwait install --input - < protected-input.json")
 		return nil
 	}
 	if args[0] == "version" || args[0] == "--version" {
@@ -240,11 +241,11 @@ func updateCommand(ctx context.Context, args []string) error {
 			fmt.Println("차단:", strings.Join(plan.BlockedReasons, "; "))
 			return nil
 		}
-		fmt.Printf("검증 → 다운로드 → 작업 종료 대기 → 암호화 백업 → 교체 → 확인 → 재개\n적용: railwait update --path %q --target %s --plan %s\n", *path, plan.TargetReleaseID, plan.PlanID)
+		fmt.Printf("검증 → 다운로드 → 작업 종료 대기 → 암호화 백업 → 교체 → 확인 → 재개\n적용: %s\n", pasteableCommand("update", "--path", *path, "--target", plan.TargetReleaseID, "--plan", plan.PlanID))
 		return nil
 	}
 	if !manager.Available(*path, time.Now()) {
-		return fmt.Errorf("관리 서비스가 실행 중이 아닙니다; railwait manager install --path %q 를 확인하세요", *path)
+		return fmt.Errorf("관리 서비스가 실행 중이 아닙니다; %s 를 확인하세요", pasteableCommand("manager", "install", "--path", *path))
 	}
 	raw := make([]byte, 16)
 	if _, err = rand.Read(raw); err != nil {
@@ -275,7 +276,7 @@ func updateCommand(ctx context.Context, args []string) error {
 					fmt.Printf("작업 %s: %s\n", id, job.State)
 				}
 				if job.State != "succeeded" {
-					return fmt.Errorf("업데이트가 %s 상태입니다; railwait status --path %q --job %s 로 확인하세요", job.State, *path, id)
+					return fmt.Errorf("업데이트가 %s 상태입니다; %s 로 확인하세요", job.State, pasteableCommand("status", "--path", *path, "--job", id))
 				}
 				return nil
 			}
@@ -293,6 +294,9 @@ func newInstaller() install.Installer {
 }
 
 func configureCommand(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "reservation" {
+		return configureReservationCommand(ctx, args[1:])
+	}
 	if len(args) > 0 && args[0] == "tago" {
 		args = args[1:]
 	}
@@ -361,7 +365,102 @@ func configureCommand(ctx context.Context, args []string) error {
 		fmt.Println("차단:", strings.Join(plan.BlockedReasons, "; "))
 		return nil
 	}
-	fmt.Printf("TAGO_SERVICE_KEY 변경: 작업 종료 대기 → 암호화 백업 → 앱 재시작 → 확인\n적용: railwait configure --path %q --plan %s\n", *path, plan.PlanID)
+	fmt.Printf("TAGO_SERVICE_KEY 변경: 작업 종료 대기 → 암호화 백업 → 앱 재시작 → 확인\n적용: %s\n", pasteableCommand("configure", "--path", *path, "--plan", plan.PlanID))
+	return nil
+}
+
+// configureReservationCommand turns the installation-wide automatic reservation
+// switches on or off. Each watch still chooses automatic reservation on its own.
+func configureReservationCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 || (args[0] != "on" && args[0] != "off") {
+		return fmt.Errorf("configure reservation on 또는 configure reservation off로 지정하세요")
+	}
+	enabled := args[0] == "on"
+	defaultPath, err := platform.DefaultInstallDir()
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("configure reservation", flag.ContinueOnError)
+	path := flags.String("path", defaultPath, "설치 경로")
+	planID := flags.String("plan", "", "확인한 설정 변경 계획 ID")
+	jsonOutput := flags.Bool("json", false, "JSON 출력")
+	flags.Bool("dry-run", true, "변경 계획만 표시 (기본 동작)")
+	if err = flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("위치 인자를 사용할 수 없습니다")
+	}
+	abs, err := filepath.Abs(*path)
+	if err != nil {
+		return err
+	}
+	i := newInstaller()
+	if *planID != "" {
+		planned, err := install.ReservationPlanEnables(abs, *planID)
+		if err != nil {
+			return err
+		}
+		if planned != enabled {
+			return fmt.Errorf("계획과 다른 동작입니다; configure reservation %s 로 계획을 다시 만드세요", args[0])
+		}
+		state, err := install.ReadState(abs)
+		if err != nil {
+			return err
+		}
+		return applySettingsPlanInProcess(ctx, &i, abs, state.Release, *planID, *jsonOutput)
+	}
+	plan, err := i.PlanConfigureReservation(ctx, abs, enabled)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(plan)
+	}
+	if !plan.Allowed {
+		fmt.Println("차단:", strings.Join(plan.BlockedReasons, "; "))
+		return nil
+	}
+	if enabled {
+		fmt.Println("자동 예매 켜기: 작업 종료 대기 → 암호화 백업 → 앱 재시작 → 확인")
+		fmt.Println("켠 뒤에는 '좌석 재발견마다 자동 예매'를 고른 대기가 좌석을 찾으면 저장한 철도 계정으로 결제 직전까지 예매합니다. 결제는 하지 않습니다.")
+	} else {
+		fmt.Println("자동 예매 끄기: 작업 종료 대기 → 암호화 백업 → 앱 재시작 → 확인")
+		fmt.Println("끈 뒤에는 자동 예매를 고른 대기도 좌석을 찾으면 알림만 보냅니다.")
+	}
+	fmt.Println("적용:", pasteableCommand("configure", "reservation", args[0], "--path", abs, "--plan", plan.PlanID))
+	return nil
+}
+
+// applySettingsPlanInProcess applies a settings plan in this CLI process under the
+// installation lock, like a local package update. The host manager does not update
+// itself, and one from an earlier release rejects plan kinds it does not know.
+func applySettingsPlanInProcess(ctx context.Context, i *install.Installer, path, target, planID string, jsonOutput bool) error {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	id := hex.EncodeToString(raw)
+	// As with local package updates, a dropped terminal must not abandon the change
+	// half way; a termination request still ends through the failure path.
+	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM)
+	defer stop()
+	fmt.Fprintln(os.Stderr, "설정 변경 작업:", id)
+	result, err := i.Update(ctx, install.UpdateOptions{Path: path, TargetReleaseID: target, PlanID: planID, JobID: id, Progress: func(stage string) error {
+		fmt.Fprintln(os.Stderr, "설정 변경 단계:", stage)
+		return nil
+	}})
+	for _, warning := range result.Warnings {
+		fmt.Fprintln(os.Stderr, "주의:", warning)
+	}
+	if err != nil {
+		return fmt.Errorf("설정 변경이 %s 상태입니다; %s 로 확인하세요: %w", result.State, pasteableCommand("status", "--path", path, "--job", id), err)
+	}
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
+	fmt.Printf("작업 %s: %s\n", id, result.State)
 	return nil
 }
 
@@ -422,11 +521,21 @@ func installManager(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	exe, err = copyManagerExecutable(path, exe)
+	plan, err := platform.CurrentServicePlan(managerExecutablePath(path), path)
 	if err != nil {
 		return err
 	}
-	plan, err := manager.InstallService(ctx, path, exe, nil)
+	// 1.4.5 wrote a Windows task definition that Task Scheduler always rejected, so
+	// the manager executable kept beside it was never started and may be replaced.
+	neverStarted, err := manager.HasLegacyDefinition(plan)
+	if err != nil {
+		return err
+	}
+	exe, err = copyManagerExecutable(path, exe, neverStarted)
+	if err != nil {
+		return err
+	}
+	plan, err = manager.InstallService(ctx, path, exe, nil)
 	if err != nil {
 		return err
 	}
@@ -436,7 +545,14 @@ func installManager(ctx context.Context, path string) error {
 	return manager.WaitAvailable(waitCtx, path)
 }
 
-func copyManagerExecutable(installation, source string) (string, error) {
+func managerExecutablePath(installation string) string {
+	return filepath.Join(installation, ".railwait", "bin", platform.ExecutableName())
+}
+
+// copyManagerExecutable keeps the running CLI as this installation's manager. A
+// different existing manager is replaced only when replaceUnstarted says it never
+// ran as a service; otherwise updating the manager itself needs a separate review.
+func copyManagerExecutable(installation, source string, replaceUnstarted bool) (string, error) {
 	source, err := filepath.EvalSymlinks(source)
 	if err != nil {
 		return "", err
@@ -449,7 +565,7 @@ func copyManagerExecutable(installation, source string) (string, error) {
 	if err = platform.SecureDir(dir); err != nil {
 		return "", err
 	}
-	dest := filepath.Join(dir, platform.ExecutableName())
+	dest := managerExecutablePath(installation)
 	if info, err := os.Lstat(dest); err == nil {
 		if !info.Mode().IsRegular() {
 			return "", fmt.Errorf("기존 관리 실행 파일이 실제 파일이 아닙니다")
@@ -458,10 +574,12 @@ func copyManagerExecutable(installation, source string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if !bytes.Equal(existing, data) {
+		if bytes.Equal(existing, data) {
+			return dest, nil
+		}
+		if !replaceUnstarted {
 			return "", fmt.Errorf("다른 관리 실행 파일이 있습니다; 관리 서비스 자체 업데이트는 별도 검토가 필요합니다")
 		}
-		return dest, nil
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}

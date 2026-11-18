@@ -1,4 +1,5 @@
 import type { ProviderAccount, RailProvider } from "../../api/providerAccounts";
+import type { AutomaticReservationAvailability } from "../../api/providerCapabilities";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
 import { defaultReservationPolicy } from "./reservationPolicy";
 import { halfHourBoundaryValue } from "./timeRange";
@@ -27,6 +28,7 @@ export interface NewWaitForm {
 export interface CreateInitialNewWaitFormOptions {
   demo: boolean;
   providerAccounts: ReadonlyArray<ProviderAccount>;
+  automaticReservation: AutomaticReservationAvailability | null;
   demoOriginNodeId: string | null;
   demoDestinationNodeId: string | null;
   now: Date;
@@ -35,6 +37,7 @@ export interface CreateInitialNewWaitFormOptions {
 export interface ToggleNewWaitProviderOptions {
   demo: boolean;
   providerAccounts: ReadonlyArray<ProviderAccount>;
+  automaticReservation: AutomaticReservationAvailability | null;
   reservationPolicyManuallySelected: boolean;
 }
 
@@ -128,6 +131,7 @@ function defaultNewWaitTravelWindow(now: Date): NewWaitTravelWindow {
 export function createInitialNewWaitForm({
   demo,
   providerAccounts,
+  automaticReservation,
   demoOriginNodeId,
   demoDestinationNodeId,
   now,
@@ -149,7 +153,7 @@ export function createInitialNewWaitForm({
     channels: ["web_push", "telegram"],
     reservationPolicy: demo
       ? "notify_only"
-      : defaultReservationPolicy(["KORAIL"], providerAccounts),
+      : defaultReservationPolicy(["KORAIL"], providerAccounts, automaticReservation),
   };
 }
 
@@ -197,6 +201,7 @@ export function toggleNewWaitProvider(
   {
     demo,
     providerAccounts,
+    automaticReservation,
     reservationPolicyManuallySelected,
   }: ToggleNewWaitProviderOptions,
 ): NewWaitForm {
@@ -205,7 +210,7 @@ export function toggleNewWaitProvider(
     : [...form.providers, provider];
   const defaultPolicy = demo
     ? "notify_only"
-    : defaultReservationPolicy(selected, providerAccounts);
+    : defaultReservationPolicy(selected, providerAccounts, automaticReservation);
   const reservationPolicy = reservationPolicyManuallySelected
     && !(form.reservationPolicy === "reserve_once_before_payment" && defaultPolicy === "notify_only")
     ? form.reservationPolicy

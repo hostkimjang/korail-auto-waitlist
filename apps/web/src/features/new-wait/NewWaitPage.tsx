@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 
 import type { ProviderAccount, RailProvider } from "../../api/providerAccounts";
+import type { AutomaticReservationAvailability } from "../../api/providerCapabilities";
 import { fetchStations } from "../../api/stations";
 import {
   fetchTimetables,
@@ -30,7 +31,7 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 import { CalendarPicker } from "./CalendarPicker";
 import { ReservationPolicyControl } from "./ReservationPolicyControl";
 import {
-  canReserveWithAuthenticatedAccounts,
+  canReserveAutomatically,
   defaultReservationPolicy,
 } from "./reservationPolicy";
 import { ServerSeatStatusPanel } from "./ServerSeatStatusPanel";
@@ -146,6 +147,8 @@ export interface NewWaitPageProps {
   demo: boolean;
   watches?: readonly WatchReadModel[];
   providerAccounts?: readonly ProviderAccount[];
+  /** `null` while unknown; a new wait then defaults to notifications only. */
+  automaticReservation?: AutomaticReservationAvailability | null;
   onComplete: SeatWatchRegistrationCompletion;
   onCancelWatch?: SeatWatchCancellation;
   onCancel: () => void;
@@ -156,6 +159,7 @@ export function NewWaitPage({
   demo,
   watches = [],
   providerAccounts = [],
+  automaticReservation = null,
   onComplete,
   onCancelWatch = async () => undefined,
   onCancel,
@@ -166,6 +170,7 @@ export function NewWaitPage({
   const [form, setForm] = useState(() => createInitialNewWaitForm({
     demo,
     providerAccounts,
+    automaticReservation,
     demoOriginNodeId: demo ? demoNodeId("서울") : null,
     demoDestinationNodeId: demo ? demoNodeId("부산") : null,
     now: new Date(),
@@ -208,7 +213,7 @@ export function NewWaitPage({
   useEffect(() => {
     const reservationPolicy = demo
       ? "notify_only"
-      : defaultReservationPolicy(form.providers, providerAccounts);
+      : defaultReservationPolicy(form.providers, providerAccounts, automaticReservation);
     setForm((value) => {
       const selectedPolicyUnavailable = value.reservationPolicy === "reserve_once_before_payment"
         && reservationPolicy === "notify_only";
@@ -219,7 +224,7 @@ export function NewWaitPage({
         ? value
         : { ...value, reservationPolicy };
     });
-  }, [demo, form.providers, providerAccounts]);
+  }, [automaticReservation, demo, form.providers, providerAccounts]);
 
   const swapStations = (): void => setForm(swapNewWaitStations);
   const setTravelDate = (date: string): void => setForm((value) => (
@@ -232,6 +237,7 @@ export function NewWaitPage({
     toggleNewWaitProvider(value, provider, {
       demo,
       providerAccounts,
+      automaticReservation,
       reservationPolicyManuallySelected: reservationPolicyManuallySelectedRef.current,
     })
   ));
@@ -341,6 +347,7 @@ export function NewWaitPage({
               value={form.reservationPolicy}
               selectedProviders={form.providers}
               accounts={providerAccounts}
+              automaticReservation={automaticReservation}
               onChange={(reservationPolicy) => {
                 reservationPolicyManuallySelectedRef.current = true;
                 setForm((value) => ({ ...value, reservationPolicy }));
@@ -405,7 +412,7 @@ export function NewWaitPage({
                   automaticReservationEnabled={
                     !demo
                     && form.reservationPolicy === "reserve_once_before_payment"
-                    && canReserveWithAuthenticatedAccounts([train.provider], providerAccounts)
+                    && canReserveAutomatically([train.provider], providerAccounts, automaticReservation)
                   }
                 />;
               })}

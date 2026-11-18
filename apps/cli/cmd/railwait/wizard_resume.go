@@ -21,6 +21,11 @@ func wizardExecutable() string {
 	return executable
 }
 
+// windowsCommandHint is shown above copyable commands on Windows. A long command
+// wraps in the terminal, and copying from the path instead of the leading & breaks
+// it in PowerShell.
+const windowsCommandHint = "아래 명령은 PowerShell에서 맨 앞의 & 부터 줄 끝까지 그대로 복사해 실행하세요."
+
 // Shell syntax is selected explicitly: Windows examples target PowerShell.
 // Go's %q uses double quotes, which still expand $, backticks and substitutions
 // in a user's shell. Quote every argument as literal data instead.
@@ -73,8 +78,8 @@ func wizardResumeArgs(o wizardOptions) []string {
 	return args
 }
 
-func showWizardStatusCommand(ui *terminal.UI, path string) {
-	command, err := wizardShellCommand(runtime.GOOS, wizardExecutable(), "status", "--path", path)
+func showWizardCommand(ui *terminal.UI, args ...string) {
+	command, err := wizardShellCommand(runtime.GOOS, wizardExecutable(), args...)
 	if err != nil {
 		ui.Hint(err.Error())
 		return
@@ -82,9 +87,24 @@ func showWizardStatusCommand(ui *terminal.UI, path string) {
 	ui.Command(command)
 }
 
+func showWizardStatusCommand(ui *terminal.UI, path string) {
+	showWizardCommand(ui, "status", "--path", path)
+}
+
+// pasteableCommand renders a follow-up command for plain output. The Windows
+// one-line install does not put railwait on PATH, so the running executable is
+// named in full and every argument is quoted for the user's shell.
+func pasteableCommand(args ...string) string {
+	command, err := wizardShellCommand(runtime.GOOS, wizardExecutable(), args...)
+	if err != nil {
+		return "railwait " + strings.Join(args, " ")
+	}
+	return command
+}
+
 func showWizardResumeCommands(ui *terminal.UI, o wizardOptions) {
 	if runtime.GOOS == "windows" {
-		ui.Hint("아래 명령은 PowerShell에서 실행하세요.")
+		ui.Hint(windowsCommandHint)
 	}
 	// WSL/Docker preparation can stop before Railwait has an installation record.
 	// A status command is useful only once that record exists.

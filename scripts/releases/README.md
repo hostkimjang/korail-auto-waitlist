@@ -73,6 +73,12 @@ Playwright 1.55가 Chromium 의존성을 설치하지 못한다. `verify-api`는
 시작이 Pydoll의 시작 대기 시간을 넘기지 않게 한다. 간헐 실패로 검증 작업 하나만 실패하면
 `gh run rerun <run ID> --failed`로 그 작업과 뒤 단계만 다시 실행한다.
 
+Playwright의 `--with-deps`가 받는 Ubuntu 패키지는 공용 액션 `.github/actions/playwright-apt-cache`가 러너 이미지
+계열(`ImageOS`)과 CPU별로 캐시한다. 설치 전에 캐시한 `.deb`를 apt 보관 폴더에 넣고, 설치 뒤 묶음이 바뀌었을 때만 새
+키로 저장하므로 CI와 릴리스가 같은 캐시를 쓴다. apt는 보관 폴더의 파일도 서명된 패키지 목록의 해시와 맞을 때만 쓰고
+다르면 다시 받으므로, 캐시는 내려받는 시간만 줄인다. 2026-11-19 밤에는 Ubuntu 미러가 54.8kB/s까지 느려져 이
+패키지(32.1MB)를 받는 데 9분 45초가 걸렸고, 캐시가 있으면 0B를 받는다. 패키지 목록 조회(약 13MB)는 그대로 남는다.
+
 `--compatible-from`을 반복 지정하거나 workflow의 `compatible_from`에 쉼표로 구분한 버전을 입력한다.
 비워 두면 새 설치만 허용하고 기존 설치의 자동 업데이트는 차단한다. DB revision은 소스 migration의
 단일 head에서 계산한다. 현재 updater는 다른 DB revision이나 PostgreSQL·Redis digest 변경을 차단하므로,

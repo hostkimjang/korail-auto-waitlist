@@ -262,9 +262,17 @@
 - [x] 첫 정식 릴리스 1.4.6(run 44355437881) 시작부터 게시까지 13분 20초: 입력 확인 12초, 이미지 병합 2.7분,
   `verify-stack` 6.4분, apt 미러 지연으로 Playwright 설치가 `verify-api` 5분·`verify-web` 8분 걸려 각각 9.5분·11.3분,
   서명 0.5분, 두 CPU smoke 1.1분, 게시 0.2분. 같은 apt 지연을 겪은 1.4.5는 38분
-- [ ] 후속 후보: GitHub 러너의 Ubuntu apt 미러가 간헐적으로 느려 Playwright `--with-deps` 설치가 최장 경로가 됨(1.4.5
-  릴리스에서 32.1MB를 9분 45초, 54.8kB/s). 브라우저 파일은 CDN에서 2초라 브라우저 캐시로는 해결되지 않음. 의존성이
-  들어 있는 Playwright 컨테이너 이미지를 digest로 고정해 웹 검증에 쓰는 방안 검토
+- [x] apt 미러 지연 대책: GitHub 러너의 Ubuntu apt 미러가 간헐적으로 느려 Playwright `--with-deps` 설치가 최장 경로가
+  됐음(1.4.5 릴리스에서 32.1MB를 9분 45초, 54.8kB/s, 브라우저 파일은 CDN에서 2초). 받은 Ubuntu 패키지를 공용 액션
+  `.github/actions/playwright-apt-cache`로 러너 이미지 계열·CPU별로 캐시: 설치 전에 `.deb`를 apt 보관 폴더에 넣고, 묶음이
+  바뀌면 새 키로 저장하며 `apt-get autoclean`으로 옛 버전을 뺌. apt가 보관 파일도 서명된 목록의 해시로 확인하므로 검증
+  기준은 같음. 릴리스 `verify-api`·`verify-web`·`verify-stack`, repository-verify, experimental-browser에 적용. actionlint
+  1.7.12 통과, 공용 액션 스크립트 shellcheck 통과. 검토 브랜치 CI 44367421817·44367421686의 첫 실행이 Ubuntu 24.04용
+  13개(32.1MB)·26.04용 9개(21.9MB)를 저장했고, 다시 실행과 릴리스 dry run 44371434935(약 9분)의 검증 작업 세 개 모두
+  `Need to get 0 B/32.1 MB of archives`로 패키지를 받지 않음. CI와 릴리스가 같은 캐시를 씀. 캐시는 브랜치별이라 `main`의
+  첫 실행이 새로 저장함
+- [ ] 후속 후보: 패키지 목록 조회(`apt-get update`, 약 13MB)는 남아 미러가 느리면 1분 22초(162kB/s)까지 걸림. 캐시한
+  패키지만으로 의존성을 설치하고 목록 조회를 건너뛰는 방식(실패하면 지금 방식으로 대체) 검토
 - [x] repository-verify에 릴리스 `verify-api`와 같은 Chrome 사전 실행 추가: 사전 실행이 없던 검토 브랜치 CI
   44336476402에서 `test_pydoll_real_browser_uses_visible_fixture_controls`가 두 번 연속 브라우저 시작 시간 초과로
   실패(각각 5811 통과·1 실패, 같은 러너 이미지·Chrome 157.0.8103.50에서 앞선 main CI는 통과). 사전 실행을 넣은 CI

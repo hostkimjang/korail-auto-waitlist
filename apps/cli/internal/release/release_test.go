@@ -66,6 +66,10 @@ func fixture(t *testing.T) (*Client, map[string][]byte, Manifest, ed25519.Privat
 	listing, _ := json.Marshal(map[string]any{"tag_name": "v1.4.0", "draft": false, "prerelease": false, "assets": assets})
 	responses := map[string][]byte{"https://api.github.com/repos/" + repository + "/releases/latest": listing, base + "release-manifest.json": metadata, base + "release-manifest.sig": sig, base + "railwait-bundle.tar.gz": bundle}
 	c := &Client{PublicKey: pub, CLIVersion: "0.1.0", HTTP: &http.Client{Transport: transport(func(r *http.Request) (*http.Response, error) {
+		// Like GitHub, the REST API refuses a request that does not accept JSON.
+		if r.URL.Host == "api.github.com" && !strings.Contains(r.Header.Get("Accept"), "json") {
+			return &http.Response{StatusCode: http.StatusUnsupportedMediaType, Body: io.NopCloser(bytes.NewReader(nil)), Header: make(http.Header)}, nil
+		}
 		data, ok := responses[r.URL.String()]
 		code := 200
 		if !ok {
@@ -87,6 +91,34 @@ func TestVerifiedReleaseDownloadsAndExtracts(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(dir, "infra", "caddy", "Caddyfile")); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestReleaseRequestsAcceptJSONFromTheAPIAndBinaryAssets(t *testing.T) {
+	c, _, _, _ := fixture(t)
+	accepted := map[string]string{}
+	github := c.HTTP.Transport
+	c.HTTP.Transport = transport(func(r *http.Request) (*http.Response, error) {
+		accepted[r.URL.Host+r.URL.Path] = r.Header.Get("Accept")
+		return github.RoundTrip(r)
+	})
+	r, err := c.Resolve(context.Background(), "stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.DownloadAndExtract(context.Background(), r, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if len(accepted) != 4 {
+		t.Fatalf("requests: %v", accepted)
+	}
+	for address, accept := range accepted {
+		want := "application/octet-stream"
+		if strings.HasPrefix(address, "api.github.com/") {
+			want = "application/vnd.github+json"
+		}
+		if accept != want {
+			t.Fatalf("%s asked for %q, want %q", address, accept, want)
+		}
 	}
 }
 func TestRejectTamperedMetadataAndBundle(t *testing.T) {

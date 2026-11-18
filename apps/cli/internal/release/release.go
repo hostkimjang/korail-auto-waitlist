@@ -28,6 +28,13 @@ import (
 const repository = "hostkimjang/korail-auto-waitlist"
 const maxBundle = 32 << 20
 
+// GitHub's REST API answers a binary Accept header with 415, while release asset downloads
+// are requested as binary content.
+const (
+	githubAPIMediaType    = "application/vnd.github+json"
+	releaseAssetMediaType = "application/octet-stream"
+)
+
 // PublicKeyBase64 is embedded by the release pipeline. Development binaries must
 // fail closed instead of trusting a key delivered alongside an untrusted bundle.
 var PublicKeyBase64 string
@@ -114,12 +121,12 @@ func DownloadAndExtract(ctx context.Context, r Release, dest string) error {
 	}
 	return c.DownloadAndExtract(ctx, r, dest)
 }
-func (c *Client) fetch(ctx context.Context, address string, limit int64) ([]byte, error) {
+func (c *Client) fetch(ctx context.Context, address, accept string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return nil, errors.New("invalid release address")
 	}
-	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", "railwait-cli")
 	response, err := c.HTTP.Do(req)
 	if err != nil {
@@ -153,7 +160,7 @@ func (c *Client) Resolve(ctx context.Context, channel string) (Release, error) {
 	if channel != "stable" {
 		return Release{}, errors.New("안정 릴리스만 지원합니다")
 	}
-	data, err := c.fetch(ctx, "https://api.github.com/repos/"+repository+"/releases/latest", 1<<20)
+	data, err := c.fetch(ctx, "https://api.github.com/repos/"+repository+"/releases/latest", githubAPIMediaType, 1<<20)
 	if err != nil {
 		return Release{}, err
 	}
@@ -184,11 +191,11 @@ func (c *Client) Resolve(ctx context.Context, channel string) (Release, error) {
 			return Release{}, errors.New("설치 가능한 서명된 릴리스 자산이 아직 준비되지 않았습니다")
 		}
 	}
-	metadata, err := c.fetch(ctx, base+"release-manifest.json", 128<<10)
+	metadata, err := c.fetch(ctx, base+"release-manifest.json", releaseAssetMediaType, 128<<10)
 	if err != nil {
 		return Release{}, err
 	}
-	signature, err := c.fetch(ctx, base+"release-manifest.sig", 256)
+	signature, err := c.fetch(ctx, base+"release-manifest.sig", releaseAssetMediaType, 256)
 	if err != nil {
 		return Release{}, err
 	}
@@ -280,7 +287,7 @@ func (c *Client) DownloadAndExtract(ctx context.Context, r Release, dest string)
 	if r.Version != m.Version || r.BundleURL != m.Bundle.URL || r.SHA256 != m.Bundle.SHA256 {
 		return errors.New("release metadata changed")
 	}
-	data, err := c.fetch(ctx, m.Bundle.URL, m.Bundle.SizeBytes)
+	data, err := c.fetch(ctx, m.Bundle.URL, releaseAssetMediaType, m.Bundle.SizeBytes)
 	if err != nil {
 		return err
 	}

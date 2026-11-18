@@ -229,6 +229,9 @@
   macOS 앱·Docker 경로를 `path`로 계산. gofmt·vet·race 전체, Windows vet·테스트 컴파일, 6대상 빌드 통과
 - [x] GitHub Actions `CLI cross-platform verification`(run 44245156416, 커밋 `0e85a3f`)에서 ubuntu·macOS·windows-latest
   네이티브 테스트와 6대상 컴파일 통과. 같은 커밋의 repository-verify·experimental-browser-verify도 통과
+- [x] 실제 Windows 11 Pro for Workstations 26H2(빌드 26300.9974, x64)에서 확인. 계정은 관리자 그룹이지만 권한 상승 전
+  일반 토큰(Medium 무결성)이고 내장 RID-500 계정이 아니라 SID가 `LA`로 바뀌지 않는 조건이다. 임시 폴더의 Go 1.27.4로
+  `ac60a6b`의 `go vet ./...` 종료 0, `go test ./...` 8개 패키지 통과, 수정한 세 테스트 개별 실행 PASS(Windows 원격 Codex 채팅)
 - [x] 첫 적용(작업 `e292f09f…`, 14:35 KST)이 `applying`의 1.4.2 migration에서 `PermissionError: 'pyproject.toml'`로
   멈춰 `recovery_required`. 스크립트가 `umask 077`로 worktree를 만들어 `0600` 소스가 이미지에 들어간 탓. 기록된 1.4.1
   구성으로 migration·log-init(종료 0)과 앱 서비스 10개를 다시 만들고 healthy 확인 뒤 같은 generation으로 gate를 열어

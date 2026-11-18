@@ -1,1 +1,3 @@
 *.sh text eol=lf
+# gofmt는 LF를 요구하므로 Windows 체크아웃에서도 Go 소스는 LF로 둔다.
+*.go text eol=lf

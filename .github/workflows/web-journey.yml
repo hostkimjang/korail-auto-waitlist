@@ -41,7 +41,9 @@ on:
 
 jobs:
   verify-repository:
-    runs-on: ubuntu-latest
+    # API의 Python Playwright 1.55는 Ubuntu 26.04 의존성 설치를 지원하지 않는다.
+    # 브라우저 런타임 이미지(noble)와 같은 Ubuntu 24.04에서 검증한다.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       POSTGRES_PASSWORD: ci-only-postgres-not-a-secret

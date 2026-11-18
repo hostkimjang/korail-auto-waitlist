@@ -87,6 +87,8 @@ Windows에서는 PowerShell에서 실행합니다.
 irm https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download/install.ps1 | iex
 ```
 
+Windows PowerShell 5.1에서 `요청이 중단되었습니다. 예기치 않게 연결이 닫혔습니다.`(영문 Windows에서는 `The request was aborted: The connection was closed unexpectedly.`)가 나오면, 받으려는 파일이 그 Release에 없어서(404) 생긴 오류일 수 있습니다. 같은 문구는 프록시나 네트워크 문제에서도 나옵니다. [최신 Release](https://github.com/hostkimjang/korail-auto-waitlist/releases/latest)에 `install.ps1`이 있는지 확인하거나, 같은 창에서 `[Net.ServicePointManager]::SecurityProtocol = 'Tls12'`을 실행한 뒤 다시 시도하면 실제 상태 코드(예: 404)를 볼 수 있습니다.
+
 스크립트는 운영체제와 CPU에 맞는 설치 CLI를 같은 Release에서 받아 SHA-256을 확인하고, `~/.local/bin/railwait`(Windows는 `%LOCALAPPDATA%\Programs\Railwait\railwait.exe`)에 둔 뒤 설치 마법사를 바로 시작합니다. sudo나 관리자 권한을 쓰지 않고, PATH와 셸 설정 파일은 바꾸지 않습니다. PATH에 없으면 추가할 명령만 안내합니다. 마법사 옵션은 `sh -s --` 뒤에 붙입니다. 예를 들어 설치 폴더와 포트를 직접 고르려면 `curl -fsSL …/install.sh | sh -s -- --custom`을 실행하고, Windows에서는 `$env:RAILWAIT_INSTALL_ARGS = '--custom'`을 먼저 지정합니다. `RAILWAIT_VERSION=1.4.4`처럼 지정하면 그 버전의 설치 CLI를 받지만, 설치되는 앱은 항상 최신 공식 릴리스입니다. 한 줄 설치는 1.4.4부터 쓸 수 있습니다.
 
 설치 마법사는 실행 환경 확인, 설치 계획, 앱·계정 설정, 자동 시작, 접속 확인의 다섯 단계로 진행합니다. Windows·macOS에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 받아 배포자 서명을 확인한 뒤 OS 설치 창으로 이어 줍니다. 간편 설치는 Tailscale HTTPS 연결과 보안·알림 키 생성을 기본으로 하므로 관리자 계정만 직접 정하면 됩니다. 실행 파일에 들어 있는 공식 공개키로 서명을 확인한 배포 묶음과 이미지만 설치합니다.

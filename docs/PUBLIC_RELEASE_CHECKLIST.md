@@ -51,6 +51,8 @@
 
 공식 릴리스는 `main`에서 `Signed release publication` 워크플로를 수동 실행해 게시합니다. 워크플로가 `v<버전>` 태그와 GitHub Release를 직접 만듭니다. 설치 CLI는 최신 Release에서 서명된 `release-manifest.json`을 찾으므로, 서명 자산이 없는 Release를 손으로 만들면 설치와 업데이트 확인이 그 Release에서 멈춥니다. 태그나 Release를 손으로 만들지 않습니다.
 
+새 자산이나 새 기능에 기대는 설치 안내는 게시 뒤 `releases/latest/download/<자산>`이 200으로 받아지는지 확인하고 나서 별도 커밋으로 공개합니다. 코드와 `CHANGELOG.md`는 워크플로 조건 때문에 먼저 `main`에 있어야 합니다. 순서와 확인 명령은 [기여 가이드](../CONTRIBUTING.md#릴리스-버전-올리기) 6단계에 있습니다. 1.4.4에서는 README가 게시보다 39분 먼저 공개돼 그 사이 Windows 한 줄 설치가 404로 실패했습니다.
+
 - [x] 서명용 Ed25519 private seed를 만들어 저장소 secret `RAILWAIT_RELEASE_SIGNING_KEY`에 등록하고 저장소 밖 안전한 곳에 따로 보관 (2026-11-18, 관리자 맥 키체인. 비밀번호 관리자 등 맥 밖 사본은 관리자가 따로 보관. 키를 바꾸면 기존 CLI가 새 서명을 거절함)
 - [x] 첫 실행 뒤 GHCR에 생긴 앱 이미지 패키지 4종이 익명으로 받아지는지 확인 (2026-11-18, 익명 pull 토큰으로 `tags/list` 200. 따로 공개로 바꾸는 단계는 필요하지 않았음)
 - [x] 첫 릴리스는 `compatible_from`을 비워 새 설치만 허용 (1.4.2·1.4.3)

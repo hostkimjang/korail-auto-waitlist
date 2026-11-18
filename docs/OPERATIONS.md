@@ -1770,6 +1770,23 @@ backup→데이터 변경→restore round-trip을 수행합니다. 복원 임시
 
 ## 문제 해결
 
+### Windows 한 줄 설치가 연결이 닫혔다며 멈출 때
+
+Windows PowerShell 5.1에서 `irm …/install.ps1 | iex`가 `요청이 중단되었습니다. 예기치 않게 연결이 닫혔습니다.`
+(영문 Windows에서는 `The request was aborted: The connection was closed unexpectedly.`)로 멈추면, 받으려는 파일이
+그 Release에 없어서(404) 생긴 오류일 수 있습니다. 같은 문구는 실제 프록시나 네트워크 문제에서도 나옵니다.
+
+- [최신 Release](https://github.com/hostkimjang/korail-auto-waitlist/releases/latest)의 자산 목록에 `install.ps1`이
+  있는지 확인합니다. 없다면 그 Release가 한 줄 설치를 지원하기 전 버전이므로 새 릴리스 게시를 기다리거나 실행
+  파일을 직접 받아 설치합니다.
+- 같은 PowerShell 창에서 `[Net.ServicePointManager]::SecurityProtocol = 'Tls12'`을 실행한 뒤 같은 명령을 다시
+  실행하면 실제 상태 코드(예: `(404) 찾을 수 없음`)를 볼 수 있습니다. 2026-11-18 Windows 11(PowerShell 5.1, 기본값
+  `SystemDefault`) 한 대에서는 기본 설정일 때만 404가 연결 종료로 보였고, 다른 주소의 200 응답은 정상이었습니다.
+  원인은 확인하지 못했습니다.
+
+이 실패는 `install.ps1`을 받기 전에 일어나므로 스크립트를 고쳐서는 해결할 수 없습니다. 스크립트가 받은 뒤 CLI
+실행 파일 다운로드에 실패하면 그때는 실패한 주소를 함께 보여 줍니다.
+
 ### 서비스가 시작되지 않음
 
 1. `docker compose -f compose.yml config --quiet`

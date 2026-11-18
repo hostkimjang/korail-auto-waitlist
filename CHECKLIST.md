@@ -247,8 +247,18 @@
   SHA-256 확인·설치·인자 보존 안내 확인, 설치된 CLI가 `railwait 1.4.4`로 표시되고 실제 GitHub에서 1.4.4 서명 확인
 - [x] 1.4.3 공식 설치(`services/railwait`)의 관리 서비스가 게시 4분 뒤 1.4.4를 `update_available`로 인식
 - [ ] 1.4.3 공식 설치(`services/railwait`)에서 웹 **앱 업데이트**로 1.4.4 적용 확인
+- [x] Windows 한 줄 설치(Windows 작업에서 확인): Windows 11 Pro for Workstations 26H2(빌드 26300.9974), Windows PowerShell
+  5.1.26100.9818에서 게시 뒤 `irm … install.ps1 | iex`를 임시 `RAILWAIT_BIN_DIR`·입력 차단·`RAILWAIT_INSTALL_ARGS='--help'`로
+  실행. 다운로드·`SHA-256 확인 완료.`·배치·PATH 안내·비대화형 안내까지 진행, 배치된 CLI가 `railwait 1.4.4 windows/amd64`로
+  응답하고 해시가 `railwait-windows-amd64.sha256`과 일치. 받은 `install.ps1`의 해시와 git blob이 자산·`fd1dbbc`와 같음.
+  HKCU Run/RunOnce·`%TEMP%`·기본 설치 위치 변화 없음. 설치 마법사 단계와 표준 계정은 미확인
+- [x] 공개 순서 문제 기록: `fd1dbbc`(22:22 KST)가 README에 한 줄 설치를 먼저 공개해 v1.4.4 게시(23:01) 전까지
+  `latest/download/install.ps1`이 v1.4.3으로 연결돼 404. 이 Windows PC의 PowerShell 5.1 기본 설정(`SystemDefault`)에서는
+  404가 `요청이 중단되었습니다. 예기치 않게 연결이 닫혔습니다.`로 보였고 `Tls12`·`Tls13`을 지정하면 404로 보임(같은 경로의
+  200 응답은 정상, 원인 미확인, PC 1대 관측). 새 자산·기능에 기대는 설치 안내를 게시 확인 뒤 별도 커밋으로 공개하는
+  절차(CONTRIBUTING 6단계·공개 릴리스 체크리스트·릴리스 도구 안내)와 PowerShell 5.1 오류 안내(README·CLI 안내·운영 가이드)를 추가
 - [ ] 운영 확인: TAGO 키 없는 실제 설치에서 역 목록 안내와 공식 시간표 검색, Docker Desktop·Colima 실설치의 폴더 선택과
-  파일 공유 확인, Windows PowerShell 5.1의 한 줄 설치
+  파일 공유 확인, Windows 한 줄 설치 뒤 설치 마법사 단계와 표준 계정
 
 ## 2026년 11월 18일 첫 공식 서명 릴리스와 릴리스 조회 수정 (v1.4.3)
 

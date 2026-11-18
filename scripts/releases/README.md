@@ -39,6 +39,10 @@ python -m unittest discover -s scripts/releases -v
 stable로 공개한다. smoke는 import·실행파일·웹 정적 파일 검증이며 실제 운영사 인증·예약 검증은 아니다.
 브라우저 이미지의 QEMU 빌드는 자원이 많이 들 수 있어 120분 제한을 둔다.
 
+`releases/latest/download/<자산>` 주소는 게시가 끝난 뒤에야 새 Release로 연결된다. 그래서 새 자산이나 새
+기능에 기대는 설치 안내(README 등)는 코드·CHANGELOG 커밋과 나눠, 게시 뒤 최신 Release 태그와 안내할 자산의 200
+응답을 확인한 다음에 공개한다. 확인 명령은 [기여 가이드](../../CONTRIBUTING.md#릴리스-버전-올리기) 6단계에 있다.
+
 저장소 secret `RAILWAIT_RELEASE_SIGNING_KEY`와 GHCR package의 공개 접근 설정이 필요하다.
 처음 만들어지는 package가 비공개이면 익명 조회 단계에서 멈추며, 공개 접근을 설정하기 전에는
 안정 릴리스를 게시하지 않는다. 이 파일의 추가나 로컬 테스트는 실제 이미지 게시·릴리스 공개를 뜻하지 않는다.

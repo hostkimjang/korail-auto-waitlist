@@ -58,6 +58,20 @@ API 개발과 전체 실행 방법은 [apps/api/README.md](apps/api/README.md)�
 3. `cd apps/web` 후 `npm test`로 두 기록이 일치하는지 확인합니다. 버전·날짜·요일이 어긋나면 `tests/appRelease.test.ts`가 실패합니다.
 4. 커밋한 뒤 로컬 패키지로 설치한 관리형 설치에는 `bash scripts/update-local-install.sh --path <설치 폴더>`로 반영합니다. 스크립트는 커밋한 내용만 사용합니다. Git 설치는 [Git으로 새 버전 받아 재가동하기](docs/OPERATIONS.md#git으로-새-버전-받아-재가동하기)를 따릅니다.
 5. 공식 서명 릴리스는 `main`에서 `Signed release publication` 워크플로를 수동 실행해 게시합니다. 입력 버전은 `CHANGELOG.md` 맨 위와 같아야 하고, 저장소 secret `RAILWAIT_RELEASE_SIGNING_KEY`와 공개 GHCR 패키지가 필요합니다. 이 워크플로가 `v<버전>` 태그와 GitHub Release를 만들고 설치 CLI는 최신 Release의 서명 manifest를 읽으므로, 태그나 Release를 손으로 만들지 않습니다. 자세한 내용은 [릴리스 도구 안내](scripts/releases/README.md)에 있습니다.
+6. 새 Release 자산이나 그 릴리스에서 처음 생기는 기능에 기대는 설치 안내(README, [시작하기](docs/GETTING_STARTED.md), [설치 CLI 안내](apps/cli/README.md) 등)는 게시를 확인한 뒤 별도 커밋으로 `main`에 올립니다. `releases/latest/download/<자산>` 주소는 그 시점의 최신 Release로만 연결되므로, 게시 전에 안내가 공개되면 이전 Release로 연결돼 404가 납니다. Windows PowerShell 5.1에서는 이 404가 `요청이 중단되었습니다. 예기치 않게 연결이 닫혔습니다.`로 보일 수 있습니다. "1.4.4부터 쓸 수 있습니다" 같은 문구로는 이 순서를 대신할 수 없습니다. 순서는 다음과 같습니다.
+   1. 코드·테스트와 `CHANGELOG.md`·`APP_RELEASE`, 아직 공개되지 않은 자산을 안내하지 않는 문서를 커밋해 `main`에 올리고 CI를 확인합니다.
+   2. 5단계의 워크플로로 게시합니다.
+   3. 최신 Release가 새 버전인지, 안내할 자산이 모두 200으로 받아지는지 확인합니다.
+
+      ```bash
+      gh api repos/hostkimjang/korail-auto-waitlist/releases/latest --jq .tag_name
+      for asset in install.sh install.ps1 release-manifest.json; do
+        curl -sSL -o /dev/null -w "%{http_code} $asset\n" \
+          "https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download/$asset"
+      done
+      ```
+
+   4. 확인한 뒤에 설치 안내 커밋을 `main`에 올립니다.
 
 버전은 `주.부.수` 형식입니다. 사용 방식이나 운영 절차가 달라지면 주, 새 기능과 눈에 띄는 개선은 부, 버그 수정과 안정화는 수를 올립니다. 문서나 내부 정리만 바꾼 변경에는 버전을 올리지 않습니다.
 

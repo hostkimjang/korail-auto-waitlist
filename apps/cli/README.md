@@ -25,6 +25,9 @@ irm https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download
 하나로 감싸 마지막 줄에서만 실행하므로 내려받기가 중간에 끊기면 아무 단계도 실행하지 않습니다.
 `install.ps1`은 Windows PowerShell 5.1이 `irm` 응답을 ISO-8859-1로 읽어도 깨지지 않게 순수 ASCII로 두고,
 한국어 안내는 실행할 때 복원합니다. 테스트는 `scripts/install/tests/`에 있습니다.
+Windows PowerShell 5.1에서 `irm`이 `요청이 중단되었습니다. 예기치 않게 연결이 닫혔습니다.`로 실패하면, 최신
+Release에 `install.ps1`이 없어 생긴 404일 수 있습니다. 이 실패는 스크립트를 받기 전에 일어나므로 스크립트로는
+막을 수 없습니다. 확인 방법은 [운영 가이드](../../docs/OPERATIONS.md#windows-한-줄-설치가-연결이-닫혔다며-멈출-때)에 있습니다.
 
 Windows·macOS의 대화형 설치에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 내려받고 배포자
 서명을 검증한 뒤 OS 설치 창으로 이어갑니다. Docker Desktop의 약관, OS 권한, VPN 허용과 SSO는 열린

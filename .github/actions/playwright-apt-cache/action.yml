@@ -1,0 +1,60 @@
+name: Playwright apt package cache
+description: >-
+  Keep the Ubuntu packages that "playwright install --with-deps" downloads between runs. apt checks
+  every cached package against the signed package index before installing it and downloads it
+  again when the file differs, so the cache only saves download time. One cache per runner image
+  family and CPU collects the packages of every job, so CI and release runs share it.
+inputs:
+  mode:
+    description: restore before the Playwright installs, save after them
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Name the cache for this runner image
+      id: image
+      shell: bash
+      run: echo "prefix=playwright-apt-${ImageOS:-unknown}-${RUNNER_ARCH}-" >> "$GITHUB_OUTPUT"
+    - name: Restore cached apt packages
+      id: restore
+      if: inputs.mode == 'restore'
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/railwait-apt-archives
+        # No run saves this exact key, so the newest package set under the prefix is restored.
+        key: ${{ steps.image.outputs.prefix }}latest
+        restore-keys: ${{ steps.image.outputs.prefix }}
+    - name: Hand cached packages to apt
+      if: inputs.mode == 'restore'
+      shell: bash
+      env:
+        MATCHED_KEY: ${{ steps.restore.outputs.cache-matched-key }}
+      run: |
+        mkdir -p "$HOME/railwait-apt-archives"
+        count="$(find "$HOME/railwait-apt-archives" -maxdepth 1 -name '*.deb' | wc -l)"
+        if [ "$count" -gt 0 ]; then sudo cp "$HOME"/railwait-apt-archives/*.deb /var/cache/apt/archives/; fi
+        echo "RAILWAIT_APT_CACHE_KEY=$MATCHED_KEY" >> "$GITHUB_ENV"
+        echo "apt cache: restored $count packages from ${MATCHED_KEY:-no earlier cache}"
+    - name: Collect the packages apt used
+      id: collect
+      if: inputs.mode == 'save'
+      shell: bash
+      env:
+        PREFIX: ${{ steps.image.outputs.prefix }}
+      run: |
+        # Drop versions the current package index no longer offers so the cache does not grow.
+        sudo apt-get autoclean -qq
+        rm -rf "$HOME/railwait-apt-archives"
+        mkdir -p "$HOME/railwait-apt-archives"
+        find /var/cache/apt/archives -maxdepth 1 -name '*.deb' -exec cp {} "$HOME/railwait-apt-archives/" \;
+        count="$(find "$HOME/railwait-apt-archives" -maxdepth 1 -name '*.deb' | wc -l)"
+        digest="$(find "$HOME/railwait-apt-archives" -maxdepth 1 -name '*.deb' -printf '%f\n' | sort | sha256sum | cut -c1-16)"
+        echo "count=$count" >> "$GITHUB_OUTPUT"
+        echo "key=${PREFIX}${digest}" >> "$GITHUB_OUTPUT"
+        echo "apt cache: $count packages under ${PREFIX}${digest}"
+    - name: Save the package set when it changed
+      if: inputs.mode == 'save' && steps.collect.outputs.count != '0' && steps.collect.outputs.key != env.RAILWAIT_APT_CACHE_KEY
+      uses: actions/cache/save@v4
+      with:
+        path: ~/railwait-apt-archives
+        key: ${{ steps.collect.outputs.key }}

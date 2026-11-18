@@ -74,8 +74,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --frozen --extra test --extra browser
         working-directory: apps/api
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: restore
       - run: uv run --frozen --extra browser playwright install --with-deps chromium
         working-directory: apps/api
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: save
       - name: Select Chrome for fixture tests
         run: |
           python - <<'PY'
@@ -116,8 +122,14 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
         working-directory: apps/web
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: restore
       - run: npx playwright install --with-deps chromium
         working-directory: apps/web
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: save
       - run: make verify-web-core
 
   verify-stack:
@@ -137,8 +149,14 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
         working-directory: apps/web
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: restore
       - run: npx playwright install --with-deps chromium
         working-directory: apps/web
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: save
       - run: make config verify-ops verify-browser
       - run: npm run test:e2e:fullstack
         working-directory: apps/web

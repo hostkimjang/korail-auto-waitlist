@@ -65,10 +65,16 @@ jobs:
           cache-dependency-glob: apps/api/uv.lock
       - run: npm ci
         working-directory: apps/web
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: restore
       - run: npx playwright install --with-deps chromium
         working-directory: apps/web
       - run: uv run --python 3.12 --frozen --extra browser playwright install --with-deps chromium
         working-directory: apps/api
+      - uses: ./.github/actions/playwright-apt-cache
+        with:
+          mode: save
       - name: Select runtime Chrome for Pydoll fixture tests
         working-directory: apps/api
         run: |

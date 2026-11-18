@@ -189,6 +189,7 @@ def test_owner_has_the_exact_definition_and_import_boundary() -> None:
         ("SRT", 0),
         ("SRT.errors", 0),
         ("domain", 2),
+        ("maintenance.admission", 2),
         ("observations.contracts", 2),
         ("provider_call_context", 2),
         ("seat_status_cooldown", 2),

@@ -52,6 +52,15 @@ python_version = "3.12"
 strict = true
 show_error_codes = true
 files = [
+  "src/rail_waitlist/maintenance/__main__.py",
+  "src/rail_waitlist/maintenance/application.py",
+  "src/rail_waitlist/maintenance/gate.py",
+  "src/rail_waitlist/maintenance/http.py",
+  "src/rail_waitlist/maintenance/middleware.py",
+  "src/rail_waitlist/maintenance/admission.py",
+  "src/rail_waitlist/maintenance/schemas.py",
+  "src/rail_waitlist/admin_auth/account_application.py",
+  "src/rail_waitlist/admin_auth/bootstrap.py",
   "src/rail_waitlist/admin_auth/models.py",
   "src/rail_waitlist/admin_auth/schemas.py",
   "src/rail_waitlist/browser_companion/models.py",

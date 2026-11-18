@@ -19,6 +19,7 @@
 
 ## 개발에 참여하는 분
 
+- [CLI 설치와 웹 업데이트 개선 설계](INSTALL_UPDATE_DESIGN.md): 미구현 설계안, CLI 초기 설정·릴리스 이미지 배포·안전한 업데이트·실패 복구
 - [최근 이슈 분석과 개발 계획](DEVELOPMENT_PLAN.md): 채팅 인계, 수정·배포 결과, 현재 보호 경계와 안전한 재개 조건
 - [시스템 구조](ARCHITECTURE.md): 서비스 구성과 데이터 흐름
 - [코드 작성 규칙](CODE_CONVENTIONS.md): TypeScript·Python·테스트 기준

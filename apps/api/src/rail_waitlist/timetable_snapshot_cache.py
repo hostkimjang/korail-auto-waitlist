@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from .domain import Provider
+from .maintenance.admission import create_admitted_task
 from .timetable_management.schemas import TimetableItem
 
 TIMETABLE_SNAPSHOT_TTL = timedelta(hours=24)
@@ -127,7 +128,7 @@ class TimetableSnapshotCache:
             snapshot = self._entries.get(key)
             if snapshot is None or snapshot.refresh_after > now or key in self._refresh_tasks:
                 return False
-            self._refresh_tasks[key] = asyncio.create_task(self._refresh(key, loader))
+            self._refresh_tasks[key] = create_admitted_task(self._refresh(key, loader))
             return True
 
     async def drain_pending_refreshes(self) -> None:

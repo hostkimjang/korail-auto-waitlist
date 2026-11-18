@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import RequestResponseEndpoint
 
+from ..maintenance.middleware import MaintenanceMiddleware
 from ..provider_call_context import (
     REQUEST_ID_HEADER,
     bind_request_id,
@@ -102,6 +103,10 @@ def create_srt_provider_adapter_app(
                 await redis.aclose()
 
     app = FastAPI(title="SRT Provider Adapter", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(
+        MaintenanceMiddleware,
+        exempt_paths=frozenset({"/readyz", "/v1/read-only-call-status"}),
+    )
     app.state.ready = False
     app.state.token = None
 

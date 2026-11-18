@@ -318,7 +318,24 @@ def test_cooldown_until_uses_the_classified_duration(
 
 
 def test_provider_failure_owner_move_does_not_change_openapi() -> None:
-    schema = app.openapi()
+    # Keep the existing API fingerprint; management routes have separate contract tests.
+    original = app.openapi()
+    schema = {
+        **original,
+        "paths": {
+            name: value
+            for name, value in original["paths"].items()
+            if not name.startswith("/api/v1/system/update")
+        },
+        "components": {
+            **original["components"],
+            "schemas": {
+                name: value
+                for name, value in original["components"]["schemas"].items()
+                if name not in {"UpdateStatus", "UpdateSubmission", "UpdateJob", "UpdateAccepted"}
+            },
+        },
+    }
     encoded = json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
 
     assert len(schema["paths"]) == 37

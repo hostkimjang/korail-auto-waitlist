@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from ..maintenance.admission import create_admitted_task
 from ..provider_call_context import (
     bind_provider_call_id,
     bind_request_id,
@@ -211,7 +212,7 @@ class KorailBrowserAutomation:
                 cleanup_grace = min(SEARCH_CLEANUP_GRACE_SECONDS, timeout * 0.2)
                 provider_deadline = caller_deadline - cleanup_grace
                 inflight = _InflightSearch(
-                    task=asyncio.create_task(
+                    task=create_admitted_task(
                         self._load(key, request, provider_call_id, provider_deadline)
                     ),
                     provider_call_id=provider_call_id,

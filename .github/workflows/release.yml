@@ -1,0 +1,316 @@
+name: Signed release publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable app version, without v (must match the top changelog entry)
+        required: true
+        type: string
+      compatible_from:
+        description: Comma-separated approved source release versions (empty disables updates)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-release-publication
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      POSTGRES_PASSWORD: release-ci-only-postgres-not-a-secret
+      SECRET_ENCRYPTION_KEY: release-ci-only-encryption-key-not-a-secret
+      AUTH_SESSION_SECRET: release-ci-only-session-key-not-a-secret
+      KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"
+      RELEASE_VERSION: ${{ inputs.version }}
+      COMPATIBLE_FROM: ${{ inputs.compatible_from }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Validate release source and version
+        run: |
+          python - <<'PY'
+          import os, pathlib, re
+          version = os.environ['RELEASE_VERSION']
+          if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
+              raise SystemExit('Stable semantic version required')
+          first = re.search(r'^## ([0-9]+\.[0-9]+\.[0-9]+)', pathlib.Path('CHANGELOG.md').read_text(), re.M)
+          if not first or first.group(1) != version:
+              raise SystemExit('Release version must match the first changelog entry')
+          PY
+          test "$GITHUB_REF" = refs/heads/main
+          test -z "$(git status --porcelain)"
+      - run: python -m pip install -r scripts/releases/requirements.txt
+      - run: python -m unittest discover -s scripts/releases -v
+      - run: npm ci
+        working-directory: apps/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: uv sync --frozen --extra test --extra browser
+        working-directory: apps/api
+      - run: uv run --frozen --extra browser playwright install --with-deps chromium
+        working-directory: apps/api
+      - name: Select Chrome for fixture tests
+        run: |
+          python - <<'PY'
+          import os, shutil
+          binary = shutil.which('google-chrome')
+          if not binary:
+              raise SystemExit('Google Chrome unavailable')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=' + binary + '\n')
+          PY
+      - run: make config verify-ops verify-api verify-web
+      - run: make verify-browser
+
+  native-cli:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/cli/go.mod
+          cache-dependency-path: apps/cli/go.sum
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race -count=1 -timeout=5m ./...
+
+  images:
+    needs: [verify, native-cli]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            original: rail-waitlist-api:local
+            context: apps/api
+            dockerfile: apps/api/Dockerfile
+          - name: web
+            original: rail-waitlist-web:local
+            context: apps/web
+            dockerfile: apps/web/Dockerfile
+          - name: browser
+            original: rail-waitlist-korail-browser-adapter:local
+            context: apps/api
+            dockerfile: apps/api/Dockerfile.browser
+          - name: backup
+            original: rail-waitlist-backup:local
+            context: .
+            dockerfile: infra/backup/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      # Browser builds under QEMU are resource intensive; timeout is bounded, no platform is skipped.
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Select immutable build tag
+        id: naming
+        env:
+          IMAGE_KIND: ${{ matrix.name }}
+        run: |
+          repository="${GITHUB_REPOSITORY,,}"
+          echo "tag=ghcr.io/${repository}/${IMAGE_KIND}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.naming.outputs.tag }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Record immutable image result
+        env:
+          ORIGINAL: ${{ matrix.original }}
+          TAG: ${{ steps.naming.outputs.tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p image-records
+          python - <<'PY'
+          import json, os, pathlib
+          pathlib.Path('image-records/result.json').write_text(json.dumps({
+              'original': os.environ['ORIGINAL'],
+              'pinned': os.environ['TAG'] + '@' + os.environ['DIGEST'],
+          }) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.name }}
+          path: image-records/result.json
+          if-no-files-found: error
+
+  bundle:
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: docker/setup-buildx-action@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: image-records
+      - run: python -m pip install -r scripts/releases/requirements.txt
+      - name: Resolve both architectures with anonymous registry access
+        run: |
+          mkdir built-images
+          find image-records -name '*.json' -exec sh -c 'cp "$1" "built-images/$(basename "$(dirname "$1")").json"' sh {} \;
+          registry_config="$(mktemp -d "${RUNNER_TEMP}/railwait-release-registry.XXXXXX")"
+          trap 'rm -rf "$registry_config"' EXIT
+          plugin_directory="${DOCKER_CONFIG:-$HOME/.docker}/cli-plugins"
+          if [ -d "$plugin_directory" ]; then ln -s "$plugin_directory" "$registry_config/cli-plugins"; fi
+          DOCKER_CONFIG="$registry_config" python scripts/releases/resolve_images.py --built-images-dir built-images --output images.json
+      - name: Sign release and export public verification key
+        env:
+          RAILWAIT_RELEASE_SIGNING_KEY: ${{ secrets.RAILWAIT_RELEASE_SIGNING_KEY }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          COMPATIBLE_FROM: ${{ inputs.compatible_from }}
+        run: |
+          compatible_args=()
+          IFS=',' read -ra sources <<< "$COMPATIBLE_FROM"
+          for source in "${sources[@]}"; do
+            if [ -n "$source" ]; then compatible_args+=(--compatible-from "$source"); fi
+          done
+          python scripts/releases/build_bundle.py "${compatible_args[@]}" --images-json images.json --output release-assets \
+            --version "$RELEASE_VERSION" --source-revision "$GITHUB_SHA" \
+            --public-key-output release-public-key.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            release-assets/*
+            release-public-key.txt
+          if-no-files-found: error
+
+  image-smoke:
+    needs: bundle
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r scripts/releases/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: artifacts
+      - name: Verify published images on native CPU
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: python scripts/releases/smoke_images.py --manifest artifacts/release-assets/release-manifest.json --platform "$TARGET_PLATFORM"
+
+  cli-assets:
+    needs: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/cli/go.mod
+          cache-dependency-path: apps/cli/go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: artifacts
+      - name: Build CLI with pinned verification key
+        working-directory: apps/cli
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CLI_VERSION: "0.1.0"
+        run: |
+          mkdir -p dist
+          suffix=""; if [ "$GOOS" = windows ]; then suffix=.exe; fi
+          public_key="$(cat ../../artifacts/release-public-key.txt)"
+          package=github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/release
+          go build -trimpath -ldflags "-X main.version=$CLI_VERSION -X $package.CLIVersion=$CLI_VERSION -X $package.PublicKeyBase64=$public_key" \
+            -o "dist/railwait-${GOOS}-${GOARCH}${suffix}" ./cmd/railwait
+          (cd dist && sha256sum * > "railwait-${GOOS}-${GOARCH}.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: apps/cli/dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [image-smoke, cli-assets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: cli-artifacts
+          merge-multiple: true
+      - name: Publish only after every platform and required artifact passed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          COMPATIBLE_FROM: ${{ inputs.compatible_from }}
+        run: |
+          tag="v${RELEASE_VERSION}"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --title "$tag" --generate-notes
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" artifacts/release-assets/* cli-artifacts/*
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest

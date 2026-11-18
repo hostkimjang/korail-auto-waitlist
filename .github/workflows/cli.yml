@@ -1,0 +1,89 @@
+name: CLI cross-platform verification
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/cli/**"
+      - ".github/workflows/cli.yml"
+  pull_request:
+    paths:
+      - "apps/cli/**"
+      - ".github/workflows/cli.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/cli/go.mod
+          cache-dependency-path: apps/cli/go.sum
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - name: Verify native permissions, process locks and installation contracts
+        run: go test -race -count=1 -timeout=5m ./...
+      - name: Build and smoke test native executable
+        run: |
+          output="${RUNNER_TEMP}/railwait-native"
+          if [ "$RUNNER_OS" = Windows ]; then output="${output}.exe"; fi
+          go build -trimpath -o "$output" ./cmd/railwait
+          "$output" version
+
+  artifact:
+    name: Compile ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: native
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/cli
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/cli/go.mod
+          cache-dependency-path: apps/cli/go.sum
+      - name: Compile executable and platform tests
+        run: |
+          output="railwait"
+          if [ "$GOOS" = windows ]; then output="railwait.exe"; fi
+          mkdir -p dist
+          go build -trimpath -o "dist/$output" ./cmd/railwait
+          go test -c -o "${RUNNER_TEMP}/platform.test" ./internal/platform
+          (cd dist && sha256sum "$output" > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: railwait-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: apps/cli/dist/
+          if-no-files-found: error
+          retention-days: 14

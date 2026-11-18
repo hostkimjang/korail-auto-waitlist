@@ -4711,6 +4711,8 @@ def test_worker_task_runtime_has_an_exact_import_allowlist() -> None:
     assert imports_from == {
         ("__future__", 0),
         ("collections.abc", 0),
+        ("inspect", 0),
+        ("maintenance.gate", 1),
     }
 
 
@@ -10608,6 +10610,7 @@ def test_korail_reservation_dialog_policy_is_a_stdlib_only_leaf() -> None:
                 ("SRT", 0),
                 ("SRT.errors", 0),
                 ("domain", 2),
+                ("maintenance.admission", 2),
                 ("provider_adapters.srt_identity", 2),
                 ("provider_adapters.srt_netfunnel_logging", 2),
                 ("provider_adapters.srt_station_roster", 2),
@@ -10633,6 +10636,7 @@ def test_korail_reservation_dialog_policy_is_a_stdlib_only_leaf() -> None:
                 ("fastapi.exceptions", 0),
                 ("fastapi.responses", 0),
                 ("starlette.middleware.base", 0),
+                ("maintenance.middleware", 2),
                 ("provider_call_context", 2),
                 ("reservations.provider_confirmation.contracts", 2),
                 ("reservations.provider_confirmation.srt", 2),

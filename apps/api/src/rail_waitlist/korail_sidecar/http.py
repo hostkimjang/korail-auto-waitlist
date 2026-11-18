@@ -25,6 +25,8 @@ from ..korail_sidecar.browser_contracts import (
     BrowserSeatSearchResult,
     BrowserSourceUnavailable,
 )
+from ..maintenance.admission import create_admitted_task
+from ..maintenance.middleware import MaintenanceMiddleware
 from ..provider_call_context import (
     REQUEST_ID_HEADER,
     REQUEST_TIMEOUT_MS_HEADER,
@@ -361,6 +363,7 @@ def create_adapter_app(
         openapi_url=None,
         lifespan=lifespan,
     )
+    app.add_middleware(MaintenanceMiddleware)
 
     def request_id_from_header(value: object) -> str | None:
         return validated_log_id(value if isinstance(value, str) else None)
@@ -706,7 +709,7 @@ def create_adapter_app(
                     terminal = failed_reservation_result()
                 frames.put_nowait(KorailReserveResultFrame(result=terminal))
 
-            task = asyncio.create_task(run_once(), context=copy_context())
+            task = create_admitted_task(run_once(), context=copy_context())
             app.state.pending_reservation_tasks.add(task)
 
             def release_task(done: asyncio.Task[None]) -> None:

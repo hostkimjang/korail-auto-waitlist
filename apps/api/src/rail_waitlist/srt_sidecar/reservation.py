@@ -33,6 +33,7 @@ from ..domain import (
 from ..domain import (
     ReservationResultReasonCode as _ReservationResultReasonCode,
 )
+from ..maintenance.admission import admitted_sync as _admitted_sync
 from ..provider_adapters.srt_identity import (
     normalize_srt_date,
     normalize_srt_time,
@@ -370,6 +371,7 @@ class SrtReservationExecutor:
             locally_reusable=locally_reusable,
         )
 
+    @_admitted_sync
     def _verify_sync(
         self,
         credentials: SrtReservationCredentials,
@@ -461,6 +463,7 @@ class SrtReservationExecutor:
         )
         return [train for train in trains if _matches_request(train, request)]
 
+    @_admitted_sync
     def _confirm_reservation_sync(
         self,
         target: ReservationConfirmationTarget,
@@ -559,6 +562,7 @@ class SrtReservationExecutor:
             observed_at=observed_at,
         )
 
+    @_admitted_sync
     def _reserve_sync(
         self,
         request: ReservationRequest,

@@ -798,3 +798,41 @@ for (const viewport of viewportCases) {
     await expectHomeApiAndBrowserClean(telemetry);
   });
 }
+
+for (const viewport of viewportCases) {
+  test(`${viewport.name} keeps update confirmation keyboard accessible`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const telemetry = observeBrowser(page);
+    await installMockApi(page, telemetry);
+    await page.route("**/api/v1/system/update", (route) => json(route, {
+      schema: 1, managed: true, manager_available: true, checked_at: timestamp(),
+      current_version: "1.3.3", latest_version: "1.4.0", plan_id: "a".repeat(64),
+      available: true, reason: "update_available", message: "새 버전을 설치할 수 있습니다.",
+    }));
+    // Other status cards are outside this interaction; malformed safe fixtures
+    // exercise their existing unavailable state without contacting a server.
+    await page.route("**/api/v1/operations/summary", (route) => json(route, {}));
+    await page.route("**/api/v1/seat-status-sources", (route) => json(route, []));
+    await page.goto("/");
+    await page.locator(usesCompactShell(viewport) ? ".bottom-nav .bottom-item" : ".side-nav .nav-item")
+      .filter({ hasText: "설정" }).click();
+    await page.getByRole("navigation", { name: "설정 메뉴" })
+      .getByRole("button", { name: "로그·진행 상태" }).click();
+    const region = page.getByRole("region", { name: "앱 업데이트" });
+    const apply = region.getByRole("button", { name: "v1.4.0 업데이트" });
+    await expect(apply).toBeDisabled();
+    await expectWithinViewport(region, viewport.width);
+    await expectWithinViewport(page.locator(".system-update-consent"), viewport.width);
+    await expectVisibleActionTarget(apply, "update application action");
+    await expectVisibleActionTarget(region.getByRole("button", { name: "업데이트 확인" }), "update check action");
+    const consent = region.getByRole("checkbox", { name: /업데이트 중 잠시 접속이 끊깁니다/ });
+    await consent.focus();
+    await page.keyboard.press("Space");
+    await expect(consent).toBeChecked();
+    await expect(apply).toBeEnabled();
+    await page.keyboard.press("Tab");
+    await expect(region.getByRole("button", { name: "업데이트 확인" })).toBeFocused();
+    const widths = await page.evaluate(() => ({ client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
+    expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+  });
+}

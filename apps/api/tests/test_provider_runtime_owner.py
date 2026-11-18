@@ -50,6 +50,8 @@ OWNER_IMPORTS_FROM = {
     ("sqlalchemy.ext.asyncio", 0, "AsyncSession", None),
     ("sqlalchemy.ext.asyncio", 0, "async_sessionmaker", None),
     ("domain", 2, "Provider", None),
+    ("maintenance.gate", 2, "MaintenanceClosed", "_MaintenanceClosed"),
+    ("maintenance.gate", 2, "MaintenanceGate", "_MaintenanceGate"),
     (
         "korail_sidecar.provider_cooldown",
         2,
@@ -121,7 +123,12 @@ OWNER_PRIVATE = {
     "_persist_protection_halt",
     "_clear_persisted_protection_halt",
 }
-OWNER_DEPENDENCY_PRIVATE = {"_ProviderCooldownDeferred", "_has_session_keepalive_demand"}
+OWNER_DEPENDENCY_PRIVATE = {
+    "_ProviderCooldownDeferred",
+    "_has_session_keepalive_demand",
+    "_MaintenanceClosed",
+    "_MaintenanceGate",
+}
 PRE_MOVE_PICKLES = {
     "ProviderRuntimePrewarmRegistry": (
         "Y3JhaWxfd2FpdGxpc3QucHJvdmlkZXJfcnVudGltZQpQcm92aWRlclJ1bnRpbWVQcmV3YXJt"

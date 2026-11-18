@@ -10,6 +10,7 @@ from typing import Any
 from ..korail_sidecar.browser_contracts import BrowserSeatSearchRequest, BrowserSeatSearchResult
 from ..korail_sidecar.client import _AdapterFailure
 from ..korail_sidecar.provider_cooldown import ProviderCooldown, ProviderCooldownDeferred
+from ..maintenance.admission import create_admitted_task
 from ..provider_call_context import (
     bind_request_deadline_at,
     bind_request_id,
@@ -160,7 +161,7 @@ class KorailBrowserQueryRuntime:
                     bind_request_id(request_id),
                     bind_request_deadline_at(provider_deadline) as deadline,
                 ):
-                    task = asyncio.create_task(load(key, request))
+                    task = create_admitted_task(load(key, request))
                 task.add_done_callback(self._consume_task_terminal)
                 inflight = _InflightQuery(
                     task=task,

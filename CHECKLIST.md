@@ -453,6 +453,142 @@
 - [x] 검증되지 않은 `Tailscale 보호됨` 상시 배지 제거와 운영 경계 문서화
 - [x] 익일 도착 열차의 aware 후보 시각 보존과 서비스 날짜 종료 watch window payload 회귀 검증
 
+## CLI 설치와 웹 업데이트 개선
+
+설치 CLI와 웹 업데이트의 목표 계약은 [개선 설계](docs/INSTALL_UPDATE_DESIGN.md)를 따릅니다.
+Windows·macOS·Linux를 함께 구현했으며, 실제 OS 지원 검증과 공개 배포는 별도다.
+
+- [x] 서명 manifest·digest 이미지·배포 Compose 생성과 검증, bundle 계약 15건 통과
+- [x] CLI 설치·진단·비밀값 생성·비공개 관리자 생성·재개·TAGO 설정, OS별 서비스 정의 구현
+- [x] 공유 유지보수 gate·thread/background drain·암호화 DB/설정 백업·영속 update job 구현
+- [x] CLI와 같은 manager 요청을 사용하는 웹 업데이트·명시 확인·재연결 화면 구현
+- [x] macOS CLI race·vet, Linux ARM CLI 테스트, Windows/macOS/Linux 두 CPU 교차 컴파일 통과
+- [x] 실제 PostgreSQL 업데이트 백업 복호화·전체 archive 검증·복원 round-trip와 자원 정리 확인
+- [x] API 전체 5,715건·strict mypy 183파일·Ruff·format·lock 검사, 웹 1,004건·lint·typecheck·build·Sites 4건 통과
+- [x] 업데이트 확인 UI의 1440·768·320px·200% 상당 폭·키보드·44px 행동 영역 검증 4건 통과
+- [x] Mac Lima 실제 2컨테이너 공유 잠금과 API 관리자·CSRF 요청→호스트 Go manager→API 작업 조회 통합 통과. 공유경로 제한·약 1초 rename 지연을 mount 사전검사·bounded retry에 반영
+- [x] API/browser uv.lock 기반 이미지 빌드, 고정 uv digest, Linux ARM browser fixture 415건·이미지 계약 4건·운영 스크립트 통과
+- [ ] 기존 설치의 설정·프로필·volume·암호화키를 보존하는 `adopt`와 DB 변경 update·자동 rollback (초기 구현 제외)
+- [ ] 실행 시점 웹 딥링크 설정 제공 (현재 정식 공통 이미지의 기본 비활성 유지)
+- [ ] Windows·macOS Docker Desktop 새 설치·실제 서비스 등록·로그인/재부팅·실패 복구 검증
+- [ ] Linux 두 CPU의 실제 공개 릴리스 설치·업데이트 통합 검증과 원격 CI 성공
+- [ ] 서명 secret·공개 GHCR·정식 CLI 6종·안정 릴리스 게시 (이번 작업에서 게시하지 않음)
+- [x] 현재 experimental-rail 전체 프로필 최종 재빌드·강제 재생성, 12서비스 healthy·migration/log-init exit 0·실행 이미지/최종 API 소스 일치·시작 traceback 0 확인
+- [x] 작업용 Go SDK·테스트 바이너리·IPC 임시 상태·백업 테스트 컨테이너/볼륨/네트워크/이미지·검증 서버 정리 및 잔여 없음 확인
+- [x] CLI README·운영 가이드·아키텍처·설계 문서에 현재 구현과 남은 제약 구분
+
+2026-11-17 로컬 패키지 설치 경로:
+
+- [x] 별도 서명키·명시적 공개키로 로컬 패키지를 검증하고 보존·재개하는 CLI 경로 구현.
+  공식 설치 검증을 유지하고 로컬 설치의 정식 업데이트 적용은 차단
+- [x] classic Docker 및 실제 containerd OCI index → CPU manifest → config 식별자 검증,
+  태그 없는 이미지 적재와 Compose 고정 자원·외부 자원 차단 회귀 테스트
+- [x] 릴리스 도구 27건·CLI 5개 패키지 race 테스트·vet·6대상 교차 빌드 통과.
+  실제 ARM 패키지 19서비스·11이미지의 서명·전체 archive 해시를 새 CLI로 검증
+- [x] macOS Lima의 별도 경로·18080 포트에서 새 CLI로 대화형 설치 완료. 관리자 생성·LaunchAgent
+  실행·12서비스 healthy·migration/log-init exit 0·웹/healthz/readyz 200·시작 traceback 0 확인.
+  기존 8080 서비스 12개 healthy와 가동 기간 유지. Docker Desktop·Windows 실설치 및 재부팅 검증과 구분
+- [x] 이번 로컬 설치 검증용 SDK·임시 스크립트·archive·일회성 서명키 정리 확인.
+  새 설치·서명된 원본 패키지·설치 내부 재개용 보존본·LaunchAgent·실행 서비스는 사용자 설치 결과로 유지
+
+2026-11-17 설치 화면·올인원 준비 흐름:
+
+- [x] Opus 설계 검토를 반영한 한국어 5단계 CLI, 실제 경과 시간·숨김 입력·재사용/건너뜀 안내,
+  40열·비TTY·NO_COLOR·TERM=dumb·Windows VT 미지원 fallback와 읽기 전용 preview 구현
+- [x] OS별 Docker/Tailscale 실행 파일 탐색, 기존 Docker 환경 보존, 공식 준비 안내·명시적 Desktop 시작·
+  준비 상태 재확인 연결. 설치·약관·OS 승인·SSO를 무인으로 끝냈다고 표시하지 않음
+- [x] 기존 관리자·API 키 유지, Tailscale HTTPS 포트 선택·충돌/Funnel 차단·기존 경로 보존,
+  허용 origin·보안 쿠키 변경을 암호화 백업·drain·재시작 절차와 연결
+- [x] CLI 8개 패키지 race 테스트, vet와 6대상 교차 빌드 통과. 실제 40열 PTY에서 숨김 입력의
+  비밀값 비출력, 한글·bracketed paste 입력, Ctrl+C·SIGINT 종료 130, echo 복구,
+  중단 전 설치 자원 미생성 확인
+- [x] 새 설치의 실제 HTTPS 8443 연결·웹/관리자 상태 API 200·12서비스 healthy·자동 시작 heartbeat·
+  maintenance gate 재개 확인. 기존 HTTPS 443·SSH 22와 운영 컨테이너 ID 유지
+- [x] 최종 CLI로 같은 설치를 재실행해 관리자 입력 생략·동일 HTTPS 포트 재사용·Serve 설정 및
+  서비스 컨테이너 ID 유지 확인. 적용한 설정 후보 파일 0개와 백업 복구키 0600 확인
+- [x] 로컬 패키지의 새 CLI·SHA-256 파일과 사용법·운영·설계·변경 기록 반영.
+  테스트 SDK·교차 빌드·Opus 검토 임시 자료·일회성 스크립트 정리와 실행 중 임시 프로세스 0 확인.
+  새 HTTPS 연결·설치 데이터·암호화 백업·복구키·사용자 관리 서비스는 실제 설치 결과로 보존
+
+2026-11-17 필수 프로그램 자동 설치·키 준비·기존 설치 정리:
+
+- [x] Windows·macOS 공식 Docker/Tailscale 다운로드, 사용자 전용 임시 폴더, 제조사 서명 검증 후
+  네이티브 설치 연결. Windows WSL 설치·업데이트·재부팅 필요 상태와 취소를 구분
+- [x] 실제 macOS Docker DMG의 앱·설치 프로그램 서명·Gatekeeper 및 Tailscale standalone PKG
+  배포자·Gatekeeper 검증. 호스트 재설치 없이 읽기 전용 검증 마운트·다운로드 정리 확인
+- [x] 보안키 6종·VAPID 자동 생성/직접 입력, 보호된 JSON 입력과 기존 키 교체 거부 구현.
+  기존 raw·DER·PEM P-256 키 보존 및 발송 라이브러리와 호환되는 subject 처리
+- [x] 현재 관리형 설치에 누락된 VAPID 키·subject를 암호화 백업·작업 종료 대기·재생성으로 적용.
+  실제 API handler의 공개키·비밀키 일치 및 py_vapid 서명 성공, 세션·암호화키 유지,
+  12서비스 healthy·migration/log-init exit 0·maintenance 재개·후보 파일 0 확인
+- [x] 사용자 선택에 따른 기존 프로젝트 암호화 백업, 격리 PostgreSQL 실제 복원·행 수·시퀀스 비교,
+  원본 DDL 재파싱 후 전체 스키마 일치와 5볼륨·소스·설정·로그의 전체 복호화·해시 검증
+- [x] 기존 컨테이너 14개·전용 볼륨 5개·네트워크 5개·HTTPS 443 경로 제거.
+  소스 저장소·새 설치·공유 이미지·Lima·Tailscale·SSH 22·HTTPS 8443 보존, 복구 안내 작성
+- [x] CLI 8개 패키지 race 테스트·vet·6대상 최종 교차 빌드 통과. OS I/O를 주입한 미설치→첫 로그인,
+  HTTPS 승인·거부·취소·시간 초과 회귀와 일회용 URL 비노출·공유 포트 rollback 보호 확인
+- [x] 최신 로컬 패키지 CLI와 SHA-256 교체 후 실제 macOS 터미널 재실행 exit 0.
+  기존 컨테이너 ID·Serve 경로·키 유지, 주요 서비스 시작 traceback 0 확인
+- [x] 작업용 SDK·모듈 캐시·교차 빌드·일회성 스크립트와 검증용 Docker 자원·마운트 정리 확인.
+  임시 프로세스는 없으며 새 설치·CLI 패키지·암호화 복구 백업·설치 터미널은 보존
+- [ ] 깨끗한 Windows·macOS에서 Docker/Tailscale 최초 설치·OS 권한·SSO·HTTPS 최초 승인·재부팅 실검증
+- [ ] 이번 설치의 실제 브라우저·OS 알림 권한 허용과 실기기 Push 수신 확인
+
+2026-11-17 간편 설치 기본값·준비 자동 대기·Windows 일회 재개 후속:
+
+- [x] 새 대화형 설치의 Tailscale HTTPS·내부 키/VAPID 자동 생성·완료 브라우저 열기,
+  `--custom`의 접속·키·TAGO·계획 질문 분리. 기존 설치·비대화형 기본값 보존
+- [x] Docker 최초 실행 최대 5분 자동 확인, 자동 선택한 최초 `default`에서만 `desktop-linux` 전환.
+  사용자 CLI 경로·사용자 소켓 탐색과 기존 context/endpoint 보존 회귀 확인
+- [x] Tailscale 초기 daemon·NoState·Starting·기기 승인·오프라인 상태 최대 5분 재확인,
+  검증한 공식 `/a/` 첫 로그인 페이지 1회 열기·원문 비출력·기존 프로필 보존
+- [x] Windows HKCU `Run` 일회 재개와 보호된 옵션 파일, 원본 파일 경로·`--custom` 등 옵션 보존,
+  stdin·UTF-16 260단위 초과 명령·32KiB 초과 상태 거절. 공유 잠금·취소 정리·다른 등록 보존·
+  일치 등록 선소비·손상 상태 보존 회귀 구현
+- [x] 최종 payload 제한·취소 테스트를 포함한 `go test -race ./cmd/railwait`,
+  `go vet ./cmd/railwait` 및 Docker 경로 확인용 `internal/setup` race 통과.
+  Go 1.27.4·CGO 비활성·`-trimpath`로 Windows/macOS/Linux amd64·arm64 6종 빌드 통과
+- [x] 최신 macOS ARM CLI의 version/help/preview와 기존 ARM 로컬 패키지 서명·전체 archive 검증 exit 0.
+  지속 패키지의 CLI·SHA-256 교체 및 `cli-builds/`에 6종·검증 지문 보존.
+  앱 패키지는 `linux/arm64` 전용이며 Windows amd64 앱 패키지로 간주하지 않음
+- [x] 후속 검증 SDK·캐시·복구 원본·임시 빌드는 지속 패키지 6종의 SHA 일치·사용 프로세스 없음
+  확인 후 전용 임시 디렉터리와 함께 제거하고 잔여 없음 확인. 전달용 `cli-builds/`는 보존
+- [ ] 깨끗한 Windows·macOS의 최초 설치·OS 승인·SSO·HTTPS 승인·재부팅 후 일회 재개 실검증.
+  교차 빌드·가짜 OS 회귀로 대체하지 않음. 2026-11-17 사용자 결정에 따라 Windows를 우선하고
+  Mac 실검증은 보류하며 미완료로 유지. Windows는 관리자 실행 취소로 VM 시작 자체가 미실행이고,
+  실제 UAC 재승인·현장 조작에 관한 사용자 응답을 계속 기다림. 패키지 준비 검증 완료와 별도 관리
+- [x] Linux amd64 앱 이미지의 별도 로컬 서명 패키지 제작·Windows 현지 전달/해시 확인.
+  기존 ARM 앱 패키지와 새 CLI 지문은 별도 관리하며 공개 릴리스는 게시하지 않음
+  기존 SSH는 호스트 키 확인 후 인증 실패(exit 255)하여 Tailscale 파일 전송으로 변경.
+  별도 서버·Serve 변경 없이 소스·CLI를 전달하고 새 amd64 앱 패키지는 Windows에서 제작·보존
+- [x] 기존 Windows checkout 대신 사용할 현재 소스 1,142개와 CLI·manifest·빌드 안내 전달 입력 제작.
+  실제 `.env`·운영 로그·캐시를 제외하고 필수 템플릿·미추적 신규 모듈 포함 확인.
+  원래 HEAD 한 개만 담은 shallow Git을 보존하고 새 커밋·푸시 없이 소스별 SHA 기록
+- [x] v2 archive의 원본 1,142개 bytes 전수 SHA·Git fsck·단일 commit·remote/reflog 부재 검증.
+  첫 archive의 remote 삭제 뒤 남은 dangling symbolic ref를 v2에서 제거했으며 첫 archive 사용 보류 전달
+- [x] 총괄의 v2 archive 경로·중복·링크·소스 SHA·Git metadata 독립 검증 통과 확인.
+  사용 프로세스·소유권을 확인한 뒤 본 작업의 snapshot 임시 폴더와 대체된 v1 archive·SHA·안내만
+  제거하고 부재 확인. v2 archive·SHA·소스 manifest·빌드 안내는 전달 결과물로 보존
+- [x] 첫 archive의 Windows 수신·전체 파일 SHA 일치 확인. v2 archive·SHA·새 빌드 안내는
+  기존 Tailscale wrapper의 stdin 파일 전송으로 송신 종료 0 확인. 서버·운영 설정 변경 없음
+- [x] Windows Downloads의 v2 archive 48,441,094bytes와 빌드 안내 존재를 원격 읽기 전용으로 직접 확인,
+  두 파일의 SHA-256을 현지 계산해 전달값과 일치 확인
+- [x] Windows의 v2 새 폴더 추출·1,142개 소스 SHA·Git fsck exit 0·단일 HEAD·remote 0·
+  freeze 소스 지문 확인. `source-verification-v2.json`에서 정확한 archive·추출 경로와 지문 대조
+- [x] 격리 태그/builder로 linux/amd64 API·웹·브라우저·백업 4종 빌드·네트워크 없는 runtime smoke,
+  Python 3.12 패키지 계약 27건 통과. 동일 bytes의 앱 빌드는 v2 패키징에서 재사용
+- [x] Windows의 `amd64-local-package-v2`를 새 키로 서명하고 최신 Windows CLI로 검증.
+  CLI 통합 담당도 원격 Windows의 실제 `package verify`를 직접 실행해 종료 0 확인:
+  v1.4.0·19서비스·11고유 이미지·archive 2,115,412,992바이트, SHA-256
+  `5ee6fabfe393a9945ab1d4fcb2f22426bcfdd27fb23b524a1f124ccaccdb9ab9`.
+  source 지문은 freeze 스냅샷 `0caa1554ea733c30a95bfca10094396b54fe2ec4ae2390798580e98024d12f7f`와 일치
+- [x] 새 테스트 서명키는 Windows 사용자 전용 ACL로 보호·사용한 뒤 키·전용 폴더 삭제 기록 확인,
+  호스트 간 private 키 전송 없음. 공개키·서명 패키지·v2 소스·CLI·검증 기록은 결과물로 보존
+- [x] Windows 작업 태그 4개·builder·smoke 컨테이너·일회 파일 정리 기록 확인.
+  통합 담당의 읽기 전용 재검사에서 기존 37컨테이너 ID·이름·이미지와 216태그 유지,
+  작업 태그·컨테이너 잔여 0 확인. 다른 프로젝트 3개는 기준 시점 이후 running→exited 관찰로
+  모든 컨테이너 상태 불변으로 기록하지 않음. 패키징과의 인과는 미확정이며 변경·복구하지 않음
+
 ## 공개 저장소 준비
 
 - [x] README와 핵심 문서의 공개용 정보구조 정리

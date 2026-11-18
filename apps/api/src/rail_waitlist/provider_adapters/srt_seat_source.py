@@ -17,6 +17,7 @@ from SRT.errors import SRTNetFunnelError  # type: ignore[import-untyped]
 
 from ..domain import Provider, SeatClass
 from ..domain import SeatObservationStatus as _SeatObservationStatus
+from ..maintenance.admission import admitted_sync, create_admitted_task
 from ..observations.contracts import (
     ObservationErrorCategory,
     SeatObservationRequest,
@@ -684,7 +685,7 @@ class SrtLiveSeatSource:
             created = record is None
             if record is None:
                 record = _InflightCall(provider_call_id=new_log_id())
-                task = asyncio.create_task(
+                task = create_admitted_task(
                     self._load(
                         key,
                         record,
@@ -1047,6 +1048,7 @@ class SrtLiveSeatSource:
             duration,
         )
 
+    @admitted_sync
     def _search_sync(
         self,
         origin: str,

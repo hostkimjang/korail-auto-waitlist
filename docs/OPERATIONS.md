@@ -2,6 +2,108 @@
 
 이 문서는 레일웨잇을 직접 운영할 때 필요한 명령과 확인 방법을 정리합니다. 처음 설치한다면 [시작하기](GETTING_STARTED.md)를 먼저 읽으세요.
 
+## CLI 관리형 설치와 업데이트
+
+`railwait install` 또는 `railwait setup`의 다섯 단계 마법사에서 필수 프로그램 설치, 앱·관리자 설정,
+자동 시작과 선택적인 Tailscale HTTPS 연결을 이어갈 수 있습니다. Windows·macOS 대화형 실행에서는 없는
+Docker Desktop·Tailscale의 공식 패키지를 내려받아 배포자 서명을 확인하고 실제 OS 설치 창을 엽니다.
+Windows의 WSL 준비가 부족하면 설치·업데이트를 이어갑니다. 약관·시스템 권한·VPN·SSO는 해당 창에서
+직접 처리하며 재부팅 필요 상태에서는 멈추고 다음 Windows 로그인 때 설치 창을 한 번 재개하도록 등록합니다.
+CLI가 재부팅을 실행하지는 않습니다. 원본 실행 파일·로컬 패키지·입력 파일을 보존해야 하며 등록 실패나
+stdin 입력에서는 수동 재개를 안내합니다. 기존 Lima 등의 로컬
+Docker context와 설치된 도구를 재사용하고, Linux·비대화형 실행은 필수 도구를 먼저 준비합니다.
+`--plain`으로 안정적인 일반 텍스트 출력을,
+`railwait preview`로 상태를 변경하지 않는 설치 화면 예시를 볼 수 있습니다.
+
+새 대화형 설치의 기본값은 Tailscale HTTPS와 보안·알림 키 자동 생성입니다. 관리자 계정 설정 외의 기술
+질문은 생략하며 완료 후 브라우저를 엽니다. 직접 키 입력·접속 선택·TAGO 입력은 `--custom`, 로컬 전용은
+`--access local`로 선택합니다. TAGO는 외부 발급 키이므로 간편 설치에서는 나중에 설정하며 시간표 검색도
+그 뒤 사용할 수 있습니다. 기존 설치와 비대화형 명령의 접속 기본값은 바꾸지 않습니다.
+Docker 최초 실행과 Tailscale 초기화·로그인·기기 승인은 최대 5분 자동 확인하며 Enter로 재확인하지 않습니다.
+첫 로그인은 공식 인증 페이지를 한 번 열고 사용자 입력을 기다립니다.
+
+OS 설치가 시작된 후에는 그 창에서 완료하거나 취소해야 합니다. CLI는 시스템 설치가 끝나기 전에 다운로드
+파일을 지우지 않습니다. macOS 설치 디스크를 안전하게 해제하지 못하면 경로를 보존하고 알립니다. 재실행은
+기존 프로그램의 상태부터 확인하므로 정상 설치를 반복하지 않습니다. 지원 OS·WSL·수동 설치 요구사항은
+[CLI 안내](../apps/cli/README.md#필수-프로그램-설치),
+[Docker Windows](https://docs.docker.com/desktop/setup/install/windows-install/),
+[Docker macOS](https://docs.docker.com/desktop/setup/install/mac-install/),
+[Tailscale 다운로드](https://tailscale.com/download)를 확인하세요.
+
+기존 관리형 설치에 `railwait install --path <경로> --access tailscale --open`을 실행하면 계정·API 키를
+다시 묻지 않고 원격 접속 설정을 이어갑니다. Tailscale 로그인은 `NeedsLogin`일 때만 옵션 없는 `up`으로
+시작하며 기존 프로필을 전환하지 않습니다. 초기화·오프라인 상태는 준비 상태 재확인·연결 복구를 안내하고,
+이미 연결된 노드는 그대로 사용합니다. 기존 Serve 경로를 피한 포트를 선택하고, 암호화 백업·
+종료 대기·앱 재시작 후 해당 HTTPS origin과 보안 쿠키를 적용합니다. 이후 로그인은 표시된 HTTPS
+주소에서 진행합니다. Funnel·전역 Serve reset·ACL 변경은 하지 않습니다. 같은 호스트의 다른
+Railwait 설치와 브라우저 쿠키가 겹칠 수 있으므로 병행 로그인은 별도 브라우저 프로필을 사용합니다.
+
+첫 HTTPS 사용에 대한 승인 요청은 검증한 공식 브라우저 페이지로 연결하고 최대 5분간 기다립니다.
+사용자는 HTTPS만 승인하며 공개 Funnel을 선택하지 않습니다. 승인 후 기존 노드·경로를 다시 확인합니다.
+권한이 부족하거나 시간이 지나면 같은 설치 명령으로 재개합니다. 일회용 승인 주소는 설치 기록에 저장하지 않습니다.
+
+2026-11-17 macOS Lima의 신규 관리형 설치(18080)에 이 흐름을 실제 적용했습니다. 새 Tailscale HTTPS
+8443 경로, 암호화 백업 검증·서비스 재시작·12서비스 healthy·관리자 구성 API 200·maintenance gate
+재개를 확인했고, 기존 HTTPS 443·SSH 22의 설정과 운영 프로젝트 컨테이너 ID는 유지했습니다.
+Windows·macOS의 Docker Desktop·Tailscale 최초 설치, OS 승인·SSO·재부팅 및 별도 원격 기기에서의
+로그인은 이 검증에 포함하지 않습니다.
+
+같은 날 사용자의 선택에 따라 기존 `rail-waitlist-macmini`를 백업 후 제거했습니다. DB를 격리된 PostgreSQL에
+복원해 행 수·시퀀스를 비교했고, PostgreSQL이 다시 표현한 22개 CHECK 제약의 차이는 원본 DDL을 빈 DB에
+적용한 결과와 전체 스키마를 비교해 검증했습니다. 전용 볼륨 5개·설정·소스·로그를 암호화하고 복호화 전체
+해시·tar 본문·설정 파일 해시를 확인한 뒤 컨테이너 14개·네트워크 5개·볼륨 5개를 제거했습니다.
+API와 proxy는 300초 종료 대기 뒤 종료 코드 137이었으며, 작업자 종료·남은 DB 클라이언트 0 확인 후
+덤프를 만들었습니다. 이 결과는 백업 폴더의 `shutdown-verification.json`에 구분해 기록했습니다.
+
+백업은 서비스 상위 폴더의 `railwait-retired-backup-20261117-c7r4o761`에 있으며 `RESTORE.md`와
+`retirement-result.json`을 함께 보관합니다. `recovery.agekey`는 복구에 필요하므로 0600 권한으로 유지합니다.
+소스 저장소는 보존했고 오래된 `.env`와 로그 원문은 암호화 백업 확인 후 제거했습니다. 현재 실행 경로는
+`railwait-local-20261117`입니다. 예전 HTTPS 443 경로만 제거했으며 새 HTTPS 8443·SSH 22·Lima·공유 이미지는 유지했습니다.
+
+초기 설치의 보안·알림 키는 자동 생성이 기본이며 직접 입력도 지원합니다. 기존 관리형 설치에 같은 경로로
+`railwait setup`을 실행하면 계정·앱 보안키는 유지하고 누락된 VAPID 키와 사용할 수 없는 발신자 주소를
+백업·작업 종료 대기·서비스 재생성 절차로 보완합니다. 브라우저·OS 알림 권한은 사용자가 직접 허용합니다.
+
+현재 설치에는 VAPID 설정을 실제 적용했고 API의 키 반환, 공개키·비밀키 일치와 `py_vapid` 서명 생성을
+확인했습니다. 발송 라이브러리가 HTTPS subject의 포트·경로를 거부해 자동 subject를 호스트명으로
+맞췄으며 앱 접속 주소는 그대로 유지했습니다. 12서비스 healthy·migration/log-init 종료 0·maintenance
+재개를 확인했습니다. 최종 CLI 재실행은 설정·컨테이너 ID를 유지했으며 실제 기기 알림 발송은 수행하지 않았습니다.
+
+Windows·macOS·Linux의 초기 설정은 `railwait install`로 처리하며, 명령·파일 권한·Docker 사전조건은
+[CLI 안내](../apps/cli/README.md)를 참고합니다. 개발용 CLI에는 신뢰 공개키가 없으므로 공개 설치에
+사용할 수 없습니다. 서명된 정식 바이너리·이미지·번들을 게시해야 일반 설치가 가능합니다.
+
+공개 릴리스 전에는 `railwait install --package <패키지 폴더> --trust-key <공개키 파일>`로
+명시적으로 신뢰한 로컬 패키지를 설치할 수 있습니다. 패키지 생성 절차는
+[릴리스 도구 안내](../scripts/releases/README.md)를 따릅니다. 이 경로도 서명·파일 해시·이미지
+식별자를 검증하며, 기존 Git 설치와 다른 폴더·포트를 사용합니다. 로컬 설치는 정식 릴리스로
+자동 전환하지 않으며 웹·CLI의 정식 업데이트 적용은 차단됩니다. 재개에 필요한 검증키와 패키지는
+설치 폴더의 `.railwait/local-package`에 보존하므로 이미지 묶음의 복사본을 위한 여유 공간도 필요합니다.
+
+관리형 설치에서는 웹의 **설정 → 로그·진행 상태 → 앱 업데이트** 또는 `railwait update`를 사용합니다.
+관리 서비스가 검증한 대상과 계획만 접수하며, 다운로드 → 새 작업 차단 → 기존 작업 종료 확인 →
+DB·설정 암호화 백업 및 복호화 검증 → 앱 교체 → health·digest 확인 → 작업 재개 순서로 실행합니다.
+브라우저가 끊겨도 호스트 관리 작업은 유지됩니다. 조회 오류를 성공으로 표시하지 않습니다.
+
+초기 자동 업데이트는 동일 DB revision·설정 schema, 동일 PostgreSQL·Redis 이미지와 릴리스가
+명시적으로 허용한 출발 버전으로 제한합니다. 실패·종료 대기 시간 초과 뒤 gate가 닫혀 있으면
+`railwait status`로 작업을 확인하고 원인을 해결해야 합니다. 자동 DB rollback·복구 명령은 아직 없으며
+`.railwait/backup.env`의 복구키와 Docker `backups` 볼륨의 암호화 백업을 보존합니다.
+
+기존 소스 설치는 아래 Git 절차를 유지합니다. 관리형 `adopt`가 없으므로 기존 경로에 CLI 설치를
+덮어쓰지 않습니다. Windows·macOS의 서비스는 로그인 세션과 Docker 실행에 의존합니다.
+
+2026-11-17 Windows amd64 검증용 패키지는 해당 Windows 작업 폴더
+`output/railwait-clean-install-20261117-hww6x3mo/amd64-local-package-v2`에 보존했습니다.
+명시적으로 신뢰할 공개키는 같은 작업 폴더의 `amd64-test-trust-key-v2.pub`이며 Mac ARM 패키지의
+공개키와 다릅니다. 이 공개키 파일의 SHA-256은
+`dabacd104740b0f46c3ee5a07108326672a5c9ce82fbc1047a33c4ab4d74acf7`입니다.
+최신 Windows CLI의 `package verify`는 서명·19서비스·11이미지·전체 archive를
+통과했습니다. 소스·빌드·패키지·정리 기록은 같은 폴더의 `source-verification-v2.json`,
+`package-build-receipt.json`, `package-verification-v2.json`, `package-cleanup-receipt.json`입니다.
+이 결과는 기존 Docker를 이용한 패키지 준비 검증이며 신규 Windows 설치·OS 로그인·HTTPS 최초 승인·
+관리자 등록·서비스 health·HKCU Run 재부팅 재개 검증을 포함하지 않습니다.
+
 ## 최근 운영 서버 배포 확인
 
 v1.3.1(작업 처리·일정 실행 Redis heartbeat와 설문형 공지 인식)은 11월 10일 22시대에 로컬(집컴)에

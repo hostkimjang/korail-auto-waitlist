@@ -34,6 +34,8 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"]
     )
     auto_create_schema: bool = False
+    railwait_management_dir: str | None = None
+    railwait_update_token_file: str | None = None
     experimental_rail_enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices("EXPERIMENTAL_RAIL_ENABLED", "ENABLE_EXPERIMENTAL_RAIL"),

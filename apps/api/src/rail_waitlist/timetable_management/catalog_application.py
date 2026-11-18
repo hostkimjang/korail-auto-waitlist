@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..domain import Provider
+from ..maintenance.admission import create_admitted_task
 from ..provider_adapters.tago import TagoClient
 from ..provider_contracts import ProviderUnavailable
 from .models import StationCatalogCache
@@ -315,7 +316,7 @@ class StationCatalogService:
             if self._closed:
                 raise ProviderUnavailable("station catalog service is shutting down")
             if self._refresh_task is None or self._refresh_task.done():
-                self._refresh_task = asyncio.create_task(self._refresh_or_wait())
+                self._refresh_task = create_admitted_task(self._refresh_or_wait())
             return self._refresh_task
 
     async def _refresh_or_wait(self) -> StationCatalogSnapshot | None:

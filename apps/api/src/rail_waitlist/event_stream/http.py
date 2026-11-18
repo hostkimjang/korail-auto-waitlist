@@ -12,6 +12,7 @@ from sqlalchemy import select
 from ..auth import require_admin
 from ..config import get_settings
 from ..database import SessionFactory
+from ..maintenance.gate import MaintenanceGate
 from ..outbox_management.models import OutboxEvent
 from .schemas import EventRead
 
@@ -50,7 +51,7 @@ async def _stream_events(
     last_event_id: str | None,
 ) -> AsyncIterator[str]:
     cursor_time, cursor_id = await _initial_event_cursor(last_event_id)
-    while not await request.is_disconnected():
+    while not await request.is_disconnected() and not MaintenanceGate.configured().is_closed():
         async with SessionFactory() as session:
             query = select(OutboxEvent).order_by(OutboxEvent.created_at, OutboxEvent.id).limit(100)
             if cursor_time is not None:

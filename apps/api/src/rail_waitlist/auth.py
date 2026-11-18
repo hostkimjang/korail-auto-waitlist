@@ -10,14 +10,18 @@ from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
-from argon2.low_level import Type
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .admin_auth.account_application import (
+    add_initial_account,
+    count_accounts,
+    hash_password,
+    password_hasher,
+)
 from .admin_auth.models import AdminAccount, AdminSession
 from .admin_auth.schemas import AuthStatus, LoginResult, UsernamePasswordCredentials
 from .config import Settings, get_settings
@@ -36,7 +40,6 @@ SessionDependency = Annotated[AsyncSession, Depends(get_session)]
 
 # PasswordHasher uses Argon2id by default. The dummy hash makes unknown-user and wrong-password
 # paths perform the same expensive verification operation without storing a second account.
-password_hasher = PasswordHasher(type=Type.ID)
 DUMMY_PASSWORD_HASH = password_hasher.hash("not-a-real-account-password")
 
 
@@ -205,14 +208,6 @@ def prepare_session(session: AsyncSession) -> tuple[AdminSession, str, str]:
     return record, sign_session_token(raw), csrf
 
 
-async def count_accounts(session: AsyncSession) -> int:
-    return int(await session.scalar(select(func.count()).select_from(AdminAccount)) or 0)
-
-
-async def hash_password(password: str) -> str:
-    return await asyncio.to_thread(password_hasher.hash, password)
-
-
 async def verify_password(password_hash: str, password: str) -> bool:
     try:
         return bool(await asyncio.to_thread(password_hasher.verify, password_hash, password))
@@ -250,12 +245,7 @@ async def register(
     if not get_settings().auth_initial_registration_enabled:
         raise HTTPException(403, "initial administrator registration is disabled")
 
-    account = AdminAccount(
-        singleton_slot=1,
-        username=data.username,
-        password_hash=await hash_password(data.password),
-    )
-    session.add(account)
+    await add_initial_account(session, data)
     admin_session, signed_token, csrf = prepare_session(session)
     try:
         await session.commit()

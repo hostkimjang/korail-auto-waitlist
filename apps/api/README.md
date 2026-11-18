@@ -26,12 +26,46 @@
   `false`로 되돌리고 API 컨테이너를 재시작해야 합니다. 이미 계정이 있으면 설정값과 무관하게
   추가 등록은 `409`로 차단됩니다.
 - ID는 앞뒤 공백 제거와 소문자 정규화 후 저장하고, 비밀번호는 평문이 아닌 Argon2id hash만 저장합니다.
+- 설치 CLI는 migration이 끝난 API 이미지에서 `python -m rail_waitlist.admin_auth.bootstrap`을
+  실행해 공개 등록 화면을 열지 않고 최초 관리자를 만듭니다. UTF-8 JSON 객체의 `username`과 `password`를
+  표준입력으로 전달하며 입력은 4,096바이트까지 허용합니다. 웹 등록과 같은 자격증명 검증·정규화·Argon2id
+  hash·단일 관리자 제약을 사용하고 세션은 만들지 않습니다. 표준출력은
+  `{"status":"created"}` 또는 `{"status":"already_configured"}` 한 줄이며, 기존 관리자가 있으면
+  ID·비밀번호를 바꾸지 않고 성공합니다. 입력·DB 오류는 원문 없는 고정 오류와 비정상 종료로 처리합니다.
+  이 명령은 스키마를 만들거나 철도사 lifecycle을 실행하지 않습니다. 비밀번호를 명령행 인자나 shell 기록에
+  넣지 말고 설치 CLI의 숨김 입력을 사용하세요.
+- 설치 재개 시에는 정확히 `{"check_only":true}`만 전달해 읽기 전용으로 등록 여부를 확인할 수 있습니다.
+  등록돼 있으면 `already_configured`, 없으면 `not_configured` 상태와 종료 코드 0을 반환하므로
+  DB 오류와 미등록을 구분합니다. 계정 생성 입력은 `username`·`password` 두 필드만 허용합니다.
 - 등록과 세션 생성은 한 트랜잭션으로 처리하며, 이미 관리자가 있거나 동시 등록이 충돌하면 `409`로
   닫습니다. 기존 passkey 설치를 업그레이드한 경우 새 관리자 계정을 최초 1회 등록해야 합니다.
 - 세션 쿠키 `rail_admin_session`은 random+HMAC 서명, HttpOnly, Secure, SameSite=Strict입니다.
 - 상태 변경 요청은 허용된 `Origin`과 `rail_csrf` 쿠키 값을 담은 `X-CSRF-Token` 헤더가 필요합니다.
 - `AUTH_ALLOWED_ORIGINS`, `AUTH_SESSION_SECRET`을 실제 도메인에 맞게
   설정해야 하며, TLS가 없는 개발 환경에서만 `AUTH_COOKIE_SECURE=false`를 사용합니다.
+
+## 관리형 설치와 유지보수 gate
+
+설치 CLI가 제공하는 `RAILWAIT_MANAGEMENT_DIR`가 없으면 기존 API·worker 동작을 유지합니다.
+설정돼 있으면 `control/maintenance.json`의 schema 1·closed·generation을 확인하고,
+`gate/operation.lock`의 POSIX 공유 잠금을 실제 작업이 끝날 때까지 보유합니다. 파일 누락·잘못된
+형식·잠금 접근 실패는 새 작업을 닫습니다. 관리 서비스만 제어 파일을 교체하며 API는 읽기 전용입니다.
+예약 결과나 DB의 `UNKNOWN`을 초기화하지 않습니다.
+
+유지보수 중에는 health·로그인·업데이트 관리 요청을 허용하고 일반 API는 `503 maintenance_in_progress`를
+반환합니다. SSE는 다음 poll에서 끝나며, 분리된 시간표·역 카탈로그·sidecar 작업과 취소 뒤 계속 실행되는
+SRT 스레드도 잠금에 포함합니다. 세션 관리자는 각 startup·주기 실행을 따로 승인받습니다.
+
+컨테이너 안에서 `python -m rail_waitlist.maintenance --status`를 실행하면 schema·closed·generation·drained를
+JSON으로 반환합니다. `drained`는 컨테이너 내부의 비차단 배타 잠금으로 확인합니다. Windows·macOS 호스트의
+잠금으로 대체하지 않습니다. 현재 DB revision은 별도 `--database-revision` 명령으로 읽으며,
+DB 조회·다중 revision·파싱 오류는 원문 없는 오류와 비정상 종료로 처리합니다.
+
+관리자 인증과 CSRF를 적용한 `GET/POST /api/v1/system/update`,
+`GET /api/v1/system/update/jobs/{id}`는 관리 서비스와 파일 IPC로 연결됩니다. API는 heartbeat 10초·catalog
+30분 유효성을 확인하고, POST의 target·plan이 현재 정보와 같을 때만 인증된 요청 파일을 원자적으로
+만듭니다. 인증 token은 API 전용 `RAILWAIT_UPDATE_TOKEN_FILE`로 읽고 응답·로그에 포함하지 않습니다.
+설치되지 않은 관리 서비스, 오래된 정보, 달라진 계획은 업데이트 실행을 허용하지 않습니다.
 
 ## 개발
 

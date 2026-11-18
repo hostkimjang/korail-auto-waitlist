@@ -8,7 +8,7 @@ test_id="$$-${RANDOM}"
 network_name="rail-backup-restore-test-${test_id}"
 volume_name="rail-backup-restore-test-${test_id}"
 postgres_name="rail-backup-restore-postgres-${test_id}"
-backup_image="rail-waitlist-backup:local"
+backup_image="railwait-backup-contract:${test_id}"
 database_name="restore_contract"
 database_user="restore_contract"
 database_password="restore-contract-password"
@@ -17,6 +17,7 @@ cleanup() {
     docker rm --force "$postgres_name" >/dev/null 2>&1 || true
     docker volume rm "$volume_name" >/dev/null 2>&1 || true
     docker network rm "$network_name" >/dev/null 2>&1 || true
+    docker image rm "$backup_image" >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT
@@ -83,6 +84,25 @@ backup_file="$(
         "$backup_image" once
 )"
 [[ "$backup_file" == /backups/*.dump.age ]] || fail '암호화 백업 파일 경로가 잘못됐습니다.'
+
+# Exercise the updater's database + settings snapshot before touching source data.
+update_job_id="0123456789abcdef0123456789abcdef"
+export BACKUP_AGE_IDENTITY_BASE64="$(printf '%s\n' "$identity" | base64 | tr -d '\r\n')"
+update_result="$(
+    printf '%s\n' 'TAGO_SERVICE_KEY=synthetic-test-value' | \
+    docker run --rm -i --read-only --tmpfs /tmp:size=128m,mode=1777 \
+        --cap-drop ALL --security-opt no-new-privileges:true \
+        --network "$network_name" \
+        --mount "type=volume,src=${volume_name},dst=/backups" \
+        --env "PGHOST=${postgres_name}" --env 'PGPORT=5432' \
+        --env "PGDATABASE=${database_name}" --env "PGUSER=${database_user}" \
+        --env "PGPASSWORD=${database_password}" --env "BACKUP_AGE_RECIPIENT=${recipient}" \
+        --env BACKUP_AGE_IDENTITY_BASE64 --env "RAILWAIT_UPDATE_JOB_ID=${update_job_id}" \
+        --entrypoint /scripts/update-backup.sh "$backup_image"
+)"
+[[ "$update_result" == '{"schema":1,"backup_verified":true}' ]] || fail '업데이트 백업 검증 실패'
+unset BACKUP_AGE_IDENTITY_BASE64
+backup_file="/backups/update-${update_job_id}.dump.age"
 
 docker exec --env "PGPASSWORD=${database_password}" "$postgres_name" \
     psql --username "$database_user" --dbname "$database_name" \

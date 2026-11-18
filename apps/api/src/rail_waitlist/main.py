@@ -31,6 +31,9 @@ from .health.schemas import HealthResponse
 from .heartbeat import RedisHeartbeatReader
 from .korail_browser_seat_source import KorailBrowserSeatSource
 from .korail_sidecar.provider_cooldown import RedisProviderCooldown
+from .maintenance.gate import MaintenanceClosed, MaintenanceGate
+from .maintenance.http import router as maintenance_router
+from .maintenance.middleware import MaintenanceMiddleware
 from .metrics import HTTP_DURATION, HTTP_REQUESTS, OUTBOX_PENDING
 from .notice_observations import RedisNoticeObservationReader
 from .notification_management.http import router as notification_management_router
@@ -71,7 +74,15 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     if settings.auto_create_schema:
         await create_schema()
-    preload_task = asyncio.create_task(app.state.station_catalog_service.preload())
+
+    async def preload_when_admitted():
+        try:
+            with MaintenanceGate.configured().operation():
+                await app.state.station_catalog_service.preload()
+        except MaintenanceClosed:
+            return
+
+    preload_task = asyncio.create_task(preload_when_admitted())
     provider_session_manager_task = asyncio.create_task(
         run_provider_session_manager(
             app.state.provider_runtime_session_factory,
@@ -108,12 +119,20 @@ def create_app(
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
+    @app.exception_handler(MaintenanceClosed)
+    async def maintenance_closed(request: Request, error: MaintenanceClosed) -> Response:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "maintenance_in_progress"},
+            headers={"Cache-Control": "no-store", "Retry-After": "5"},
+        )
+
     @app.exception_handler(RequestValidationError)
     async def redact_provider_account_validation_error(
         request: Request,
         error: RequestValidationError,
     ) -> Response:
-        if request.url.path.startswith("/api/v1/provider-accounts/"):
+        if request.url.path.startswith(("/api/v1/provider-accounts/", "/api/v1/system/update")):
             return JSONResponse(
                 status_code=422,
                 content={"detail": "request_validation_failed"},
@@ -197,7 +216,9 @@ def create_app(
             "X-Rail-Bridge-Challenge",
         ],
     )
+    app.add_middleware(MaintenanceMiddleware)
     app.include_router(auth_router)
+    app.include_router(maintenance_router)
     app.include_router(browser_bridge_router)
     app.include_router(browser_companion_admin_router)
     app.include_router(notification_management_router)

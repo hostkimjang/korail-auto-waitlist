@@ -1,0 +1,7 @@
+.system-update-settings { border-bottom: 1px solid var(--line, #dce3eb); padding-bottom: 24px; margin-bottom: 28px; min-width: 0; }
+.system-update-settings p { overflow-wrap: anywhere; }
+.system-update-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+.system-update-actions button { min-height: 44px; white-space: normal; }
+.system-update-consent { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; cursor: pointer; }
+.system-update-consent input { flex: 0 0 auto; margin-top: 4px; width: 20px; height: 20px; }
+.system-update-consent span { min-width: 0; overflow-wrap: anywhere; }

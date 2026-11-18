@@ -30,6 +30,7 @@ import { StatusPill } from "../../shared/ui/StatusPill";
 import { NotificationChannelSettings } from "./NotificationChannelSettings";
 import { ProviderAccountSettings } from "./ProviderAccountSettings";
 import type { ProviderRuntimeStatusLoadState } from "./providerRuntimeStatus";
+import { SystemUpdateSettings } from "./SystemUpdateSettings";
 import { SystemStatusDashboard } from "./SystemStatusDashboard";
 import { TimetableRefreshSettings } from "./TimetableRefreshSettings";
 
@@ -206,7 +207,7 @@ export function SettingsPage({
               </button>
             </>
           )}
-          {section === "system" && <SystemStatusDashboard demo={demo} />}
+          {section === "system" && <><SystemUpdateSettings demo={demo} /><SystemStatusDashboard demo={demo} /></>}
         </section>
       </div>
     </div>

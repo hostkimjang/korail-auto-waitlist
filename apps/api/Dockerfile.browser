@@ -1,4 +1,8 @@
+FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
+
 FROM mcr.microsoft.com/playwright/python:v1.55.0-noble AS browser-base
+
+COPY --from=uv /uv /usr/local/bin/uv
 
 ARG TARGETARCH
 
@@ -6,6 +10,8 @@ ARG TARGETARCH
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never \
     PATH="/opt/venv/bin:$PATH" \
     LANGUAGE=ko_KR:ko \
     KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=/usr/bin/google-chrome
@@ -40,7 +46,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY scripts/start-korail-browser-test.sh /usr/local/bin/start-korail-browser-test
 COPY scripts/start-korail-browser-profile-bootstrap.sh /usr/local/bin/start-korail-browser-profile-bootstrap
@@ -49,7 +55,7 @@ RUN chmod 0755 \
         /usr/local/bin/start-korail-browser-test \
     && install -d -o pwuser -g pwuser -m 0700 \
         /var/lib/rail-waitlist/korail-browser-profile \
-    && python -m pip install --no-cache-dir ".[browser]"
+    && uv sync --locked --no-dev --extra browser --no-editable --no-cache
 
 FROM browser-base AS test
 
@@ -59,7 +65,7 @@ ENV KORAIL_BROWSER_TEST_DISABLE_SANDBOX=true \
 
 USER root
 COPY tests ./tests
-RUN python -m pip install --no-cache-dir ".[browser,test]"
+RUN uv sync --locked --no-dev --extra browser --extra test --no-editable --no-cache
 USER pwuser
 CMD ["pytest", "tests/test_korail_browser_automation.py", "tests/test_korail_browser_mode_smoke.py", "tests/test_korail_chromium_launch.py", "tests/test_korail_direct_cdp.py", "tests/test_korail_login_failure_transport.py", "tests/test_korail_pydoll_auth_actor.py", "tests/test_korail_pydoll_browser.py", "tests/test_korail_pydoll_chromium_lifecycle.py", "tests/test_korail_pydoll_login_driver.py", "tests/test_korail_sidecar_runtime.py", "-q", "-p", "no:cacheprovider"]
 

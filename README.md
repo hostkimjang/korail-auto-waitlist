@@ -69,6 +69,11 @@ npm run dev
 
 ## 설치
 
+Windows·macOS·Linux용 간편 CLI 설치와 웹 업데이트 경로를 추가했습니다. 공식 서명 릴리스가
+게시된 뒤에는 `railwait install`로 설치하고, 웹의 **설정 → 로그·진행 상태 → 앱 업데이트**에서
+업데이트할 수 있습니다. 현재 구현 범위와 공개 전 검증 항목은 [CLI 안내](apps/cli/README.md)에
+있습니다. 기존 Git 설치를 자동으로 이전하는 기능은 아직 제공하지 않습니다.
+
 Docker Compose로 실행합니다. 처음 설치하는 방법은 [시작하기](docs/GETTING_STARTED.md)에 순서대로 정리했습니다.
 
 Linux Bash:

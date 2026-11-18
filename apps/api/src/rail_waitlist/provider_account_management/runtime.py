@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..domain import Provider
 from ..korail_sidecar.provider_cooldown import ProviderCooldownDeferred as _ProviderCooldownDeferred
+from ..maintenance.gate import MaintenanceClosed as _MaintenanceClosed
+from ..maintenance.gate import MaintenanceGate as _MaintenanceGate
 from .application import (
     SUPPORTED_ACCOUNT_PROVIDERS,
     clear_provider_protection_halt,
@@ -837,11 +839,17 @@ async def maintain_provider_sessions(
     while True:
         await asyncio.sleep(interval_seconds)
         try:
-            await recover_provider_sessions_once(
-                session_factory,
-                verifier,
-                registry,
-            )
+            with _MaintenanceGate.configured().operation():
+                if not registry.completed:
+                    await prewarm_provider_sessions(session_factory, verifier, registry)
+                else:
+                    await recover_provider_sessions_once(
+                        session_factory,
+                        verifier,
+                        registry,
+                    )
+        except _MaintenanceClosed:
+            continue
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 -- database/provider details stay redacted.
@@ -857,7 +865,11 @@ async def run_provider_session_manager(
 ) -> None:
     """Warm stored accounts at startup, then keep each enabled session reusable."""
 
-    await prewarm_provider_sessions(session_factory, verifier, registry)
+    try:
+        with _MaintenanceGate.configured().operation():
+            await prewarm_provider_sessions(session_factory, verifier, registry)
+    except _MaintenanceClosed:
+        pass
     await maintain_provider_sessions(
         session_factory,
         verifier,

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from inspect import iscoroutine
+
+from .maintenance.gate import MaintenanceClosed, MaintenanceGate
 
 
 async def run_task_isolated(
@@ -12,7 +15,18 @@ async def run_task_isolated(
 ) -> int:
     """Finish engine cleanup before the caller closes its task event loop."""
 
+    started = False
     try:
-        return await operation
-    finally:
+        with MaintenanceGate.configured().operation():
+            started = True
+            try:
+                return await operation
+            finally:
+                await dispose_engine()
+    except MaintenanceClosed:
+        if started:
+            raise
+        if iscoroutine(operation):
+            operation.close()
         await dispose_engine()
+        return 0

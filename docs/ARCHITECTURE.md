@@ -32,6 +32,80 @@ flowchart LR
 
 Docker Compose는 위 서비스를 하나의 배포 단위로 실행합니다. 웹과 API만 외부 요청을 받고, 데이터베이스와 작업 큐는 내부 네트워크에 둡니다.
 
+## 관리형 설치의 업데이트 경계
+
+CLI의 `internal/terminal`은 한국어 단계·입력 안내·실제 경과 시간과 일반 텍스트 출력을 담당한다.
+`internal/setup`은 OS별 도구 탐색·기존 Docker 환경 재사용·공식 패키지 다운로드·서명 검증·네이티브 설치와
+Windows WSL 준비를, `internal/access`는 Tailscale 연결 계획·기존 경로 보존·부분 실패 확인을 맡는다.
+명령의 마법사는 이 경계를 조합하며
+비밀 입력과 설치 정책을 렌더러에 전달하지 않는다. HTTPS 접속 설정 변경은 릴리스 변경과 같은
+백업·유지보수 gate·재시작 절차를 사용하되 허용 origin·보안 쿠키 세 항목만 변경한다.
+
+필수 도구 설치는 `DependencyPlan`의 고정 공식 HTTPS 주소와 예상 배포자를 사용한다. `InstallDependency`는
+현재 사용자 전용 임시 폴더에서 파일을 받고 macOS 코드·패키지 서명 또는 Windows Authenticode를 검증한 뒤
+OS 설치 창을 호출한다. 기존 설치가 발견되면 덮어쓰지 않는다. `InstallResult`의 `Installed`,
+`RebootRequired`, `NeedsUserAction`은 설치 종료·재부팅·권한 또는 로그인 조치를 구분하며 실제 준비 상태는
+별도로 다시 검사한다. 시스템 설치가 시작된 후 취소되면 해당 프로세스 종료까지 기다려 설치 파일을 유지하고,
+DMG 연결 해제가 실패하면 경로를 보존해 보고한다. Linux·비대화형 실행에는 공식 준비 안내를 제공한다.
+
+정상 Lima·Colima 등 기존 로컬 Docker의 context·socket을 재사용하고 전역 context를 변경하지 않는다.
+설치별 프로젝트·볼륨·포트를 분리하며 Tailscale도 기존 노드와 관련 없는 Serve·TCP 경로를 보존한다.
+Tailscale의 `NeedsLogin` 상태에서만 옵션 없는 `up`을 실행해 기존 프로필을 유지한다. `login`으로 프로필을
+전환하거나 이미 연결된 노드에 `up`을 재실행하지 않으며 초기화·오프라인 상태는 재확인·연결 복구로 처리한다.
+첫 Serve 설정의 HTTPS 승인 요구는 해당 적용 명령의 제한된 출력에서 공식 `/f/serve` 주소만 식별한다.
+일회용 주소를 오류 문자열·JSON·상태 파일로 내보내지 않고 대화형 브라우저 인계에만 사용한다.
+기존 경로가 바뀌지 않았고 생성 결과도 불명확하지 않을 때에만 최대 5분간 같은 계획을 재검증하며 대기한다.
+필수 도구의 OS 서명 검증과 Railwait 배포 묶음의 Ed25519 검증은 별도 신뢰 경계다.
+
+첫 로그인은 `tailscale up`의 stdout·stderr를 제한된 메모리 버퍼에서 처리하며 공식 `/a/…` HTTPS 주소만
+검증해 브라우저로 한 번 인계한다. 원문 출력은 전달하지 않는다. 초기화·기기 승인·일시 오프라인은 5분의
+deadline 안에서 상태만 확인하며 기존 노드의 인증을 다시 시작하지 않는다. Docker도 최초 실행 뒤 최대
+5분 확인하고 초기 기본 context에서 Docker Desktop으로 준비된 경우만 탐색 결과 전환을 허용한다.
+
+Windows 재부팅 재개는 현재 사용자의 HKCU `Run`과 비밀값 없는 보호된 옵션 파일을 사용한다.
+표준 사용자에게도 적용되도록 `RunOnce`에 의존하지 않으며, 자기 명령과 일치하는 등록은 소비 시 한 번
+제거한다. `resume.lock` 커널 잠금으로 등록·소비를 직렬화하고 기존 기록·다른 등록은 검증 없이 덮어쓰지
+않는다. 취소·등록 실패는 이번 시도에서 만든 자원만 정리한다. 잠금 파일은 다음 실행의 동기화용으로
+보존하며 관리자 입력은 원문을 복사하지 않고 기존 보호 파일 경로만 보존한다.
+등록 전에 명령의 UTF-16 260단위와 옵션 JSON의 32KiB 제한을 검사한다. 소비 시 자기 명령의 등록을
+먼저 제거하므로 손상된 상태가 로그인마다 반복 실행되지 않으며, 손상된 원본 파일은 복구용으로 보존한다.
+
+초기 키 준비는 `internal/install/initial_secrets.go`와 `push_config.go`가 소유한다. 내부 키 6종은 기본적으로
+각각 별도 난수를 생성하며, 보호된 JSON의 `app_secrets` 또는 마법사의 숨김 입력으로 직접 지정할 수도 있다.
+허용 이름은 `POSTGRES_PASSWORD`, `SECRET_ENCRYPTION_KEY`, `AUTH_SESSION_SECRET`,
+`KORAIL_BROWSER_ADAPTER_TOKEN`, `SRT_PROVIDER_ADAPTER_TOKEN`, `KORAIL_PROVIDER_COOLDOWN_REDIS_PASSWORD`이며
+직접 입력은 URL-safe 영문·숫자·`-`·`_` 32~1024자로 제한한다. VAPID는 JSON `webpush`의
+`public_key`·`private_key`·`subject`를 받거나 P-256 키 쌍을 자동 생성한다. raw 키의 base64url 형식,
+유효한 32바이트 비밀키와 대응 공개점의 일치, 호스트만 담은 HTTPS 또는 mailto subject를 검증한다.
+새 설치의 자동 subject는 계획된 HTTPS 주소에서 포트·경로를 제외한 호스트 주소이며 로컬 전용이면
+`https://github.com`이다. 실제 운영자 연락처는 수동으로 지정할 수 있다. 기존 PEM·DER 키도 표현을
+보존하고 subject 호환성만 보완한다. 외부 TAGO 키는 발급하지 않는다.
+
+재개는 기존 내부 키와 VAPID 키를 유지하며 회전 요청은 거절한다. 기존 설치에 누락된 VAPID 설정은
+`configure_push` 후보를 보호된 파일에 보존하고 기존 계획·drain·암호화 백업·재생성·health 경계로 적용한다.
+후보는 VAPID 세 항목 외의 변경을 거절하고 이미 존재하는 키 쌍도 교체하지 않는다. 기존 키가 한쪽만 있거나
+손상됐으면 자동 복구로 덮어쓰지 않는다. 키 준비와 브라우저·OS 알림 권한, 실제 전달 결과는 별도 상태다.
+
+재개 명령은 `wizard_resume.go`가 실제 실행 파일과 설치 옵션에서 구성한다. 파일 인자는 절대경로로
+유지하고 POSIX·PowerShell별로 문자열을 인용한다. 입력 JSON의 경로만 보존하며 내용은 명령에 넣지 않는다.
+앱 설치 기록 전에는 상태 조회 명령을 생략하고 stdin JSON은 다시 전달하도록 안내한다.
+
+CLI와 호스트 관리 프로세스는 Go 단일 바이너리의 별도 모드다. 웹 API는 Docker socket·shell에 접근하지
+않고, 고정 DTO의 업데이트 요청 파일만 쓰며 관리자 인증·CSRF를 적용한다. 관리 프로세스는 서명된
+릴리스·호환성·만료된 계획 여부를 다시 검사한다. 배포 묶음은 Compose의 build를 제거하고 이미지 digest를
+고정한다. API만 요청 디렉터리와 인증 파일을 받고, 작업자는 maintenance control·operation lock만 읽는다.
+
+로컬 패키지는 공식 릴리스와 별도 형식·검증키를 사용한다. 사용자가 지정한 공개키로 manifest와
+이미지 archive를 검증하고 Docker에 태그 없이 적재하며, Compose는 서명된 이미지 식별자와
+`pull_policy: never`를 사용한다. 설치 원본과 키를 보존해 재개할 수 있지만 공식 업데이트로
+전환하지는 않는다. 소스 작업 트리의 해시와 dirty 여부는 패키지 생성 시점의 출처이며,
+기존 이미지가 그 소스에서 빌드됐다는 증명과 구분한다.
+
+공유 Linux `flock`은 입장한 HTTP·worker·sidecar·background 작업의 수명 동안 유지된다. 업데이트는
+새 작업을 막은 뒤 같은 파일에서 배타 잠금을 획득할 수 있는지 확인하며, async 취소 후 살아 있는
+동기 thread·브라우저 작업도 종료 전까지 drain되지 않는다. 저장소·UNKNOWN·cooldown 기록은 초기화하지 않는다.
+자세한 목표 설계와 현재 한계는 [설치·업데이트 설계](INSTALL_UPDATE_DESIGN.md)를 따른다.
+
 ## 구성 요소
 
 ### 웹 앱

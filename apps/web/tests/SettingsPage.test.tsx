@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -80,6 +80,27 @@ describe("settings page", () => {
 
     expect(onLogout).toHaveBeenCalledOnce();
     expect(screen.getByText("비밀번호는 Argon2id 단방향 해시로 저장됩니다.")).toBeTruthy();
+  });
+
+  it("places server settings before the log section and keeps the demo free of server calls", async () => {
+    const user = userEvent.setup();
+    const onSectionChange = vi.fn();
+    const fetcher = vi.spyOn(globalThis, "fetch");
+    render(<SettingsPage {...settingsPageProps({ demo: true, onSectionChange })} />);
+
+    const labels = within(screen.getByRole("navigation", { name: "설정 메뉴" }))
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(labels.indexOf("서버 설정")).toBeGreaterThan(-1);
+    expect(labels.indexOf("서버 설정")).toBe(labels.indexOf("로그·진행 상태") - 1);
+
+    await user.click(screen.getByRole("button", { name: /서버 설정/ }));
+    expect(onSectionChange).toHaveBeenCalledWith("server");
+    expect(screen.getByRole("heading", { name: "서버 설정", level: 2 })).toBeTruthy();
+    expect(screen.getByText("설치한 서버의 .env 설정을 바꾸고 필요한 서비스만 다시 시작합니다.")).toBeTruthy();
+    expect(screen.getByText("체험 화면에서는 서버 설정을 바꾸지 않습니다.")).toBeTruthy();
+    expect(fetcher).not.toHaveBeenCalled();
+    fetcher.mockRestore();
   });
 
   it("passes a secret-bearing editor submission to the App callback without hydrating it", async () => {

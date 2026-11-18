@@ -1,0 +1,442 @@
+.server-settings {
+  min-width: 0;
+}
+
+.server-settings p {
+  overflow-wrap: anywhere;
+}
+
+.server-settings code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.server-settings-form {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+/* Fieldsets default to min-content width, which would overflow narrow screens. */
+.server-settings-group {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.server-settings-group > legend {
+  padding: 0 6px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.server-settings-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.server-settings-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.server-settings-switch-label {
+  min-width: 0;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.server-settings-switch .switch {
+  flex: 0 0 auto;
+}
+
+.server-settings-input {
+  min-width: 0;
+}
+
+.server-settings-input input {
+  min-height: 48px;
+}
+
+.server-settings-secret-state {
+  margin: 0;
+  font-size: 14px;
+}
+
+.server-settings-staged {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.server-settings-staged p {
+  flex: 1 1 200px;
+}
+
+.server-settings-error {
+  margin: 0;
+  color: #9d3f3f;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.server-settings-warning {
+  margin: 0;
+  color: #76511b;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.server-settings-app-links {
+  display: grid;
+  gap: 12px;
+}
+
+.server-settings-app-link {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e3e9ec;
+  border-radius: 10px;
+  background: #fbfcfd;
+}
+
+.server-settings-app-link > strong {
+  font-size: 15px;
+}
+
+.server-settings-app-link .server-settings-switch-label {
+  color: #42566e;
+  font-weight: 650;
+}
+
+.server-settings-review {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.server-settings-review h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.server-settings-review ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.server-settings-review li {
+  overflow-wrap: anywhere;
+}
+
+.server-settings-scope {
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.server-settings-scope.is-app {
+  color: #76511b;
+}
+
+.server-settings-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.server-settings-consent input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+}
+
+.server-settings-consent span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.server-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.server-settings-actions .button {
+  min-height: 44px;
+  white-space: normal;
+}
+
+.server-settings-advanced {
+  min-width: 0;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.server-settings-advanced > summary {
+  min-height: 44px;
+  padding: 12px 18px;
+  box-sizing: border-box;
+  font-weight: 800;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.server-settings-advanced > summary:focus-visible {
+  outline: 3px solid rgba(13, 139, 132, 0.28);
+  outline-offset: 2px;
+}
+
+.server-settings-advanced-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 18px 18px;
+}
+
+.server-settings-legend {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.server-settings-legend p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.server-settings-key-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.server-settings-key-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.server-settings-key-list li {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.server-settings-key-list code {
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #eef2f4;
+  font-weight: 600;
+}
+
+.server-settings-raw-label {
+  color: #516277;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+/* wrap="off" keeps .env lines intact; long lines scroll inside the editor, not the page. */
+.server-settings-raw {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-height: 280px;
+  box-sizing: border-box;
+  padding: 12px;
+  overflow: auto;
+  color: var(--ink);
+  border: 1px solid #cfd9df;
+  border-radius: 10px;
+  background: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  white-space: pre;
+}
+
+.server-settings-raw:read-only {
+  background: var(--surface-soft);
+}
+
+.server-settings-guidance {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.server-settings-guidance p,
+.server-settings-notice {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.server-settings-notice {
+  margin-bottom: 12px;
+  font-weight: 750;
+}
+
+.server-settings-command {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.server-settings-command-label {
+  grid-column: 1 / -1;
+  color: #516277;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+/* Long one-line commands wrap anywhere so they never widen the page; user-select keeps copy easy. */
+.server-settings-command > code {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #f4f8fa;
+  background: #102a3a;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
+.server-settings-command-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.server-settings-command-status:empty {
+  display: none;
+}
+
+.server-settings-reload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 16px;
+}
+
+.server-settings-reload p {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
+.server-settings-status {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.server-settings-status:empty {
+  margin-top: 0;
+}
+
+.server-settings-status p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.server-settings-outcome {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  font-weight: 700;
+}
+
+.server-settings-outcome.is-success {
+  color: #0b5f5b;
+  border-color: #b8ddd9;
+  background: var(--teal-soft);
+}
+
+.server-settings-outcome.is-warning {
+  color: #76511b;
+  border-color: #ead9b5;
+  background: #fff8ea;
+}
+
+.server-settings-outcome.is-error {
+  color: #8f3434;
+  border-color: #efc9c9;
+  background: #fff4f4;
+}
+
+.server-settings-submit-error {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.server-settings-submit-error > p {
+  margin: 0;
+}
+
+@media (max-width: 480px) {
+  .server-settings-group {
+    padding: 12px 12px 14px;
+  }
+
+  .server-settings-advanced-body {
+    padding: 0 12px 14px;
+  }
+
+  .server-settings-review {
+    padding: 14px;
+  }
+
+  .server-settings-command {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .server-settings-command .button {
+    justify-self: start;
+  }
+
+  .server-settings-actions .button {
+    flex: 1 1 140px;
+  }
+}

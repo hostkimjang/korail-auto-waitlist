@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 
+import { SETTINGS_FIELD_CONTRACT } from "../src/api/systemSettings";
 import { selectStation } from "./support/stationSelection";
 
 interface ViewportCase {
@@ -851,5 +852,74 @@ for (const viewport of viewportCases) {
     await expect(region.getByRole("button", { name: "업데이트 확인" })).toBeFocused();
     const widths = await page.evaluate(() => ({ client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
     expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+  });
+}
+
+function serverSettingsSnapshot(): Record<string, unknown> {
+  const longValue = "x".repeat(180);
+  return {
+    schema: 1, managed: true, manager_available: true, available: true, reason: "ready",
+    revision: "a".repeat(64),
+    fields: SETTINGS_FIELD_CONTRACT.map(({ key, kind, scope }) => (kind === "secret"
+      ? { key, kind, scope, value: null, configured: true }
+      : { key, kind, scope, value: kind === "boolean" ? "false" : "", configured: kind === "boolean" })),
+    raw: `COMPOSE_PROJECT_NAME=railwait\nPOSTGRES_PASSWORD=••••••\nLONG_VALUE=${longValue}\n`,
+    secret_keys: ["POSTGRES_PASSWORD", "TAGO_SERVICE_KEY"],
+    locked_keys: ["COMPOSE_PROJECT_NAME", "RAILWAIT_INSTALL_PROFILE_WITH_A_LONG_NAME"],
+  };
+}
+
+for (const viewport of viewportCases) {
+  test(`${viewport.name} keeps server settings within bounds and keyboard operable`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const telemetry = observeBrowser(page);
+    await installMockApi(page, telemetry);
+    await page.route("**/api/v1/system/settings", (route) => json(route, serverSettingsSnapshot()));
+    await page.goto("/");
+    await page.locator(usesCompactShell(viewport) ? ".bottom-nav .bottom-item" : ".side-nav .nav-item")
+      .filter({ hasText: "설정" }).click();
+    await page.getByRole("navigation", { name: "설정 메뉴" })
+      .getByRole("button", { name: "서버 설정" }).click();
+    const region = page.getByRole("region", { name: "서버 설정" });
+    await expect(region.getByRole("form", { name: "서버 설정 항목" })).toBeVisible();
+
+    await expectWithinViewport(page.locator(".settings-panel"), viewport.width, "settings panel");
+    const groups = region.locator(".server-settings-group");
+    await expect(groups).toHaveCount(4);
+    for (let index = 0; index < 4; index += 1) {
+      await expectWithinViewport(groups.nth(index), viewport.width, `server settings group ${index + 1}`);
+    }
+    const switchRows = region.locator(".server-settings-switch");
+    await expect(switchRows).toHaveCount(6);
+    for (let index = 0; index < 6; index += 1) {
+      await expectVisibleActionTarget(switchRows.nth(index), `server settings switch ${index + 1}`);
+    }
+
+    const linkSwitch = region.getByRole("switch", { name: "SRT 예매 홈 앱 연결" });
+    await linkSwitch.focus();
+    await page.keyboard.press("Space");
+    await expect(linkSwitch).toBeChecked();
+    await expect(region.getByText("버전을 입력하기 전까지 이 연결은 꺼진 상태로 동작합니다.")).toBeVisible();
+    await region.getByRole("textbox", { name: "SRT 예매 홈 검증한 앱 버전" }).fill("2.0.41");
+    await expect(region.getByText("웹 화면만 다시 시작합니다(몇 초). 진행 중인 대기에는 영향이 없습니다.")).toBeVisible();
+    const apply = region.getByRole("button", { name: "변경 적용" });
+    await expect(apply).toBeEnabled();
+    await expectWithinViewport(region.locator(".server-settings-review"), viewport.width, "server settings review");
+    await expectVisibleActionTarget(apply, "server settings apply action");
+    await expectVisibleActionTarget(region.getByRole("button", { name: "변경 취소" }), "server settings reset action");
+
+    await region.getByText("고급: .env 직접 편집").click();
+    const editor = region.getByRole("textbox", { name: ".env 원문" });
+    await expect(editor).toBeVisible();
+    await expectVisibleActionTarget(region.locator(".server-settings-advanced > summary"), "advanced editor summary");
+    await expectWithinViewport(region.locator(".server-settings-advanced"), viewport.width, "advanced editor");
+    await expectVisibleActionTarget(region.getByRole("button", { name: "원문 적용" }), "raw apply action");
+
+    const widths = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+    }));
+    expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+    expect(telemetry.pageErrors).toEqual([]);
   });
 }

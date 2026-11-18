@@ -6,6 +6,7 @@ import {
   GlobeSimple,
   LockKey,
   ShieldCheck,
+  SlidersHorizontal,
   User,
   WifiHigh,
 } from "@phosphor-icons/react";
@@ -30,6 +31,7 @@ import { StatusPill } from "../../shared/ui/StatusPill";
 import { NotificationChannelSettings } from "./NotificationChannelSettings";
 import { ProviderAccountSettings } from "./ProviderAccountSettings";
 import type { ProviderRuntimeStatusLoadState } from "./providerRuntimeStatus";
+import { ServerSettings } from "./ServerSettings";
 import { SystemUpdateSettings } from "./SystemUpdateSettings";
 import { SystemStatusDashboard } from "./SystemStatusDashboard";
 import { TimetableRefreshSettings } from "./TimetableRefreshSettings";
@@ -39,6 +41,7 @@ export type SettingsSection =
   | "notifications"
   | "display"
   | "security"
+  | "server"
   | "system";
 
 export interface SettingsPageProps {
@@ -72,6 +75,7 @@ const sections = [
   { id: "notifications", label: "알림 채널", icon: Bell },
   { id: "display", label: "화면 동작", icon: Clock },
   { id: "security", label: "보안", icon: LockKey },
+  { id: "server", label: "서버 설정", icon: SlidersHorizontal },
   { id: "system", label: "로그·진행 상태", icon: WifiHigh },
 ] as const;
 
@@ -207,6 +211,7 @@ export function SettingsPage({
               </button>
             </>
           )}
+          {section === "server" && <ServerSettings demo={demo} />}
           {section === "system" && <><SystemUpdateSettings demo={demo} /><SystemStatusDashboard demo={demo} /></>}
         </section>
       </div>

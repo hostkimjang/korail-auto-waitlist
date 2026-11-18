@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
 import { fetchSystemUpdate, fetchUpdateJob, submitSystemUpdate, type SystemUpdate, type UpdateJob } from "../../api/systemUpdate";
+import { managementAuthorizationError } from "./managementRequestErrors";
 
 const storageKey = "railwait-update-job";
 function rememberedJob(): string | null {
@@ -9,25 +10,10 @@ function rememberedJob(): string | null {
     return id && /^[a-f0-9]{32}$/.test(id) ? id : null;
   } catch { return null; }
 }
-function serverDetail(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null || !("detail" in payload)) return null;
-  return typeof payload.detail === "string" ? payload.detail : null;
-}
-// The API rejects state changes from an origin it does not trust and from an expired CSRF token
-// with 403. Each needs a different user action, so name it instead of a generic failure.
 function submissionError(cause: unknown): string {
-  if (cause instanceof ApiError) {
-    if (cause.status === 409) return "업데이트 계획이 바뀌었습니다. 정보를 새로 확인한 뒤 다시 실행해 주세요.";
-    if (cause.status === 401) return "로그인이 만료되었습니다. 다시 로그인한 뒤 업데이트해 주세요.";
-    if (cause.status === 403) {
-      const detail = serverDetail(cause.detail);
-      if (detail === "untrusted or missing Origin") {
-        return "지금 접속한 주소는 서버가 허용한 접속 주소가 아니어서 업데이트 요청이 거부되었습니다. 이 컴퓨터에서는 로컬 주소(127.0.0.1)로, 다른 기기에서는 원격 접속(HTTPS) 주소로 접속해 다시 실행해 주세요.";
-      }
-      if (detail === "CSRF validation failed") return "보안 확인 값이 만료되었습니다. 화면을 새로고침한 뒤 다시 실행해 주세요.";
-      return "서버가 업데이트 요청을 거부했습니다. 다시 로그인한 뒤 실행해 주세요.";
-    }
-  }
+  if (cause instanceof ApiError && cause.status === 409) return "업데이트 계획이 바뀌었습니다. 정보를 새로 확인한 뒤 다시 실행해 주세요.";
+  const rejection = managementAuthorizationError(cause, { request: "업데이트 요청", retryAfterLogin: "업데이트해 주세요." });
+  if (rejection !== null) return rejection;
   return "업데이트 요청을 확인하지 못했습니다. 다시 시도해도 같은 요청은 중복 실행하지 않습니다.";
 }
 export function useSystemUpdate(demo: boolean) {

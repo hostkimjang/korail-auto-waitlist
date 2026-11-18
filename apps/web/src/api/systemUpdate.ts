@@ -10,7 +10,18 @@ export interface SystemUpdate {
   reason: string;
 }
 export type UpdateJobState = "queued" | "running" | "succeeded" | "failed" | "deferred" | "recovery_required" | "rejected";
-export interface UpdateJob { id: string; state: UpdateJobState; stage: string }
+// Settings jobs reuse the update job record, so both families of manager error codes live here.
+export type UpdateJobErrorCode =
+  | "E_INVALID_REQUEST"
+  | "E_UNAUTHORIZED"
+  | "E_IDEMPOTENCY_CONFLICT"
+  | "E_HANDLER_FAILED"
+  | "E_MANAGER_RESTARTED"
+  | "E_SETTINGS_CHANGED"
+  | "E_SETTINGS_INVALID"
+  | "E_SETTINGS_FORBIDDEN"
+  | "E_SETTINGS_UNCHANGED";
+export interface UpdateJob { id: string; state: UpdateJobState; stage: string; errorCode: UpdateJobErrorCode | null }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("업데이트 응답을 확인하지 못했습니다.");
   return Object.fromEntries(Object.entries(value));
@@ -39,10 +50,24 @@ function jobState(value: unknown): UpdateJobState {
     default: throw new Error("업데이트 작업 상태를 확인하지 못했습니다.");
   }
 }
+// An unknown or missing code is not an error by itself: the state still decides the outcome.
+function jobErrorCode(value: unknown): UpdateJobErrorCode | null {
+  switch (value) {
+    case "E_INVALID_REQUEST": case "E_UNAUTHORIZED": case "E_IDEMPOTENCY_CONFLICT": case "E_HANDLER_FAILED":
+    case "E_MANAGER_RESTARTED": case "E_SETTINGS_CHANGED": case "E_SETTINGS_INVALID": case "E_SETTINGS_FORBIDDEN":
+    case "E_SETTINGS_UNCHANGED": return value;
+    default: return null;
+  }
+}
 export function mapUpdateJob(value: unknown): UpdateJob {
   const item = record(value);
   if (item.schema !== 1 || typeof item.id !== "string" || !/^[a-f0-9]{32}$/.test(item.id)) throw new Error("업데이트 작업 응답이 올바르지 않습니다.");
-  return { id: item.id, state: jobState(item.state), stage: typeof item.stage === "string" ? item.stage : "queued" };
+  return {
+    id: item.id,
+    state: jobState(item.state),
+    stage: typeof item.stage === "string" ? item.stage : "queued",
+    errorCode: jobErrorCode(item.error_code),
+  };
 }
 export async function fetchSystemUpdate(signal?: AbortSignal): Promise<SystemUpdate> {
   return mapSystemUpdate(await request("/system/update", { signal: signal ?? null }));

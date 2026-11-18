@@ -284,7 +284,9 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CLI_VERSION: "0.1.0"
+          # The CLI reports the release version. Installed managers built as 0.1.0 still update
+          # because build_bundle.py keeps the manifest's minimum_cli_version at 0.1.0.
+          CLI_VERSION: ${{ inputs.version }}
         run: |
           mkdir -p dist
           suffix=""; if [ "$GOOS" = windows ]; then suffix=.exe; fi
@@ -292,15 +294,43 @@ jobs:
           package=github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/release
           go build -trimpath -ldflags "-X main.version=$CLI_VERSION -X $package.CLIVersion=$CLI_VERSION -X $package.PublicKeyBase64=$public_key" \
             -o "dist/railwait-${GOOS}-${GOARCH}${suffix}" ./cmd/railwait
-          (cd dist && sha256sum * > "railwait-${GOOS}-${GOARCH}.sha256")
+          # install.sh and install.ps1 require exactly one line naming this executable.
+          (cd dist && sha256sum "railwait-${GOOS}-${GOARCH}${suffix}" > "railwait-${GOOS}-${GOARCH}.sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: apps/cli/dist/*
           if-no-files-found: error
 
+  installer-scripts:
+    # ubuntu-24.04 ships PowerShell 7, which runs the install.ps1 tests with faked Windows variables.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint install.sh
+        run: docker run --rm -v "$PWD/scripts/install:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0 install.sh tests/test-install-sh.sh
+      - name: Test install.sh with sh, dash and bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: sh scripts/install/tests/test-install-sh.sh
+      - name: Test install.ps1
+        shell: pwsh
+        run: ./scripts/install/tests/test-install-ps1.ps1
+      - name: Package installer scripts with checksums
+        run: |
+          mkdir installer-assets
+          cp scripts/install/install.sh scripts/install/install.ps1 installer-assets/
+          cd installer-assets
+          for script in install.sh install.ps1; do sha256sum "$script" > "$script.sha256"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-scripts
+          path: installer-assets/*
+          if-no-files-found: error
+
   publish:
-    needs: [image-smoke, cli-assets]
+    needs: [image-smoke, cli-assets, installer-scripts]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -315,6 +345,10 @@ jobs:
           pattern: cli-*
           path: cli-artifacts
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-scripts
+          path: installer-assets
       - name: Publish only after every platform and required artifact passed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -324,5 +358,5 @@ jobs:
           tag="v${RELEASE_VERSION}"
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --draft --title "$tag" --generate-notes
-          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" artifacts/release-assets/* cli-artifacts/*
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" artifacts/release-assets/* cli-artifacts/* installer-assets/*
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest

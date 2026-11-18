@@ -5,10 +5,12 @@ on:
   push:
     paths:
       - "apps/cli/**"
+      - "scripts/install/**"
       - ".github/workflows/cli.yml"
   pull_request:
     paths:
       - "apps/cli/**"
+      - "scripts/install/**"
       - ".github/workflows/cli.yml"
 
 permissions:
@@ -87,3 +89,30 @@ jobs:
           path: apps/cli/dist/
           if-no-files-found: error
           retention-days: 14
+
+  install-scripts:
+    name: Install scripts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-24.04 ships PowerShell 7; macOS and Windows images include it as well.
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint install.sh
+        if: runner.os == 'Linux'
+        run: docker run --rm -v "$PWD/scripts/install:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0 install.sh tests/test-install-sh.sh
+      - name: Test install.sh with every available POSIX shell
+        if: runner.os != 'Windows'
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: sh scripts/install/tests/test-install-sh.sh
+      - name: Test install.ps1 with PowerShell 7
+        shell: pwsh
+        run: ./scripts/install/tests/test-install-ps1.ps1
+      - name: Test install.ps1 with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/install/tests/test-install-ps1.ps1

@@ -2,7 +2,7 @@
 
 레일웨잇을 처음 실행하는 방법을 안내합니다. 화면만 둘러보려면 데모를, 실제로 운영하려면 Docker Compose 설치를 따라가세요.
 
-이 문서는 저장소를 Git으로 받아 Docker Compose로 운영하는 설치를 다룹니다. 설치 CLI(`railwait`)로 관리형 설치를 하려면 [설치 CLI 안내](../apps/cli/README.md)를 보세요. 공식 서명 릴리스를 게시하기 전까지 CLI 설치에는 직접 만든 로컬 패키지가 필요합니다. 설치 방법별 업데이트 방법은 [README의 업데이트](../README.md#업데이트)에 정리했습니다.
+이 문서는 저장소를 Git으로 받아 Docker Compose로 운영하는 설치를 다룹니다. GitHub Release의 서명된 설치 CLI(`railwait`)로 관리형 설치를 하려면 [README의 공식 릴리스 설치](../README.md#공식-릴리스로-설치하기)를 보세요. 설치 방법별 업데이트 방법은 [README의 업데이트](../README.md#업데이트)에 정리했습니다.
 
 ## 데모 실행
 

@@ -31,7 +31,7 @@ KTX·SRT 관심 열차를 한곳에서 찾고 관리하는 개인용 웹 앱
 - Chrome·Edge·모바일 등 연결한 각 기기에 함께 보내는 Web Push와 Telegram·Discord·Webhook 알림
 - 공식 예약·결제 페이지를 새 브라우저 창으로 여는 안전한 인계와, 경로별 실기기 검증 뒤에만 켤 수 있는 코레일+·SRT 앱 인계
 - 모바일 PWA와 데스크톱 반응형 화면
-- Windows·macOS·Linux용 설치 CLI와, 작업 종료 대기·암호화 백업·상태 확인을 거치는 업데이트(공식 배포 준비 중)
+- Windows·macOS·Linux용 설치 CLI와, 작업 종료 대기·암호화 백업·상태 확인을 거치는 업데이트
 
 ## 화면 미리 보기
 
@@ -65,13 +65,29 @@ npm run dev
 
 ## 설치
 
-지금 쓸 수 있는 방법은 저장소를 Git으로 받아 Docker Compose로 운영하는 방법과, 설치 CLI에 직접 만든 로컬 패키지를 쓰는 방법입니다. 실행 파일 하나로 설치하고 웹에서 업데이트하는 공식 서명 릴리스는 아직 게시하지 않았습니다.
+설치 방법은 세 가지입니다. 서버를 운영하기만 한다면 GitHub Release의 서명된 설치 CLI 하나로 설치하는 방법이 가장 간단합니다. 저장소를 직접 운영하거나 개발한다면 Git 설치를, 직접 빌드한 이미지를 시험한다면 로컬 패키지 설치를 씁니다.
 
 | 설치 방법 | 알맞은 경우 | 상태 | 업데이트 |
 | --- | --- | --- | --- |
+| 설치 CLI + 공식 서명 릴리스 | Git·Python·Node.js 없이 설치 | 사용 가능(1.4.3부터) | 웹 **앱 업데이트** 버튼 또는 `railwait update` |
 | Git + Docker Compose | 저장소를 받아 직접 운영 | 사용 가능 | `git pull` 뒤 운영 스크립트로 재빌드 |
 | 설치 CLI + 로컬 패키지 | 직접 빌드·서명한 패키지로 관리형 설치 | 사용 가능(macOS에서 확인) | `scripts/update-local-install.sh` |
-| 설치 CLI + 공식 서명 릴리스 | Git·Python·Node.js 없이 설치 | 게시 전 | 웹 **앱 업데이트** 버튼 |
+
+### 공식 릴리스로 설치하기
+
+[최신 Release](https://github.com/hostkimjang/korail-auto-waitlist/releases/latest)에서 운영체제와 CPU에 맞는 `railwait-<OS>-<CPU>` 실행 파일과 같은 이름의 `.sha256` 파일을 받습니다. Apple Silicon Mac이라면 다음과 같습니다.
+
+```bash
+curl -fLO https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download/railwait-darwin-arm64
+curl -fLO https://github.com/hostkimjang/korail-auto-waitlist/releases/latest/download/railwait-darwin-arm64.sha256
+shasum -a 256 -c railwait-darwin-arm64.sha256
+chmod +x railwait-darwin-arm64
+./railwait-darwin-arm64 install
+```
+
+Intel Mac은 `darwin-amd64`, Linux는 `linux-amd64`·`linux-arm64`를 받고 Linux에서는 `sha256sum -c`로 확인합니다. Windows에서는 `railwait-windows-amd64.exe`(ARM은 `windows-arm64`)를 받아 PowerShell의 `Get-FileHash`로 `.sha256` 파일과 같은 값인지 확인한 뒤 `.\railwait-windows-amd64.exe install`을 실행합니다. 받은 실행 파일은 설치가 끝날 때까지 옮기거나 지우지 마세요. 중단된 설치를 이어갈 때 같은 파일을 씁니다.
+
+`railwait install`은 실행 환경 확인, 설치 계획, 앱·계정 설정, 자동 시작, 접속 확인의 다섯 단계로 진행합니다. Windows·macOS에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 받아 배포자 서명을 확인한 뒤 OS 설치 창으로 이어 줍니다. 새 대화형 설치는 Tailscale HTTPS 연결과 보안·알림 키 생성을 기본으로 하므로 관리자 계정만 직접 정하면 됩니다. 로컬 전용 접속은 `--access local`, 접속 방식과 키를 직접 고르려면 `--custom`을 씁니다. 실행 파일에 들어 있는 공식 공개키로 서명을 확인한 배포 묶음과 이미지만 설치합니다. 명령 전체는 [설치 CLI 안내](apps/cli/README.md)에 있습니다. 기존 Git 설치를 CLI 설치로 옮기는 기능은 아직 없으므로 다른 폴더와 포트에 설치하세요.
 
 ### Git으로 설치하기
 
@@ -98,17 +114,15 @@ notepad .env
 
 공통 대기 저장용 비밀값은 `experimental-rail`에서 필수이며, 이 프로필을 실행하지 않는 구성에서는 선택 항목입니다. KORAIL sidecar의 준비 상태는 저장소와 설정 오류도 확인하지만 정상 준비 상태가 실제 코레일 로그인 성공을 뜻하지는 않습니다.
 
-### 설치 CLI로 설치하기
+### 로컬 패키지로 설치하기
 
-`railwait` CLI는 실행 환경 확인, 설치 계획, 앱·계정 설정, 자동 시작, 접속 확인의 다섯 단계로 설치합니다. Windows·macOS에서는 없는 Docker Desktop·Tailscale을 공식 서버에서 받아 배포자 서명을 확인한 뒤 OS 설치 창으로 이어 줍니다. 새 대화형 설치는 Tailscale HTTPS 연결과 보안·알림 키 생성을 기본으로 하므로 관리자 계정만 직접 정하면 됩니다. 로컬 전용 접속은 `--access local`, 접속 방식과 키를 직접 고르려면 `--custom`을 씁니다.
-
-공식 서명 릴리스를 게시하기 전에는 저장소에서 빌드한 CLI로, 직접 만든 로컬 패키지와 그 공개키를 명시적으로 신뢰해 설치합니다.
+직접 빌드한 이미지를 시험할 때는 저장소에서 빌드한 CLI로, 직접 만든 로컬 패키지와 그 공개키를 명시적으로 신뢰해 설치합니다. 이렇게 설치하면 공식 릴리스 업데이트는 받지 않습니다.
 
 ```console
 railwait install --path <새 설치 폴더> --package <로컬 패키지 폴더> --trust-key <공개키 파일>
 ```
 
-CLI를 빌드하는 방법과 명령 전체는 [설치 CLI 안내](apps/cli/README.md), 로컬 패키지를 만드는 방법은 [릴리스 도구 안내](scripts/releases/README.md#로컬-오프라인-설치-패키지)에 있습니다. 기존 Git 설치를 CLI 설치로 옮기는 기능은 아직 없으므로 다른 폴더와 포트에 설치하세요.
+CLI를 빌드하는 방법은 [설치 CLI 안내](apps/cli/README.md#railwait-설치-패키지), 로컬 패키지를 만드는 방법은 [릴리스 도구 안내](scripts/releases/README.md#로컬-오프라인-설치-패키지)에 있습니다.
 
 ## 업데이트
 
@@ -147,7 +161,7 @@ bash scripts/update-local-install.sh --path <설치 폴더>
 
 ### 공식 서명 릴리스로 설치한 CLI 설치
 
-웹의 **설정 → 로그·진행 상태 → 앱 업데이트**에서 새 버전을 확인하고 적용합니다. 같은 작업을 `railwait update`로도 실행할 수 있고, 진행 화면을 닫아도 작업은 계속됩니다. 공식 릴리스는 아직 게시하지 않았습니다. 로컬 패키지 설치에서는 이 버튼이 의도적으로 막혀 있습니다.
+웹의 **설정 → 로그·진행 상태 → 앱 업데이트**에서 새 버전을 확인하고 적용합니다. 같은 작업을 `railwait update`로도 실행할 수 있고, 진행 화면을 닫아도 작업은 계속됩니다. 새 Release가 지금 설치한 버전에서 올라오는 것을 허용할 때만 적용할 수 있고, DB 구조가 바뀌는 버전은 아직 이 방법으로 올릴 수 없습니다. 로컬 패키지 설치에서는 이 버튼이 의도적으로 막혀 있습니다.
 
 ### 지금 버전 확인하기
 
@@ -180,12 +194,12 @@ bash scripts/update-local-install.sh --path <설치 폴더>
 
 ## 현재 상태
 
-2026년 11월 18일, v1.4.2 기준입니다. 확인한 범위와 남은 일을 나눠 적었습니다.
+2026년 11월 18일, v1.4.3 기준입니다. 확인한 범위와 남은 일을 나눠 적었습니다.
 
 - **좌석 조회와 감시**: 11월 18일 관리형 설치에서 공지를 닫은 뒤 KORAIL 공개 좌석 조회가 성공하는 것을 확인했습니다. 코레일이 보호 응답(`macro_err1` 등)을 보내면 자동 로그인과 조회를 정해진 시간 동안 멈추며 우회하지 않으므로, 그동안 감시 관측도 멈출 수 있습니다.
 - **공지 팝업**: v1.4.1부터 화면 기준으로 판정합니다. 실제 공개 화면의 세 가지 화면 폭에서 인식과 닫기를 확인했고, 예약 도중 늦게 뜨는 공지는 아직 실제로 마주쳐 확인하지 못했습니다. 범위는 [공개 검증 기록](docs/NOTICE_ADAPTATION_VERIFICATION.md)에 있습니다.
 - **예약**: 계정 기반 예매 시도는 별도 gate로 꺼져 있습니다. 출발 전 열차로 좌석 관측부터 결제 전 예약까지 다시 확인하는 일이 남아 있습니다.
-- **설치 CLI**: macOS(Apple Silicon)의 기존 Lima Docker에서 로컬 패키지 설치와 스크립트 업데이트(1.4.1 → 1.4.2)를 확인했고, CLI 테스트는 GitHub Actions의 Ubuntu·macOS·Windows에서 통과합니다. 공식 서명 릴리스 게시, 웹 **앱 업데이트** 버튼으로 실제 새 버전을 받는 확인, Windows·macOS Docker Desktop 새 설치와 재부팅 뒤 복구는 아직 확인하지 않았습니다.
+- **설치 CLI**: 1.4.3부터 GitHub Release에 서명된 CLI 6종과 배포 묶음을 게시합니다. 게시한 이미지는 amd64·arm64 runner에서 실행을 확인했고, 받은 macOS CLI로 공식 릴리스 조회와 서명 확인을 마쳤습니다. 1.4.2 Release의 CLI는 릴리스 조회 결함 때문에 쓸 수 없습니다. 웹 **앱 업데이트** 버튼으로 실제 새 버전을 받는 확인은 다음 릴리스에서 하고, Windows·macOS Docker Desktop 새 설치와 재부팅 뒤 복구는 아직 확인하지 않았습니다.
 
 지난 장애의 원인과 조치는 [운영 장애 기록](docs/INCIDENTS.md), 보호 경계와 안전한 재개 조건은 [이슈 분석·개발 계획](docs/DEVELOPMENT_PLAN.md), 남은 검증 전체는 [체크리스트](CHECKLIST.md)에 있습니다.
 

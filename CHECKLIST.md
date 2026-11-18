@@ -217,6 +217,32 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 18일 첫 공식 서명 릴리스와 릴리스 조회 수정 (v1.4.3)
+
+- [x] 릴리스 서명키: Ed25519 seed를 사용자 전용 임시 폴더에서 만들어 저장소 secret `RAILWAIT_RELEASE_SIGNING_KEY`로
+  등록하고 관리자 맥의 로그인 키체인에 백업(값 일치 확인, 임시 파일 삭제, 값은 출력하지 않음). 공개키
+  `qeR7RDhD9a1lF0YVpMX5PbiHmrVU+nm7Fstt9UbB5nM=`
+- [x] GitHub 보안 설정: 비공개 취약점 신고, 비밀값 검사, 푸시 차단을 켜고 main ruleset `main 보호`(삭제·강제 푸시
+  차단, 예외 없음)를 활성. 기존 `default rule`은 대상이 비어 있고 모든 푸시를 막는 규칙이 있어 비활성으로 둠
+- [x] 1.4.2 서명 릴리스 게시(run 44288860894, 커밋 `b166d5b`). 첫 실행(44288468947)은 ubuntu-latest(Ubuntu 26.04)에서
+  API의 Playwright 1.55가 Chromium 의존성 설치를 거부해 실패해 verify를 ubuntu-24.04로 고정. 그 실행의 첫 시도는
+  Pydoll 실제 Chrome 시작 시간 초과 1건으로 실패하고 같은 커밋 재시도에서 통과. GHCR 네 패키지 공개 전환(사용자),
+  익명 조회·서명, 두 CPU 이미지 실행 확인, CLI 6종, Release 게시
+- [x] 게시 뒤 확인에서 결함 발견: Release의 CLI가 모든 요청에 `Accept: application/octet-stream`을 보내 GitHub API
+  `releases/latest`가 415를 돌려줘 공식 설치·`update check`·웹 업데이트 확인이 불가. API에는
+  `application/vnd.github+json`, 자산에는 octet-stream을 보내도록 수정. 가짜 HTTP도 GitHub처럼 415를 돌려주게 해 수정 전
+  코드에서 Resolve 테스트가 실패함을 확인하고 요청별 Accept 회귀 추가. 공식 공개키로 빌드한 darwin/arm64 CLI가 실제
+  GitHub의 v1.4.2를 조회·서명 확인. gofmt·3개 OS vet·Linux race 전체·Windows 테스트 컴파일·6대상 빌드 통과
+- [x] 릴리스 verify의 Chrome 첫 시작 지연: 1.4.3 첫 실행(44295653617)도 같은 Pydoll 테스트가 시간 초과로 실패. 테스트 전에
+  Chrome을 실행하는 repository-verify처럼 Chrome 선택 단계에 버전 확인과 임시 프로필 headless 시작을 추가(이 단계 13초)
+- [x] 1.4.3 서명 릴리스 게시(run 44297262666, 커밋 `62f46c3`, 2026-11-18 21:17 KST): 자산 15개, 최신 Release. 받은
+  darwin-arm64 CLI의 SHA-256 일치·공개키 포함, `update check`가 실제 GitHub에서 1.4.3을 찾아 서명 확인. manifest는
+  `compatible_from` 없음·DB revision `0042_protection_halt`·두 CPU 이미지 digest 고정
+- [x] main CI(`30222c4`): repository-verify 44295655712, experimental-browser-verify 44295655657, CLI cross-platform
+  verification 44295655790 통과
+- [ ] 1.4.3 공식 CLI로 맥미니 새 설치(사용자가 직접 진행) 확인 뒤 18080 로컬 패키지 설치 백업·정리
+- [ ] 다음 릴리스에서 `compatible_from`에 1.4.3을 넣어 웹 **앱 업데이트** 버튼으로 실제 업데이트 확인
+
 ## 2026년 11월 18일 로컬 설치 한 번에 업데이트와 Windows CLI 테스트 수정 (v1.4.2)
 
 - [x] `scripts/update-local-install.sh` 추가: 커밋 고정 worktree, 화면 버전·CHANGELOG·설치 버전·DB revision 사전
@@ -587,7 +613,7 @@ Windows·macOS·Linux를 함께 구현했으며, 실제 OS 지원 검증과 공�
 - [ ] 실행 시점 웹 딥링크 설정 제공 (현재 정식 공통 이미지의 기본 비활성 유지)
 - [ ] Windows·macOS Docker Desktop 새 설치·실제 서비스 등록·로그인/재부팅·실패 복구 검증
 - [ ] Linux 두 CPU의 실제 공개 릴리스 설치·업데이트 통합 검증과 원격 CI 성공
-- [ ] 서명 secret·공개 GHCR·정식 CLI 6종·안정 릴리스 게시 (이번 작업에서 게시하지 않음)
+- [x] 서명 secret·공개 GHCR·정식 CLI 6종·안정 릴리스 게시 (2026-11-18 1.4.3, 위 v1.4.3 절)
 - [ ] 공식 릴리스로 설치한 구버전에서 웹 **앱 업데이트** 버튼으로 새 버전 적용 확인. 정식 릴리스 두 개(구버전 설치 뒤
   `compatible_from`에 구버전을 넣은 새 버전 게시)가 필요하다. 로컬 패키지 설치는 이 버튼을 의도적으로 막는다
 - [x] 현재 experimental-rail 전체 프로필 최종 재빌드·강제 재생성, 12서비스 healthy·migration/log-init exit 0·실행 이미지/최종 API 소스 일치·시작 traceback 0 확인
@@ -715,7 +741,7 @@ Windows·macOS·Linux를 함께 구현했으며, 실제 OS 지원 검증과 공�
 - [x] MIT 라이선스와 패키지 메타데이터 반영
 - [x] `docs/research/`와 `docs/design/`을 현재 공개 후보에서 제거
 - [x] 공개 제외 자료를 로컬·원격 브랜치와 태그의 전체 Git 이력에서 제거
-- [ ] GitHub 비공개 취약점 신고 기능 활성화 (2026-11-18 확인 때 꺼짐. 비밀값 검사·푸시 차단과 main 보호 규칙도 꺼져 있음)
+- [x] GitHub 비공개 취약점 신고 기능 활성화 (2026-11-18. 비밀값 검사·푸시 차단과 main 보호 ruleset도 켬)
 - [x] README를 설치 방법 세 가지와 방법별 업데이트 중심으로 재구성하고, 문서 목록·시작하기·기여 가이드·공개 릴리스
   체크리스트·보안 정책을 현재 공개 상태와 설치 CLI에 맞게 갱신(2026-11-18). 바꾼 문서의 상대 링크·앵커 145개 확인
 - [x] 커밋 `fe4b364`의 OCI Ubuntu 20.04 ARM64 clean clone에서 운영 `.env`를 별도 프로젝트·포트로 격리한 뒤 README 최초 설치 절차 재검증

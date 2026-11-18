@@ -11,7 +11,7 @@
 | --- | --- | --- | --- |
 | Git + Docker Compose | [시작하기](GETTING_STARTED.md) | `git pull --ff-only origin main` 뒤 `ops.sh experimental` 또는 `ops.ps1 experimental` | 사용 가능 |
 | CLI + 로컬 패키지 | `railwait install --package <패키지> --trust-key <공개키>` | `bash scripts/update-local-install.sh --path <설치 폴더>` 또는 `railwait update --package … --trust-key …` | 사용 가능. 스크립트는 macOS에서 확인, Linux 호스트는 미확인 |
-| CLI + 공식 서명 릴리스 | `railwait install` | 웹 **설정 → 로그·진행 상태 → 앱 업데이트** 또는 `railwait update` | 릴리스 게시 전 |
+| CLI + 공식 서명 릴리스 | `railwait install` | 웹 **설정 → 로그·진행 상태 → 앱 업데이트** 또는 `railwait update` | 사용 가능(1.4.3부터) |
 
 `railwait install` 또는 `railwait setup`의 다섯 단계 마법사에서 필수 프로그램 설치, 앱·관리자 설정,
 자동 시작과 선택적인 Tailscale HTTPS 연결을 이어갈 수 있습니다. Windows·macOS 대화형 실행에서는 없는
@@ -56,10 +56,11 @@ Railwait 설치와 브라우저 쿠키가 겹칠 수 있으므로 병행 로그�
 백업·작업 종료 대기·서비스 재생성 절차로 보완합니다. 브라우저·OS 알림 권한은 사용자가 직접 허용합니다.
 
 Windows·macOS·Linux의 초기 설정은 `railwait install`로 처리하며, 명령·파일 권한·Docker 사전조건은
-[CLI 안내](../apps/cli/README.md)를 참고합니다. 개발용 CLI에는 신뢰 공개키가 없으므로 공개 설치에
-사용할 수 없습니다. 서명된 정식 바이너리·이미지·번들을 게시해야 일반 설치가 가능합니다.
+[CLI 안내](../apps/cli/README.md)를 참고합니다. 1.4.3부터 서명된 정식 CLI·이미지·배포 묶음을 GitHub Release에
+게시합니다. 받는 방법은 [README의 공식 릴리스 설치](../README.md#공식-릴리스로-설치하기)에 있습니다. 개발용 CLI에는
+신뢰 공개키가 없으므로 공식 릴리스 설치에 사용할 수 없습니다.
 
-공개 릴리스 전에는 `railwait install --package <패키지 폴더> --trust-key <공개키 파일>`로
+직접 빌드한 이미지를 시험할 때는 `railwait install --package <패키지 폴더> --trust-key <공개키 파일>`로
 명시적으로 신뢰한 로컬 패키지를 설치할 수 있습니다. 패키지 생성 절차는
 [릴리스 도구 안내](../scripts/releases/README.md)를 따릅니다. 이 경로도 서명·파일 해시·이미지
 식별자를 검증하며, 기존 Git 설치와 다른 폴더·포트를 사용합니다. 로컬 설치는 정식 릴리스로

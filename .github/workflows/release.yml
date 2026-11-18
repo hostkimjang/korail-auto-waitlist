@@ -12,6 +12,11 @@ on:
         required: false
         default: ""
         type: string
+      dry_run:
+        description: Rehearse every step from any branch with a throwaway signing key and publish nothing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -20,30 +25,21 @@ concurrency:
   group: signed-release-publication
   cancel-in-progress: false
 
+# Verification, CLI tests and image builds start together. Only the bundle job signs, and it waits for
+# every verification job and both image architectures, so an unverified commit is never signed or
+# published. Images pushed before a failed verification stay unreferenced under the commit tag.
 jobs:
-  verify:
-    # Same runner as repository-verify: Playwright 1.55 cannot install Chromium dependencies on
-    # the Ubuntu 26.04 image that ubuntu-latest now selects.
+  preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 10
     env:
-      POSTGRES_PASSWORD: release-ci-only-postgres-not-a-secret
-      SECRET_ENCRYPTION_KEY: release-ci-only-encryption-key-not-a-secret
-      AUTH_SESSION_SECRET: release-ci-only-session-key-not-a-secret
-      KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"
       RELEASE_VERSION: ${{ inputs.version }}
-      COMPATIBLE_FROM: ${{ inputs.compatible_from }}
+      DRY_RUN: ${{ inputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
       - name: Validate release source and version
         run: |
           python - <<'PY'
@@ -55,14 +51,27 @@ jobs:
           if not first or first.group(1) != version:
               raise SystemExit('Release version must match the first changelog entry')
           PY
-          test "$GITHUB_REF" = refs/heads/main
+          # A rehearsal may run from a review branch: it never receives the release key or publishes.
+          if [ "$DRY_RUN" != true ]; then test "$GITHUB_REF" = refs/heads/main; fi
           test -z "$(git status --porcelain)"
       - run: python -m pip install -r scripts/releases/requirements.txt
       - run: python -m unittest discover -s scripts/releases -v
-      - run: npm ci
-        working-directory: apps/web
-      - run: npx playwright install --with-deps chromium
-        working-directory: apps/web
+
+  verify-api:
+    # Same runner as repository-verify: Playwright 1.55 cannot install Chromium dependencies on
+    # the Ubuntu 26.04 image that ubuntu-latest now selects.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      POSTGRES_PASSWORD: release-ci-only-postgres-not-a-secret
+      SECRET_ENCRYPTION_KEY: release-ci-only-encryption-key-not-a-secret
+      AUTH_SESSION_SECRET: release-ci-only-session-key-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync --frozen --extra test --extra browser
         working-directory: apps/api
       - run: uv run --frozen --extra browser playwright install --with-deps chromium
@@ -87,8 +96,52 @@ jobs:
               output.write('KORAIL_BROWSER_CHROMIUM_EXECUTABLE_PATH=' + binary + '\n')
           print('Pydoll runtime browser: ' + version)
           PY
-      - run: make config verify-ops verify-api verify-web
-      - run: make verify-browser
+      - run: make verify-api
+        env:
+          KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"
+
+  verify-web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      POSTGRES_PASSWORD: release-ci-only-postgres-not-a-secret
+      SECRET_ENCRYPTION_KEY: release-ci-only-encryption-key-not-a-secret
+      AUTH_SESSION_SECRET: release-ci-only-session-key-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+        working-directory: apps/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: make verify-web-core
+
+  verify-stack:
+    # Compose configuration, operations scripts, the browser test image and the isolated full-stack E2E.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      POSTGRES_PASSWORD: release-ci-only-postgres-not-a-secret
+      SECRET_ENCRYPTION_KEY: release-ci-only-encryption-key-not-a-secret
+      AUTH_SESSION_SECRET: release-ci-only-session-key-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+        working-directory: apps/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: make config verify-ops verify-browser
+      - run: npm run test:e2e:fullstack
+        working-directory: apps/web
 
   native-cli:
     runs-on: ${{ matrix.os }}
@@ -112,9 +165,82 @@ jobs:
       - run: go test -race -count=1 -timeout=5m ./...
 
   images:
-    needs: [verify, native-cli]
+    name: images (${{ matrix.name }}, ${{ matrix.arch }})
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [api, web, browser, backup]
+        arch: [amd64, arm64]
+        include:
+          - name: api
+            context: apps/api
+            dockerfile: apps/api/Dockerfile
+          - name: web
+            context: apps/web
+            dockerfile: apps/web/Dockerfile
+          - name: browser
+            context: apps/api
+            dockerfile: apps/api/Dockerfile.browser
+          - name: backup
+            context: .
+            dockerfile: infra/backup/Dockerfile
+          # Each architecture builds on its own CPU. Under QEMU the arm64 browser image's apt step took
+          # 365 seconds against 42 seconds for the same step on amd64 (v1.4.4 release).
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Select image repository
+        id: naming
+        env:
+          IMAGE_KIND: ${{ matrix.name }}
+        run: |
+          repository="${GITHUB_REPOSITORY,,}"
+          echo "image=ghcr.io/${repository}/${IMAGE_KIND}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          # Push by digest only. images-merge puts the commit tag on the two-platform index.
+          outputs: type=image,name=${{ steps.naming.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Record platform digest
+        env:
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid image digest" >&2; exit 1; }
+          mkdir -p digests
+          printf '%s\n' "$DIGEST" > "digests/${ARCH}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.name }}-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+
+  images-merge:
+    name: images-merge (${{ matrix.name }})
+    needs: images
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
@@ -124,56 +250,52 @@ jobs:
         include:
           - name: api
             original: rail-waitlist-api:local
-            context: apps/api
-            dockerfile: apps/api/Dockerfile
           - name: web
             original: rail-waitlist-web:local
-            context: apps/web
-            dockerfile: apps/web/Dockerfile
           - name: browser
             original: rail-waitlist-korail-browser-adapter:local
-            context: apps/api
-            dockerfile: apps/api/Dockerfile.browser
           - name: backup
             original: rail-waitlist-backup:local
-            context: .
-            dockerfile: infra/backup/Dockerfile
     steps:
-      - uses: actions/checkout@v4
-      # Browser builds under QEMU are resource intensive; timeout is bounded, no platform is skipped.
-      - uses: docker/setup-qemu-action@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.name }}-*
+          path: digests
+          merge-multiple: true
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Select immutable build tag
-        id: naming
+      - name: Tag the two-platform index with the immutable commit tag
+        id: merge
         env:
           IMAGE_KIND: ${{ matrix.name }}
         run: |
           repository="${GITHUB_REPOSITORY,,}"
-          echo "tag=ghcr.io/${repository}/${IMAGE_KIND}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v7
-        id: build
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.naming.outputs.tag }}
-          labels: |
-            org.opencontainers.image.version=${{ inputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
+          image="ghcr.io/${repository}/${IMAGE_KIND}"
+          tag="${image}:${GITHUB_SHA}"
+          sources=()
+          for arch in amd64 arm64; do
+            digest="$(cat "digests/${arch}")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid ${arch} digest" >&2; exit 1; }
+            sources+=("${image}@${digest}")
+          done
+          docker buildx imagetools create --tag "$tag" "${sources[@]}"
+          index="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])')"
+          [[ "$index" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid index digest" >&2; exit 1; }
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "digest=${index}" >> "$GITHUB_OUTPUT"
       - name: Record immutable image result
         env:
           ORIGINAL: ${{ matrix.original }}
-          TAG: ${{ steps.naming.outputs.tag }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          TAG: ${{ steps.merge.outputs.tag }}
+          DIGEST: ${{ steps.merge.outputs.digest }}
         run: |
           mkdir -p image-records
-          python - <<'PY'
+          python3 - <<'PY'
           import json, os, pathlib
           pathlib.Path('image-records/result.json').write_text(json.dumps({
               'original': os.environ['ORIGINAL'],
@@ -187,7 +309,7 @@ jobs:
           if-no-files-found: error
 
   bundle:
-    needs: images
+    needs: [preflight, verify-api, verify-web, verify-stack, native-cli, images-merge]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -212,7 +334,9 @@ jobs:
           DOCKER_CONFIG="$registry_config" python scripts/releases/resolve_images.py --built-images-dir built-images --output images.json
       - name: Sign release and export public verification key
         env:
-          RAILWAIT_RELEASE_SIGNING_KEY: ${{ secrets.RAILWAIT_RELEASE_SIGNING_KEY }}
+          # A rehearsal never receives the release key; it signs with a key that exists only in this job.
+          RAILWAIT_RELEASE_SIGNING_KEY: ${{ !inputs.dry_run && secrets.RAILWAIT_RELEASE_SIGNING_KEY || '' }}
+          DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_VERSION: ${{ inputs.version }}
           COMPATIBLE_FROM: ${{ inputs.compatible_from }}
         run: |
@@ -221,7 +345,14 @@ jobs:
           for source in "${sources[@]}"; do
             if [ -n "$source" ]; then compatible_args+=(--compatible-from "$source"); fi
           done
-          python scripts/releases/build_bundle.py "${compatible_args[@]}" --images-json images.json --output release-assets \
+          key_args=()
+          if [ "$DRY_RUN" = true ]; then
+            key_file="$(mktemp "${RUNNER_TEMP}/railwait-rehearsal-key.XXXXXX")"
+            python -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())' > "$key_file"
+            key_args=(--signing-key-file "$key_file")
+          fi
+          python scripts/releases/build_bundle.py "${compatible_args[@]}" "${key_args[@]}" \
+            --images-json images.json --output release-assets \
             --version "$RELEASE_VERSION" --source-revision "$GITHUB_SHA" \
             --public-key-output release-public-key.txt
       - uses: actions/upload-artifact@v4
@@ -331,6 +462,7 @@ jobs:
 
   publish:
     needs: [image-smoke, cli-assets, installer-scripts]
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

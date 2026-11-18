@@ -33,11 +33,26 @@ python -m unittest discover -s scripts/releases -v
 - `release-manifest.sig`: JSON 원본 bytes를 서명한 Ed25519 signature의 base64
 
 `.github/workflows/release.yml`은 `main`에서 수동 실행한다. 입력 버전은 CHANGELOG 최상단과
-같아야 한다. 전체 API·웹·브라우저 및 3개 OS의 CLI 검증이 통과한 뒤 4개 앱 이미지를 빌드하고,
-익명 registry 조회로 양쪽 CPU 지원을 검증한다. 서명한 번들과 키가 포함된 CLI 6종을 준비하고,
-두 Linux CPU에서 게시한 동일 digest의 실행 smoke가 통과한 뒤 draft Release에 자산을 모두 올리고
-stable로 공개한다. smoke는 import·실행파일·웹 정적 파일 검증이며 실제 운영사 인증·예약 검증은 아니다.
-브라우저 이미지의 QEMU 빌드는 자원이 많이 들 수 있어 120분 제한을 둔다.
+같아야 한다. 입력 확인(`preflight`)이 끝나면 4개 앱 이미지를 CPU마다 네이티브 러너(amd64는 `ubuntu-latest`,
+arm64는 `ubuntu-24.04-arm`)에서 빌드해 digest로만 올리고, 두 CPU를 하나의 이미지 index로 묶어 커밋 태그를 붙인다.
+같은 시각에 API(`verify-api`), 웹(`verify-web`), Compose·운영 스크립트·브라우저 테스트 이미지·풀스택 E2E
+(`verify-stack`)와 3개 OS의 CLI 검증이 병렬로 돈다. 서명하는 `bundle` 작업은 이 검증들과 두 CPU 이미지가 모두
+성공한 뒤에만 시작하므로, 검증하지 못한 커밋은 서명·게시되지 않는다. 검증이 실패하면 먼저 올린 이미지는 어떤
+Release도 참조하지 않는 커밋 태그로만 남는다. `bundle`은 익명 registry 조회로 양쪽 CPU 지원을 확인하고 서명한
+번들과 키가 포함된 CLI 6종을 준비한다. 두 Linux CPU에서 게시한 동일 digest의 실행 smoke가 통과한 뒤 draft
+Release에 자산을 모두 올리고 stable로 공개한다. smoke는 import·실행파일·웹 정적 파일 검증이며 실제 운영사
+인증·예약 검증은 아니다. 1.4.5까지는 전체 검증이 한 작업에서 순서대로 끝난 뒤에 이미지를 QEMU로 함께 빌드해,
+1.4.4 기준 검증 15분과 이미지 8.4분이 이어졌다(arm64 browser 이미지의 같은 apt 단계가 365초, amd64는 42초).
+
+워크플로를 바꿨다면 게시 전에 검토 브랜치에서 `dry_run`으로 먼저 실행한다.
+
+```bash
+gh workflow run release.yml --ref <브랜치> -f version=<CHANGELOG 최상단 버전> -f compatible_from=<출발 버전> -f dry_run=true
+```
+
+dry run은 `main`이 아니어도 실행되고, 저장소 서명 키를 받지 않고 그 작업 안에서만 만든 일회용 키로 서명하며,
+게시 작업을 건너뛴다. 이미지 빌드·병합·익명 조회·두 CPU smoke·CLI 빌드는 실제와 같이 하므로 그 커밋 태그의
+이미지가 GHCR에 남는다.
 
 `releases/latest/download/<자산>` 주소는 게시가 끝난 뒤에야 새 Release로 연결된다. 그래서 새 자산이나 새
 기능에 기대는 설치 안내(README 등)는 코드·CHANGELOG 커밋과 나눠, 게시 뒤 최신 Release 태그와 안내할 자산의 200
@@ -51,9 +66,10 @@ stable로 공개한다. smoke는 import·실행파일·웹 정적 파일 검증�
 secret과 관리자의 오프라인 백업에만 있다. GHCR의 `api`·`web`·`browser`·`backup` 네 패키지는 첫 게시 직후부터 익명
 pull 토큰으로 `tags/list` 200을 돌려줘 따로 공개로 바꿀 필요가 없었다. `gh` 토큰에 packages 권한이 없어 패키지
 공개 설정 값 자체는 API로 확인하지 않았다.
-verify 작업은 repository-verify와 같은 ubuntu-24.04에서 돈다. ubuntu-latest가 고르는 Ubuntu 26.04에는 API의
-Playwright 1.55가 Chromium 의존성을 설치하지 못한다. 병렬 테스트 전에 Chrome을 한 번 띄워, 첫 시작이 Pydoll의
-시작 대기 시간을 넘기지 않게 한다.
+검증 작업은 repository-verify와 같은 ubuntu-24.04에서 돈다. ubuntu-latest가 고르는 Ubuntu 26.04에는 API의
+Playwright 1.55가 Chromium 의존성을 설치하지 못한다. `verify-api`는 병렬 테스트 전에 Chrome을 한 번 띄워, 첫
+시작이 Pydoll의 시작 대기 시간을 넘기지 않게 한다. 간헐 실패로 검증 작업 하나만 실패하면
+`gh run rerun <run ID> --failed`로 그 작업과 뒤 단계만 다시 실행한다.
 
 `--compatible-from`을 반복 지정하거나 workflow의 `compatible_from`에 쉼표로 구분한 버전을 입력한다.
 비워 두면 새 설치만 허용하고 기존 설치의 자동 업데이트는 차단한다. DB revision은 소스 migration의

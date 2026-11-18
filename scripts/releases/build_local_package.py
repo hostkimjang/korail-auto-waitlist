@@ -333,8 +333,14 @@ def main() -> int:
             (args.signing_key_file.absolute(), args.public_key_output.absolute()),
         )
         args.public_key_output.write_text(public + "\n", encoding="ascii")
-    except Exception:
-        print("Local package generation failed. Check local images and inputs; existing images were not modified.", file=sys.stderr)
+    except Exception as error:
+        # Messages name Docker references, paths and validation rules; the seed is only read
+        # from its file, so it never appears in an exception or a command line.
+        print(
+            f"Local package generation failed ({type(error).__name__}: {error}). "
+            "Check local images and inputs; existing images were not modified.",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

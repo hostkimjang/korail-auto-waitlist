@@ -244,9 +244,15 @@ print(f"KORAIL 조회 확인: {travel_date} 대전→서울 12~14시 열차 {len
 PY
 }
 
+# Docker 29의 containerd 이미지 저장소는 같은 플랫폼 매니페스트를 공유하는 다른 이미지의 provenance 증명을
+# docker image save 결과에 referrer 최상위 항목으로 덧붙인다. 레이어가 모두 캐시인 재빌드는 이전 이미지와
+# 매니페스트가 같아지므로, 실행마다 다른 build-id 라벨로 config를 고유하게 만든다. 레이어 캐시는 그대로 쓴다.
 build_image() {
     local tag="$1" context="$2" dockerfile="$3" target="$4"
-    set -- --platform "$platform" --file "$source_dir/$context/$dockerfile" --tag "$tag"
+    set -- --platform "$platform" --file "$source_dir/$context/$dockerfile" --tag "$tag" \
+        --label "org.opencontainers.image.version=$version" \
+        --label "org.opencontainers.image.revision=$commit" \
+        --label "io.github.hostkimjang.railwait.build-id=$build_id"
     if [[ "$target" != - ]]; then
         set -- "$@" --target "$target"
     fi
@@ -424,6 +430,7 @@ done
 images_json="{"
 separator=""
 built_tags=""
+build_id="$(py -c 'import secrets; print(secrets.token_hex(8))')"
 while read -r image context dockerfile target; do
     [[ -n "$image" ]] || continue
     name="${image%:*}"

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/platform"
 	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/release"
@@ -21,6 +22,12 @@ import (
 var localUpdateSteps = []string{"checking", "loading_package", "draining", "backing_up", "applying", "replacing_package", "verifying", "resuming"}
 
 const previousLocalPackagePrefix = ".local-package-previous-"
+
+// packageHandleWait bounds how long a package folder swap waits for another process to close
+// a file inside the folder. Windows refuses to rename a folder while any file inside it is
+// open, even when that process allows deletion, and antivirus scans or the search indexer
+// hold such files briefly. A refused swap leaves the update in recovery_required.
+var packageHandleWait = 30 * time.Second
 
 // PlanLocalUpdate plans an update of a local-package installation from a package and a
 // public key that the operator names explicitly on this host. The host manager and the
@@ -142,7 +149,8 @@ func checkLocalPackageSpace(installation string, m release.LocalManifest) error 
 
 // replaceLocalPackage moves the preserved package to previous and the staged copy into its
 // place. The caller restores previous on failure and removes it only after the new
-// installation record is written.
+// installation record is written. Each move waits for files that another process briefly
+// holds open on Windows.
 func replaceLocalPackage(installation, staged, previous string) error {
 	current := filepath.Join(installation, ".railwait", "local-package")
 	if _, err := os.Lstat(previous); err == nil {
@@ -150,24 +158,40 @@ func replaceLocalPackage(installation, staged, previous string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.Rename(current, previous); err != nil {
+	if err := retryWhileFileHeld(func() error { return os.Rename(current, previous) }); err != nil {
 		return err
 	}
-	if err := os.Rename(staged, current); err != nil {
-		return errors.Join(err, os.Rename(previous, current))
+	if err := retryWhileFileHeld(func() error { return os.Rename(staged, current) }); err != nil {
+		return errors.Join(err, retryWhileFileHeld(func() error { return os.Rename(previous, current) }))
 	}
 	return nil
 }
 
 func restoreLocalPackage(installation, previous string) error {
 	current := filepath.Join(installation, ".railwait", "local-package")
-	if err := os.RemoveAll(current); err != nil {
+	if err := retryWhileFileHeld(func() error { return os.RemoveAll(current) }); err != nil {
 		return fmt.Errorf("새 로컬 패키지를 되돌리지 못했습니다; 이전 패키지는 %s에 있습니다: %w", previous, err)
 	}
-	if err := os.Rename(previous, current); err != nil {
+	if err := retryWhileFileHeld(func() error { return os.Rename(previous, current) }); err != nil {
 		return fmt.Errorf("이전 로컬 패키지를 복원하지 못했습니다; %s를 확인하세요: %w", previous, err)
 	}
 	return nil
+}
+
+// retryWhileFileHeld repeats a package folder rename or removal that Windows refused because
+// another process had a file open, until it succeeds, fails for another reason or the wait
+// runs out. Other platforms never report a held file, so the operation runs once.
+func retryWhileFileHeld(op func() error) error {
+	deadline := time.Now().Add(packageHandleWait)
+	delay := 50 * time.Millisecond
+	for {
+		err := op()
+		if err == nil || !fileHeldByAnotherProcess(err) || time.Now().Add(delay).After(deadline) {
+			return err
+		}
+		time.Sleep(delay)
+		delay = min(2*delay, time.Second)
+	}
 }
 
 // withInterruptedLocalUpdateHint points to the previous package that an interrupted local

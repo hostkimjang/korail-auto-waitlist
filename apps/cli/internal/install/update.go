@@ -618,6 +618,11 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		// services. Restore it unless the new installation record is written; afterwards the
 		// previous package is only cleanup.
 		if err = replaceLocalPackage(abs, stagedPackage, result.PreviousPackage); err != nil {
+			// A refused swap leaves the preserved package in place unless the rollback also
+			// failed, so the job names a previous package only while that directory exists.
+			if _, statErr := os.Lstat(result.PreviousPackage); os.IsNotExist(statErr) {
+				result.PreviousPackage = ""
+			}
 			return result, err
 		}
 		defer func() {
@@ -627,7 +632,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 				} else {
 					result.PreviousPackage = ""
 				}
-			} else if removeErr := os.RemoveAll(result.PreviousPackage); removeErr != nil {
+			} else if removeErr := retryWhileFileHeld(func() error { return os.RemoveAll(result.PreviousPackage) }); removeErr != nil {
 				result.Warnings = append(result.Warnings, "설치 기록은 새 버전으로 바뀌었지만 이전 로컬 패키지를 지우지 못했습니다: "+result.PreviousPackage)
 			} else {
 				result.PreviousPackage = ""

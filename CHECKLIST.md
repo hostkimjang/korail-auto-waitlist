@@ -250,6 +250,14 @@
   삭제), 보존했던 작업 폴더·진단 worktree·임시 키 삭제. 1.4.1 이미지와 업데이트 직전 암호화 백업은 되돌리기용으로 보존
 - [ ] `recovery_required` 작업을 기록된 이전 버전으로 되돌리는 CLI 복구 명령 (현재는 운영 가이드의 수동 절차)
 - [ ] Linux 호스트에서 스크립트 실행 확인 (macOS bash 3.2·Lima에서만 확인)
+- [x] Windows 로컬 패키지 폴더 교체 재시도: ERROR_ACCESS_DENIED·SHARING_VIOLATION·LOCK_VIOLATION에 한해 50ms~1초 간격으로
+  최대 30초(`packageHandleWait`) 다시 시도하는 `retryWhileFileHeld`를 교체의 두 rename·되돌리기·복원·커밋 뒤 정리에 적용(다른
+  OS는 한 번 실행). 교체가 거부돼 previous 폴더가 없으면 작업 기록의 `previous_package`를 비움. Windows 원격 채팅이 재현 뒤 제안한
+  diff를 파일 해시가 같게 반영하고 Windows 회귀 3건 추가. Windows에서 수정 전 새 job 테스트 실패·수정 뒤 통과, 새 테스트 5회 반복과
+  `go test ./...` 8개 패키지 통과. 맥미니에서 gofmt·3개 OS vet·Linux race 전체·Windows 테스트 컴파일·6대상 빌드 통과
+- [ ] GitHub Actions windows-latest에서 새 Windows 회귀 3건 `-race` 통과
+- [ ] 30초를 넘게 잡혀 있으면 새 서비스 교체 뒤라 여전히 `recovery_required`. 교체 실패가 서비스 교체 전에 드러나도록 순서 조정 검토.
+  관리자 그룹이 아닌 Windows 표준 계정은 미확인
 
 ## 2026년 11월 17일 공지 팝업 화면 기준 판정과 거부 사유 표시 (v1.4.1)
 
@@ -278,7 +286,13 @@
   `status --job`의 CLI 작업 기록 조회, 터미널 끊김 무시·SIGTERM 취소, 계획 단계 패키지 공간 검사, dry-run 공개키 표시.
   독립 리뷰(높음 0건) 지적을 반영하고 Go 회귀 10건 추가. 사본 공개키 검사를 끈 변이에서 회귀가 실패하는 것 확인.
   gofmt·go vet·race 전체와 6개 OS/CPU vet·빌드 통과
-- [ ] Windows 실기기에서 백신·색인 프로그램이 보존 패키지 폴더를 잡고 있을 때의 폴더 교체 확인
+- [x] Windows 실기기에서 백신·색인 프로그램이 보존 패키지 폴더를 잡고 있을 때의 폴더 교체 확인(11월 18일, Windows 원격 Codex, Defender
+  실시간 보호 기본 상태). 실제 설치가 아닌 `%TEMP%`의 같은 이름 패키지에 별도 프로세스가 handle을 잡은 채 원본 함수를 호출했다.
+  보존 패키지 안 파일이 열려 있으면 공유 모드(RWD·RW·R)와 관계없이 첫 rename이 errno 5로 거부되고 보존 패키지·staged는 제자리,
+  staged 안 파일이면 두 번째 rename 거부 뒤 되돌리기 성공. 폴더 자체 handle은 막지 않고 다른 프로세스의 작업 폴더면 errno 32.
+  복원·커밋 뒤 정리는 RW 열기에 errno 32로 실패하지만 이전 패키지는 `.local-package-previous-<job>`에 남고 안내도 정확했다. 방금 쓴
+  2×32MiB 패키지 교체·정리 20회는 실패 0. 가짜 runner로 돌린 `Update`에서는 교체 거부가 새 서비스 교체 뒤 `recovery_required`로
+  이어지고 작업 기록이 만들어지지 않은 previous 폴더를 가리키는 것을 확인해 v1.4.2에서 재시도와 기록 수정을 넣음
 - [x] `apps/api/.dockerignore`의 `__pycache__/`·`*.pyc`가 빌드 컨텍스트 루트에만 적용돼 작업 트리에서 빌드한 API·KORAIL
   어댑터 이미지에 오래된 bytecode(`__pycache__` 25개)가 섞이던 문제를 `**/` 패턴으로 수정. 하위 `__pycache__`가 있는
   작업 트리에서 다시 빌드한 두 이미지에 `__pycache__` 0개, 깨끗한 커밋 빌드(정식 1.4.1 이미지)와 레이어·실행 설정 동일 확인

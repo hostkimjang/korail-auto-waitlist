@@ -255,7 +255,9 @@
   OS는 한 번 실행). 교체가 거부돼 previous 폴더가 없으면 작업 기록의 `previous_package`를 비움. Windows 원격 채팅이 재현 뒤 제안한
   diff를 파일 해시가 같게 반영하고 Windows 회귀 3건 추가. Windows에서 수정 전 새 job 테스트 실패·수정 뒤 통과, 새 테스트 5회 반복과
   `go test ./...` 8개 패키지 통과. 맥미니에서 gofmt·3개 OS vet·Linux race 전체·Windows 테스트 컴파일·6대상 빌드 통과
-- [ ] GitHub Actions windows-latest에서 새 Windows 회귀 3건 `-race` 통과
+- [x] GitHub Actions `CLI cross-platform verification`(run 44260788142, 커밋 `62ba195`): windows-latest의
+  `go test -race -count=1 ./...`에서 새 Windows 회귀 3건이 든 install 패키지 통과(20.1초, 직전 13.7초). ubuntu·macOS 네이티브
+  테스트와 6대상 컴파일도 통과
 - [ ] 30초를 넘게 잡혀 있으면 새 서비스 교체 뒤라 여전히 `recovery_required`. 교체 실패가 서비스 교체 전에 드러나도록 순서 조정 검토.
   관리자 그룹이 아닌 Windows 표준 계정은 미확인
 

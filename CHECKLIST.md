@@ -251,11 +251,34 @@
 - [x] Git 설치의 `ops.sh`가 macOS 기본 bash 3.2에서 바로 실패하던 문제(이번 변경 전부터 있던 결함): `mapfile`과 `set -u`
   아래 빈 배열 확장을 bash 3.2 호환으로 바꿈. `test-ops.sh` 계약 테스트가 bash 3.2·5.2 컨테이너에서 통과하고,
   repository-verify가 bash 3.2 실행을 함께 확인
-- [ ] Git 설치 업데이트 확인: 임시 Git 설치(1.4.10, 포트 18096, 관리자·화면 설정 데이터 있음)를 `git pull --ff-only`와
-  `bash ./scripts/ops.sh experimental`로 1.5.0에 올리고 데이터 보존·화면 버전·서버 설정 안내 확인
+- [x] Git 설치 업데이트 확인(macOS 기본 bash 3.2, Lima Docker): GitHub `main`(1.4.10)을 받아 `.env.example`로 만든 임시
+  Git 설치(포트 18096)에 관리자와 화면 설정(시간표 새로고침 37초)을 만든 뒤, `git pull --ff-only origin main`과
+  `bash ./scripts/ops.sh experimental`로 51초 만에 1.5.0으로 올림. 단계적 종료(proxy → scheduler → worker 계열 → api) 뒤
+  12개 서비스 healthy, migration·log-init `exited 0`, 같은 관리자로 로그인되고 설정 37초 유지, 화면 번들 1.5.0,
+  `/runtime-config.js` 200. 서버 설정 API는 `managed_install_required`(화면은 Git 설치 안내), `restart_available` false,
+  다시 시작 요청은 `503 restart_manager_unavailable`. `ops.sh down` 뒤 빈 상태에서 `ops.sh experimental`도 통과하고 데이터
+  유지. 1.4.10의 `ops.sh`는 이 Mac에서 실패해 처음 기동은 Compose를 직접 실행함. 확인 뒤 임시 프로젝트의 컨테이너·볼륨·
+  네트워크와 clone을 지움
 - [ ] Windows·Linux 실제 서비스 관리자에서 `uninstall` 등록 해제, Windows 탐색기 `/select,`와 더블클릭 판정, Linux
   `xdg-open` 확인
-- [ ] 1.5.0 서명 릴리스 게시와 운영 설치(포트 8080) 업데이트·관리 서비스 교체
+- [x] CI: PR #12의 저장소 검증(PR·push), CLI 교차 플랫폼, 실험 브라우저 검증 통과. 첫 CLI 교차 플랫폼 실행은 Windows에서
+  제거 안내의 OS별 문구를 고정한 테스트 1건이 실패해 테스트를 OS별로 고침
+- [x] 1.5.0 서명 릴리스 게시(run 44472617804, 커밋 `7cc92a6`, 2026-11-19 16:04 KST): 최신 Release `v1.5.0`, 자산 19개가
+  공개 주소에서 모두 200, manifest `compatible_from` 1.4.3~1.4.6·1.4.10, DB revision `0042_protection_halt`, PostgreSQL
+  `81e77a48…`·Redis `7f7d30b7…`, 공개키 `qeR7…5nM=`로 OpenSSL 서명 검증 통과, darwin-arm64 CLI SHA-256 일치, 한국어
+  Release 노트. 브라우저 amd64 이미지와 스택 검증이 캐시가 비어 30분 가까이 걸렸지만 통과
+- [x] CLI 간편 설치 업데이트 확인: 공식 1.4.10 CLI로 만든 임시 관리형 설치(포트 18095)에서 웹 **앱 업데이트** 버튼과 같은
+  API 요청이 202로 접수돼 69초 만에 1.4.10→1.5.0 `succeeded`. 관리 서비스 교체 전에는 설치 위치가
+  `RAILWAIT_INSTALL_DIR`에서 `darwin`으로 추정돼 보이고 다시 시작 요청은 `409 restart_manager_upgrade_required`.
+  공식 1.5.0 CLI의 `manager upgrade` 뒤 `restart_available` true, 웹 다시 시작 요청이 32초 만에 `succeeded`. 이어서 공식
+  1.5.0 CLI의 `uninstall --delete-data`가 한 번에 끝남(launchd 대기 수정 반영)
+- [x] 1.5.0 CLI의 `uninstall --delete-data`가 업데이트·설정 변경 때 생긴 `<프로젝트>_backups` 볼륨을 남기고도 데이터를
+  지웠다고 알리던 결함: `backups`는 필요할 때만 실행하는 `backup` 프로필 서비스의 볼륨이라 프로필 없는 `down --volumes`가
+  건너뜀. 모든 프로필(`--profile '*'`)로 내리고 남은 이 설치의 볼륨은 이름으로 지우도록 고침. 회귀 테스트(프로필별 볼륨,
+  Compose가 남긴 볼륨) 추가. 공식 1.5.0 임시 설치에 설정 변경으로 `backups`를 만든 뒤 고친 CLI로 제거해 볼륨 6개가 모두
+  지워진 것을 확인. 1.5.1로 게시
+- [ ] 1.5.1 서명 릴리스 게시와 운영 설치(포트 8080) 업데이트·관리 서비스 교체(KORAIL 재로그인을 한 번만 하도록 1.5.0을
+  건너뛰고 1.5.1로 바로 올림)
 
 ## 2026년 11월 19일 1.4.6 이하에서 앱 업데이트를 막은 PostgreSQL 이미지 변경 (v1.4.10)
 

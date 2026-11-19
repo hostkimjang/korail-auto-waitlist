@@ -105,7 +105,7 @@ Windows PowerShell 5.1에서 `요청이 중단되었습니다. 예기치 않게 
 
 Docker Compose로 실행합니다. 처음 설치하는 방법은 [시작하기](docs/GETTING_STARTED.md)에 순서대로 정리했습니다.
 
-Linux Bash:
+macOS·Linux Bash:
 
 ```bash
 cp .env.example .env
@@ -144,12 +144,14 @@ CLI를 빌드하는 방법은 [설치 CLI 안내](apps/cli/README.md#railwait-�
 
 새 커밋을 fast-forward로만 받은 뒤 사용 중인 프로필 전체를 다시 빌드하고 재가동합니다.
 
-Linux Bash:
+macOS·Linux Bash:
 
 ```bash
 git pull --ff-only origin main
 bash ./scripts/ops.sh experimental
 ```
+
+`ops.sh`는 1.5.0부터 macOS 기본 bash(3.2)에서도 동작합니다. 그 전 버전에서 올릴 때도 `git pull`로 받은 새 스크립트가 실행되므로 같은 명령을 씁니다.
 
 Windows PowerShell:
 

@@ -9,7 +9,9 @@ from .gate import MaintenanceClosed, MaintenanceGate
 
 EXEMPT_PATHS = frozenset({"/healthz", "/readyz", "/api/v1/auth/login", "/api/v1/auth/status"})
 # Management screens must keep working while the manager drains and restarts the app.
-MANAGEMENT_PATHS = frozenset({"/api/v1/system/update", "/api/v1/system/settings"})
+MANAGEMENT_PATHS = frozenset(
+    {"/api/v1/system/update", "/api/v1/system/settings", "/api/v1/system/restart"}
+)
 
 
 class MaintenanceMiddleware:

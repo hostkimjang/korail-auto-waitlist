@@ -17,8 +17,10 @@ from rail_waitlist.config import get_settings
 from rail_waitlist.maintenance.schemas import SettingsSubmission
 
 SETTINGS_PATH = "/api/v1/system/settings"
+RESTART_PATH = "/api/v1/system/restart"
 TOKEN = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 IDEMPOTENCY = "e" * 32
+RESTART_BODY = {"scope": "app", "idempotency_key": IDEMPOTENCY}
 STARTED_AT = "2026-11-19T01:02:03.123456789Z"
 RAW = (
     "COMPOSE_PROJECT_NAME=railwait\n"
@@ -61,6 +63,8 @@ UNAVAILABLE_PROJECTION = {
     "raw": None,
     "secret_keys": [],
     "locked_keys": [],
+    "restart_available": False,
+    "install_location": None,
 }
 
 
@@ -98,6 +102,19 @@ def write_heartbeat(directory: Path, **overrides: Any) -> None:
         **overrides,
     }
     (directory / "status/manager.json").write_text(json.dumps(heartbeat))
+
+
+def write_capabilities(directory: Path, **overrides: Any) -> None:
+    capabilities = {
+        "schema": 1,
+        "manager_started_at": STARTED_AT,
+        "version": "1.5.0",
+        "capabilities": ["settings", "restart"],
+        "install_path": "/Users/me/Library/Application Support/Railwait",
+        "host_os": "darwin",
+        **overrides,
+    }
+    (directory / "status/capabilities.json").write_text(json.dumps(capabilities))
 
 
 def submission(**form: Any) -> dict[str, Any]:
@@ -163,6 +180,8 @@ async def test_ready_status_projects_allowlisted_fields_in_contract_order(client
         "raw",
         "secret_keys",
         "locked_keys",
+        "restart_available",
+        "install_location",
     ]
     assert body["schema"] == 1
     assert body["managed"] is True
@@ -173,6 +192,9 @@ async def test_ready_status_projects_allowlisted_fields_in_contract_order(client
     assert body["raw"] == RAW
     assert body["secret_keys"] == ["POSTGRES_PASSWORD", "TAGO_SERVICE_KEY"]
     assert body["locked_keys"] == ["COMPOSE_PROJECT_NAME"]
+    # A manager without status/capabilities.json predates restarts.
+    assert body["restart_available"] is False
+    assert body["install_location"] is None
     assert [(f["key"], f["kind"], f["scope"]) for f in body["fields"]] == CONTRACT_FIELDS
     for field in body["fields"]:
         assert list(field) == ["key", "kind", "scope", "value", "configured"]
@@ -589,7 +611,14 @@ async def test_settings_endpoints_require_admin_csrf_and_trusted_origin(
 
 @pytest.mark.parametrize(
     "error_code",
-    ["E_SETTINGS_CHANGED", "E_SETTINGS_INVALID", "E_SETTINGS_FORBIDDEN", "E_SETTINGS_UNCHANGED"],
+    [
+        "E_SETTINGS_CHANGED",
+        "E_SETTINGS_INVALID",
+        "E_SETTINGS_FORBIDDEN",
+        "E_SETTINGS_UNCHANGED",
+        "E_RESTART_ENV_INVALID",
+        "E_RESTART_UNAVAILABLE",
+    ],
 )
 async def test_update_job_reader_accepts_settings_error_codes(client, management_ipc, error_code):
     identifier = os.urandom(16).hex()
@@ -614,3 +643,149 @@ async def test_update_job_reader_accepts_settings_error_codes(client, management
     assert response.status_code == 200
     assert response.json()["error_code"] == error_code
     assert response.json()["state"] == "rejected"
+
+
+async def test_capabilities_enable_restart_and_locate_install_env(client, management_ipc):
+    write_capabilities(management_ipc)
+    body = (await client.get(SETTINGS_PATH)).json()
+    assert body["restart_available"] is True
+    assert body["install_location"] == {
+        "install_path": "/Users/me/Library/Application Support/Railwait",
+        "env_path": "/Users/me/Library/Application Support/Railwait/.env",
+        "host_os": "darwin",
+    }
+
+
+async def test_capabilities_ignore_unknown_fields_from_newer_managers(client, management_ipc):
+    write_capabilities(
+        management_ipc, capabilities=["settings", "restart", "later"], extra={"x": 1}
+    )
+    assert (await client.get(SETTINGS_PATH)).json()["restart_available"] is True
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"manager_started_at": "2026-11-19T01:02:04Z"},
+        {"capabilities": ["settings"]},
+        {"schema": 2},
+        {"host_os": "plan9"},
+    ],
+    ids=["earlier_process", "no_restart", "schema", "host_os"],
+)
+async def test_restart_needs_current_capability_file(client, management_ipc, overrides):
+    write_capabilities(management_ipc, **overrides)
+    body = (await client.get(SETTINGS_PATH)).json()
+    assert body["available"] is True
+    assert body["restart_available"] is False
+    response = await client.post(RESTART_PATH, json=RESTART_BODY)
+    assert response.status_code == 409
+    assert response.json() == {"detail": "restart_manager_upgrade_required"}
+    assert request_files(management_ipc) == []
+
+
+@pytest.mark.parametrize(
+    ("line", "location"),
+    [
+        (
+            "RAILWAIT_INSTALL_DIR='/home/me/railwait'",
+            {
+                "install_path": "/home/me/railwait",
+                "env_path": "/home/me/railwait/.env",
+                "host_os": "linux",
+            },
+        ),
+        (
+            "RAILWAIT_INSTALL_DIR='C:\\Users\\me\\Railwait'",
+            {
+                "install_path": "C:\\Users\\me\\Railwait",
+                "env_path": "C:\\Users\\me\\Railwait\\.env",
+                "host_os": "windows",
+            },
+        ),
+        (
+            "RAILWAIT_INSTALL_DIR=/srv/railwait/",
+            {"install_path": "/srv/railwait/", "env_path": "/srv/railwait/.env", "host_os": None},
+        ),
+        ("RAILWAIT_INSTALL_DIR='railwait'", None),
+    ],
+    ids=["linux", "windows", "unknown_os", "relative"],
+)
+async def test_install_location_falls_back_to_the_snapshot_of_older_managers(
+    client, management_ipc, line, location
+):
+    write_snapshot(management_ipc, snapshot(raw=RAW + line + "\n"))
+    body = (await client.get(SETTINGS_PATH)).json()
+    assert body["restart_available"] is False
+    assert body["install_location"] == location
+
+
+async def test_restart_submission_writes_documented_request_file(client, management_ipc, caplog):
+    caplog.set_level(logging.DEBUG)
+    write_capabilities(management_ipc)
+    # The fixture closes the maintenance gate: a restart can be requested while the app drains.
+    response = await client.post(RESTART_PATH, json=RESTART_BODY)
+    assert response.status_code == 202
+    assert response.headers["cache-control"] == "no-store"
+    assert list(response.json()) == ["schema", "id", "state"]
+    assert response.json()["state"] == "queued"
+    identifier = response.json()["id"]
+    assert len(identifier) == 32 and set(identifier) <= set("0123456789abcdef")
+    assert TOKEN not in response.text and TOKEN not in caplog.text
+    assert request_files(management_ipc) == [f"{identifier}.restart.json"]
+    path = management_ipc / "requests" / f"{identifier}.restart.json"
+    assert path.stat().st_mode & 0o777 == 0o644
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written == {
+        "schema": 1,
+        "id": identifier,
+        "idempotency_key": IDEMPOTENCY,
+        "auth_token": TOKEN,
+        "scope": "app",
+    }
+    assert list(written) == ["schema", "id", "idempotency_key", "auth_token", "scope"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"scope": "all", "idempotency_key": IDEMPOTENCY},
+        {"scope": "app"},
+        {"scope": "app", "idempotency_key": "E" * 32},
+        {"scope": "app", "idempotency_key": IDEMPOTENCY, "services": ["postgres"]},
+    ],
+    ids=["scope", "missing_key", "key_format", "extra_field"],
+)
+async def test_invalid_restart_submission_is_redacted_and_writes_nothing(
+    client, management_ipc, body
+):
+    write_capabilities(management_ipc)
+    response = await client.post(RESTART_PATH, json=body)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "request_validation_failed"}
+    assert request_files(management_ipc) == []
+
+
+async def test_restart_with_unavailable_manager_returns_503(client, management_ipc):
+    write_capabilities(management_ipc)
+    stale = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    write_heartbeat(management_ipc, heartbeat_at=stale)
+    response = await client.post(RESTART_PATH, json=RESTART_BODY)
+    assert response.status_code == 503
+    assert response.json() == {"detail": "restart_manager_unavailable"}
+    assert request_files(management_ipc) == []
+
+
+async def test_restart_requires_admin_csrf_and_trusted_origin(
+    public_client, client, management_ipc
+):
+    write_capabilities(management_ipc)
+    body = RESTART_BODY
+    assert (await public_client.post(RESTART_PATH, json=body)).status_code == 401
+    assert (
+        await client.post(RESTART_PATH, json=body, headers={"X-CSRF-Token": "wrong"})
+    ).status_code == 403
+    assert (
+        await client.post(RESTART_PATH, json=body, headers={"Origin": "https://untrusted.example"})
+    ).status_code == 403
+    assert request_files(management_ipc) == []

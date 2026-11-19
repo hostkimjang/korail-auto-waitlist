@@ -85,3 +85,7 @@ class RailProviderRuntimeStatusRead(ApiModel):
     local_reuse_remaining_seconds: float | None = Field(default=None, ge=0)
     locally_reusable: bool
     prewarm_outcome: RailProviderAuthStatus | None = None
+    # The provider answered an automatic login with protection; the session manager holds
+    # this provider's logins (and seat observation) until a later login succeeds.
+    protection_halted: bool = False
+    next_login_attempt_seconds: float | None = Field(default=None, ge=0)

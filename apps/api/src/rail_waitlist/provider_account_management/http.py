@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -49,8 +50,11 @@ async def provider_runtime_status(
 
     response.headers["Cache-Control"] = "no-store"
     registry = request.app.state.provider_runtime_prewarm_registry
+    # The session manager's clocks are event-loop times on this same loop.
+    now = asyncio.get_running_loop().time()
     results: list[RailProviderRuntimeStatusRead] = []
     for provider in (Provider.KORAIL, Provider.SRT):
+        protection_halted, next_login_attempt_seconds = registry.login_wait(provider, now)
         try:
             snapshot = await request.app.state.provider_login_verifier.session_snapshot(provider)
             results.append(
@@ -64,6 +68,8 @@ async def provider_runtime_status(
                     local_reuse_remaining_seconds=snapshot.local_reuse_remaining_seconds,
                     locally_reusable=snapshot.locally_reusable,
                     prewarm_outcome=registry.outcome_for(provider),
+                    protection_halted=protection_halted,
+                    next_login_attempt_seconds=next_login_attempt_seconds,
                 )
             )
         except Exception:  # noqa: BLE001 -- provider exceptions must remain redacted.
@@ -73,6 +79,8 @@ async def provider_runtime_status(
                     state="stale",
                     locally_reusable=False,
                     prewarm_outcome=registry.outcome_for(provider),
+                    protection_halted=protection_halted,
+                    next_login_attempt_seconds=next_login_attempt_seconds,
                 )
             )
     return results

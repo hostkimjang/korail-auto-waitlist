@@ -1596,6 +1596,44 @@ async def test_runtime_status_api_is_secret_free_and_reports_local_reuse(
     assert "token" not in serialized
 
 
+async def test_runtime_status_api_reports_protection_wait(app, client) -> None:
+    app.state.provider_login_verifier = StubRuntimeVerifier(
+        snapshots={Provider.KORAIL: _cold_snapshot(Provider.KORAIL)},
+    )
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    # The state a restart leaves after rehydrating a persisted protection verdict.
+    registry.halt_after_protection_verdict((Provider.KORAIL, 9, 1))
+    registry.finish_prewarm(
+        Provider.KORAIL,
+        9,
+        outcome="provider_blocked",
+        now=asyncio.get_running_loop().time(),
+    )
+    app.state.provider_runtime_prewarm_registry = registry
+
+    response = await client.get("/api/v1/provider-runtime-status")
+
+    assert response.status_code == 200
+    korail, srt = response.json()
+    assert korail["provider"] == "korail"
+    assert korail["state"] == "cold"
+    assert korail["protection_halted"] is True
+    assert 1790 <= korail["next_login_attempt_seconds"] <= 1800
+    assert srt["protection_halted"] is False
+    assert srt["next_login_attempt_seconds"] is None
+
+
+def test_login_wait_is_read_only_and_reports_the_longest_pending_wait() -> None:
+    registry = ProviderRuntimePrewarmRegistry(completed=True)
+    assert registry.login_wait(Provider.KORAIL, 100.0) == (False, None)
+    registry.prewarm_retry_state[Provider.KORAIL] = (9, 1, 160.0)
+    registry.provider_deferred_until[Provider.KORAIL] = 130.0
+    assert registry.login_wait(Provider.KORAIL, 100.0) == (False, 60.0)
+    registry.halt_after_protection_verdict((Provider.KORAIL, 9, 1))
+    assert registry.login_wait(Provider.KORAIL, 170.0) == (True, None)
+    assert registry.prewarm_retry_state[Provider.KORAIL] == (9, 1, 160.0)
+
+
 async def _halt_row(app):
     async with app.state.test_session_factory() as session:
         return (

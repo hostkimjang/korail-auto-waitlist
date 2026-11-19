@@ -10,7 +10,10 @@ from .application import (
     update_job,
     update_status,
 )
+from .restart import RestartManagerUpgradeRequired, submit_restart
 from .schemas import (
+    RestartAccepted,
+    RestartSubmission,
     SettingsAccepted,
     SettingsStatus,
     SettingsSubmission,
@@ -28,6 +31,7 @@ from .settings import (
 
 router = APIRouter(prefix="/api/v1/system/update", dependencies=[Depends(require_admin)])
 settings_router = APIRouter(prefix="/api/v1/system/settings", dependencies=[Depends(require_admin)])
+restart_router = APIRouter(prefix="/api/v1/system/restart", dependencies=[Depends(require_admin)])
 NO_STORE = {"Cache-Control": "no-store"}
 
 # The handlers below are plain functions so FastAPI runs them in its thread pool: reading the
@@ -80,3 +84,14 @@ def request_settings_change(data: SettingsSubmission, response: Response) -> Set
         raise HTTPException(409, "settings_manager_upgrade_required", headers=NO_STORE) from None
     except SettingsChanged:
         raise HTTPException(409, "settings_changed", headers=NO_STORE) from None
+
+
+@restart_router.post("", response_model=RestartAccepted, status_code=202)
+def request_restart(data: RestartSubmission, response: Response) -> RestartAccepted:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return submit_restart(data)
+    except ManagementUnavailable:
+        raise HTTPException(503, "restart_manager_unavailable", headers=NO_STORE) from None
+    except RestartManagerUpgradeRequired:
+        raise HTTPException(409, "restart_manager_upgrade_required", headers=NO_STORE) from None

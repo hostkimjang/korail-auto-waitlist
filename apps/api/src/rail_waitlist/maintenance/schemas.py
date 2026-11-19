@@ -140,6 +140,8 @@ class UpdateJob(ManagementModel):
             "E_SETTINGS_INVALID",
             "E_SETTINGS_FORBIDDEN",
             "E_SETTINGS_UNCHANGED",
+            "E_RESTART_ENV_INVALID",
+            "E_RESTART_UNAVAILABLE",
         ]
         | None
     ) = None
@@ -196,6 +198,41 @@ class SettingsField(BaseModel):
     configured: bool
 
 
+HostOs = Literal["darwin", "linux", "windows"]
+CapabilityName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
+
+
+class ManagerCapabilities(ManagementModel):
+    """status/capabilities.json, written by managers that can do more than change settings.
+
+    Unlike the other management files it ignores unknown fields, so a newer manager can
+    announce more without hiding what this API already understands.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=True, populate_by_name=True)
+    manager_started_at: datetime
+    version: str = Field(pattern=r"^[0-9A-Za-z.+_-]{1,64}$")
+    capabilities: list[CapabilityName] = Field(max_length=32)
+    install_path: str = Field(min_length=1, max_length=4096)
+    host_os: HostOs
+
+    @field_validator("manager_started_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timezone required")
+        return value
+
+
+class InstallLocation(BaseModel):
+    """Where the install .env lives on the install computer, for users who edit it there."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    install_path: str
+    env_path: str
+    host_os: HostOs | None
+
+
 class SettingsStatus(ManagementModel):
     schema_version: Literal[1] = Field(default=1, alias="schema")
     managed: bool
@@ -207,6 +244,8 @@ class SettingsStatus(ManagementModel):
     raw: str | None = None
     secret_keys: list[EnvName] = Field(default_factory=list)
     locked_keys: list[EnvName] = Field(default_factory=list)
+    restart_available: bool = False
+    install_location: InstallLocation | None = None
 
 
 class SettingsFieldValues(BaseModel):
@@ -290,4 +329,14 @@ class SettingsSubmission(BaseModel):
 
 
 class SettingsAccepted(UpdateAccepted):
+    pass
+
+
+class RestartSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    scope: Literal["app"]
+    idempotency_key: Identifier
+
+
+class RestartAccepted(UpdateAccepted):
     pass

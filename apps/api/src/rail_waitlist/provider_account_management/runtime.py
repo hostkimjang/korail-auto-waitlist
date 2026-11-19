@@ -224,6 +224,21 @@ class ProviderRuntimePrewarmRegistry:
     def clear_protection_halt(self, provider: Provider) -> None:
         self.protection_halted_revisions.pop(provider, None)
 
+    def login_wait(self, provider: Provider, now: float) -> tuple[bool, float | None]:
+        """Report whether protection holds this provider and when a login is next admitted.
+
+        Read-only, for the status screen: the halt fence and the retry clock stay owned by
+        the session manager. The wait is None when no backoff or deferral is pending.
+        """
+
+        halted = provider in self.protection_halted_revisions
+        waits = [self.provider_deferred_until.get(provider, 0.0) - now]
+        retry = self.prewarm_retry_state.get(provider)
+        if retry is not None:
+            waits.append(retry[2] - now)
+        remaining = max(waits)
+        return halted, (remaining if remaining > 0 else None)
+
     def begin_prewarm(
         self,
         provider: Provider,

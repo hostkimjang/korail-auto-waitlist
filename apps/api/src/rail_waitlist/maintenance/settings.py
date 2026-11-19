@@ -6,6 +6,7 @@ snapshot and publishes change requests that the manager validates and applies.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
@@ -17,9 +18,13 @@ from .application import (
     ManagementUnavailable,
     live_manager,
     publish_request,
+    read_management_file,
     read_status_file,
 )
 from .schemas import (
+    HostOs,
+    InstallLocation,
+    ManagerCapabilities,
     ManagerStatus,
     SettingKey,
     SettingKind,
@@ -35,6 +40,10 @@ from .schemas import (
 )
 
 SNAPSHOT_FILE_LIMIT = 256 * 1024
+CAPABILITIES_FILE_LIMIT = 16 * 1024
+RESTART_CAPABILITY = "restart"
+_INSTALL_DIR_LINE = re.compile(r"^RAILWAIT_INSTALL_DIR=(.*)$", re.MULTILINE)
+_WINDOWS_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 class SettingDefinition(NamedTuple):
@@ -119,6 +128,69 @@ def _unavailable(
     )
 
 
+def _manager_capabilities(directory: Path, manager: ManagerStatus) -> ManagerCapabilities | None:
+    """Capabilities of the live manager process, or None for a manager that predates them."""
+    try:
+        # Read once: older managers never write this file, and waiting for it on every
+        # request would slow the settings screen down for them.
+        capabilities = ManagerCapabilities.model_validate_json(
+            read_management_file(directory / "status/capabilities.json", CAPABILITIES_FILE_LIMIT)
+        )
+    except (OSError, ValueError, ValidationError):
+        return None
+    # A file left behind by an earlier manager process may describe another executable.
+    if manager.started_at.tzinfo is None or capabilities.manager_started_at != manager.started_at:
+        return None
+    return capabilities
+
+
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+
+def _usable_install_path(path: str) -> bool:
+    return (
+        0 < len(path) <= 4096
+        and not any(ord(character) < 32 for character in path)
+        and (path.startswith("/") or _WINDOWS_PATH.match(path) is not None)
+    )
+
+
+def _guess_host_os(path: str) -> HostOs | None:
+    if _WINDOWS_PATH.match(path):
+        return "windows"
+    if path.startswith("/Users/"):
+        return "darwin"
+    if path.startswith("/home/"):
+        return "linux"
+    return None
+
+
+def _install_location(capabilities: ManagerCapabilities | None, raw: str) -> InstallLocation | None:
+    """Locate the install .env from the manager, or from the snapshot of older managers."""
+    host_os: HostOs | None
+    if capabilities is not None and _usable_install_path(capabilities.install_path):
+        path, host_os = capabilities.install_path, capabilities.host_os
+    else:
+        # RAILWAIT_INSTALL_DIR is a locked, non-secret key every managed install writes.
+        match = _INSTALL_DIR_LINE.search(raw)
+        if match is None:
+            return None
+        path = _unquote(match.group(1))
+        if not _usable_install_path(path):
+            return None
+        host_os = _guess_host_os(path)
+    separator = "\\" if host_os == "windows" or _WINDOWS_PATH.match(path) else "/"
+    return InstallLocation(
+        install_path=path,
+        env_path=path.rstrip("\\/") + separator + ".env",
+        host_os=host_os,
+    )
+
+
 def settings_status() -> SettingsStatus:
     configured = get_settings().railwait_management_dir
     if configured is None:
@@ -130,6 +202,7 @@ def settings_status() -> SettingsStatus:
     current = _current_settings(directory, manager)
     if current is None:
         return _unavailable("manager_upgrade_required", managed=True, manager_available=True)
+    capabilities = _manager_capabilities(directory, manager)
     return SettingsStatus(
         managed=True,
         manager_available=True,
@@ -140,6 +213,10 @@ def settings_status() -> SettingsStatus:
         raw=current.snapshot.raw,
         secret_keys=current.snapshot.secret_keys,
         locked_keys=current.snapshot.locked_keys,
+        restart_available=(
+            capabilities is not None and RESTART_CAPABILITY in capabilities.capabilities
+        ),
+        install_location=_install_location(capabilities, current.snapshot.raw),
     )
 
 

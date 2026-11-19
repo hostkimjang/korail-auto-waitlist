@@ -32,6 +32,7 @@ from .heartbeat import RedisHeartbeatReader
 from .korail_browser_seat_source import KorailBrowserSeatSource
 from .korail_sidecar.provider_cooldown import RedisProviderCooldown
 from .maintenance.gate import MaintenanceClosed, MaintenanceGate
+from .maintenance.http import restart_router as maintenance_restart_router
 from .maintenance.http import router as maintenance_router
 from .maintenance.http import settings_router as maintenance_settings_router
 from .maintenance.middleware import MaintenanceMiddleware
@@ -138,6 +139,7 @@ def create_app(
                 "/api/v1/provider-accounts/",
                 "/api/v1/system/update",
                 "/api/v1/system/settings",
+                "/api/v1/system/restart",
             )
         ):
             return JSONResponse(
@@ -227,6 +229,7 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(maintenance_router)
     app.include_router(maintenance_settings_router)
+    app.include_router(maintenance_restart_router)
     app.include_router(browser_bridge_router)
     app.include_router(browser_companion_admin_router)
     app.include_router(notification_management_router)

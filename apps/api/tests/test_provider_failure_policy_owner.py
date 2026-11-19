@@ -317,7 +317,11 @@ def test_cooldown_until_uses_the_classified_duration(
     assert actual == expected
 
 
-MANAGEMENT_PATH_PREFIXES = ("/api/v1/system/update", "/api/v1/system/settings")
+MANAGEMENT_PATH_PREFIXES = (
+    "/api/v1/system/update",
+    "/api/v1/system/settings",
+    "/api/v1/system/restart",
+)
 MANAGEMENT_SCHEMAS = frozenset(
     {
         "UpdateStatus",
@@ -329,6 +333,9 @@ MANAGEMENT_SCHEMAS = frozenset(
         "SettingsSubmission",
         "SettingsFieldValues",
         "SettingsAccepted",
+        "InstallLocation",
+        "RestartSubmission",
+        "RestartAccepted",
     }
 )
 
@@ -389,7 +396,18 @@ def test_provider_failure_owner_move_does_not_change_openapi() -> None:
         "title": "Catalog Origin",
         "type": "string",
     }
-    assert len(encoded) == 93651
+    # 1.5.0 added only the backward-compatible protection wait fields to the runtime status.
+    runtime = schema["components"]["schemas"]["RailProviderRuntimeStatusRead"]["properties"]
+    assert runtime["protection_halted"] == {
+        "default": False,
+        "title": "Protection Halted",
+        "type": "boolean",
+    }
+    assert runtime["next_login_attempt_seconds"] == {
+        "anyOf": [{"minimum": 0.0, "type": "number"}, {"type": "null"}],
+        "title": "Next Login Attempt Seconds",
+    }
+    assert len(encoded) == 93860
     assert hashlib.sha256(encoded).hexdigest() == (
-        "22b4eeb12c7f42384e5c56f43e04bd8a90ddab4078618fa64065772d994c8b16"
+        "b8cec0c2d8d2f1ea75582d7de5d19ba1ac7001bd78f13ea362b3583f14aa65d0"
     )

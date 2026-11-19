@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,23 @@ type Options struct {
 	// web settings window. Without them settings requests stay where the API wrote them.
 	PlanSettings     SettingsPlanner
 	SettingsSnapshot func() (SettingsSnapshot, error)
+	// PlanRestart is set by a manager that restarts the app services for the web. Without
+	// it restart requests stay where the API wrote them.
+	PlanRestart RestartPlanner
+	// Version is the CLI release this manager runs as, published in capabilities.json.
+	Version string
+}
+
+// capabilities lists what this manager does for the API, in capabilities.json.
+func (o Options) capabilities() []string {
+	list := []string{}
+	if o.PlanSettings != nil && o.SettingsSnapshot != nil {
+		list = append(list, "settings")
+	}
+	if o.PlanRestart != nil {
+		list = append(list, "restart")
+	}
+	return list
 }
 
 func Run(ctx context.Context, installation string, handler Handler) error {
@@ -34,6 +52,10 @@ func Run(ctx context.Context, installation string, handler Handler) error {
 func RunWithOptions(ctx context.Context, installation string, handler Handler, options Options) error {
 	if handler == nil {
 		return errors.New("manager handler is required")
+	}
+	abs, err := filepath.Abs(installation)
+	if err != nil {
+		return err
 	}
 	p, err := Prepare(installation)
 	if err != nil {
@@ -81,12 +103,25 @@ func RunWithOptions(ctx context.Context, installation string, handler Handler, o
 		}
 	}()
 	defer func() { stopBeat(); beatWG.Wait(); _ = beat("stopped") }()
+	// The API trusts capabilities.json only while its start time matches the live heartbeat,
+	// so it is written after the first heartbeat and rewritten if it goes missing.
+	version := options.Version
+	if version == "" {
+		version = "dev"
+	}
+	capabilities := Capabilities{Schema: 1, ManagerStartedAt: started, Version: version, Capabilities: options.capabilities(), InstallPath: abs, HostOS: runtime.GOOS}
+	if err := WriteStatusFile(filepath.Join(p.Status, "capabilities.json"), capabilities); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(options.PollInterval)
 	defer ticker.Stop()
 	lastCatalog := time.Time{}
 	var catalogFingerprint string
 	var settings settingsPublication
 	for {
+		if err := keepCapabilities(p, capabilities); err != nil {
+			return err
+		}
 		fingerprint, err := journalFingerprint(p)
 		if err != nil {
 			return err
@@ -107,7 +142,7 @@ func RunWithOptions(ctx context.Context, installation string, handler Handler, o
 				return err
 			}
 		}
-		if err := processPending(ctx, p, token, handler, options.PlanSettings); err != nil {
+		if err := processPending(ctx, p, token, handler, planners{settings: options.PlanSettings, restart: options.PlanRestart}); err != nil {
 			return err
 		}
 		select {
@@ -116,6 +151,17 @@ func RunWithOptions(ctx context.Context, installation string, handler Handler, o
 		case <-ticker.C:
 		}
 	}
+}
+
+// keepCapabilities writes capabilities.json again when something removed it.
+func keepCapabilities(p Paths, capabilities Capabilities) error {
+	path := filepath.Join(p.Status, "capabilities.json")
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return WriteStatusFile(path, capabilities)
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 // settingsPublication rewrites status/settings.json when .env changes, and every few
@@ -198,7 +244,14 @@ func recoverInterrupted(p Paths) error {
 	return nil
 }
 
-func processPending(ctx context.Context, p Paths, token string, handler Handler, planSettings SettingsPlanner) error {
+// planners turn settings and restart requests into ordinary requests. A nil planner leaves
+// its requests where the API wrote them.
+type planners struct {
+	settings SettingsPlanner
+	restart  RestartPlanner
+}
+
+func processPending(ctx context.Context, p Paths, token string, handler Handler, planners planners) error {
 	entries, err := os.ReadDir(p.Requests)
 	if err != nil {
 		return err
@@ -214,11 +267,21 @@ func processPending(ctx context.Context, p Paths, token string, handler Handler,
 		}
 		name := entry.Name()
 		if id, ok := strings.CutSuffix(name, ".settings.json"); ok {
-			if planSettings == nil || !idPattern.MatchString(id) {
+			if planners.settings == nil || !idPattern.MatchString(id) {
 				continue
 			}
 			processed++
-			if err := processSettings(ctx, p, token, handler, planSettings, id); err != nil {
+			if err := processSettings(ctx, p, token, handler, planners.settings, id); err != nil {
+				return err
+			}
+			continue
+		}
+		if id, ok := strings.CutSuffix(name, ".restart.json"); ok {
+			if planners.restart == nil || !idPattern.MatchString(id) {
+				continue
+			}
+			processed++
+			if err := processRestart(ctx, p, token, handler, planners.restart, id); err != nil {
 				return err
 			}
 			continue
@@ -334,18 +397,31 @@ func runJob(ctx context.Context, p Paths, job Job, request Request, handler Hand
 	return writeJob(p, job)
 }
 
-// noPlan fills the plan ID of a settings job refused before a plan existed.
+// noPlan fills the plan ID of a settings or restart job refused before a plan existed.
 var noPlan = strings.Repeat("0", 64)
 
-var settingsErrorCodes = map[string]bool{"E_SETTINGS_CHANGED": true, "E_SETTINGS_INVALID": true, "E_SETTINGS_FORBIDDEN": true, "E_SETTINGS_UNCHANGED": true}
+// plannerErrorCodes are the refusals a planner may record as a rejected job. Any other
+// planner failure is recorded as a failed job with E_HANDLER_FAILED.
+var plannerErrorCodes = map[string]bool{
+	"E_SETTINGS_CHANGED": true, "E_SETTINGS_INVALID": true, "E_SETTINGS_FORBIDDEN": true, "E_SETTINGS_UNCHANGED": true,
+	"E_RESTART_ENV_INVALID": true, "E_RESTART_UNAVAILABLE": true,
+}
+
+// journaled removes a request whose job was already recorded and reports whether it did.
+func journaled(p Paths, id, path string) (bool, error) {
+	if _, err := os.Lstat(filepath.Join(p.Jobs, id+".json")); err == nil {
+		return true, os.Remove(path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return true, err
+	}
+	return false, nil
+}
 
 // processSettings plans a settings request and then runs the plan as an ordinary job,
 // so a settings change has the same journal, progress and recovery as an update.
 func processSettings(ctx context.Context, p Paths, token string, handler Handler, planSettings SettingsPlanner, id string) error {
 	path := filepath.Join(p.Requests, id+".settings.json")
-	if _, err := os.Lstat(filepath.Join(p.Jobs, id+".json")); err == nil {
-		return os.Remove(path)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if done, err := journaled(p, id, path); done || err != nil {
 		return err
 	}
 	data, readErr := readBounded(path, 160<<10)
@@ -353,8 +429,46 @@ func processSettings(ctx context.Context, p Paths, token string, handler Handler
 	if readErr != nil || decode(data, &request) != nil || !validSettingsRequest(request) || request.ID != id {
 		return os.Remove(path)
 	}
+	authToken := request.AuthToken
+	request.AuthToken = ""
+	return processPlanned(ctx, p, token, handler, plannedRequest{id: id, idempotencyKey: request.IdempotencyKey, authToken: authToken, path: path, plan: func(ctx context.Context) (Request, error) {
+		planned, err := planSettings(ctx, request)
+		request.Fields, request.Raw = nil, nil
+		return planned, err
+	}})
+}
+
+// processRestart plans a restart request and then runs the plan as an ordinary job, the
+// same way as a settings request.
+func processRestart(ctx context.Context, p Paths, token string, handler Handler, planRestart RestartPlanner, id string) error {
+	path := filepath.Join(p.Requests, id+".restart.json")
+	if done, err := journaled(p, id, path); done || err != nil {
+		return err
+	}
+	data, readErr := readBounded(path, 8<<10)
+	var request RestartRequest
+	if readErr != nil || decode(data, &request) != nil || !validRestartRequest(request) || request.ID != id {
+		return os.Remove(path)
+	}
+	authToken := request.AuthToken
+	request.AuthToken = ""
+	return processPlanned(ctx, p, token, handler, plannedRequest{id: id, idempotencyKey: request.IdempotencyKey, authToken: authToken, path: path, plan: func(ctx context.Context) (Request, error) {
+		return planRestart(ctx, request)
+	}})
+}
+
+// plannedRequest is a settings or restart request that passed its own format check.
+type plannedRequest struct {
+	id, idempotencyKey, authToken, path string
+	plan                                func(context.Context) (Request, error)
+}
+
+// processPlanned authenticates a planned request, records its job, plans it and runs the
+// plan as an ordinary job. Invalid content never reaches the journal.
+func processPlanned(ctx context.Context, p Paths, token string, handler Handler, r plannedRequest) error {
+	id, path := r.id, r.path
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	job := Job{Schema: 1, ID: id, TargetReleaseID: "0.0.0", PlanID: noPlan, IdempotencyKey: request.IdempotencyKey, State: "running", Stage: "accepted", CreatedAt: now, UpdatedAt: now}
+	job := Job{Schema: 1, ID: id, TargetReleaseID: "0.0.0", PlanID: noPlan, IdempotencyKey: r.idempotencyKey, State: "running", Stage: "accepted", CreatedAt: now, UpdatedAt: now}
 	reject := func(code string) error {
 		job.State, job.Stage, job.ErrorCode = "rejected", "rejected", code
 		if err := writeJob(p, job); err != nil {
@@ -362,10 +476,10 @@ func processSettings(ctx context.Context, p Paths, token string, handler Handler
 		}
 		return os.Remove(path)
 	}
-	if subtle.ConstantTimeCompare([]byte(request.AuthToken), []byte(token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(r.authToken), []byte(token)) != 1 {
 		return reject("E_UNAUTHORIZED")
 	}
-	previous, found, err := findIdempotent(p, request.IdempotencyKey)
+	previous, found, err := findIdempotent(p, r.idempotencyKey)
 	if err != nil {
 		return err
 	}
@@ -385,14 +499,12 @@ func processSettings(ctx context.Context, p Paths, token string, handler Handler
 	if err := os.Remove(path); err != nil {
 		return err
 	}
-	request.AuthToken = ""
-	planned, planErr := planSettings(ctx, request)
-	request.Fields, request.Raw = nil, nil
+	planned, planErr := r.plan(ctx)
 	if versionPattern.MatchString(planned.TargetReleaseID) {
 		job.TargetReleaseID = planned.TargetReleaseID
 	}
 	var rejected RejectedError
-	if errors.As(planErr, &rejected) && settingsErrorCodes[rejected.Code] {
+	if errors.As(planErr, &rejected) && plannerErrorCodes[rejected.Code] {
 		job.State, job.Stage, job.ErrorCode = "rejected", "rejected", rejected.Code
 		job.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		return writeJob(p, job)
@@ -408,7 +520,7 @@ func processSettings(ctx context.Context, p Paths, token string, handler Handler
 	if err := writeJob(p, job); err != nil {
 		return err
 	}
-	return runJob(ctx, p, job, Request{Schema: 1, ID: id, TargetReleaseID: planned.TargetReleaseID, PlanID: planned.PlanID, IdempotencyKey: request.IdempotencyKey}, handler)
+	return runJob(ctx, p, job, Request{Schema: 1, ID: id, TargetReleaseID: planned.TargetReleaseID, PlanID: planned.PlanID, IdempotencyKey: r.idempotencyKey}, handler)
 }
 
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
@@ -429,6 +541,10 @@ func validSettingsRequest(r SettingsRequest) bool {
 		}
 	}
 	return true
+}
+
+func validRestartRequest(r RestartRequest) bool {
+	return r.Schema == 1 && idPattern.MatchString(r.ID) && idPattern.MatchString(r.IdempotencyKey) && len(r.AuthToken) == 43 && r.Scope == "app"
 }
 
 func validRequest(r Request) bool {

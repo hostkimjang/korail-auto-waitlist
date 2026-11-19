@@ -117,14 +117,14 @@ func TestRequestIdempotencyAndSecretFreeJournal(t *testing.T) {
 	if err := Submit(root, first); err != nil {
 		t.Fatal(err)
 	}
-	if err := processPending(context.Background(), p, token, handler, nil); err != nil {
+	if err := processPending(context.Background(), p, token, handler, planners{}); err != nil {
 		t.Fatal(err)
 	}
 	second := request("2", "a")
 	if err := Submit(root, second); err != nil {
 		t.Fatal(err)
 	}
-	if err := processPending(context.Background(), p, token, handler, nil); err != nil {
+	if err := processPending(context.Background(), p, token, handler, planners{}); err != nil {
 		t.Fatal(err)
 	}
 	job, err := ReadJob(root, second.ID)
@@ -139,7 +139,7 @@ func TestRequestIdempotencyAndSecretFreeJournal(t *testing.T) {
 	if err := Submit(root, third); err != nil {
 		t.Fatal(err)
 	}
-	if err := processPending(context.Background(), p, token, handler, nil); err != nil {
+	if err := processPending(context.Background(), p, token, handler, planners{}); err != nil {
 		t.Fatal(err)
 	}
 	job, err = ReadJob(root, third.ID)
@@ -174,7 +174,7 @@ func TestRejectUntrustedRequestsBeforeHandler(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(p.Requests, strings.Repeat("2", 32)+".json"), []byte(strings.Repeat("x", 9000)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := processPending(context.Background(), p, token, handler, nil); err != nil {
+	if err := processPending(context.Background(), p, token, handler, planners{}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
@@ -214,7 +214,7 @@ func TestHandlerErrorNeverPublishesRawError(t *testing.T) {
 	token, _ := readToken(p)
 	if err := processPending(context.Background(), p, token, func(context.Context, Request, Progress) (Result, error) {
 		return Result{State: "recovery_required", Stage: "applying"}, errors.New("secret fixture marker")
-	}, nil); err != nil {
+	}, planners{}); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(p.Jobs, r.ID+".json"))

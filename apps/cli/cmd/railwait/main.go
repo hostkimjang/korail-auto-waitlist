@@ -533,6 +533,10 @@ func managerCommand(ctx context.Context, args []string) error {
 				return i.PlanSettingsRequest(ctx, abs, r)
 			},
 			SettingsSnapshot: func() (manager.SettingsSnapshot, error) { return install.SettingsSnapshot(abs) },
+			PlanRestart: func(ctx context.Context, r manager.RestartRequest) (manager.Request, error) {
+				return i.PlanRestartRequest(ctx, abs, r)
+			},
+			Version: version,
 		})
 	default:
 		return fmt.Errorf("지원하지 않는 manager 명령입니다")

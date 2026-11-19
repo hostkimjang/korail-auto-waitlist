@@ -47,7 +47,7 @@ func TestSettingsRequestIsPlannedThenRunAsAnOrdinaryJob(t *testing.T) {
 		}
 		return Result{State: "succeeded", Stage: "succeeded", CurrentVersion: "1.4.8", TargetVersion: "1.4.8"}, nil
 	}
-	if err := processPending(context.Background(), p, token, handler, planner); err != nil {
+	if err := processPending(context.Background(), p, token, handler, planners{settings: planner}); err != nil {
 		t.Fatal(err)
 	}
 	if planned.AuthToken != "" || planned.Fields["TAGO_SERVICE_KEY"] != "new-credential-marker" || planned.BaseRevision != request.BaseRevision {
@@ -81,7 +81,7 @@ func TestRefusedSettingsRequestRecordsTheReasonWithoutRunning(t *testing.T) {
 	planner := func(context.Context, SettingsRequest) (Request, error) {
 		return Request{TargetReleaseID: "1.4.8"}, RejectedError{Code: "E_SETTINGS_CHANGED"}
 	}
-	if err := processPending(context.Background(), p, token, handler, planner); err != nil {
+	if err := processPending(context.Background(), p, token, handler, planners{settings: planner}); err != nil {
 		t.Fatal(err)
 	}
 	job, err := ReadJob(root, request.ID)
@@ -92,9 +92,9 @@ func TestRefusedSettingsRequestRecordsTheReasonWithoutRunning(t *testing.T) {
 		t.Fatalf("job: %+v calls=%d", job, calls)
 	}
 	failed := settingsRequest(t, p, "2", "b", nil)
-	if err := processPending(context.Background(), p, token, handler, func(context.Context, SettingsRequest) (Request, error) {
+	if err := processPending(context.Background(), p, token, handler, planners{settings: func(context.Context, SettingsRequest) (Request, error) {
 		return Request{}, errors.New("compose unavailable fixture marker")
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	job, err = ReadJob(root, failed.ID)
@@ -121,7 +121,7 @@ func TestUntrustedOrMalformedSettingsRequestsNeverReachThePlanner(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(p.Requests, strings.Repeat("5", 32)+".settings.json"), []byte(strings.Repeat("x", 170<<10)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := processPending(context.Background(), p, token, handler, planner); err != nil {
+	if err := processPending(context.Background(), p, token, handler, planners{settings: planner}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
@@ -143,7 +143,7 @@ func TestManagerWithoutSettingsSupportLeavesSettingsRequests(t *testing.T) {
 	_, p := fixture(t)
 	token, _ := readToken(p)
 	settingsRequest(t, p, "1", "a", nil)
-	if err := processPending(context.Background(), p, token, func(context.Context, Request, Progress) (Result, error) { return Result{}, nil }, nil); err != nil {
+	if err := processPending(context.Background(), p, token, func(context.Context, Request, Progress) (Result, error) { return Result{}, nil }, planners{}); err != nil {
 		t.Fatal(err)
 	}
 	if entries, _ := os.ReadDir(p.Requests); len(entries) != 1 {

@@ -50,11 +50,27 @@ type SettingsRequest struct {
 // ordinary request that applies it. It returns RejectedError when nothing may change.
 type SettingsPlanner func(context.Context, SettingsRequest) (Request, error)
 
-// RejectedError refuses a settings request before anything changed. Code is one of the
-// E_SETTINGS_* job error codes the API and the web screen explain to the user.
+// RestartRequest asks the manager to restart the app services with the current .env.
+// The API writes it as requests/<id>.restart.json. Earlier managers accept only <id>.json
+// and <id>.settings.json names, so they leave it alone; the API offers a restart only when
+// this manager's capabilities.json lists "restart". Scope is always "app".
+type RestartRequest struct {
+	Schema         int    `json:"schema"`
+	ID             string `json:"id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	AuthToken      string `json:"auth_token"`
+	Scope          string `json:"scope"`
+}
+
+// RestartPlanner saves a restart plan for an authenticated restart request and returns the
+// ordinary request that runs it. It returns RejectedError when nothing may restart.
+type RestartPlanner func(context.Context, RestartRequest) (Request, error)
+
+// RejectedError refuses a settings or restart request before anything changed. Code is one
+// of the E_SETTINGS_* or E_RESTART_* job error codes the API and the web screen explain.
 type RejectedError struct{ Code string }
 
-func (e RejectedError) Error() string { return "settings request rejected: " + e.Code }
+func (e RejectedError) Error() string { return "manager request rejected: " + e.Code }
 
 // SettingsField reports one setting the web form edits. Value is omitted for a secret,
 // which only reports whether it is set.
@@ -83,6 +99,18 @@ type Heartbeat struct {
 	PID         int    `json:"pid"`
 	StartedAt   string `json:"started_at"`
 	HeartbeatAt string `json:"heartbeat_at"`
+}
+
+// Capabilities is status/capabilities.json: what the running manager can do for the API.
+// ManagerStartedAt is exactly the started_at of the heartbeat of the manager that wrote it,
+// so the API trusts the file only while that manager is the one running.
+type Capabilities struct {
+	Schema           int      `json:"schema"`
+	ManagerStartedAt string   `json:"manager_started_at"`
+	Version          string   `json:"version"`
+	Capabilities     []string `json:"capabilities"`
+	InstallPath      string   `json:"install_path"`
+	HostOS           string   `json:"host_os"`
 }
 
 type Catalog struct {

@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -365,6 +364,10 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		return result, fmt.Errorf("업데이트 계획이 잘못되었습니다")
 	}
 	configure := configureKind(saved.Kind)
+	// A restart keeps the installed release and .env like a settings change, but changes
+	// nothing: no candidate, no backup, and nothing to roll back.
+	restart := saved.Kind == restartKind
+	sameRelease := configure || restart
 	local := saved.Kind == "local_package"
 	if local != (o.PackagePath != "" || o.TrustKey != "") {
 		// The host manager never forwards package paths, so only a host CLI caller that names
@@ -374,10 +377,10 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	if local && s.ReleaseSource != "local_package" {
 		return result, fmt.Errorf("로컬 패키지로 설치한 경로만 로컬 패키지로 업데이트합니다")
 	}
-	if s.ReleaseSource == "local_package" && !configure && !local {
+	if s.ReleaseSource == "local_package" && !sameRelease && !local {
 		return result, fmt.Errorf("로컬 패키지 설치의 공식 릴리스 업데이트는 지원하지 않습니다; --package와 --trust-key를 사용하세요")
 	}
-	if saved.Kind != "release" && !configure && !local {
+	if saved.Kind != "release" && !sameRelease && !local {
 		return result, fmt.Errorf("지원하지 않는 관리 작업 종류입니다")
 	}
 	expiry, err := time.Parse(time.RFC3339, saved.Plan.ExpiresAt)
@@ -406,7 +409,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			return result, err
 		}
 		target = localPackageIdentity(selected.Manifest)
-	} else if !configure {
+	} else if !sameRelease {
 		r, err = i.Releases.Resolve(ctx, "stable")
 		if err != nil {
 			return result, err
@@ -416,7 +419,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	if r.Version != o.TargetReleaseID || target != saved.TargetSHA256 {
 		return result, fmt.Errorf("확인한 릴리스가 변경되었습니다; 새 계획이 필요합니다")
 	}
-	currentPlan, err := i.makePlanMode(ctx, s, r, configure)
+	currentPlan, err := i.makePlanMode(ctx, s, r, sameRelease)
 	if err != nil {
 		return result, err
 	}
@@ -460,7 +463,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		if err = progress("preparing_config"); err != nil {
 			return result, err
 		}
-	} else {
+	} else if !restart {
 		stage := "downloading"
 		if local {
 			stage = "loading_package"
@@ -537,13 +540,15 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		result.Stage = "succeeded"
 		return result, nil
 	}
-	if s.ReleaseSource != "local_package" {
-		if _, err = i.compose(ctx, s, nil, "--profile", "backup", "pull", "backup"); err != nil {
+	if !restart {
+		if s.ReleaseSource != "local_package" {
+			if _, err = i.compose(ctx, s, nil, "--profile", "backup", "pull", "backup"); err != nil {
+				return result, err
+			}
+		}
+		if err = i.ensureBackupKey(ctx, s); err != nil {
 			return result, err
 		}
-	}
-	if err = i.ensureBackupKey(ctx, s); err != nil {
-		return result, err
 	}
 	controlDir := filepath.Join(abs, ".railwait", "manager", "control")
 	if info, statErr := os.Lstat(controlDir); statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -569,6 +574,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	if err = verifyBundle(filepath.Dir(next.ComposeFile), next.BundleHashes); err != nil {
 		return result, err
 	}
+	services := appServices(s.ExpectedImages)
 	committed := false
 	if local {
 		// Swap the preserved package before the gate closes, so a swap that the OS refuses, for
@@ -616,6 +622,20 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 		return result, err
 	}
 	closed = true
+	stopping := false
+	if restart {
+		// Nothing changed that could be rolled back. A restart that fails while the app
+		// services can still run healthy must not leave the app behind a closed gate.
+		defer func() {
+			if err != nil && closed {
+				if reopenErr := i.reopenAfterRestart(ctx, s, controlDir, generation, services, stopping); reopenErr != nil {
+					err = errors.Join(err, reopenErr)
+				} else {
+					closed = false
+				}
+			}
+		}()
+	}
 	if err = progress("draining"); err != nil {
 		return result, err
 	}
@@ -634,23 +654,19 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			return result, fmt.Errorf("종료 대기 중 DB revision이 변경되었습니다")
 		}
 	}
-	if err = progress("backing_up"); err != nil {
-		return result, err
-	}
-	backupEnv := filepath.Join(abs, ".railwait", "backup.env")
-	if _, err = i.composeExtra(ctx, s, backupEnv, bytes.NewReader(env), "--profile", "backup", "run", "--rm", "--no-deps", "-T", "-e", "RAILWAIT_UPDATE_JOB_ID="+o.JobID, "--entrypoint", "/scripts/update-backup.sh", "backup"); err != nil {
-		return result, fmt.Errorf("암호화 백업 검증에 실패했습니다: %w", err)
+	if !restart {
+		if err = progress("backing_up"); err != nil {
+			return result, err
+		}
+		backupEnv := filepath.Join(abs, ".railwait", "backup.env")
+		if _, err = i.composeExtra(ctx, s, backupEnv, bytes.NewReader(env), "--profile", "backup", "run", "--rm", "--no-deps", "-T", "-e", "RAILWAIT_UPDATE_JOB_ID="+o.JobID, "--entrypoint", "/scripts/update-backup.sh", "backup"); err != nil {
+			return result, fmt.Errorf("암호화 백업 검증에 실패했습니다: %w", err)
+		}
 	}
 	if err = progress("applying"); err != nil {
 		return result, err
 	}
-	services := []string{}
-	for name := range s.ExpectedImages {
-		if name != "postgres" && name != "redis" && name != "migration" && name != "log-init" {
-			services = append(services, name)
-		}
-	}
-	sort.Strings(services)
+	stopping = true
 	if _, err = i.compose(ctx, s, nil, append([]string{"stop", "--timeout", "300"}, services...)...); err != nil {
 		return result, err
 	}
@@ -681,13 +697,7 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 			return result, err
 		}
 	}
-	nextServices := []string{}
-	for name := range next.ExpectedImages {
-		if name != "postgres" && name != "redis" && name != "migration" && name != "log-init" {
-			nextServices = append(nextServices, name)
-		}
-	}
-	sort.Strings(nextServices)
+	nextServices := appServices(next.ExpectedImages)
 	if _, err = i.compose(ctx, next, nil, append([]string{"up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "180"}, nextServices...)...); err != nil {
 		return result, err
 	}

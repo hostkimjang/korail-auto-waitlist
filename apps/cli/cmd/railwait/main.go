@@ -53,51 +53,81 @@ func run(ctx context.Context, args []string) error {
 	if resumed {
 		args = resumedArgs
 	}
-	if len(args) == 0 && term.IsTerminal(int(os.Stdin.Fd())) {
-		return installCommand(ctx, nil)
-	}
-	if len(args) > 0 && (args[0] == "install" || args[0] == "setup") {
-		return installCommand(ctx, args[1:])
-	}
-	if len(args) > 0 && args[0] == "preview" {
-		return previewCommand(ctx, args[1:])
-	}
-	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("railwait install|setup|status|doctor|update|configure|manager|package|preview|version\n간편 설치: railwait install [--path <경로>] [--plain]\n직접 설정: railwait install --custom / 로컬 전용: --access local\n로컬 패키지: railwait install --path <새 경로> --package <패키지 디렉터리> --trust-key <공개키 파일>\n업데이트: railwait update --path <경로> --dry-run / --target <버전> --plan <계획ID>\n로컬 패키지 업데이트: railwait update --path <경로> --package <새 패키지> --trust-key <공개키 파일> [--dry-run]\nTAGO 설정: railwait configure --path <경로>\n자동 예매: railwait configure reservation on|off --path <경로>\n관리 서비스 교체: railwait manager upgrade --path <경로>\n비대화형: railwait install --input - < protected-input.json")
+	if len(args) == 0 {
+		printTopHelp(helpOutput)
 		return nil
 	}
-	if args[0] == "version" || args[0] == "--version" {
-		fmt.Printf("railwait %s %s/%s\n", version, runtime.GOOS, runtime.GOARCH)
-		return nil
+	name, rest := args[0], args[1:]
+	if isHelpArg(name) {
+		name = "help"
+	} else if name == "--version" {
+		name = "version"
 	}
-	if !platform.SupportedTarget(runtime.GOOS, runtime.GOARCH) {
+	handler, ok := commandHandler(name)
+	if !ok {
+		return unknownCommand(name)
+	}
+	if !portableCommand(name) && !platform.SupportedTarget(runtime.GOOS, runtime.GOARCH) {
 		return fmt.Errorf("지원하지 않는 OS/CPU입니다")
 	}
-	if args[0] == "update" {
-		return updateCommand(ctx, args[1:])
+	return handler(ctx, rest)
+}
+
+// commandHandler returns the function that runs a top-level command.
+func commandHandler(name string) (func(context.Context, []string) error, bool) {
+	switch name {
+	case "install", "setup":
+		return installCommand, true
+	case "preview":
+		return previewCommand, true
+	case "help":
+		return helpCommand, true
+	case "version":
+		return versionCommand, true
+	case "update":
+		return updateCommand, true
+	case "configure":
+		return configureCommand, true
+	case "manager":
+		return managerCommand, true
+	case "status":
+		return statusCommand, true
+	case "doctor":
+		return doctorCommand, true
+	case "package":
+		return verifyPackageCommand, true
 	}
-	if args[0] == "manager" {
-		return managerCommand(ctx, args[1:])
+	return nil, false
+}
+
+// portableCommand runs before the OS/CPU check: the installer explains preparation itself.
+func portableCommand(name string) bool {
+	return name == "install" || name == "setup" || name == "preview" || name == "help" || name == "version"
+}
+
+func versionCommand(_ context.Context, args []string) error {
+	flags := newCommandFlags("version")
+	if err := parseCommandFlags(flags, args); err != nil {
+		return err
 	}
-	if args[0] == "configure" {
-		return configureCommand(ctx, args[1:])
+	if flags.NArg() != 0 {
+		return fmt.Errorf("version은 인자를 받지 않습니다")
 	}
-	if args[0] == "package" {
-		return verifyPackageCommand(ctx, args[1:])
-	}
-	if args[0] != "install" && args[0] != "status" && args[0] != "doctor" {
-		return fmt.Errorf("알 수 없는 명령입니다; railwait help를 확인하세요")
-	}
+	// manager upgrade reads this line from an installed manager executable.
+	fmt.Printf("railwait %s %s/%s\n", version, runtime.GOOS, runtime.GOARCH)
+	return nil
+}
+
+func statusCommand(ctx context.Context, args []string) error {
 	defaultPath, err := platform.DefaultInstallDir()
 	if err != nil {
 		return err
 	}
-	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
-	path := flags.String("path", defaultPath, "설치 디렉터리")
-	dockerContext := flags.String("docker-context", "", "고정할 로컬 Docker context (신규 설치 기본 default)")
-	jsonOutput := flags.Bool("json", false, "비밀값 없는 JSON 상태 출력")
-	jobID := flags.String("job", "", "조회할 관리 작업 ID (status)")
-	if err = flags.Parse(args[1:]); err != nil {
+	flags := newCommandFlags("status")
+	path := flags.String("path", defaultPath, "설치 경로")
+	jsonOutput := flags.Bool("json", false, "비밀값 없는 JSON으로 출력")
+	jobID := flags.String("job", "", "결과를 볼 관리 작업 ID")
+	if err = parseCommandFlags(flags, args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -107,67 +137,89 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	i := install.Installer{Runner: install.ExecRunner{}, Releases: install.OfficialReleases{}}
-	switch args[0] {
-	case "status":
-		if *jobID != "" {
-			job, err := manager.ReadJob(abs, *jobID)
-			if err != nil {
-				// Jobs that the host CLI ran itself, such as local package updates, are recorded
-				// by the installer rather than the manager.
-				local, localErr := install.ReadUpdateJob(abs, *jobID)
-				if localErr != nil {
-					return err
-				}
-				if *jsonOutput {
-					return json.NewEncoder(os.Stdout).Encode(local)
-				}
-				fmt.Printf("작업 %s: %s · 단계 %s\n현재: %s → 대상: %s\n", local.JobID, local.State, local.Stage, local.CurrentVersion, local.TargetVersion)
-				if local.PreviousPackage != "" {
-					fmt.Println("이전 로컬 패키지:", local.PreviousPackage)
-				}
-				for _, warning := range local.Warnings {
-					fmt.Println("주의:", warning)
-				}
-				return nil
+	if *jobID != "" {
+		job, err := manager.ReadJob(abs, *jobID)
+		if err != nil {
+			// Jobs that the host CLI ran itself, such as local package updates, are recorded
+			// by the installer rather than the manager.
+			local, localErr := install.ReadUpdateJob(abs, *jobID)
+			if localErr != nil {
+				return err
 			}
 			if *jsonOutput {
-				return json.NewEncoder(os.Stdout).Encode(job)
+				return json.NewEncoder(os.Stdout).Encode(local)
 			}
-			fmt.Printf("작업 %s: %s · 단계 %s\n현재: %s → 대상: %s\n", job.ID, job.State, job.Stage, job.CurrentVersion, job.TargetVersion)
+			fmt.Printf("작업 %s: %s · 단계 %s\n현재: %s → 대상: %s\n", local.JobID, local.State, local.Stage, local.CurrentVersion, local.TargetVersion)
+			if local.PreviousPackage != "" {
+				fmt.Println("이전 로컬 패키지:", local.PreviousPackage)
+			}
+			for _, warning := range local.Warnings {
+				fmt.Println("주의:", warning)
+			}
 			return nil
 		}
-		s, err := i.Status(ctx, abs)
-		if err != nil {
-			return err
-		}
 		if *jsonOutput {
-			return json.NewEncoder(os.Stdout).Encode(s)
+			return json.NewEncoder(os.Stdout).Encode(job)
 		}
-		fmt.Printf("릴리스: %s · 설치 단계: %s · healthy: %t\n", s.Installation.Release, s.Installation.Stage, s.Healthy)
-		for _, service := range s.Services {
-			fmt.Printf("%s: %s / %s\n", service.Service, service.State, service.Health)
-		}
-	case "doctor":
-		if err = i.Doctor(ctx, abs, *dockerContext); err != nil {
-			return fmt.Errorf("%w\n%s", err, platform.PrerequisiteHint())
-		}
-		if *jsonOutput {
-			return json.NewEncoder(os.Stdout).Encode(map[string]any{"docker": "ready", "os": runtime.GOOS, "arch": runtime.GOARCH})
-		}
-		fmt.Println("로컬 Docker daemon과 Compose를 확인했습니다. 실제 철도사 인증·예약은 실행하지 않았습니다.")
+		fmt.Printf("작업 %s: %s · 단계 %s\n현재: %s → 대상: %s\n", job.ID, job.State, job.Stage, job.CurrentVersion, job.TargetVersion)
+		return nil
+	}
+	i := newInstaller()
+	s, err := i.Status(ctx, abs)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(s)
+	}
+	fmt.Printf("릴리스: %s · 설치 단계: %s · healthy: %t\n", s.Installation.Release, s.Installation.Stage, s.Healthy)
+	for _, service := range s.Services {
+		fmt.Printf("%s: %s / %s\n", service.Service, service.State, service.Health)
 	}
 	return nil
 }
 
-func verifyPackageCommand(ctx context.Context, args []string) error {
-	if len(args) == 0 || args[0] != "verify" {
-		return fmt.Errorf("package verify 명령이 필요합니다")
+func doctorCommand(ctx context.Context, args []string) error {
+	defaultPath, err := platform.DefaultInstallDir()
+	if err != nil {
+		return err
 	}
-	flags := flag.NewFlagSet("package verify", flag.ContinueOnError)
-	path := flags.String("package", "", "검증할 로컬 패키지")
-	key := flags.String("trust-key", "", "직접 신뢰할 공개키")
-	if err := flags.Parse(args[1:]); err != nil {
+	flags := newCommandFlags("doctor")
+	path := flags.String("path", defaultPath, "설치 경로")
+	dockerContext := flags.String("docker-context", "", "확인할 로컬 Docker context (설치 전 기본 default, 설치 후 기록한 값)")
+	jsonOutput := flags.Bool("json", false, "JSON으로 출력")
+	if err = parseCommandFlags(flags, args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("위치 인자를 사용할 수 없습니다")
+	}
+	abs, err := filepath.Abs(*path)
+	if err != nil {
+		return err
+	}
+	i := newInstaller()
+	if err = i.Doctor(ctx, abs, *dockerContext); err != nil {
+		return fmt.Errorf("%w\n%s", err, platform.PrerequisiteHint())
+	}
+	if *jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"docker": "ready", "os": runtime.GOOS, "arch": runtime.GOARCH})
+	}
+	fmt.Println("로컬 Docker daemon과 Compose를 확인했습니다. 실제 철도사 인증·예약은 실행하지 않았습니다.")
+	return nil
+}
+
+func verifyPackageCommand(ctx context.Context, args []string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		args = []string{"verify", args[0]}
+	}
+	if len(args) == 0 || args[0] != "verify" {
+		return fmt.Errorf("package verify 명령이 필요합니다; railwait package --help 로 사용법을 확인하세요")
+	}
+	flags := newCommandFlags("package")
+	path := flags.String("package", "", "검증할 로컬 패키지 폴더")
+	key := flags.String("trust-key", "", "직접 신뢰할 공개키 파일")
+	if err := parseCommandFlags(flags, args[1:]); err != nil {
 		return err
 	}
 	if *path == "" || *key == "" || flags.NArg() != 0 {
@@ -191,15 +243,15 @@ func updateCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	flags := flag.NewFlagSet("update", flag.ContinueOnError)
+	flags := newCommandFlags("update")
 	path := flags.String("path", defaultPath, "설치 경로")
-	jsonOutput := flags.Bool("json", false, "JSON 출력")
-	dryRun := flags.Bool("dry-run", false, "적용 계획만 표시")
-	target := flags.String("target", "", "확인한 대상 버전")
-	planID := flags.String("plan", "", "확인한 계획 ID")
+	jsonOutput := flags.Bool("json", false, "JSON으로 출력")
+	dryRun := flags.Bool("dry-run", false, "적용하지 않고 계획만 표시")
+	target := flags.String("target", "", "--dry-run에서 확인한 대상 버전")
+	planID := flags.String("plan", "", "--dry-run에서 확인한 계획 ID")
 	packagePath := flags.String("package", "", "로컬 패키지 설치에 적용할 새 로컬 패키지 디렉터리")
 	trustKey := flags.String("trust-key", "", "직접 신뢰할 새 로컬 패키지 공개키 파일")
-	if err = flags.Parse(args); err != nil {
+	if err = parseCommandFlags(flags, args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -304,13 +356,13 @@ func configureCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	flags := flag.NewFlagSet("configure", flag.ContinueOnError)
+	flags := newCommandFlags("configure")
 	path := flags.String("path", defaultPath, "설치 경로")
 	input := flags.String("input", "", "보호된 TAGO JSON 파일 또는 stdin: -")
 	planID := flags.String("plan", "", "확인한 설정 변경 계획 ID")
-	jsonOutput := flags.Bool("json", false, "JSON 출력")
+	jsonOutput := flags.Bool("json", false, "JSON으로 출력")
 	flags.Bool("dry-run", true, "변경 계획만 표시 (기본 동작)")
-	if err = flags.Parse(args); err != nil {
+	if err = parseCommandFlags(flags, args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -372,20 +424,23 @@ func configureCommand(ctx context.Context, args []string) error {
 // configureReservationCommand turns the installation-wide automatic reservation
 // switches on or off. Each watch still chooses automatic reservation on its own.
 func configureReservationCommand(ctx context.Context, args []string) error {
-	if len(args) == 0 || (args[0] != "on" && args[0] != "off") {
-		return fmt.Errorf("configure reservation on 또는 configure reservation off로 지정하세요")
-	}
-	enabled := args[0] == "on"
 	defaultPath, err := platform.DefaultInstallDir()
 	if err != nil {
 		return err
 	}
-	flags := flag.NewFlagSet("configure reservation", flag.ContinueOnError)
+	flags := newCommandFlags("configure reservation")
 	path := flags.String("path", defaultPath, "설치 경로")
 	planID := flags.String("plan", "", "확인한 설정 변경 계획 ID")
-	jsonOutput := flags.Bool("json", false, "JSON 출력")
+	jsonOutput := flags.Bool("json", false, "JSON으로 출력")
 	flags.Bool("dry-run", true, "변경 계획만 표시 (기본 동작)")
-	if err = flags.Parse(args[1:]); err != nil {
+	if shown, err := subcommandHelp(flags, args); shown {
+		return err
+	}
+	if len(args) == 0 || (args[0] != "on" && args[0] != "off") {
+		return fmt.Errorf("configure reservation on 또는 configure reservation off로 지정하세요")
+	}
+	enabled := args[0] == "on"
+	if err = parseCommandFlags(flags, args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -465,17 +520,20 @@ func applySettingsPlanInProcess(ctx context.Context, i *install.Installer, path,
 }
 
 func managerCommand(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("manager install|upgrade|serve|status 명령이 필요합니다")
-	}
 	defaultPath, err := platform.DefaultInstallDir()
 	if err != nil {
 		return err
 	}
-	flags := flag.NewFlagSet("manager", flag.ContinueOnError)
+	flags := newCommandFlags("manager")
 	path := flags.String("path", defaultPath, "설치 경로")
 	force := flags.Bool("force", false, "버전을 비교할 수 없는 개발용 CLI로도 관리 서비스를 교체 (upgrade)")
-	if err = flags.Parse(args[1:]); err != nil {
+	if shown, err := subcommandHelp(flags, args); shown {
+		return err
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("manager %s 명령이 필요합니다; railwait manager --help 로 사용법을 확인하세요", subcommandList("manager"))
+	}
+	if err = parseCommandFlags(flags, args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -539,7 +597,7 @@ func managerCommand(ctx context.Context, args []string) error {
 			Version: version,
 		})
 	default:
-		return fmt.Errorf("지원하지 않는 manager 명령입니다")
+		return fmt.Errorf("지원하지 않는 manager 명령입니다: %q; railwait manager --help 로 사용법을 확인하세요", args[0])
 	}
 }
 

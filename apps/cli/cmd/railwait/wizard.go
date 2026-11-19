@@ -44,7 +44,7 @@ func parseWizardCommand(args []string) (wizardOptions, bool, error) {
 	}
 	var o wizardOptions
 	pathSet := false
-	f := flag.NewFlagSet("install", flag.ContinueOnError)
+	f := newCommandFlags("install")
 	f.StringVar(&o.Path, "path", path, "설치 폴더. 같은 폴더로 다시 실행하면 이어서 설정")
 	f.StringVar(&o.DockerContext, "docker-context", "", "사용할 로컬 Docker 환경. 대화형 기본: 현재 환경")
 	f.IntVar(&o.Port, "port", 0, "이 컴퓨터의 접속 포트. 새 설치는 8080부터 비어 있는 포트를 자동 선택")
@@ -57,7 +57,7 @@ func parseWizardCommand(args []string) (wizardOptions, bool, error) {
 	f.BoolVar(&o.Yes, "yes", false, "설치 계획 확인 생략. OS 승인·계정 로그인은 생략하지 않음")
 	f.BoolVar(&o.Open, "open", false, "완료 후 접속 주소를 브라우저로 열기")
 	f.BoolVar(&o.Custom, "custom", false, "접속 방식·보안키·TAGO 키를 직접 선택하는 고급 설치")
-	if err = f.Parse(args); err != nil {
+	if err = parseCommandFlags(f, args); err != nil {
 		return o, pathSet, err
 	}
 	if f.NArg() != 0 {
@@ -537,9 +537,9 @@ func installedOrigin(path string, s *install.State) (string, error) {
 }
 
 func previewCommand(ctx context.Context, args []string) error {
-	f := flag.NewFlagSet("preview", flag.ContinueOnError)
+	f := newCommandFlags("preview")
 	plain := f.Bool("plain", false, "색·애니메이션 없이 표시")
-	if err := f.Parse(args); err != nil {
+	if err := parseCommandFlags(f, args); err != nil {
 		return err
 	}
 	if f.NArg() != 0 {

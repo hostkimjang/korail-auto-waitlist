@@ -121,6 +121,13 @@ jobs:
       - run: bash -n scripts/*.sh
       - run: bash scripts/ops.sh config
       - run: make verify-ops
+      - name: Operations script contract on macOS bash 3.2
+        # macOS ships bash 3.2, which has no mapfile and treats an empty array as unbound under
+        # set -u. Run the same contract there so Git installs on a Mac keep deploying.
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro" -w /repo
+          bash:3.2@sha256:2556c2da19c32c1614d318645c73a7bf64d38be21cf69e98e3ca51f053983719
+          sh -c 'ln -sf /usr/local/bin/bash /bin/bash && bash scripts/test-ops.sh'
       - run: make verify-api
         env:
           KORAIL_BROWSER_TEST_DISABLE_SANDBOX: "true"

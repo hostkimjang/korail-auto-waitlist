@@ -10,7 +10,8 @@ temporary_paths=()
 
 cleanup_temporary_paths() {
     local path
-    for path in "${temporary_paths[@]}"; do
+    # bash 3.2 (macOS) treats an empty "${array[@]}" as unbound under set -u.
+    for path in ${temporary_paths[@]+"${temporary_paths[@]}"}; do
         rm -f -- "$path"
     done
 }

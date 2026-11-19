@@ -2,6 +2,9 @@
 
 set -Eeuo pipefail
 
+# macOS ships bash 3.2, which has no mapfile and treats an empty "${array[@]}" as unbound
+# under set -u. Arrays that may be empty expand as ${array[@]+"${array[@]}"} instead.
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 cd "$repo_root"
@@ -27,7 +30,7 @@ compose() {
 contains_service() {
     local expected="$1"
     local service
-    for service in "${running_services[@]}"; do
+    for service in ${running_services[@]+"${running_services[@]}"}; do
         if [[ "$service" == "$expected" ]]; then
             return 0
         fi
@@ -37,10 +40,13 @@ contains_service() {
 
 load_running_services() {
     local output
+    local service
     output="$(compose --profile '*' ps --status running --services)"
     running_services=()
     if [[ -n "$output" ]]; then
-        mapfile -t running_services <<< "$output"
+        while IFS= read -r service; do
+            running_services+=("$service")
+        done <<< "$output"
     fi
 }
 
@@ -83,7 +89,7 @@ configure_browser_adapter() {
     if [[ "$include_srt" == true ]]; then
         arguments+=(--include-srt-provider-adapter)
     fi
-    bash "${script_dir}/configure-browser-adapter.sh" "${arguments[@]}"
+    bash "${script_dir}/configure-browser-adapter.sh" ${arguments[@]+"${arguments[@]}"}
 }
 
 show_celery_active_task_summary() {
@@ -179,7 +185,7 @@ stop_services_for_graceful_recreate() {
             fi
         done
         if ((${#services_to_stop[@]} > 0)); then
-            compose "${profile_arguments[@]}" stop --timeout 300 "${services_to_stop[@]}" || return $?
+            compose ${profile_arguments[@]+"${profile_arguments[@]}"} stop --timeout 300 "${services_to_stop[@]}" || return $?
         fi
     done
 }
@@ -197,7 +203,7 @@ restore_drained_services() {
     done
     if ((${#services_to_restore[@]} > 0)); then
         echo '재배포가 완료되지 않아 중지했던 서비스의 실행 상태를 복구합니다.' >&2
-        if ! compose "${profile_arguments[@]}" start "${services_to_restore[@]}"; then
+        if ! compose ${profile_arguments[@]+"${profile_arguments[@]}"} start "${services_to_restore[@]}"; then
             echo '중지했던 서비스의 실행 상태 복구도 실패했습니다. 중간 종료 상태를 확인하세요.' >&2
         fi
     fi
@@ -230,8 +236,8 @@ graceful_recreate() {
 
     show_celery_active_task_summary
     load_running_services
-    if stop_services_for_graceful_recreate "$include_experimental_rail" "${profile_arguments[@]}"; then
-        if compose "${profile_arguments[@]}" "${up_arguments[@]}"; then
+    if stop_services_for_graceful_recreate "$include_experimental_rail" ${profile_arguments[@]+"${profile_arguments[@]}"}; then
+        if compose ${profile_arguments[@]+"${profile_arguments[@]}"} "${up_arguments[@]}"; then
             return 0
         else
             stop_status=$?
@@ -243,7 +249,7 @@ graceful_recreate() {
         stop_status=$?
     fi
 
-    restore_drained_services "${profile_arguments[@]}"
+    restore_drained_services ${profile_arguments[@]+"${profile_arguments[@]}"}
     return "$stop_status"
 }
 

@@ -77,6 +77,8 @@ function runtimeStatus(
     localReuseRemainingSeconds: 100,
     locallyReusable: true,
     prewarmOutcome: "authenticated",
+    protectionHalted: false,
+    nextLoginAttemptSeconds: null,
     ...overrides,
   };
 }

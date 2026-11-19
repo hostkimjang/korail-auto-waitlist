@@ -30,6 +30,8 @@ describe("rail provider account settings", () => {
         localReuseRemainingSeconds: null,
         locallyReusable: false,
         prewarmOutcome: "failed",
+        protectionHalted: false,
+        nextLoginAttemptSeconds: null,
       };
       const props = { accounts: [account], onSave: vi.fn(), onDelete: vi.fn() };
       const { rerender } = render(
@@ -174,5 +176,38 @@ describe("rail provider account settings", () => {
     expect(screen.queryByDisplayValue("temporary-password")).toBeNull();
     await user.click(screen.getByRole("button", { name: "연결 해제" }));
     expect(onDelete).toHaveBeenCalledWith("KORAIL");
+  });
+
+  it("explains a protection hold after a restart instead of a bare not-started session", () => {
+    const account = {
+      provider: "KORAIL" as const,
+      configured: true,
+      enabled: true,
+      loginMethod: "membership_number" as const,
+      maskedLoginId: "ra***er",
+      credentialVersion: 1,
+      lastAuthStatus: "authenticated" as const,
+      lastAuthenticatedAt: "2026-10-01T10:00:00+09:00",
+      updatedAt: "2026-10-01T10:00:00+09:00",
+    };
+    const runtime: ProviderRuntimeStatus = {
+      provider: "KORAIL",
+      state: "cold",
+      credentialGeneration: null,
+      createdAgeSeconds: null,
+      lastVerifiedAgeSeconds: null,
+      lastUsedAgeSeconds: null,
+      localReuseRemainingSeconds: null,
+      locallyReusable: false,
+      prewarmOutcome: null,
+      protectionHalted: true,
+      nextLoginAttemptSeconds: 1680,
+    };
+    render(<ProviderAccountSettings accounts={[account]} runtimeStatuses={[runtime]} onSave={vi.fn()} onDelete={vi.fn()} />);
+    const card = within(screen.getByRole("region", { name: "KORAIL 계정" }));
+    expect(card.getByText("운영사 보호 대기")).toBeTruthy();
+    expect(card.queryByText("시작 전")).toBeNull();
+    expect(card.getByText(/KORAIL이 자동 로그인을 막아 이 운영사의 좌석 관측을 잠시 멈췄습니다/)).toBeTruthy();
+    expect(card.getByText(/약 28분 뒤 다시 로그인을 시도합니다/)).toBeTruthy();
   });
 });

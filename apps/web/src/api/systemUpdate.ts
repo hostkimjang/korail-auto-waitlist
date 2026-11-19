@@ -10,7 +10,7 @@ export interface SystemUpdate {
   reason: string;
 }
 export type UpdateJobState = "queued" | "running" | "succeeded" | "failed" | "deferred" | "recovery_required" | "rejected";
-// Settings jobs reuse the update job record, so both families of manager error codes live here.
+// Settings and restart jobs reuse the update job record, so every family of manager error codes lives here.
 export type UpdateJobErrorCode =
   | "E_INVALID_REQUEST"
   | "E_UNAUTHORIZED"
@@ -20,7 +20,9 @@ export type UpdateJobErrorCode =
   | "E_SETTINGS_CHANGED"
   | "E_SETTINGS_INVALID"
   | "E_SETTINGS_FORBIDDEN"
-  | "E_SETTINGS_UNCHANGED";
+  | "E_SETTINGS_UNCHANGED"
+  | "E_RESTART_ENV_INVALID"
+  | "E_RESTART_UNAVAILABLE";
 export interface UpdateJob { id: string; state: UpdateJobState; stage: string; errorCode: UpdateJobErrorCode | null }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("업데이트 응답을 확인하지 못했습니다.");
@@ -55,7 +57,7 @@ function jobErrorCode(value: unknown): UpdateJobErrorCode | null {
   switch (value) {
     case "E_INVALID_REQUEST": case "E_UNAUTHORIZED": case "E_IDEMPOTENCY_CONFLICT": case "E_HANDLER_FAILED":
     case "E_MANAGER_RESTARTED": case "E_SETTINGS_CHANGED": case "E_SETTINGS_INVALID": case "E_SETTINGS_FORBIDDEN":
-    case "E_SETTINGS_UNCHANGED": return value;
+    case "E_SETTINGS_UNCHANGED": case "E_RESTART_ENV_INVALID": case "E_RESTART_UNAVAILABLE": return value;
     default: return null;
   }
 }

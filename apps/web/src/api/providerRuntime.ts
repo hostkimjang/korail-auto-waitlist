@@ -18,6 +18,10 @@ export interface ProviderRuntimeStatus {
   localReuseRemainingSeconds: number | null;
   locallyReusable: boolean;
   prewarmOutcome: ProviderAuthStatus | null;
+  /** The provider answered an automatic login with protection; logins and seat observation wait. */
+  protectionHalted: boolean;
+  /** Seconds until the server admits the next automatic login; null when none is scheduled. */
+  nextLoginAttemptSeconds: number | null;
 }
 
 const providers: ReadonlySet<string> = new Set(["KORAIL", "SRT"]);
@@ -76,6 +80,11 @@ export function mapProviderRuntimeStatus(value: unknown): ProviderRuntimeStatus 
   const lastUsedAgeSeconds = value.last_used_age_seconds;
   const localReuseRemainingSeconds = value.local_reuse_remaining_seconds;
   const prewarmOutcome = value.prewarm_outcome;
+  // Both fields are absent from APIs before 1.5.0; a present value must be well formed.
+  const protectionHalted = value.protection_halted === undefined ? false : value.protection_halted;
+  const nextLoginAttemptSeconds = value.next_login_attempt_seconds === undefined
+    ? null
+    : value.next_login_attempt_seconds;
   if (
     provider === null
     || !isRuntimeState(value.state)
@@ -86,6 +95,8 @@ export function mapProviderRuntimeStatus(value: unknown): ProviderRuntimeStatus 
     || !isNullableNonNegativeNumber(localReuseRemainingSeconds)
     || typeof value.locally_reusable !== "boolean"
     || !isPrewarmOutcome(prewarmOutcome)
+    || typeof protectionHalted !== "boolean"
+    || !isNullableNonNegativeNumber(nextLoginAttemptSeconds)
   ) {
     throw new Error("상주 세션 상태 응답 형식을 확인할 수 없습니다.");
   }
@@ -100,6 +111,8 @@ export function mapProviderRuntimeStatus(value: unknown): ProviderRuntimeStatus 
     localReuseRemainingSeconds,
     locallyReusable: value.locally_reusable,
     prewarmOutcome,
+    protectionHalted,
+    nextLoginAttemptSeconds,
   };
 }
 

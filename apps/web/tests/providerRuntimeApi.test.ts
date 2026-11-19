@@ -36,6 +36,8 @@ describe("provider runtime API boundary", () => {
         local_reuse_remaining_seconds: null,
         locally_reusable: false,
         prewarm_outcome: null,
+        protection_halted: true,
+        next_login_attempt_seconds: 1500.5,
       },
     ])).toEqual([
       {
@@ -48,6 +50,9 @@ describe("provider runtime API boundary", () => {
         localReuseRemainingSeconds: 240,
         locallyReusable: true,
         prewarmOutcome: "authenticated",
+        // APIs before 1.5.0 omit the protection wait fields.
+        protectionHalted: false,
+        nextLoginAttemptSeconds: null,
       },
       {
         provider: "SRT",
@@ -59,8 +64,24 @@ describe("provider runtime API boundary", () => {
         localReuseRemainingSeconds: null,
         locallyReusable: false,
         prewarmOutcome: null,
+        protectionHalted: true,
+        nextLoginAttemptSeconds: 1500.5,
       },
     ]);
+  });
+
+  it("rejects malformed protection wait fields", () => {
+    for (const malformed of [
+      { protection_halted: "true" },
+      { protection_halted: null },
+      { next_login_attempt_seconds: -1 },
+      { next_login_attempt_seconds: "60" },
+    ]) {
+      expect(() => mapProviderRuntimeStatuses([
+        { ...runtimeStatusDto, ...malformed },
+        { ...runtimeStatusDto, provider: "srt" },
+      ])).toThrow("상주 세션 상태 응답 형식");
+    }
   });
 
   it("rejects malformed and incomplete runtime status lists", () => {

@@ -2,6 +2,7 @@ import { request } from "./client";
 
 export type SettingsFieldKind = "boolean" | "version" | "secret" | "contact";
 export type SettingsScope = "web" | "app";
+export type HostOs = "darwin" | "linux" | "windows";
 export type SystemSettingsReason =
   | "ready"
   | "managed_install_required"
@@ -43,6 +44,14 @@ export interface ValueSettingsField {
 }
 export type SettingsField = SecretSettingsField | ValueSettingsField;
 
+/** Where the install .env lives on the install computer, for edits made there. */
+export interface InstallLocation {
+  installPath: string;
+  envPath: string;
+  /** Null when an older manager did not report it and the path does not reveal it. */
+  hostOs: HostOs | null;
+}
+
 export interface AvailableSystemSettings {
   available: true;
   reason: "ready";
@@ -53,6 +62,9 @@ export interface AvailableSystemSettings {
   raw: string;
   secretKeys: readonly string[];
   lockedKeys: readonly string[];
+  /** Whether the running host manager can restart the app services on request. */
+  restartAvailable: boolean;
+  installLocation: InstallLocation | null;
 }
 export interface UnavailableSystemSettings {
   available: false;
@@ -75,6 +87,7 @@ export type SettingsSubmission =
   | (SettingsSubmissionBase & { mode: "raw"; raw: string });
 
 export const RAW_SETTINGS_MAX_BYTES = 65536;
+const MAX_INSTALL_PATH_LENGTH = 4096;
 const REVISION = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[a-f0-9]{32}$/;
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -106,6 +119,35 @@ function envKeys(value: unknown): string[] {
     if (typeof entry !== "string" || !ENV_KEY.test(entry)) throw invalid();
     return entry;
   });
+}
+
+function hostOs(value: unknown): HostOs | null {
+  if (value === null || value === undefined) return null;
+  if (value === "darwin" || value === "linux" || value === "windows") return value;
+  throw invalid();
+}
+
+function displayablePath(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || value === ""
+    || value.length > MAX_INSTALL_PATH_LENGTH + 8
+    || Array.from(value).some((character) => character.charCodeAt(0) < 32)
+  ) {
+    throw invalid();
+  }
+  return value;
+}
+
+function installLocation(value: unknown): InstallLocation | null {
+  // Absent from APIs before 1.5.0; null when the manager did not report a location.
+  if (value === null || value === undefined) return null;
+  const item = record(value);
+  return {
+    installPath: displayablePath(item.install_path),
+    envPath: displayablePath(item.env_path),
+    hostOs: hostOs(item.host_os),
+  };
 }
 
 function settingsField(value: unknown, index: number): SettingsField {
@@ -158,6 +200,7 @@ export function mapSystemSettings(value: unknown): SystemSettings {
   if (typeof item.revision !== "string" || !REVISION.test(item.revision)) throw invalid();
   if (typeof item.raw !== "string") throw invalid();
   if (!Array.isArray(item.fields) || item.fields.length !== SETTINGS_FIELD_CONTRACT.length) throw invalid();
+  if (item.restart_available !== undefined && typeof item.restart_available !== "boolean") throw invalid();
   return {
     available: true,
     reason: "ready",
@@ -168,15 +211,25 @@ export function mapSystemSettings(value: unknown): SystemSettings {
     raw: item.raw,
     secretKeys: envKeys(item.secret_keys),
     lockedKeys: envKeys(item.locked_keys),
+    restartAvailable: item.restart_available === true,
+    installLocation: installLocation(item.install_location),
   };
 }
 
-export function mapSettingsSubmissionAccepted(value: unknown): SettingsSubmissionAccepted {
+function mapAccepted(value: unknown, message: string): SettingsSubmissionAccepted {
   const item = record(value);
   if (item.schema !== 1 || typeof item.id !== "string" || !IDENTIFIER.test(item.id) || item.state !== "queued") {
-    throw new Error("서버 설정 변경 요청 응답이 올바르지 않습니다.");
+    throw new Error(message);
   }
   return { id: item.id };
+}
+
+export function mapSettingsSubmissionAccepted(value: unknown): SettingsSubmissionAccepted {
+  return mapAccepted(value, "서버 설정 변경 요청 응답이 올바르지 않습니다.");
+}
+
+export function mapRestartAccepted(value: unknown): SettingsSubmissionAccepted {
+  return mapAccepted(value, "서비스 다시 시작 요청 응답이 올바르지 않습니다.");
 }
 
 export function utf8ByteLength(value: string): number {
@@ -213,5 +266,14 @@ export async function submitSystemSettings(submission: SettingsSubmission): Prom
   return mapSettingsSubmissionAccepted(await request("/system/settings", {
     method: "POST",
     body: submissionBody(submission),
+  }));
+}
+
+/** Ask the host manager to recreate the app services; PostgreSQL and Redis keep running. */
+export async function submitSystemRestart(idempotencyKey: string): Promise<SettingsSubmissionAccepted> {
+  if (!IDENTIFIER.test(idempotencyKey)) throw new Error("서비스 다시 시작 요청을 만들지 못했습니다.");
+  return mapRestartAccepted(await request("/system/restart", {
+    method: "POST",
+    body: JSON.stringify({ scope: "app", idempotency_key: idempotencyKey }),
   }));
 }

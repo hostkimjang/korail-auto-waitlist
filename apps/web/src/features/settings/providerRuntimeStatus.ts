@@ -24,6 +24,9 @@ export function providerRuntimeStatusPresentation(
     }
     return { label: "재사용 가능", tone: "ready" };
   }
+  if (status.protectionHalted) {
+    return { label: "운영사 보호 대기", tone: "blocked" };
+  }
   if (status.state === "authenticating") {
     return { label: "로그인 준비 중", tone: "pending" };
   }
@@ -69,4 +72,10 @@ export function formatRuntimeLocalReuseWindow(seconds: number | null, reusable: 
   if (seconds === null) return "남은 시간 확인 불가";
   if (seconds === 0) return "종료됨";
   return `약 ${formatRoundedDuration(seconds)} 남음`;
+}
+
+export function formatNextLoginAttempt(seconds: number | null): string {
+  if (seconds === null) return "다음 로그인 시도 시각을 정하는 중입니다.";
+  if (seconds < 60) return "1분 안에 다시 로그인을 시도합니다.";
+  return `약 ${formatRoundedDuration(seconds)} 뒤 다시 로그인을 시도합니다.`;
 }

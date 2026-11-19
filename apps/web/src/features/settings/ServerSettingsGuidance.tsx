@@ -21,9 +21,11 @@ type CopyState = "idle" | "copied" | "failed";
 export interface CopyableCommandProps {
   label: string;
   command: string;
+  /** Accessible name of the copy button; defaults to "<label> 명령 복사". */
+  copyLabel?: string;
 }
 
-export function CopyableCommand({ label, command }: CopyableCommandProps) {
+export function CopyableCommand({ label, command, copyLabel }: CopyableCommandProps) {
   const labelId = useId();
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const copy = async (): Promise<void> => {
@@ -42,7 +44,7 @@ export function CopyableCommand({ label, command }: CopyableCommandProps) {
       <button
         type="button"
         className="button button-outline compact"
-        aria-label={`${label} 명령 복사`}
+        aria-label={copyLabel ?? `${label} 명령 복사`}
         onClick={() => void copy()}
       >
         복사
@@ -79,17 +81,38 @@ export interface ServerSettingsUnavailableProps {
   reason: Exclude<SystemSettingsReason, "ready">;
 }
 
+// Run from the folder the repository was cloned into; the API cannot see that host path.
+export const GIT_INSTALL_ENV_COMMANDS = [
+  { id: "mac-reveal", label: "macOS: Finder에서 .env 보기", command: "open -R .env" },
+  { id: "linux-edit", label: "Linux: 터미널에서 .env 고치기", command: "nano .env" },
+  { id: "windows-edit", label: "Windows: 메모장으로 .env 열기", command: "notepad .env" },
+  { id: "unix-apply", label: "macOS·Linux: 바꾼 설정 반영", command: "bash ./scripts/ops.sh experimental" },
+  { id: "windows-apply", label: "Windows: 바꾼 설정 반영", command: "./scripts/ops.ps1 experimental" },
+] as const;
+
+export function GitInstallSettingsGuidance() {
+  return (
+    <div className="server-settings-guidance">
+      <p>
+        이 서버는 설치 CLI 없이 Git 저장소와 Docker Compose로 직접 설치한 서버여서 화면에서 설정을 바꿀 수 없습니다.
+        설정은 저장소를 받은 폴더의 <code>.env</code>에 있습니다. 아래 명령은 그 폴더에서 실행합니다.
+      </p>
+      {GIT_INSTALL_ENV_COMMANDS.map(({ id, label, command }) => (
+        <CopyableCommand key={id} label={label} command={command} />
+      ))}
+      <p className="server-settings-help">
+        macOS Finder는 <code>.env</code> 같은 숨김 파일을 기본으로 보여 주지 않습니다. 보이지 않으면 Finder에서{" "}
+        <kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>.</kbd>을 누르세요. 고친 뒤에는 반영 명령으로 서비스를 다시 만들어야
+        바뀐 값이 적용됩니다. 비밀번호·키 같은 기존 비밀값은 바꾸지 마세요.
+      </p>
+    </div>
+  );
+}
+
 export function ServerSettingsUnavailable({ reason }: ServerSettingsUnavailableProps) {
   switch (reason) {
     case "managed_install_required":
-      return (
-        <div className="server-settings-guidance">
-          <p>
-            이 서버는 설치 CLI로 관리하는 설치가 아니어서 화면에서 설정을 바꿀 수 없습니다. Git 저장소로 설치했다면
-            저장소 폴더의 <code>.env</code>를 직접 고친 뒤 서비스를 다시 시작하세요.
-          </p>
-        </div>
-      );
+      return <GitInstallSettingsGuidance />;
     case "manager_unavailable":
       return (
         <div className="server-settings-guidance">

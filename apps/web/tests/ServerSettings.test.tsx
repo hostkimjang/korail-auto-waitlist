@@ -258,7 +258,7 @@ describe("server settings", () => {
 
 describe("server settings availability", () => {
   it.each([
-    ["managed_install_required", "직접 고친 뒤 서비스를 다시 시작하세요"],
+    ["managed_install_required", "Git 저장소와 Docker Compose로 직접 설치한 서버"],
     ["manager_unavailable", "설치한 컴퓨터의 관리 서비스와 Docker 실행 상태를 확인해 주세요."],
   ])("explains %s without a form", async (reason, message) => {
     routeFetch(() => jsonResponse(unavailableSettingsPayload(reason, reason !== "managed_install_required")));

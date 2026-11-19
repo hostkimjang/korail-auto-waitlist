@@ -9,6 +9,7 @@ import type {
   RailProvider,
 } from "../../api/providerAccounts";
 import {
+  formatNextLoginAttempt,
   formatRuntimeLocalReuseWindow,
   formatRuntimeVerifiedAge,
   isRuntimeReusableForCredential,
@@ -30,6 +31,12 @@ export interface ProviderAccountSettingsProps {
 const providerLabels: Record<RailProvider, string> = {
   KORAIL: "KORAIL",
   SRT: "SRT",
+};
+
+// Subject particles follow how each name is read aloud (코레일, 에스알티).
+const providerSubjects: Record<RailProvider, string> = {
+  KORAIL: "KORAIL이",
+  SRT: "SRT가",
 };
 
 const statusLabels: Record<ProviderAccount["lastAuthStatus"], string> = {
@@ -258,6 +265,16 @@ export function ProviderAccountSettings({
                   현재 상주 세션 상태를 확인할 수 없습니다. 다시 조회될 때까지 재사용 가능으로 판단하지 않습니다.
                 </p>
               ) : verifiedRuntimeStatus ? (
+                verifiedRuntimeStatus.protectionHalted && !runtimeReusable ? (
+                  <p className="provider-runtime-status-details">
+                    <span>
+                      {providerSubjects[provider]} 자동 로그인을 막아 이 운영사의 좌석 관측을 잠시 멈췄습니다.{" "}
+                      {formatNextLoginAttempt(verifiedRuntimeStatus.nextLoginAttemptSeconds)} 로그인되면 관측을 다시
+                      시작합니다.
+                    </span>
+                    <span>업데이트나 서비스 재시작 직후 다시 로그인할 때 생길 수 있으며, 간격을 두고 자동으로 다시 시도합니다.</span>
+                  </p>
+                ) : (
                 <p className="provider-runtime-status-details">
                   <span>최근 재검증: {formatRuntimeVerifiedAge(verifiedRuntimeStatus.lastVerifiedAgeSeconds)}</span>
                   <span>서버 로컬 재사용 창: {formatRuntimeLocalReuseWindow(
@@ -265,6 +282,7 @@ export function ProviderAccountSettings({
                     runtimeReusable,
                   )}</span>
                 </p>
+                )
               ) : effectiveRuntimeLoadState === "loading" ? (
                 <p className="provider-runtime-status-details">상주 세션 상태를 확인하는 중입니다.</p>
               ) : effectiveRuntimeLoadState === "ready" ? (

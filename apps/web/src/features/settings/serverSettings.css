@@ -415,6 +415,84 @@
   margin: 0;
 }
 
+/* Cards below the form share the fieldset look; their heading replaces the legend. */
+.server-settings-location,
+.server-restart {
+  margin-top: 18px;
+}
+
+.server-settings-location > h3,
+.server-restart > h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.server-settings-details {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.server-settings-details > summary {
+  min-height: 44px;
+  padding: 12px 0;
+  box-sizing: border-box;
+  color: #23415a;
+  font-weight: 750;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.server-settings-details > summary:focus-visible {
+  outline: 3px solid rgba(13, 139, 132, 0.28);
+  outline-offset: 2px;
+}
+
+.server-settings-details ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.server-settings-details .server-settings-guidance {
+  margin-top: 10px;
+}
+
+.server-settings-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.server-settings-evidence p {
+  margin: 0;
+  color: #42566e;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.server-settings-evidence-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.server-settings kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #f6f8f9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
 @media (max-width: 480px) {
   .server-settings-group {
     padding: 12px 12px 14px;

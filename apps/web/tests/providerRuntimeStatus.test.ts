@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ProviderRuntimeStatus } from "../src/api/providerRuntime";
 import {
+  formatNextLoginAttempt,
   formatRuntimeLocalReuseWindow,
   formatRuntimeVerifiedAge,
   providerRuntimeStatusPresentation,
@@ -17,6 +18,8 @@ const readyRuntime: ProviderRuntimeStatus = {
   localReuseRemainingSeconds: 130,
   locallyReusable: true,
   prewarmOutcome: "authenticated",
+  protectionHalted: false,
+  nextLoginAttemptSeconds: null,
 };
 
 describe("provider runtime status presentation", () => {
@@ -54,5 +57,23 @@ describe("provider runtime status presentation", () => {
     expect(formatRuntimeLocalReuseWindow(130, true)).toBe("약 2분 남음");
     expect(formatRuntimeLocalReuseWindow(0, true)).toBe("종료됨");
     expect(formatRuntimeLocalReuseWindow(240, false)).toBe("사용 불가");
+  });
+
+  it("names a protection hold instead of a cold session and says when the next login comes", () => {
+    const held: ProviderRuntimeStatus = {
+      ...readyRuntime,
+      state: "cold",
+      locallyReusable: false,
+      protectionHalted: true,
+      nextLoginAttemptSeconds: 1500,
+    };
+    expect(providerRuntimeStatusPresentation(held, 1)).toEqual({ label: "운영사 보호 대기", tone: "blocked" });
+    // A reusable session of the current account wins: the hold lifts on the next manager tick.
+    expect(providerRuntimeStatusPresentation({ ...readyRuntime, protectionHalted: true }, 1))
+      .toEqual({ label: "재사용 가능", tone: "ready" });
+    expect(formatNextLoginAttempt(null)).toBe("다음 로그인 시도 시각을 정하는 중입니다.");
+    expect(formatNextLoginAttempt(30)).toBe("1분 안에 다시 로그인을 시도합니다.");
+    expect(formatNextLoginAttempt(1500)).toBe("약 25분 뒤 다시 로그인을 시도합니다.");
+    expect(formatNextLoginAttempt(5400)).toBe("약 2시간 뒤 다시 로그인을 시도합니다.");
   });
 });

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
 import {
   fetchSystemSettings,
+  submitSystemRestart,
   submitSystemSettings,
   type SettingsFieldKey,
   type SettingsScope,
@@ -26,6 +27,8 @@ export const MANAGER_UNAVAILABLE_MESSAGE =
   "설치한 컴퓨터의 관리 서비스와 Docker 실행 상태를 확인해 주세요. 관리 서비스가 준비되면 이 화면에서 서버 설정을 바꿀 수 있습니다.";
 export const MANAGER_UPGRADE_MESSAGE =
   "서버 설정을 바꾸려면 설치한 컴퓨터의 관리 서비스를 한 번 교체해야 합니다.";
+export const RESTART_UPGRADE_MESSAGE =
+  "화면에서 서비스를 다시 시작하려면 설치한 컴퓨터의 관리 서비스를 1.5.0 이상으로 한 번 교체해야 합니다.";
 export const SETTINGS_CHANGED_MESSAGE =
   "다른 곳에서 설정이 바뀌었습니다. 새로 불러온 값을 확인한 뒤 다시 적용하세요.";
 
@@ -60,6 +63,8 @@ export interface ServerSettingsController {
   submitError: ServerSettingsSubmitError | null;
   reload: () => void;
   submit: (request: ServerSettingsRequest) => Promise<void>;
+  /** Recreate the app services through the host manager without changing .env. */
+  restart: () => Promise<void>;
 }
 
 function queuedJob(id: string): UpdateJob {
@@ -137,6 +142,25 @@ function submissionFailure(cause: unknown): SubmissionFailure {
       guidance: null,
     },
     reload: false,
+  };
+}
+
+function restartFailure(cause: unknown): ServerSettingsSubmitError {
+  if (cause instanceof ApiError) {
+    const detail = serverDetail(cause.detail);
+    if (cause.status === 409 && detail === "restart_manager_upgrade_required") {
+      return { message: RESTART_UPGRADE_MESSAGE, guidance: "manager_upgrade" };
+    }
+    if (cause.status === 503) return { message: MANAGER_UNAVAILABLE_MESSAGE, guidance: null };
+    const rejection = managementAuthorizationError(cause, {
+      request: "다시 시작 요청",
+      retryAfterLogin: "다시 시도해 주세요.",
+    });
+    if (rejection !== null) return { message: rejection, guidance: null };
+  }
+  return {
+    message: "다시 시작 요청을 확인하지 못했습니다. 다시 시도해도 같은 요청은 중복 실행하지 않습니다.",
+    guidance: null,
   };
 }
 
@@ -256,6 +280,33 @@ export function useServerSettings(demo: boolean): ServerSettingsController {
     }
   };
 
+  const restart = async (): Promise<void> => {
+    if (demo || activeSubmission.current || jobRunning || snapshot === null || !snapshot.available) return;
+    if (!snapshot.restartAvailable) return;
+    activeSubmission.current = true;
+    setSubmitting(true);
+    setSubmitError(null);
+    setJobError(null);
+    setTracked(null);
+    // A retry after an unknown outcome reuses the key so the manager restarts only once.
+    const fingerprint = JSON.stringify([snapshot.revision, "restart"]);
+    if (attempt.current?.fingerprint !== fingerprint) {
+      attempt.current = { fingerprint, key: newIdempotencyKey() };
+    }
+    try {
+      const accepted = await submitSystemRestart(attempt.current.key);
+      attempt.current = null;
+      const context: SettingsJobContext = { id: accepted.id, mode: "restart", scope: "app", reloadRequired: false };
+      rememberJob(context);
+      setTracked({ context, job: queuedJob(accepted.id) });
+    } catch (cause: unknown) {
+      setSubmitError(restartFailure(cause));
+    } finally {
+      activeSubmission.current = false;
+      setSubmitting(false);
+    }
+  };
+
   return {
     snapshot,
     loading: !demo && settledRequest !== loadRequest,
@@ -268,5 +319,6 @@ export function useServerSettings(demo: boolean): ServerSettingsController {
     submitError,
     reload,
     submit,
+    restart,
   };
 }

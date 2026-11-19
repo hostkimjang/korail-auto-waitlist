@@ -204,6 +204,8 @@ export const demoProviderRuntimeStatuses: ProviderRuntimeStatus[] = demoProvider
   localReuseRemainingSeconds: null,
   locallyReusable: false,
   prewarmOutcome: null,
+  protectionHalted: false,
+  nextLoginAttemptSeconds: null,
 }));
 
 export const initialWatches: ProjectedWatch[] = [

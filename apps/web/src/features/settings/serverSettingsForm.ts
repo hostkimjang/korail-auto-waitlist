@@ -38,11 +38,13 @@ export interface SettingsChange {
 }
 
 export interface AppLinkRow {
-  id: string;
+  id: AppLinkId;
   label: string;
   enabledKey: AppLinkEnabledKey;
   versionKey: AppLinkVersionKey;
 }
+
+export type AppLinkId = "korail-booking" | "korail-ticket" | "srt-main" | "srt-ticket";
 
 export const APP_LINK_ROWS: readonly AppLinkRow[] = [
   {

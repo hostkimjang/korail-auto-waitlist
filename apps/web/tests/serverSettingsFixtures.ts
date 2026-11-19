@@ -17,6 +17,8 @@ interface SettingsPayloadOptions {
   revision?: string;
   values?: Readonly<Record<string, string>>;
   secretConfigured?: boolean;
+  restartAvailable?: boolean;
+  installLocation?: { install_path: string; env_path: string; host_os: string | null } | null;
 }
 
 const defaultValues: Readonly<Record<string, string>> = {
@@ -43,6 +45,8 @@ export function settingsPayload(options: SettingsPayloadOptions = {}) {
     raw: SETTINGS_RAW,
     secret_keys: ["POSTGRES_PASSWORD", "TAGO_SERVICE_KEY"],
     locked_keys: ["COMPOSE_PROJECT_NAME"],
+    restart_available: options.restartAvailable ?? true,
+    install_location: options.installLocation ?? null,
   };
 }
 

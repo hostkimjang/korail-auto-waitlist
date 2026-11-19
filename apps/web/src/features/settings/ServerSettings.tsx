@@ -2,6 +2,8 @@ import { Fragment, useState } from "react";
 
 import { ManagerUpgradeGuidance, ServerSettingsUnavailable } from "./ServerSettingsGuidance";
 import { APP_SCOPE_TEXT, ServerSettingsFieldsForm } from "./ServerSettingsFieldsForm";
+import { RESTART_PROGRESS_TEXT, ServerRestartPanel } from "./ServerRestartPanel";
+import { ServerSettingsLocation } from "./ServerSettingsLocation";
 import { ServerSettingsRawEditor } from "./ServerSettingsRawEditor";
 import { settingsJobOutcome } from "./serverSettingsJob";
 import { useServerSettings } from "./useServerSettings";
@@ -23,6 +25,7 @@ function ServerSettingsContent() {
     submitError,
     reload,
     submit,
+    restart,
   } = useServerSettings(false);
   // Lives above the keyed editor so a reloaded snapshot does not collapse an open raw editor.
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -44,6 +47,8 @@ function ServerSettingsContent() {
             onToggle={setAdvancedOpen}
             onSubmit={submit}
           />
+          {snapshot.installLocation !== null && <ServerSettingsLocation location={snapshot.installLocation} />}
+          <ServerRestartPanel restartAvailable={snapshot.restartAvailable} busy={busy} onRestart={restart} />
         </Fragment>
       )}
       {visibleLoadError !== null && !loading && (
@@ -68,7 +73,8 @@ function ServerSettingsContent() {
             {outcome.command !== null && <> <code>{outcome.command}</code></>}
           </p>
         )}
-        {jobRunning && tracked?.context.scope === "app" && (
+        {jobRunning && tracked?.context.mode === "restart" && <p>{RESTART_PROGRESS_TEXT}</p>}
+        {jobRunning && tracked?.context.mode !== "restart" && tracked?.context.scope === "app" && (
           <p>{APP_SCOPE_TEXT} 이 화면을 닫아도 적용은 계속됩니다.</p>
         )}
         {jobError !== null && <p>{jobError}</p>}

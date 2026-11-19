@@ -855,6 +855,9 @@ for (const viewport of viewportCases) {
   });
 }
 
+const LONG_INSTALL_PATH =
+  "/Users/someone/Library/Application Support/MacMiniHomeServer/services/railwait-with-a-long-install-folder-name";
+
 function serverSettingsSnapshot(): Record<string, unknown> {
   const longValue = "x".repeat(180);
   return {
@@ -866,6 +869,12 @@ function serverSettingsSnapshot(): Record<string, unknown> {
     raw: `COMPOSE_PROJECT_NAME=railwait\nPOSTGRES_PASSWORD=••••••\nLONG_VALUE=${longValue}\n`,
     secret_keys: ["POSTGRES_PASSWORD", "TAGO_SERVICE_KEY"],
     locked_keys: ["COMPOSE_PROJECT_NAME", "RAILWAIT_INSTALL_PROFILE_WITH_A_LONG_NAME"],
+    restart_available: true,
+    install_location: {
+      install_path: LONG_INSTALL_PATH,
+      env_path: `${LONG_INSTALL_PATH}/.env`,
+      host_os: "darwin",
+    },
   };
 }
 
@@ -881,10 +890,11 @@ for (const viewport of viewportCases) {
     await page.getByRole("navigation", { name: "설정 메뉴" })
       .getByRole("button", { name: "서버 설정" }).click();
     const region = page.getByRole("region", { name: "서버 설정" });
-    await expect(region.getByRole("form", { name: "서버 설정 항목" })).toBeVisible();
+    const form = region.getByRole("form", { name: "서버 설정 항목" });
+    await expect(form).toBeVisible();
 
     await expectWithinViewport(page.locator(".settings-panel"), viewport.width, "settings panel");
-    const groups = region.locator(".server-settings-group");
+    const groups = form.locator(".server-settings-group");
     await expect(groups).toHaveCount(4);
     for (let index = 0; index < 4; index += 1) {
       await expectWithinViewport(groups.nth(index), viewport.width, `server settings group ${index + 1}`);
@@ -894,6 +904,10 @@ for (const viewport of viewportCases) {
     for (let index = 0; index < 6; index += 1) {
       await expectVisibleActionTarget(switchRows.nth(index), `server settings switch ${index + 1}`);
     }
+    await expectVisibleActionTarget(
+      region.getByRole("button", { name: "개발자 확인 값 채우기" }),
+      "developer app link values action",
+    );
 
     const linkSwitch = region.getByRole("switch", { name: "SRT 예매 홈 앱 연결" });
     await linkSwitch.focus();
@@ -914,6 +928,26 @@ for (const viewport of viewportCases) {
     await expectVisibleActionTarget(region.locator(".server-settings-advanced > summary"), "advanced editor summary");
     await expectWithinViewport(region.locator(".server-settings-advanced"), viewport.width, "advanced editor");
     await expectVisibleActionTarget(region.getByRole("button", { name: "원문 적용" }), "raw apply action");
+
+    const location = region.getByRole("region", { name: "설정 파일 위치" });
+    await expectWithinViewport(location, viewport.width, "install location card");
+    for (const name of [
+      ".env 위치 복사",
+      "Finder에서 .env 보기 명령 복사",
+      "railwait CLI(1.5.0 이상)로 열기 명령 복사",
+    ]) {
+      await expectVisibleActionTarget(location.getByRole("button", { name }), name);
+    }
+
+    const restartPanel = region.getByRole("region", { name: "서비스 다시 시작" });
+    await expectWithinViewport(restartPanel, viewport.width, "service restart panel");
+    const restart = restartPanel.getByRole("button", { name: "앱 서비스 다시 시작" });
+    await expect(restart).toBeDisabled();
+    const restartConsent = restartPanel.locator(".server-settings-consent");
+    await expectVisibleActionTarget(restartConsent, "service restart consent");
+    await restartPanel.getByRole("checkbox").check();
+    await expect(restart).toBeEnabled();
+    await expectVisibleActionTarget(restart, "service restart action");
 
     const widths = await page.evaluate(() => ({
       client: document.documentElement.clientWidth,

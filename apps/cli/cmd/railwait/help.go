@@ -89,6 +89,14 @@ var commandDocs = []commandDoc{
 		Details: []string{"--job은 웹·관리 서비스·CLI가 실행한 업데이트와 설정 작업의 단계와 결과를 보여 줍니다."},
 	},
 	{
+		Name: "open", Group: "관리 서비스·운영", Summary: "설정 파일(.env) 위치를 보여 주고 파일 관리자에서 엽니다",
+		Usage: []string{"open [--path <설치 경로>]"},
+		Details: []string{
+			".env의 절대경로를 출력하고 macOS Finder·Windows 탐색기에서 파일을, Linux에서는 설치 폴더를 엽니다.",
+			"화면이 없는 세션이거나 열지 못하면 경로와 직접 열 명령만 보여 줍니다. 고친 설정은 railwait restart로 반영합니다.",
+		},
+	},
+	{
 		Name: "doctor", Group: "진단", Summary: "Docker와 Compose 준비 상태를 확인합니다",
 		Usage:   []string{"doctor [--path <설치 경로>] [--docker-context <이름>] [--json]"},
 		Details: []string{"읽기 전용 확인입니다. 철도사 로그인·예약은 실행하지 않습니다."},
@@ -119,6 +127,7 @@ var commonExamples = [][2]string{
 	{"railwait update --dry-run", "업데이트할 수 있는지 계획을 확인합니다"},
 	{"railwait configure", "TAGO 키를 바꿀 계획을 만듭니다"},
 	{"railwait restart", "앱 서비스를 다시 시작합니다"},
+	{"railwait open", "설정 파일(.env) 위치를 엽니다"},
 	{"railwait manager upgrade", "관리 서비스를 이 CLI로 바꿉니다"},
 }
 

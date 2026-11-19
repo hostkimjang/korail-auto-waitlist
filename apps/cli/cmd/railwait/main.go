@@ -100,6 +100,8 @@ func commandHandler(name string) (func(context.Context, []string) error, bool) {
 		return restartCommand, true
 	case "uninstall":
 		return uninstallCommand, true
+	case "open":
+		return openCommand, true
 	}
 	return nil, false
 }

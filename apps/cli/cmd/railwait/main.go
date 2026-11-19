@@ -579,7 +579,9 @@ func managerCommand(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		result, err := newManagerUpgrader().upgrade(ctx, abs, exe, version, *force)
+		upgrader := newManagerUpgrader()
+		upgrader.notice = func(message string) { fmt.Fprintln(os.Stderr, message) }
+		result, err := upgrader.upgrade(ctx, abs, exe, version, *force)
 		if err != nil {
 			return err
 		}

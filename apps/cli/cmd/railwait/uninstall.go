@@ -40,6 +40,9 @@ type uninstaller struct {
 	executable string
 	// stopWait bounds how long the manager process may take to exit after unregistering.
 	stopWait time.Duration
+	// endProcess ends a manager process the service manager left running; nil uses
+	// platform.EndManagerProcess.
+	endProcess func(pid int, executable string, startedAt time.Time, wait time.Duration) error
 }
 
 func uninstallCommand(ctx context.Context, args []string) error {
@@ -66,7 +69,7 @@ func uninstallCommand(ctx context.Context, args []string) error {
 	}
 	return uninstaller{
 		installer: newInstaller(), services: manager.ExecServiceRunner{}, confirm: terminalConfirmation(), out: os.Stderr,
-		goos: runtime.GOOS, home: home, executable: executable, stopWait: 30 * time.Second,
+		goos: runtime.GOOS, home: home, executable: executable, stopWait: 30 * time.Second, endProcess: platform.EndManagerProcess,
 	}.run(ctx, uninstallOptions{Path: *path, DeleteData: *deleteData, Yes: *yes})
 }
 
@@ -82,6 +85,10 @@ func (u uninstaller) run(ctx context.Context, o uninstallOptions) error {
 	rerun := []string{"uninstall", "--path", abs}
 	if o.DeleteData {
 		rerun = append(rerun, "--delete-data")
+	}
+	// A run without a terminal needs --yes again, so the suggested command keeps it.
+	if o.Yes {
+		rerun = append(rerun, "--yes")
 	}
 	lock, err := platform.AcquireLock(filepath.Join(abs, ".railwait", "install.lock"))
 	if errors.Is(err, platform.ErrLocked) {
@@ -121,7 +128,24 @@ func (u uninstaller) run(ctx context.Context, o uninstallOptions) error {
 		return fmt.Errorf("관리 서비스를 해제하지 못해 아무것도 지우지 않았습니다: %w", err)
 	}
 	if err = u.waitManagerStopped(ctx, abs); err != nil {
-		return fmt.Errorf("관리 서비스 등록은 해제했지만 관리 프로세스가 멈추지 않아 컨테이너는 지우지 않았습니다; 잠시 뒤 %s 를 다시 실행하세요: %w", pasteableCommand(rerun...), err)
+		// The service is no longer registered, so a manager it left running stops only at
+		// logoff; waiting does not help once the CLI has refused to end that process.
+		next := "잠시 뒤 " + pasteableCommand(rerun...) + " 를 다시 실행하세요"
+		var running *managerStillRunning
+		if errors.As(err, &running) && running.pid > 0 && !running.ended {
+			// A PID that failed the check may now belong to another program, so only the
+			// manager executable's path names the process to end.
+			target := fmt.Sprintf("PID %d(%s)", running.pid, running.executable)
+			if errors.Is(running.cause, platform.ErrNotManagerProcess) {
+				target = running.executable + " 를 실행하는 프로세스"
+			}
+			where := ""
+			if u.goos == "windows" {
+				where = "작업 관리자의 세부 정보 탭에서 "
+			}
+			next = where + target + "를 끝낸 뒤 " + pasteableCommand(rerun...) + " 를 다시 실행하세요"
+		}
+		return fmt.Errorf("관리 서비스 등록은 해제했지만 관리 프로세스가 멈추지 않아 컨테이너는 지우지 않았습니다; %s: %w", next, err)
 	}
 	if state.ComposeFile != "" {
 		if o.DeleteData {
@@ -170,7 +194,8 @@ func (u uninstaller) waitManagerStopped(ctx context.Context, path string) error 
 	if _, err := os.Lstat(filepath.Join(manager.InstallationPaths(path).Root, "serve.lock")); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return managerUpgrader{wait: u.stopWait}.waitStopped(ctx, path)
+	notice := func(message string) { fmt.Fprintln(u.out, message) }
+	return managerUpgrader{wait: u.stopWait, endProcess: u.endProcess, notice: notice}.waitStopped(ctx, path)
 }
 
 // deleteFolder removes the installation folder after checking again that it is this

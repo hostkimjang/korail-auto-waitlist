@@ -13,8 +13,11 @@ var doubleClicked = func() bool {
 	return consoleOwnedByThisProcess() && term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-// installWizard runs the install wizard; a variable so tests can stand in for it.
-var installWizard = installCommand
+// installWizard runs the install wizard for a double-clicked railwait.exe; a variable so tests
+// can stand in for it.
+var installWizard = func(ctx context.Context, args []string) error {
+	return runInstallWizard(ctx, args, launchDoubleClick)
+}
 
 // bareInvocation handles railwait without arguments. It shows the command list, except for a
 // double-clicked railwait.exe: Explorer closes that console as soon as railwait exits, so the

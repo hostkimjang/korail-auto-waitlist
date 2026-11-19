@@ -48,6 +48,8 @@ type fakeRunner struct {
 	wrongImage    bool
 	mountFailures int
 	shareBroken   bool
+	// failureErr is what a command matching failure returns; nil returns a generic error.
+	failureErr error
 }
 
 func testInstaller(runner *fakeRunner, source *fakeReleases) Installer {
@@ -64,6 +66,9 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 	r.inputs = append(r.inputs, input)
 	args := strings.Join(c.Args, " ")
 	if r.failure != "" && strings.Contains(args, r.failure) {
+		if r.failureErr != nil {
+			return nil, r.failureErr
+		}
 		return nil, errors.New("injected failure")
 	}
 	switch {
@@ -500,5 +505,46 @@ func TestMissingDockerFileSharingStopsBeforeDatabaseOrBootstrap(t *testing.T) {
 	}
 	if state.Stage != "configured" {
 		t.Fatal(state.Stage)
+	}
+}
+
+func TestRecognizedDockerFailureIsReportedInsteadOfFileSharing(t *testing.T) {
+	exhausted := &DockerFailure{Cause: DockerAddressPoolsExhausted, err: errors.New("Docker command failed: exit status 1")}
+	runner := &fakeRunner{failure: "rail_waitlist.maintenance --status", failureErr: exhausted}
+	i := testInstaller(runner, &fakeReleases{})
+	_, err := i.Install(context.Background(), Options{Path: filepath.Join(t.TempDir(), "installation")})
+	var failure *DockerFailure
+	if !errors.As(err, &failure) || failure.Cause != DockerAddressPoolsExhausted {
+		t.Fatalf("cause lost: %v", err)
+	}
+	if strings.Contains(err.Error(), "파일 공유") || !strings.Contains(err.Error(), "default-address-pools") {
+		t.Fatalf("wrong guidance: %v", err)
+	}
+	probes := 0
+	for _, c := range runner.commands {
+		args := strings.Join(c.Args, " ")
+		if strings.Contains(args, "rail_waitlist.maintenance --status") {
+			probes++
+		}
+		if strings.Contains(args, "up -d") || strings.Contains(args, "admin_auth.bootstrap") || strings.Contains(args, "-T migration") {
+			t.Fatal("initialized database after a Docker failure")
+		}
+	}
+	if probes != 1 {
+		t.Fatalf("retried a failure that waiting cannot fix: %d probes", probes)
+	}
+}
+
+func TestRecognizedDockerFailureIsReportedInsteadOfFileSharingProbeMessage(t *testing.T) {
+	unreachable := &DockerFailure{Cause: DockerUnreachable, err: errors.New("Docker command failed: exit status 1")}
+	runner := &fakeRunner{failure: "/probe/host", failureErr: unreachable}
+	i := testInstaller(runner, &fakeReleases{images: probeTestImages()})
+	_, err := i.Install(context.Background(), Options{Path: filepath.Join(t.TempDir(), "installation")})
+	var failure *DockerFailure
+	if !errors.As(err, &failure) || failure.Cause != DockerUnreachable || strings.Contains(err.Error(), "File sharing") {
+		t.Fatalf("wrong guidance: %v", err)
+	}
+	if commandIndex(runner.commands, " pull") >= 0 {
+		t.Fatal("pulled images after Docker stopped answering")
 	}
 }

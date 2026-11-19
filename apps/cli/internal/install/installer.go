@@ -558,6 +558,12 @@ func (i *Installer) checkManagementMount(ctx context.Context, s State) error {
 		if err == nil && json.Unmarshal(out, &mounted) == nil && mounted.Schema == 1 && !mounted.Closed && mounted.Generation == host.Generation && mounted.Drained {
 			return nil
 		}
+		// A recognized Docker failure, such as no address left for the app's networks, is not
+		// a file sharing problem and does not go away by trying again.
+		var failure *DockerFailure
+		if errors.As(err, &failure) {
+			return fmt.Errorf("설치 관리 파일을 확인할 컨테이너를 시작하지 못했습니다: %w", err)
+		}
 		if attempt < 2 {
 			if err = i.pauseProbe(ctx); err != nil {
 				return err

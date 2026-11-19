@@ -4,7 +4,8 @@ Windows, macOS, Linux의 `amd64`·`arm64`용 설치 CLI입니다. Docker의 Linu
 Compose 2.24 이상이 필요합니다. Docker Desktop/VM에서 설치 경로의 파일 공유도 허용해야 합니다.
 사용자는 Go를 설치할 필요가 없습니다. `railwait install` 또는 `railwait setup`은 실행 환경 → 설치 계획 →
 앱·계정 → 자동 시작 → 접속 확인의 다섯 단계로 진행합니다. 인자 없이 실행하면 명령 목록을 보여 주고, Windows
-탐색기에서 `railwait.exe`를 더블클릭하면 예전처럼 설치 마법사를 시작합니다.
+탐색기에서 `railwait.exe`를 더블클릭하면 설치 마법사를 시작합니다. 이미 설치를 마친 폴더가 있으면 바로 진행하지 않고
+무엇을 할지 먼저 묻습니다.
 
 공식 릴리스는 한 줄 설치 스크립트로 시작할 수 있습니다(1.4.4부터). 스크립트 원본은
 [`scripts/install/`](../../scripts/install/)에 있고 Release 자산으로 `.sha256`과 함께 게시합니다.
@@ -104,7 +105,11 @@ railwait preview --plain
 `railwait`, `railwait help`, `--help`, `-h`는 설치·업데이트/설정/관리 서비스·운영/진단/제거/기타로 묶은 명령
 목록과 자주 쓰는 예를 보여 줍니다. 대화형 터미널에서 인자 없이 실행해도 설치 마법사 대신 이 목록을 보여 주므로
 설치는 `railwait install`로 시작합니다. 다만 Windows 탐색기에서 더블클릭한 `railwait.exe`는 콘솔 창이 끝나자마자
-닫혀 목록을 읽을 수 없으므로, 콘솔에 railwait만 연결되어 있으면 설치 마법사를 시작합니다. 명령별 목적·사용법·옵션과
+닫혀 목록을 읽을 수 없으므로, 콘솔에 railwait만 연결되어 있으면 설치 마법사를 시작합니다. 이때 기본 설치 폴더에 설치를
+마친 기록이 있으면 1단계 전에 설치 폴더, 앱·관리 서비스 버전, 접속 주소와 진행하면 바뀔 내용(관리 서비스 교체,
+Tailscale 접속 확인 등)을 보여 주고 **1 웹 앱 열기**(기본)·**2 설치 다시 확인**·**0 닫기** 중에서 고르게 합니다.
+더블클릭한 창은 닫기를 고른 경우를 빼고 끝난 뒤 Enter를 누를 때까지 열어 두어 결과와 오류를 읽을 수 있습니다.
+명령별 목적·사용법·옵션과
 하위 명령은 `railwait <명령> --help` 또는 `railwait help <명령>`으로 봅니다. 알 수 없는 명령이나 잘못된 옵션은 그
 이름과 함께 볼 도움말 명령을 알려 줍니다.
 
@@ -236,6 +241,10 @@ Docker Desktop이나 로컬 VM에서는 설치 경로를 파일 공유 대상으
 폴더를 읽고 쓰는지 먼저 확인합니다. 실패하면 수 GB 이미지를 받지 않고 멈추며, 생성한 설정은 보존해 같은
 명령으로 이어갈 수 있습니다. 이미지 다운로드 뒤에는 실제 API 컨테이너에서 관리 파일과 잠금 파일을 읽는지
 다시 확인하고, 실패하면 DB를 만들기 전에 중지합니다. 파일 공유의 짧은 전파 지연은 최대 세 차례 확인합니다.
+Docker 명령의 오류 원문은 비밀값이 섞일 수 있어 보여 주지 않습니다. 대신 끝부분만 읽어 Docker 네트워크 주소 범위
+소진, 포트 충돌, 저장 공간 부족, Docker 연결 실패를 알아보고 원인과 해결 방법을 안내합니다(1.5.2). 이런 오류는 파일
+공유 문제로 안내하지 않고 다시 시도하지도 않습니다. 주소 범위가 모두 찼다면 `docker network ls`로 쓰지 않는
+프로젝트의 네트워크를 지우거나 Docker 엔진 설정의 `default-address-pools`를 넓힙니다.
 
 접속은 loopback 전용이며 관리자 공개 등록은 꺼 둡니다. 검증한 배포 묶음의 좌석 감시·sidecar
 기본값과 `experimental-rail` 프로필을 유지합니다. 자동 예매 스위치(`KORAIL_RESERVATION_ONCE_ENABLED`·
@@ -348,7 +357,11 @@ Windows 작업 정의는 UTF-16으로 저장하고 `conhost.exe --headless`로 �
 관리 서비스 실행 파일은 앱 업데이트로 바뀌지 않습니다. 더 새 공식 CLI로 `railwait install`을 다시 실행하거나
 `railwait manager upgrade --path <설치 경로>`를 실행하면, 설치 잠금을 잡아 진행 중인 업데이트·설정 작업과 겹치지
 않게 기존 관리 서비스를 멈추고 `.railwait/bin`의 실행 파일을 이 CLI로 바꾼 뒤 다시 시작합니다. 새 관리 서비스의
-heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌립니다. macOS LaunchAgent와 Linux systemd 정의에는 처음
+heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌립니다. Windows 작업 스케줄러의 `/End`는 관리 서비스를 띄운
+`conhost`만 끝내고 관리 프로세스는 로그오프할 때까지 남기므로, 멈춘 지 3초 뒤에도 serve 잠금이 남아 있으면 heartbeat의
+PID를 엽니다. 실행 파일이 이 설치의 `.railwait\bin\railwait.exe`이고 프로세스 생성 시각이 heartbeat의 시작 시각 직전(10분
+이내)일 때만 그 프로세스를 끝내며, 하나라도 맞지 않으면 아무것도 끝내지 않고 PID와 실행 파일 경로를 담아 실패를
+알립니다(1.5.1 이하 CLI는 이 경우 30초 뒤 교체에 실패했습니다). macOS LaunchAgent와 Linux systemd 정의에는 처음
 설치한 터미널의 PATH가 들어가고, 관리 서비스는 이 PATH로 docker를 찾습니다. 교체와 `manager install`은 PATH만 다른
 정의를 다시 쓰지 않고 그대로 등록해 시작하므로, 설치 때와 다른 터미널에서 실행해도 됩니다. 1.4.8 CLI는 이 경우
 관리 서비스를 멈춘 채 남겼는데, 1.4.9 이상 CLI로 `manager upgrade`나 `manager install`을 실행하면 다시 시작합니다.
@@ -408,7 +421,9 @@ gate를 다시 열어 `failed`로 끝내며 다시 켜지 못했거나 비정상
 `systemctl --user disable --now`·unit 삭제·`daemon-reload`, Windows `schtasks /End`·`/Delete /F`와 작업 XML 삭제)
 이 설치의 Compose 프로젝트에서 컨테이너와 네트워크만 지웁니다(`down --remove-orphans`). `launchctl bootout`은 launchd가
 서비스를 다 내리기 전에 돌아오므로, 등록 해제 뒤 서비스 관리자가 서비스를 찾지 못할 때까지 최대 15초 다시 확인하고
-그래도 남아 있으면 아무것도 지우지 않고 멈춥니다. DB·Redis·백업 볼륨과 설치
+그래도 남아 있으면 아무것도 지우지 않고 멈춥니다. Windows에서 등록을 해제한 뒤 남은 관리 프로세스는 위 교체와 같은 확인을
+거쳐 끝냅니다. 끝내지 못하면 컨테이너를 지우지 않고, 끝낼 프로세스와 처음 실행한 옵션(`--yes` 포함)을 그대로 담은 재실행
+명령을 안내합니다. DB·Redis·백업 볼륨과 설치
 폴더(`.env`, 복구키 `.railwait/backup.env`)는 남기고 위치와 나중에 지우는 명령을 보여 줍니다. `--delete-data`는
 볼륨까지 지우고(`down --volumes`) 설치 폴더를 삭제합니다. 내릴 때는 모든 프로필을 켜(`--profile '*'`) 업데이트 백업이
 쓰는 `backups`처럼 필요할 때만 실행하는 서비스의 볼륨도 지우고, 그래도 남은 이 설치의 볼륨은 이름으로 지웁니다
@@ -445,5 +460,8 @@ Windows CLI의 서명·전체 archive 검증을 통과했습니다. 이 패키�
 임시 디렉터리로 검증했고, macOS(Lima Docker)의 임시 설치에서 실제로 확인했습니다. `restart`는 31초, 웹과 같은 형식의
 다시 시작 요청은 관리 서비스가 30초 만에 `succeeded`로 처리했고 두 경우 모두 PostgreSQL·Redis 컨테이너는 그대로
 두었습니다. `uninstall --delete-data`는 LaunchAgent·컨테이너·볼륨·네트워크·설치 폴더를 모두 지웠습니다. 이 확인에서
-`launchctl bootout` 직후의 상태 확인 때문에 제거가 멈추는 문제를 찾아 위의 다시 확인으로 고쳤습니다. Windows·Linux
-서비스 관리자, Windows 탐색기 `/select,`와 더블클릭 판정, Linux `xdg-open`은 아직 실제로 확인하지 않았습니다.
+`launchctl bootout` 직후의 상태 확인 때문에 제거가 멈추는 문제를 찾아 위의 다시 확인으로 고쳤습니다. 11월 19일
+Windows 11(Docker Desktop)에서는 1.5.1 CLI의 도움말, 작업 스케줄러 관리 서비스 등록, `open`의 탐색기 `/select,`를
+실제로 확인했고, 탐색기와 같은 콘솔 조건으로 띄운 `railwait.exe`가 설치 마법사를 시작하는 것을 확인했습니다. 이때
+`manager upgrade`와 `uninstall`이 작업 스케줄러가 남긴 관리 프로세스 때문에 실패해 1.5.2에서 고쳤습니다. 1.5.2의
+Windows 교체·제거와 실제 탐색기 더블클릭, Linux 서비스 관리자와 `xdg-open`은 아직 실제로 확인하지 않았습니다.

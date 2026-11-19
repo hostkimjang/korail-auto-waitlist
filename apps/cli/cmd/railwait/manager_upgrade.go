@@ -28,10 +28,15 @@ type managerUpgrader struct {
 	version func(ctx context.Context, executable string) (string, error)
 	// wait bounds how long the old manager may take to stop and the new one to start.
 	wait time.Duration
+	// endProcess ends a manager process that its service manager left running; nil uses
+	// platform.EndManagerProcess.
+	endProcess func(pid int, executable string, startedAt time.Time, wait time.Duration) error
+	// notice tells the user about a leftover manager process that was ended; nil stays quiet.
+	notice func(string)
 }
 
 func newManagerUpgrader() managerUpgrader {
-	return managerUpgrader{runner: manager.ExecServiceRunner{}, version: executableVersion, wait: 30 * time.Second}
+	return managerUpgrader{runner: manager.ExecServiceRunner{}, version: executableVersion, wait: 30 * time.Second, endProcess: platform.EndManagerProcess}
 }
 
 var versionLine = regexp.MustCompile(`^railwait (\S+) `)
@@ -187,9 +192,20 @@ func (u managerUpgrader) start(ctx context.Context, path, executable string) err
 	return err
 }
 
-// waitStopped waits until no manager process holds the manager's serve lock.
+// leftoverGrace is how long a stopped manager may take to release its serve lock before the
+// process its heartbeat names is checked and ended. Task Scheduler's /End ends only the
+// conhost that hosts the Windows manager, so the manager itself keeps running and holding
+// the lock until the user logs off; launchd and systemd stop the manager itself.
+var leftoverGrace = 3 * time.Second
+
+// waitStopped waits until no manager process holds the manager's serve lock. A manager
+// process the service manager left running is ended once it is verified as this
+// installation's manager.
 func (u managerUpgrader) waitStopped(ctx context.Context, path string) error {
-	deadline := time.Now().Add(u.wait)
+	started := time.Now()
+	deadline := started.Add(u.wait)
+	var leftover *managerStillRunning
+	checked := false
 	for {
 		lock, err := platform.AcquireLock(filepath.Join(manager.InstallationPaths(path).Root, "serve.lock"))
 		if err == nil {
@@ -198,8 +214,16 @@ func (u managerUpgrader) waitStopped(ctx context.Context, path string) error {
 		if !errors.Is(err, platform.ErrLocked) {
 			return err
 		}
+		if !checked && time.Since(started) >= leftoverGrace {
+			checked = true
+			leftover = u.endLeftover(path)
+		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("관리 서비스가 %s 안에 멈추지 않았습니다", u.wait)
+			if leftover == nil {
+				leftover = &managerStillRunning{}
+			}
+			leftover.wait = u.wait
+			return leftover
 		}
 		select {
 		case <-ctx.Done():
@@ -207,6 +231,64 @@ func (u managerUpgrader) waitStopped(ctx context.Context, path string) error {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// managerStillRunning says a manager process kept the serve lock after its service was
+// stopped. pid and executable name the process its heartbeat named, once the CLI checked it.
+type managerStillRunning struct {
+	wait       time.Duration
+	pid        int
+	executable string
+	// ended is set when the process was ended but the lock stayed.
+	ended bool
+	// cause says why the process was not ended.
+	cause error
+}
+
+func (e *managerStillRunning) Error() string {
+	message := fmt.Sprintf("관리 서비스가 %s 안에 멈추지 않았습니다", e.wait)
+	switch {
+	case e.pid <= 0:
+		return message
+	case e.ended:
+		return fmt.Sprintf("%s; heartbeat의 관리 프로세스(PID %d)를 끝냈지만 잠금이 풀리지 않았습니다", message, e.pid)
+	}
+	return fmt.Sprintf("%s; heartbeat의 PID %d는 끝내지 않았습니다(관리 실행 파일 %s): %v", message, e.pid, e.executable, e.cause)
+}
+
+func (e *managerStillRunning) Unwrap() error { return e.cause }
+
+// endLeftover ends the manager process the heartbeat names when it is verified as this
+// installation's manager. It describes the process it checked, or returns nil when the
+// heartbeat names none or the service manager stops managers itself.
+func (u managerUpgrader) endLeftover(path string) *managerStillRunning {
+	beat, err := manager.ReadHeartbeat(path)
+	if err != nil || beat.PID <= 0 {
+		return nil
+	}
+	leftover := &managerStillRunning{pid: beat.PID, executable: managerExecutablePath(path)}
+	started, err := time.Parse(time.RFC3339Nano, beat.StartedAt)
+	if err != nil {
+		leftover.cause = errors.New("heartbeat의 시작 시각을 읽지 못했습니다")
+		return leftover
+	}
+	end := u.endProcess
+	if end == nil {
+		end = platform.EndManagerProcess
+	}
+	err = end(beat.PID, leftover.executable, started, 10*time.Second)
+	if errors.Is(err, errors.ErrUnsupported) {
+		return nil
+	}
+	if err != nil {
+		leftover.cause = err
+		return leftover
+	}
+	leftover.ended = true
+	if u.notice != nil {
+		u.notice(fmt.Sprintf("작업 스케줄러가 멈추지 못한 관리 프로세스(PID %d)를 끝냈습니다.", beat.PID))
+	}
+	return leftover
 }
 
 // waitRestarted waits for a live heartbeat from a manager process other than the old one.

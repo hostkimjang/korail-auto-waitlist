@@ -109,9 +109,14 @@ type terminalIO struct {
 }
 
 func choose(ctx context.Context, ui *terminal.UI, label, hint, fallback string, allowed ...string) (string, error) {
+	return chooseWith(ctx, ui, readLine, label, hint, fallback, allowed...)
+}
+
+// chooseWith asks until the answer is one of allowed; an empty answer picks fallback.
+func chooseWith(ctx context.Context, ui *terminal.UI, read func(context.Context) (string, error), label, hint, fallback string, allowed ...string) (string, error) {
 	for {
 		ui.Prompt(label, hint)
-		value, err := readLine(ctx)
+		value, err := read(ctx)
 		if err != nil {
 			return "", err
 		}

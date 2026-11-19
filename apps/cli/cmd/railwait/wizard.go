@@ -111,7 +111,22 @@ func existingInstallation(path string) (*install.State, error) {
 	return &s, nil
 }
 
-func installCommand(ctx context.Context, args []string) (err error) {
+// wizardLaunch says how the install wizard was started.
+type wizardLaunch int
+
+const (
+	// launchCommand is railwait install or setup, the one-line install script or a resume.
+	launchCommand wizardLaunch = iota
+	// launchDoubleClick is railwait.exe double-clicked in Windows Explorer, whose console
+	// closes as soon as railwait exits.
+	launchDoubleClick
+)
+
+func installCommand(ctx context.Context, args []string) error {
+	return runInstallWizard(ctx, args, launchCommand)
+}
+
+func runInstallWizard(ctx context.Context, args []string, launch wizardLaunch) (err error) {
 	o, pathSet, err := parseWizardCommand(args)
 	if err != nil {
 		return err
@@ -122,6 +137,14 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	}
 	ui := terminal.New(os.Stderr, caps)
 	defer ui.Close()
+	// A double-clicked console would close before its result could be read, so it stays
+	// open until Enter unless the user chose to close it.
+	keepWindow := launch == launchDoubleClick
+	defer func() {
+		if keepWindow {
+			waitBeforeClosing(ctx, ui, readLine)
+		}
+	}()
 	defer func() {
 		if err == nil {
 			return
@@ -163,13 +186,35 @@ func installCommand(ctx context.Context, args []string) (err error) {
 	if pathSet {
 		ui.KeyValue("설치 폴더", o.Path)
 	}
-	if !o.Custom {
-		ui.Info("간편 설치 · 프로그램 준비와 보안키 생성은 자동으로 진행합니다.")
-		ui.Hint("열린 창의 권한·약관 승인과 로그인을 진행해 주세요. 직접 설정하려면 --custom을 사용하세요.")
-	}
 	existing, err := existingInstallation(o.Path)
 	if err != nil {
 		return err
+	}
+	// Going ahead replaces the manager and reconnects remote access without asking, which
+	// someone who double-clicked railwait.exe to open the app does not expect.
+	if launch == launchDoubleClick && interactive && existing != nil && existing.Stage == "complete" {
+		summary := describeExistingInstall(ctx, o.Path, *existing, executableVersion)
+		choice, choiceErr := existingInstallChoice(ctx, ui, summary, readLine)
+		if choiceErr != nil {
+			return choiceErr
+		}
+		switch choice {
+		case existingClose:
+			keepWindow = false
+			ui.Info("아무것도 바꾸지 않았습니다.")
+			return nil
+		case existingOpen:
+			if openErr := setup.OpenURL(ctx, summary.Address); openErr != nil {
+				ui.Hint("브라우저를 열지 못했습니다. 위 접속 주소를 직접 열어 주세요.")
+			} else {
+				ui.Done("웹 앱을 열었습니다 · " + summary.Address)
+			}
+			return nil
+		}
+	}
+	if !o.Custom {
+		ui.Info("간편 설치 · 프로그램 준비와 보안키 생성은 자동으로 진행합니다.")
+		ui.Hint("열린 창의 권한·약관 승인과 로그인을 진행해 주세요. 직접 설정하려면 --custom을 사용하세요.")
 	}
 	reuseExisting := func() error {
 		if o.DockerContext != "" && o.DockerContext != existing.DockerContext {

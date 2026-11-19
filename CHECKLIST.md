@@ -217,6 +217,44 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 19일 Windows 관리 서비스 교체·제거, 더블클릭 확인, Docker 오류 안내 (v1.5.2)
+
+- [x] Windows 확인 결과(Windows 11 26H2, Docker Desktop 27.3.1, 1.5.1 CLI, Windows 채팅): CLI 받기·해시, 인자 없는
+  `railwait`와 명령별 도움말, 알 수 없는 명령 안내, 1.4.10 `manager install`(UTF-16 정의, `conhost --headless` 아래
+  heartbeat `ready`), `railwait open`(탐색기 `/select,`) 통과. 더블클릭은 탐색기 대신 같은 콘솔 조건(`Start-Process`, 콘솔에
+  `railwait.exe` 하나)으로 마법사 시작만 확인. `manager upgrade`(30.6초 뒤)와 `uninstall --delete-data --yes`(31.5초 뒤)는
+  실패. 웹 교체 안내·다시 시작, `restart`, `configure`와 `backups` 볼륨은 그 PC의 Docker 네트워크 주소 풀이 가득 차 임시
+  설치가 3단계에서 멈춰 확인하지 못함
+- [x] 원인: Windows 작업의 동작은 `conhost.exe --headless <설치>\.railwait\bin\railwait.exe manager serve`인데,
+  `schtasks /End`는 conhost만 끝내고 관리 프로세스는 `serve.lock`과 heartbeat를 계속 유지함(railwait와 무관한 `ping`
+  작업에서도 재현). `manager upgrade`, 설치 마법사 4단계, 교체 실패 뒤 되돌리기, `uninstall`이 모두 같은 30초 대기에서
+  멈춤. `uninstall`은 작업과 정의를 먼저 지워 남은 프로세스를 로그오프 전까지 멈출 수 없었고, 안내한 재실행 명령에는
+  `--yes`가 빠져 있었음. 설치 관리 파일 확인은 Compose의 네트워크 생성 실패(`all predefined address pools have been fully
+  subnetted`)를 버리고 파일 공유 문제로 안내함
+- [x] 수정: 교체·제거는 멈춘 지 3초 뒤에도 `serve.lock`이 남으면 heartbeat의 PID를 열어, 실행 파일이 이 설치의
+  `.railwait\bin\railwait.exe`(파일 동일성, 읽지 못하면 대소문자 무시 경로)이고 생성 시각이 heartbeat 시작 시각 직전(2초
+  오차, 10분 이내)일 때만 `TerminateProcess`. 맞지 않으면 아무것도 끝내지 않고 PID·실행 파일 경로·이유를 알림. 이미 설치된
+  1.4.x~1.5.1 관리 서비스도 이 경로로 교체·제거됨. `uninstall`은 끝낸 프로세스를 출력하고, 실패하면 확인되지 않은 PID 대신
+  관리 실행 파일 경로로 끝낼 대상을 안내하며 `--yes`까지 담은 재실행 명령을 보여 줌. macOS·Linux는 서비스 관리자가 관리
+  프로세스를 직접 멈추므로 동작이 같음
+- [x] 수정: 탐색기에서 더블클릭한 `railwait.exe`가 설치를 마친 기록을 찾으면 1단계 전에 설치 폴더, 앱 버전, 관리 서비스
+  버전과 실행 여부, 접속 주소, 진행하면 바뀔 내용(관리 서비스 교체, 멈춘 관리 서비스 시작, Tailscale 접속 확인)을 보여 주고
+  1 웹 앱 열기(기본)·2 설치 다시 확인·0 닫기 중에서 고르게 함. 더블클릭한 창은 닫기를 고른 경우를 빼고 완료·실패·취소 뒤
+  Enter를 기다림. 터미널의 `railwait install`과 한 줄 설치 재실행은 예전처럼 질문 없이 이어감
+- [x] 수정: Docker 명령의 stderr는 끝 64KiB만 메모리에 받아 네트워크 주소 범위 소진(`could not find an available,
+  non-overlapping IPv4 address pool` 포함)·포트 충돌·저장 공간 부족·Docker 연결 실패만 알아보고 고정 안내로 바꾼 뒤 지움.
+  원문은 오류에 넣지 않음. 설치 관리 파일 확인과 파일 공유 확인은 이런 오류를 파일 공유 안내로 바꾸거나 다시 시도하지
+  않음. 설치·업데이트·다시 시작의 모든 Docker 명령에 적용
+- [x] 자동 검증: CLI gofmt, vet(linux·windows/amd64·darwin/arm64), Linux 전체 테스트·race, darwin 테스트 바이너리 8개를
+  macOS에서 실행, 6대상 교차 빌드. 새 테스트는 교체·제거가 남은 관리 프로세스를 끝내고 이어가는지, 확인되지 않은
+  프로세스는 남기고 경로로 안내하는지, 기존 설치 선택 화면과 요약, Docker 오류 분류와 원문 비노출을 확인. 실제 자식
+  프로세스로 확인하는 Windows 전용 종료 테스트는 이 Mac에서 타입 검사만 함
+- [ ] Windows에서 1.5.2 커밋 확인(Windows 채팅): Windows 전용 테스트를 포함한 `go test ./...`, 1.5.1 CLI로 만든 임시 설치에서
+  새 빌드의 `manager upgrade`와 `uninstall --delete-data --yes`, 주소 풀이 찬 상태의 네트워크 오류 안내, 임시 조건의 더블클릭
+  확인 화면과 닫기 뒤 무변경
+- [ ] CI 교차 플랫폼 검증(windows-latest 포함) 통과
+- [ ] 1.5.2 서명 릴리스 게시
+
 ## 2026년 11월 19일 서비스 다시 시작·설정 파일 위치와 CLI 운영 명령 (v1.5.0)
 
 - [x] 원인 확인: 1.4.10 업데이트 뒤 **철도 계정**의 KORAIL 상주 세션이 `시작 전`으로 보인 것은 앱을 다시 만든 뒤의
@@ -260,7 +298,8 @@
   유지. 1.4.10의 `ops.sh`는 이 Mac에서 실패해 처음 기동은 Compose를 직접 실행함. 확인 뒤 임시 프로젝트의 컨테이너·볼륨·
   네트워크와 clone을 지움
 - [ ] Windows·Linux 실제 서비스 관리자에서 `uninstall` 등록 해제, Windows 탐색기 `/select,`와 더블클릭 판정, Linux
-  `xdg-open` 확인
+  `xdg-open` 확인. Windows는 11월 19일 1.5.1 확인에서 `/select,` 통과, 더블클릭은 같은 콘솔 조건으로만 확인했고
+  `uninstall`은 실패해 v1.5.2 항목에서 고침
 - [x] CI: PR #12의 저장소 검증(PR·push), CLI 교차 플랫폼, 실험 브라우저 검증 통과. 첫 CLI 교차 플랫폼 실행은 Windows에서
   제거 안내의 OS별 문구를 고정한 테스트 1건이 실패해 테스트를 OS별로 고침
 - [x] 1.5.0 서명 릴리스 게시(run 44472617804, 커밋 `7cc92a6`, 2026-11-19 16:04 KST): 최신 Release `v1.5.0`, 자산 19개가

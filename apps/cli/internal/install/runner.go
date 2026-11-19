@@ -33,12 +33,22 @@ func (ExecRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 	}
 	cmd := exec.CommandContext(ctx, executable, c.Args...)
 	cmd.Dir, cmd.Env, cmd.Stdin = c.Dir, c.Env, c.Input
+	return runDockerCommand(cmd)
+}
+
+// runDockerCommand runs a Docker command and returns its standard output.
+func runDockerCommand(cmd *exec.Cmd) ([]byte, error) {
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	// Docker errors can contain expanded configuration; never forward raw stderr.
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("Docker command failed: %w", err)
+	// Docker errors can contain expanded configuration, so stderr is never forwarded or kept
+	// in an error. Only its end is read, to recognize failures the user can fix.
+	stderr := &tailBuffer{limit: dockerErrorTail}
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	cause := dockerFailureCause(stderr.data)
+	stderr.wipe()
+	if err != nil {
+		return nil, newDockerFailure(cause, fmt.Errorf("Docker command failed: %w", err))
 	}
 	return out.Bytes(), nil
 }

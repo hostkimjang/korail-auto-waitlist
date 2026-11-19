@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +41,10 @@ func (i *Installer) checkFileSharing(ctx context.Context, s State, image string)
 		"-e", "RAILWAIT_PROBE_TOKEN="+containerToken, "-v", probe+":/probe", image,
 		"-c", "cat /probe/host && printf %s \"$RAILWAIT_PROBE_TOKEN\" > /probe/container")
 	written, readErr := os.ReadFile(filepath.Join(probe, "container"))
+	var failure *DockerFailure
+	if errors.As(runErr, &failure) {
+		return fmt.Errorf("설치 폴더 공유를 확인할 컨테이너를 실행하지 못했습니다: %w", runErr)
+	}
 	if runErr != nil || strings.TrimSpace(string(out)) != hostToken || readErr != nil || string(written) != containerToken {
 		return fmt.Errorf("Docker 컨테이너가 설치 폴더 %s 를 읽고 쓰지 못했습니다. Docker Desktop은 설정의 File sharing에, Lima·Colima는 VM의 쓰기 가능한 공유 폴더에 이 경로가 있어야 합니다. 공유된 폴더를 --path로 지정해 다시 실행하세요", s.Path)
 	}

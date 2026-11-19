@@ -51,7 +51,10 @@ from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationResult,
 )
 from rail_waitlist.reservations.attempt_policy import (
+    PAYMENT_HOLD_RETRY_EPISODE_PREFIX,
     is_unresolved_unknown_manual_rearm_source,
+    manual_payment_hold_rearm_episode_key,
+    official_seat_observation_source,
 )
 from rail_waitlist.reservations.reconciliation_application import (
     _reservation_reconciliation_is_due,
@@ -2839,7 +2842,7 @@ async def test_legacy_confirmed_absent_payment_hold_emits_one_retry_episode(
     "retry_edge_status",
     [SeatObservationStatus.SOLD_OUT, SeatObservationStatus.STANDING_ONLY],
 )
-async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
+async def test_ended_payment_hold_waits_for_manual_rearm_after_new_unavailable_edge(
     db_engine,
     confirmation_outcome: ReservationConfirmationOutcome,
     retry_edge_status: SeatObservationStatus,
@@ -2931,13 +2934,49 @@ async def test_ended_payment_hold_retries_only_after_new_unavailable_edge(
         session.add_all([unavailable, rediscovered])
         await session.flush()
 
+        # Seats released by the unpaid hold come back as a new availability episode;
+        # retrying on it held the same train again every payment window.
+        assert (
+            await _retryable_reservation_episode_key(
+                session,
+                candidate,
+                rediscovered,
+                Provider.SRT,
+            )
+            is None
+        )
+        queued, created = await begin_reservation_attempt(
+            session,
+            watch,
+            candidate,
+            f"reserve:queued-automatic:{confirmation_outcome.value}",
+            episode_key=f"{PAYMENT_HOLD_RETRY_EPISODE_PREFIX}{first_attempt.id}:{unavailable.id}",
+            retry_authorized=True,
+        )
+        assert queued.id == first_attempt.id
+        assert created is False
+
+        authorized_at = hold_ended_at + timedelta(seconds=40)
+        candidate.manual_rearm_source_attempt_id = first_attempt.id
+        candidate.manual_rearm_authorized_at = authorized_at
+        official = SeatObservation(
+            candidate=candidate,
+            status=SeatObservationStatus.LIMITED,
+            source=official_seat_observation_source(Provider.SRT),
+            observed_at=authorized_at + timedelta(seconds=10),
+            fresh_until=authorized_at + timedelta(minutes=1),
+        )
+        session.add(official)
+        await session.flush()
         episode_key = await _retryable_reservation_episode_key(
             session,
             candidate,
-            rediscovered,
+            official,
             Provider.SRT,
         )
-        assert episode_key == (f"availability-after-hold:{first_attempt.id}:{unavailable.id}")
+        assert episode_key == manual_payment_hold_rearm_episode_key(
+            first_attempt.id, candidate.id, official.id
+        )
 
         second_attempt, created = await begin_reservation_attempt(
             session,
@@ -3054,7 +3093,7 @@ async def test_watch_payment_hold_fences_reactivated_lower_candidate_without_loc
                 rediscovered,
                 Provider.SRT,
             )
-            == f"availability-after-hold:{hold.id}:{unavailable.id}"
+            is None
         )
 
 

@@ -2,7 +2,7 @@ import {
   isWatchSeatClass,
   type WatchSeatClass,
 } from "../domain/watch";
-import type { ManualRearmReason } from "../domain/reservationAttempt";
+import type { ManualRearmRequest } from "../domain/reservationAttempt";
 import { ApiError, request } from "./client";
 import {
   awareTimestamp,
@@ -361,15 +361,16 @@ export async function cancelWatch(id: string): Promise<ProjectedWatch> {
 
 export async function rearmWatchReservation(
   id: string,
-  reason: ManualRearmReason,
+  rearm: ManualRearmRequest,
 ): Promise<ProjectedWatch> {
   const normalizedId = watchId(id);
   return mapWatch(await request(`/watches/${normalizedId}/reservation-rearm`, {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({
-      reason,
+      reason: rearm.reason,
       official_reservation_state_confirmed: true,
+      ...(rearm.reason === "payment_hold_ended" ? { manual_rearm_revision: rearm.revision } : {}),
     }),
   }));
 }

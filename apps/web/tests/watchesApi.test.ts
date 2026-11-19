@@ -677,6 +677,7 @@ describe("watch API boundary", () => {
       paymentHoldEndedAt: null,
       manualRearmAvailable: false,
       manualRearmReason: null,
+      manualRearmRevision: null,
       confirmationOutcome: "inconclusive",
       confirmationDiagnosticCode: "official_read_unavailable",
       confirmationObservedAt: "2026-08-02T13:05:08Z",
@@ -1023,7 +1024,7 @@ describe("watch API boundary", () => {
     });
   });
 
-  it("maps a finalized missing payment hold only with the complete retry contract", () => {
+  it("maps a finalized missing hold to manual rearm and discards legacy automatic retry", () => {
     const attempt = {
       outcome: "payment_required",
       started_at: "2026-08-02T08:20:00Z",
@@ -1036,6 +1037,7 @@ describe("watch API boundary", () => {
       payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
       manual_rearm_available: true,
       manual_rearm_reason: "payment_hold_ended",
+      manual_rearm_revision: "a".repeat(64),
     };
     const mapAttempt = (overrides: Record<string, unknown> = {}) => mapWatch({
       ...apiWatch,
@@ -1048,10 +1050,13 @@ describe("watch API boundary", () => {
 
     expect(mapAttempt()).toMatchObject({
       outcome: "payment_required",
+      retryable: false,
+      retryCondition: null,
       paymentHoldEndedAt: "2026-08-02T08:24:00Z",
       paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
       manualRearmAvailable: true,
       manualRearmReason: "payment_hold_ended",
+      manualRearmRevision: "a".repeat(64),
     });
     expect(mapAttempt({ confirmation_outcome: "inconclusive" })).toMatchObject({
       paymentHoldEndedAt: null,
@@ -1060,12 +1065,18 @@ describe("watch API boundary", () => {
     expect(mapAttempt({ post_deadline_reconciled_at: null })).toMatchObject({
       paymentHoldEndedAt: null,
     });
-    expect(mapAttempt({ retryable: false })).toMatchObject({
+    expect(mapAttempt({ retryable: false, retry_condition: null })).toMatchObject({
       paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+      manualRearmAvailable: true,
     });
-    expect(mapAttempt({ retry_condition: null })).toMatchObject({
-      paymentHoldEndedAt: "2026-08-02T08:24:00Z",
-    });
+    for (const revision of [undefined, null, "legacy", "A".repeat(64), `${"a".repeat(64)}\n`]) {
+      expect(mapAttempt({ manual_rearm_revision: revision })).toMatchObject({
+        paymentHoldEndedAt: "2026-08-02T08:24:00Z",
+        manualRearmAvailable: false,
+        manualRearmReason: null,
+        manualRearmRevision: null,
+      });
+    }
     expect(mapAttempt({ manual_check_required: true })).toMatchObject({
       paymentHoldEndedAt: null,
     });
@@ -1636,6 +1647,7 @@ describe("watch API boundary", () => {
           payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
           manual_rearm_available: true,
           manual_rearm_reason: "payment_hold_ended",
+          manual_rearm_revision: "a".repeat(64),
         },
       }],
     });
@@ -1645,6 +1657,7 @@ describe("watch API boundary", () => {
       paymentHoldEndedAt: "2026-08-02T08:24:00Z",
       manualRearmAvailable: true,
       manualRearmReason: "payment_hold_ended",
+      manualRearmRevision: "a".repeat(64),
     });
     expect(mapped.seatFoundObservation).toMatchObject({
       kind: "official_provider",
@@ -1665,6 +1678,7 @@ describe("watch API boundary", () => {
       payment_hold_end_reason: "confirmed_payment_hold_no_longer_present",
       manual_rearm_available: true,
       manual_rearm_reason: "payment_hold_ended",
+      manual_rearm_revision: "a".repeat(64),
     };
     const mapped = mapWatch({
       ...WATCH_DTO,
@@ -1756,7 +1770,7 @@ describe("watch API boundary", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(apiWatch));
     vi.stubGlobal("fetch", fetchMock);
 
-    await rearmWatchReservation(apiWatch.id, "unknown_result_unresolved");
+    await rearmWatchReservation(apiWatch.id, { reason: "unknown_result_unresolved" });
 
     const [url, options] = fetchMock.mock.calls[0] ?? [];
     const headers = new Headers(options?.headers);
@@ -1766,6 +1780,21 @@ describe("watch API boundary", () => {
     expect(JSON.parse(String(options?.body))).toEqual({
       reason: "unknown_result_unresolved",
       official_reservation_state_confirmed: true,
+    });
+  });
+
+  it("submits the expired hold revision with the official confirmation", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(apiWatch));
+    vi.stubGlobal("fetch", fetchMock);
+    const revision = "a".repeat(64);
+
+    await rearmWatchReservation(apiWatch.id, { reason: "payment_hold_ended", revision });
+
+    const [, options] = fetchMock.mock.calls[0] ?? [];
+    expect(JSON.parse(String(options?.body))).toEqual({
+      reason: "payment_hold_ended",
+      official_reservation_state_confirmed: true,
+      manual_rearm_revision: revision,
     });
   });
 

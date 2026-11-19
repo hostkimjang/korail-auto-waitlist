@@ -30,12 +30,8 @@ from ..reservations.attempt_policy import (
     manual_payment_hold_rearm_episode_key,
     manual_unknown_rearm_episode_key,
     official_seat_observation_source,
-    payment_hold_retry_episode_key,
 )
-from ..reservations.payment_hold_retry_application import (
-    active_watch_payment_hold_fence,
-    conclusive_unavailable_after_hold,
-)
+from ..reservations.payment_hold_retry_application import active_watch_payment_hold_fence
 from ..reservations.progress_timing_policy import (
     has_persisted_reservation_requested_progress,
 )
@@ -308,18 +304,9 @@ async def retryable_reservation_episode_key(
                 candidate.id,
                 current_observation.id,
             )
-        unavailable_observation = await conclusive_unavailable_after_hold(
-            session,
-            payment_hold_fence,
-            candidate.id,
-            before=current_observation.observed_at,
-        )
-        if unavailable_observation is None:
-            return None
-        return payment_hold_retry_episode_key(
-            payment_hold_fence.attempt.id,
-            unavailable_observation.id,
-        )
+        # Released seats can look like fresh availability after an unpaid hold.
+        # Keep observing them while waiting for the user to rearm reservation.
+        return None
     latest_attempt = await session.scalar(
         select(ReservationAttempt)
         .where(ReservationAttempt.candidate_id == candidate.id)

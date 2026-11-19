@@ -665,8 +665,9 @@ async def apply_reservation_reconciliation(
                     if expired_confirmed_hold and confirmation.payment_deadline is not None
                     else None
                 ),
-                "automatic_reservation_retry": not terminal_one_off,
-                "retry_condition": "new_availability_episode" if not terminal_one_off else None,
+                # Monitoring resumes, but reservation waits for the user's manual rearm.
+                "automatic_reservation_retry": False,
+                "retry_condition": None,
             },
             dedupe_key=f"payment-hold-ended:{attempt.id}",
         )

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..domain import ReservationPolicy, WatchStatus
+from ..domain import WatchStatus
 from ..outbox import add_outbox_event
 from ..reservations.domain import reservation_attempt_result_policy
 from ..reservations.payment_hold_application import is_payment_hold_ended
@@ -96,18 +96,12 @@ async def _notification_candidate_and_attempt(
     return candidate, attempt
 
 
-def _retry_condition(
-    watch: Watch,
-    attempt: ReservationAttempt | None,
-) -> str | None:
+def _retry_condition(attempt: ReservationAttempt | None) -> str | None:
     if attempt is None:
         return None
     if is_payment_hold_ended(attempt):
-        return (
-            "new_availability_episode"
-            if watch.reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-            else None
-        )
+        # Reopening reservation after an unpaid hold needs the user's manual rearm.
+        return None
     return reservation_attempt_result_policy(attempt.outcome).retry_condition
 
 
@@ -215,7 +209,8 @@ def _message_detail(
         )
     if payment_hold_ended:
         follow_up = (
-            "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 예매하지 않습니다."
+            "좌석 감시는 계속하지만 자동 예매는 멈췄습니다. 다시 자동 예매하려면 앱에서 "
+            "'자동 예매 다시 시도'를 눌러 확인해 주세요."
             if target == WatchStatus.WATCHING
             else "해당 1회성 작업을 종료합니다."
         )
@@ -307,7 +302,7 @@ async def add_watch_notifications(
         if candidate is not None
         else f"{watch.origin} → {watch.destination} {detail}"
     )
-    retry_condition = _retry_condition(watch, attempt)
+    retry_condition = _retry_condition(attempt)
     workflow_stage = _workflow_stage(target, reason, attempt)
     for channel_id in channel_ids:
         await add_outbox_event(

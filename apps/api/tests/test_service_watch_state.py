@@ -31,7 +31,7 @@ from rail_waitlist.reservation_confirmation import (
     ReservationConfirmationOutcome,
     ReservationConfirmationResult,
 )
-from rail_waitlist.reservations.attempt_policy import payment_hold_retry_episode_key
+from rail_waitlist.reservations.attempt_policy import PAYMENT_HOLD_RETRY_EPISODE_PREFIX
 from rail_waitlist.schemas import (
     ProviderCapabilities,
     ReservationProgressStage,
@@ -72,7 +72,8 @@ class CapabilityAdapter:
         (
             WatchStatus.WATCHING,
             "confirmed_payment_hold_no_longer_actionable_monitoring_resumed",
-            "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 예매하지 않습니다.",
+            "좌석 감시는 계속하지만 자동 예매는 멈췄습니다. 다시 자동 예매하려면 앱에서 "
+            "'자동 예매 다시 시도'를 눌러 확인해 주세요.",
         ),
         (
             WatchStatus.EXPIRED,
@@ -1096,7 +1097,7 @@ async def test_final_not_found_for_confirmed_hold_resumes_monitoring_without_ret
         assert repeated.id == attempt.id
         assert created is False
         assert event is not None
-        assert event.payload["automatic_reservation_retry"] is True
+        assert event.payload["automatic_reservation_retry"] is False
 
         unavailable = SeatObservation(
             candidate_id=candidate.id,
@@ -1119,11 +1120,11 @@ async def test_final_not_found_for_confirmed_hold_resumes_monitoring_without_ret
             watch,
             candidate,
             "reserve:new-availability-edge",
-            episode_key=payment_hold_retry_episode_key(attempt.id, unavailable.id),
+            episode_key=f"{PAYMENT_HOLD_RETRY_EPISODE_PREFIX}{attempt.id}:{unavailable.id}",
             retry_authorized=True,
         )
-        assert retry_created is True
-        assert retried.attempt_sequence == 2
+        assert retry_created is False
+        assert retried.id == attempt.id
 
 
 async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_wait(
@@ -1226,8 +1227,8 @@ async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_w
             "reason": "confirmed_payment_deadline_elapsed",
             "message": "공식 확인에서 결제 가능 기한이 지난 임시 예약을 확인했습니다.",
             "payment_deadline": deadline.isoformat(),
-            "automatic_reservation_retry": True,
-            "retry_condition": "new_availability_episode",
+            "automatic_reservation_retry": False,
+            "retry_condition": None,
         }
         assert notification is not None
         message_lines = notification.payload["message"].splitlines()
@@ -1237,7 +1238,8 @@ async def test_final_expired_confirmed_hold_resumes_monitoring_without_payment_w
         assert message_lines[1] == (
             "공식 확인 결과 기존 결제 안내를 종료했습니다. "
             "공식 예약 내역을 직접 확인해 주세요. "
-            "좌석 감시를 다시 시작합니다. 같은 가용성 구간에서는 바로 다시 예매하지 않습니다."
+            "좌석 감시는 계속하지만 자동 예매는 멈췄습니다. 다시 자동 예매하려면 앱에서 "
+            "'자동 예매 다시 시도'를 눌러 확인해 주세요."
         )
 
 

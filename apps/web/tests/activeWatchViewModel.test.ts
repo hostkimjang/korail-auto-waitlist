@@ -167,13 +167,14 @@ describe("active watch view model", () => {
         outcome: "payment_required",
         startedAt: "2026-08-08T13:00:00Z",
         finishedAt: "2026-08-08T13:01:00Z",
-        retryable: true,
+        retryable: false,
         manualCheckRequired: false,
-        retryCondition: "new_availability_episode",
+        retryCondition: null,
         paymentHoldEndedAt: "2026-08-08T13:02:00Z",
         paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
         manualRearmAvailable: true,
         manualRearmReason: "payment_hold_ended",
+        manualRearmRevision: "a".repeat(64),
       },
     }), false);
     const blocked = presentActiveWatchRow(mapActiveWatch(mappedWatch({
@@ -184,7 +185,7 @@ describe("active watch view model", () => {
 
     expect(endedHold.statusLabel).toBe("대상 임시 예약 목록 부재 · 감시 중");
     expect(endedHold.reservationAttemptLabel).toBe(
-      `${ATTEMPT_CONTEXT_LABEL} · 공식 내역에서 대상 임시 예약을 더 이상 찾지 못함 · 22:02:00 · 다시 시도하려면 사용자 확인 필요`,
+      `${ATTEMPT_CONTEXT_LABEL} · 공식 내역에서 대상 임시 예약을 더 이상 찾지 못함 · 22:02:00 · 자동 예매 중지 · 재시도하려면 사용자 확인 필요`,
     );
     expect(endedHold.canManualRearmReservation).toBe(true);
     expect(blocked).toMatchObject({
@@ -215,6 +216,7 @@ describe("active watch view model", () => {
         paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
         manualRearmAvailable: true,
         manualRearmReason: "payment_hold_ended",
+        manualRearmRevision: "a".repeat(64),
       },
     }), false);
     const notifyOnly = presentActiveWatchRow(mapActiveWatch(mappedWatch(), "not_checked", false), false);
@@ -588,6 +590,7 @@ describe("active watch view model", () => {
         paymentHoldEndReason: "confirmed_payment_hold_no_longer_present",
         manualRearmAvailable: true,
         manualRearmReason: "payment_hold_ended",
+        manualRearmRevision: "a".repeat(64),
       },
       seatFoundObservation: {
         kind: "official_provider",

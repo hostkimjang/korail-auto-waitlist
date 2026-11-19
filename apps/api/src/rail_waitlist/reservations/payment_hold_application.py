@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 
 from ..domain import ReservationOutcome
 from ..watch_management.models import ReservationAttempt
@@ -38,3 +39,12 @@ def payment_hold_end_reason(attempt: ReservationAttempt) -> str | None:
 
 def is_payment_hold_ended(attempt: ReservationAttempt) -> bool:
     return payment_hold_end_reason(attempt) is not None
+
+
+def payment_hold_rearm_revision(attempt: ReservationAttempt) -> str | None:
+    """Bind a confirmation to the attempt and the official hold-ending check shown to the user."""
+    ended_at = attempt.post_deadline_reconciled_at
+    if ended_at is None or not is_payment_hold_ended(attempt):
+        return None
+    evidence = f"{attempt.id}:{_utc_instant(ended_at).isoformat()}"
+    return sha256(evidence.encode()).hexdigest()

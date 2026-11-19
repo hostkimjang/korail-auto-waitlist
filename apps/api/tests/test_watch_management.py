@@ -6,7 +6,7 @@ from httpx2 import AsyncClient
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from rail_waitlist.domain import ReservationOutcome, ReservationPolicy, WatchStatus
+from rail_waitlist.domain import ReservationOutcome, WatchStatus
 from rail_waitlist.reservation_confirmation import ReservationConfirmationOutcome
 from rail_waitlist.reservations.manual_rearm_contracts import ManualReservationRearmReason
 from rail_waitlist.reservations.reconciliation_policy import (
@@ -401,7 +401,7 @@ def test_immediate_processing_uses_exact_durable_task_and_is_best_effort(monkeyp
     assert watch_http.enqueue_immediate_watch_processing("watch-2") is False
 
 
-def test_payment_hold_projection_preserves_policy_specific_retry_boundary() -> None:
+def test_ended_payment_hold_projection_never_retries_automatically() -> None:
     now = datetime.now(UTC)
     attempt = ReservationAttempt(
         candidate_id="candidate-1",
@@ -415,19 +415,12 @@ def test_payment_hold_projection_preserves_policy_specific_retry_boundary() -> N
         finished_at=now,
     )
 
-    notify_only = reservation_attempt_projection(ReservationPolicy.NOTIFY_ONLY, attempt)
-    automatic = reservation_attempt_projection(
-        ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
-        attempt,
-    )
+    projection = reservation_attempt_projection(attempt)
 
-    assert notify_only["payment_hold_end_reason"] == "confirmed_payment_hold_no_longer_present"
-    assert notify_only["retryable"] is False
-    assert notify_only["manual_check_required"] is False
-    assert notify_only["retry_condition"] is None
-    assert automatic["retryable"] is True
-    assert automatic["manual_check_required"] is False
-    assert automatic["retry_condition"] == "new_availability_episode"
+    assert projection["payment_hold_end_reason"] == "confirmed_payment_hold_no_longer_present"
+    assert projection["retryable"] is False
+    assert projection["manual_check_required"] is False
+    assert projection["retry_condition"] is None
 
 
 def test_confirmed_paid_unknown_projection_closes_manual_check_and_rearm() -> None:
@@ -446,7 +439,6 @@ def test_confirmed_paid_unknown_projection_closes_manual_check_and_rearm() -> No
     )
 
     projection = reservation_attempt_projection(
-        ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
         attempt,
         manual_rearm_reason=ManualReservationRearmReason.UNKNOWN_RESULT_UNRESOLVED,
     )

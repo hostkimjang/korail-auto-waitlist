@@ -2,7 +2,10 @@ import { ArrowRight, ArrowsClockwise, Clock, Pause, Play, Plus, Trash } from "@p
 import type { ReactElement, ReactNode } from "react";
 
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
-import type { ManualRearmReason } from "../../domain/reservationAttempt";
+import {
+  validatedManualRearmRevision,
+  type ManualRearmRequest,
+} from "../../domain/reservationAttempt";
 import { formatTrainIdentity } from "../../domain/watch";
 import { StatusPill } from "../../shared/ui/StatusPill";
 import {
@@ -31,7 +34,7 @@ export interface WatchRowProps {
   onChangeReservationPolicy?: (watchId: string, policy: ReservationPolicy) => void | Promise<void>;
   onManualReservationRearm?: (
     watchId: string,
-    reason: ManualRearmReason,
+    rearm: ManualRearmRequest,
   ) => void | Promise<void>;
   isReservationPolicyUpdating?: boolean;
   isMutationPending?: boolean;
@@ -73,12 +76,15 @@ export function WatchRow({
     ? watch.latestReservationAttemptContext ?? null
     : null;
   const paymentHoldEndReason = watch.latestReservationAttempt?.paymentHoldEndReason ?? null;
+  const manualRearmRevision = validatedManualRearmRevision(
+    watch.latestReservationAttempt?.manualRearmRevision,
+  );
   const rearmMode: ReservationRearmMode | null = presentation.manualRearmReason
     === "unknown_result_unresolved"
-    ? { kind: "unknown", reason: "unknown_result_unresolved" }
-    : presentation.manualRearmReason === "payment_hold_ended"
-      && paymentHoldEndReason !== null
-      ? { kind: "payment_hold", reason: "payment_hold_ended", paymentHoldEndReason }
+    ? { reason: "unknown_result_unresolved" }
+    : presentation.manualRearmReason === "payment_hold_ended" && paymentHoldEndReason !== null
+      && manualRearmRevision !== null
+      ? { reason: "payment_hold_ended", paymentHoldEndReason, revision: manualRearmRevision }
       : null;
   const seatFoundAction = presentation.canRenderSeatFoundAction
     ? renderSeatFoundAction?.(watch)
@@ -167,6 +173,7 @@ export function WatchRow({
           {seatFoundAction}
           {rearmContext && rearmMode && onManualReservationRearm ? (
             <ReservationRearmConfirm
+              key={rearmMode.reason === "payment_hold_ended" ? rearmMode.revision : rearmMode.reason}
               watchId={watch.id}
               trainLabel={formatTrainIdentity(rearmContext.trainType, rearmContext.train)}
               travelDate={rearmContext.date}

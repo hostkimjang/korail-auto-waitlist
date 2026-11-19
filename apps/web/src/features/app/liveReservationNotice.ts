@@ -520,16 +520,18 @@ function buildLiveReservationNoticeFromLifecycle(
     eventType === "watch.payment_hold_ended_monitoring_resumed"
     || eventType === "watch.payment_hold_ended_one_off_expired"
   ) {
+    const monitoringResumed = eventType === "watch.payment_hold_ended_monitoring_resumed";
+    const expectedStatus = monitoringResumed ? "watching" : "expired";
+    // Persisted pre-change events can carry true on monitoring resume.
     const automaticReservationRetry = event.payload.automatic_reservation_retry;
-    const expectedAutomaticRetry = eventType === "watch.payment_hold_ended_monitoring_resumed";
-    const expectedStatus = expectedAutomaticRetry ? "watching" : "expired";
     const reason = text(event.payload.reason);
     if (
       event.payload.terminal !== true
       || text(event.payload.from) !== "payment_required"
       || text(event.payload.to) !== expectedStatus
       || text(event.payload.status) !== expectedStatus
-      || automaticReservationRetry !== expectedAutomaticRetry
+      || typeof automaticReservationRetry !== "boolean"
+      || (!monitoringResumed && automaticReservationRetry)
       || (
         reason !== "confirmed_payment_deadline_elapsed"
         && reason !== "confirmed_payment_hold_no_longer_present"
@@ -538,7 +540,7 @@ function buildLiveReservationNoticeFromLifecycle(
     const transition = transitionFromEvent(event, watches, "payment_hold_ended");
     return transition === null ? null : buildWatchActionToast({
       ...transition,
-      automaticReservationRetry: expectedAutomaticRetry,
+      monitoringResumed,
       paymentHoldEndReason: reason,
     });
   }

@@ -77,7 +77,6 @@ export interface WatchActionTransition extends SeatFoundTransition {
     | "authentication_recovered"
     | "failed"
     | "monitoring_resumed";
-  automaticReservationRetry?: boolean;
   monitoringResumed?: boolean;
   reservationResult?: ReservationRecoveryResult;
   paymentHoldEndReason?:
@@ -475,7 +474,7 @@ function detectWatchActionLifecycleTransitions(
       return [{
         ...transitionContext(watch, "payment_hold_ended"),
         status: "payment_hold_ended" as const,
-        automaticReservationRetry: watch.status === "watching",
+        monitoringResumed: watch.status === "watching",
         paymentHoldEndReason: holdEndReason,
       }];
     }

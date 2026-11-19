@@ -171,7 +171,7 @@ async def test_claim_application_preserves_attempt_state_transition_and_event_co
     "retry_edge_status",
     [SeatObservationStatus.SOLD_OUT, SeatObservationStatus.STANDING_ONLY],
 )
-async def test_claim_revalidates_watch_scoped_hold_for_candidate_without_attempt(
+async def test_claim_never_dispatches_queued_automatic_retry_after_ended_hold(
     db_engine,
     retry_edge_status: SeatObservationStatus,
 ) -> None:
@@ -245,9 +245,10 @@ async def test_claim_revalidates_watch_scoped_hold_for_candidate_without_attempt
             episode_key=episode_key,
             retry_authorized=True,
         )
-        assert created is True
-        assert retry.candidate_id == lower.id
-        assert retry.attempt_sequence == 1
+        # Legacy automatic keys cannot reopen an ended hold, even when a later
+        # observation shows a bookable seat.
+        assert retry is hold
+        assert created is False
 
         stale_replay, created = await begin_reservation_attempt(
             session,

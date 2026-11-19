@@ -25,7 +25,10 @@ from ..reservations.domain import (
     reservation_attempt_result_policy,
 )
 from ..reservations.manual_rearm_contracts import ManualReservationRearmReason
-from ..reservations.payment_hold_application import payment_hold_end_reason
+from ..reservations.payment_hold_application import (
+    payment_hold_end_reason,
+    payment_hold_rearm_revision,
+)
 from ..reservations.progress_timing_policy import (
     normalize_reservation_terminal_time,
     persisted_reservation_progress_times,
@@ -60,21 +63,21 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def reservation_attempt_projection(
-    reservation_policy: ReservationPolicy,
     attempt: ReservationAttempt,
     *,
     manual_rearm_reason: ManualReservationRearmReason | None = None,
 ) -> dict[str, object]:
-    """Project an attempt without broadening the persisted retry policy."""
+    """Project an attempt without broadening the persisted retry policy.
+
+    An ended payment hold never retries by itself; only the separate manual rearm projected
+    here can reopen automatic reservation for that watch.
+    """
     result_policy = reservation_attempt_result_policy(attempt.outcome)
     hold_end_reason = payment_hold_end_reason(attempt)
     payment_hold_ended = hold_end_reason is not None
     confirmed_paid = attempt.confirmation_outcome is ReservationConfirmationOutcome.CONFIRMED_PAID
     if confirmed_paid:
         manual_rearm_reason = None
-    automatic_hold_retry = (
-        payment_hold_ended and reservation_policy is ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT
-    )
     progress_stages = attempt.progress_stages or []
     finished_at = attempt.finished_at
     if finished_at is not None:
@@ -106,7 +109,7 @@ def reservation_attempt_projection(
         "automatic_reservation_retry_fence_reason": (
             automatic_reservation_retry_fence_reason(attempt)
         ),
-        "retryable": automatic_hold_retry or (not payment_hold_ended and result_policy.retryable),
+        "retryable": not payment_hold_ended and result_policy.retryable,
         "manual_check_required": reservation_attempt_manual_check_required(
             attempt.outcome,
             confirmation_outcome=attempt.confirmation_outcome,
@@ -114,13 +117,12 @@ def reservation_attempt_projection(
         ),
         "manual_rearm_available": manual_rearm_reason is not None,
         "manual_rearm_reason": manual_rearm_reason,
-        "retry_condition": (
-            "new_availability_episode"
-            if automatic_hold_retry
+        "manual_rearm_revision": (
+            payment_hold_rearm_revision(attempt)
+            if manual_rearm_reason is ManualReservationRearmReason.PAYMENT_HOLD_ENDED
             else None
-            if payment_hold_ended
-            else result_policy.retry_condition
         ),
+        "retry_condition": None if payment_hold_ended else result_policy.retry_condition,
     }
 
 
@@ -401,7 +403,6 @@ async def watch_read(
             ):
                 manual_rearm_reason = ManualReservationRearmReason.UNKNOWN_RESULT_UNRESOLVED
             candidate["latest_reservation_attempt"] = reservation_attempt_projection(
-                watch.reservation_policy,
                 latest_attempt,
                 manual_rearm_reason=manual_rearm_reason,
             )

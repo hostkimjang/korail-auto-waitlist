@@ -1933,6 +1933,7 @@ async def test_watch_reads_include_latest_reservation_attempt_policy_per_candida
         "manual_check_required": False,
         "manual_rearm_available": False,
         "manual_rearm_reason": None,
+        "manual_rearm_revision": None,
         "retry_condition": "new_availability_episode",
     }
     assert attempts[1]["outcome"] == "failed"
@@ -2062,18 +2063,19 @@ async def test_watch_read_projects_ended_srt_374_hold_as_new_episode_retry(app, 
         "post_deadline_reconciled_at": reconciled_at.isoformat().replace("+00:00", "Z"),
         "payment_hold_end_reason": "confirmed_payment_hold_no_longer_present",
         "automatic_reservation_retry_fence_reason": None,
-        "retryable": True,
+        "retryable": False,
         "manual_check_required": False,
         "manual_rearm_available": False,
         "manual_rearm_reason": None,
-        "retry_condition": "new_availability_episode",
+        "manual_rearm_revision": None,
+        "retry_condition": None,
     }
 
 
 @pytest.mark.parametrize(
     ("reservation_policy", "expected_retryable", "expected_retry_condition"),
     [
-        ("reserve_once_before_payment", True, "new_availability_episode"),
+        ("reserve_once_before_payment", False, None),
         ("notify_only", False, None),
     ],
 )

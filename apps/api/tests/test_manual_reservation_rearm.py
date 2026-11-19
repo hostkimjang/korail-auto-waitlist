@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from rail_waitlist.config import get_settings
 from rail_waitlist.domain import (
@@ -32,7 +33,10 @@ from rail_waitlist.reservations.manual_rearm_application import (
     authorize_manual_reservation_rearm,
 )
 from rail_waitlist.reservations.manual_rearm_contracts import ManualReservationRearmReason
-from rail_waitlist.reservations.payment_hold_application import is_payment_hold_ended
+from rail_waitlist.reservations.payment_hold_application import (
+    is_payment_hold_ended,
+    payment_hold_rearm_revision,
+)
 from rail_waitlist.reservations.provider_confirmation.contracts import (
     ReservationConfirmationOutcome,
 )
@@ -173,20 +177,35 @@ def _dependencies(now: datetime) -> ManualReservationRearmDependencies:
     )
 
 
+async def _hold_revision(session: AsyncSession, attempt_id: str) -> str:
+    attempt = await session.get(ReservationAttempt, attempt_id)
+    assert attempt is not None
+    revision = payment_hold_rearm_revision(attempt)
+    assert revision is not None
+    return revision
+
+
 async def test_manual_rearm_persists_one_marker_and_duplicate_is_idempotent(app) -> None:
     session_factory = app.state.test_session_factory
     watch_id, candidate_id, attempt_id, now = await _persist_ended_hold(session_factory)
 
     async with session_factory() as session:
+        revision = await _hold_revision(session, attempt_id)
         first = await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=revision,
             dependencies=_dependencies(now),
         )
     async with session_factory() as session:
         second = await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=revision,
             dependencies=_dependencies(now + timedelta(seconds=1)),
         )
         candidate = await session.get(WatchCandidate, candidate_id)
@@ -210,9 +229,13 @@ async def test_same_attempt_new_hold_end_generation_persists_a_new_authorization
     watch_id, candidate_id, attempt_id, now = await _persist_ended_hold(session_factory)
 
     async with session_factory() as session:
+        first_revision = await _hold_revision(session, attempt_id)
         first = await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=first_revision,
             dependencies=_dependencies(now),
         )
     assert first.created is True
@@ -227,9 +250,29 @@ async def test_same_attempt_new_hold_end_generation_persists_a_new_authorization
         await session.commit()
 
     async with session_factory() as session:
+        with pytest.raises(ManualReservationRearmRejected):
+            await authorize_manual_reservation_rearm(
+                session,
+                watch_id,
+                reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+                official_reservation_state_confirmed=True,
+                manual_rearm_revision=first_revision,
+                dependencies=_dependencies(now + timedelta(seconds=3)),
+            )
+        candidate = await session.get(WatchCandidate, candidate_id)
+        assert candidate is not None
+        assert candidate.manual_rearm_authorized_at == now.replace(tzinfo=None)
+        await session.rollback()
+
+    async with session_factory() as session:
+        second_revision = await _hold_revision(session, attempt_id)
+        assert second_revision != first_revision
         second = await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=second_revision,
             dependencies=_dependencies(now + timedelta(seconds=3)),
         )
     assert second.created is True
@@ -257,9 +300,13 @@ async def test_a_later_ended_manual_hold_can_be_rearmed_again(app) -> None:
     session_factory = app.state.test_session_factory
     watch_id, candidate_id, first_attempt_id, now = await _persist_ended_hold(session_factory)
     async with session_factory() as session:
+        first_revision = await _hold_revision(session, first_attempt_id)
         await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=first_revision,
             dependencies=_dependencies(now),
         )
     async with session_factory() as session:
@@ -287,9 +334,29 @@ async def test_a_later_ended_manual_hold_can_be_rearmed_again(app) -> None:
         second_attempt_id = second_attempt.id
 
     async with session_factory() as session:
+        with pytest.raises(ManualReservationRearmRejected):
+            await authorize_manual_reservation_rearm(
+                session,
+                watch_id,
+                reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+                official_reservation_state_confirmed=True,
+                manual_rearm_revision=first_revision,
+                dependencies=_dependencies(now + timedelta(seconds=4)),
+            )
+        candidate = await session.get(WatchCandidate, candidate_id)
+        assert candidate is not None
+        assert candidate.manual_rearm_source_attempt_id == first_attempt_id
+        await session.rollback()
+
+    async with session_factory() as session:
+        second_revision = await _hold_revision(session, second_attempt_id)
+        assert second_revision != first_revision
         rearmed = await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=second_revision,
             dependencies=_dependencies(now + timedelta(seconds=4)),
         )
     async with session_factory() as session:
@@ -329,14 +396,49 @@ async def test_manual_rearm_route_commits_then_enqueues_once(
         lambda queued_watch_id: enqueued.append(queued_watch_id) or True,
     )
 
-    first = await client.post(f"/api/v1/watches/{watch_id}/reservation-rearm")
-    second = await client.post(f"/api/v1/watches/{watch_id}/reservation-rearm")
+    response = await client.get(f"/api/v1/watches/{watch_id}")
+    assert response.status_code == 200
+    projected = response.json()["candidates"][0]["latest_reservation_attempt"]
+    revision = projected["manual_rearm_revision"]
+    assert isinstance(revision, str) and revision
+    endpoint = f"/api/v1/watches/{watch_id}/reservation-rearm"
+    confirmation = {
+        "reason": "payment_hold_ended",
+        "official_reservation_state_confirmed": True,
+        "manual_rearm_revision": revision,
+    }
+    unbound = await client.post(endpoint)
+    missing_revision = await client.post(
+        endpoint,
+        json={"reason": "payment_hold_ended", "official_reservation_state_confirmed": True},
+    )
+    missing_acknowledgement = await client.post(
+        endpoint,
+        json={"reason": "payment_hold_ended", "manual_rearm_revision": revision},
+    )
+    missing_reason = await client.post(
+        endpoint,
+        json={"official_reservation_state_confirmed": True, "manual_rearm_revision": revision},
+    )
+    stale_revision = revision[:-1] + ("0" if revision[-1] != "0" else "1")
+    stale = await client.post(
+        endpoint,
+        json={**confirmation, "manual_rearm_revision": stale_revision},
+    )
+    assert unbound.status_code == 409
+    assert missing_revision.status_code == 409
+    assert missing_acknowledgement.status_code == 409
+    assert missing_reason.status_code == 409
+    assert stale.status_code == 409
+    assert enqueued == []
+
+    first = await client.post(endpoint, json=confirmation)
+    second = await client.post(endpoint, json=confirmation)
 
     assert first.status_code == 200
-    assert (
-        first.json()["candidates"][0]["latest_reservation_attempt"]["manual_rearm_available"]
-        is False
-    )
+    projected = first.json()["candidates"][0]["latest_reservation_attempt"]
+    assert projected["manual_rearm_available"] is False
+    assert projected.get("manual_rearm_revision") is None
     assert second.status_code == 200
     assert enqueued == [watch_id]
 
@@ -354,7 +456,7 @@ async def test_manual_rearm_rejects_non_monitoring_or_non_automatic_watch(
     policy: ReservationPolicy,
 ) -> None:
     session_factory = app.state.test_session_factory
-    watch_id, candidate_id, _attempt_id, now = await _persist_ended_hold(session_factory)
+    watch_id, candidate_id, attempt_id, now = await _persist_ended_hold(session_factory)
     async with session_factory() as session:
         watch = await session.get(Watch, watch_id)
         assert watch is not None
@@ -362,10 +464,14 @@ async def test_manual_rearm_rejects_non_monitoring_or_non_automatic_watch(
         watch.reservation_policy = policy
         await session.commit()
     async with session_factory() as session:
+        revision = await _hold_revision(session, attempt_id)
         with pytest.raises(ManualReservationRearmRejected):
             await authorize_manual_reservation_rearm(
                 session,
                 watch_id,
+                reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+                official_reservation_state_confirmed=True,
+                manual_rearm_revision=revision,
                 dependencies=_dependencies(now),
             )
         await session.rollback()
@@ -379,9 +485,13 @@ async def test_manual_rearm_claims_only_once_after_a_later_actionable_observatio
     session_factory = app.state.test_session_factory
     watch_id, candidate_id, attempt_id, now = await _persist_ended_hold(session_factory)
     async with session_factory() as session:
+        revision = await _hold_revision(session, attempt_id)
         await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=revision,
             dependencies=_dependencies(now),
         )
 
@@ -555,6 +665,8 @@ async def test_unknown_authorization_cannot_be_reused_after_same_attempt_becomes
         assert projected is not None
         assert projected.manual_rearm_available is True
         assert projected.manual_rearm_reason is ManualReservationRearmReason.PAYMENT_HOLD_ENDED
+        revision = projected.manual_rearm_revision
+        assert revision is not None
 
     async with session_factory() as session:
         watch = await session.get(Watch, watch_id)
@@ -606,6 +718,9 @@ async def test_unknown_authorization_cannot_be_reused_after_same_attempt_becomes
         payment_rearm = await authorize_manual_reservation_rearm(
             session,
             watch_id,
+            reason=ManualReservationRearmReason.PAYMENT_HOLD_ENDED,
+            official_reservation_state_confirmed=True,
+            manual_rearm_revision=revision,
             dependencies=_dependencies(payment_authorized_at),
         )
     assert payment_rearm.created is True

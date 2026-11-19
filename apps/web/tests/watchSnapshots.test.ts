@@ -774,18 +774,22 @@ describe("watch snapshot reconciliation", () => {
     }];
 
     expect(detectWatchActionTransitions(previous, resumedWithoutEvidence)).toEqual([]);
-    expect(detectWatchActionTransitions(previous, resumed)).toMatchObject([{
+    const resumedTransitions = detectWatchActionTransitions(previous, resumed);
+    expect(resumedTransitions).toMatchObject([{
       id: "payment",
       status: "payment_hold_ended",
-      automaticReservationRetry: true,
+      monitoringResumed: true,
       paymentHoldEndReason: "confirmed_payment_deadline_elapsed",
       revisionAt: holdEndedAt,
     }]);
     expect(detectWatchActionTransitions(previous, oneOffExpired)).toMatchObject([{
       id: "payment",
       status: "payment_hold_ended",
-      automaticReservationRetry: false,
+      monitoringResumed: false,
       revisionAt: holdEndedAt,
+    }]);
+    expect(resumedTransitions.map(buildWatchActionToast)).toMatchObject([{
+      description: expect.stringContaining("자동 예매를 다시 시도하려면 앱에서 예약 상태를 확인해 주세요"),
     }]);
   });
 

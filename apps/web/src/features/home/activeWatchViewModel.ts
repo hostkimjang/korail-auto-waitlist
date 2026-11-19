@@ -213,7 +213,7 @@ function reservationAttemptLabel(
   const contextLabel = reservationAttemptContextLabel(context);
   if (attempt.paymentHoldEndedAt !== null) {
     const nextAction = attempt.manualRearmAvailable
-      ? " · 다시 시도하려면 사용자 확인 필요"
+      ? " · 자동 예매 중지 · 재시도하려면 사용자 확인 필요"
       : " · 감시 계속";
     const holdResult = attempt.paymentHoldEndReason === "confirmed_payment_deadline_elapsed"
       ? "공식 확인에서 결제 가능 기한 종료"

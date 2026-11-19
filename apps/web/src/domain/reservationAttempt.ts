@@ -69,6 +69,10 @@ export type ManualRearmReason =
   | "payment_hold_ended"
   | "unknown_result_unresolved";
 
+export type ManualRearmRequest =
+  | { reason: "payment_hold_ended"; revision: string }
+  | { reason: "unknown_result_unresolved" };
+
 export type ReservationReconciliationResolution =
   | "confirmed_absent"
   | "exhausted_unresolved";
@@ -87,6 +91,7 @@ export interface LatestReservationAttempt {
   paymentHoldEndedAt: string | null;
   manualRearmAvailable?: boolean;
   manualRearmReason?: ManualRearmReason | null;
+  manualRearmRevision?: string | null;
   paymentHoldEndReason?: PaymentHoldEndReason | null;
   confirmationOutcome?: ReservationConfirmationOutcome | null;
   confirmationDiagnosticCode?: ReservationConfirmationDiagnosticCode | null;
@@ -208,6 +213,12 @@ export function normalizeReservationReconciliationProjection(
   };
 }
 
+export function validatedManualRearmRevision(value: unknown): string | null {
+  return typeof value === "string" && value.length === 64 && !/[^a-f0-9]/.test(value)
+    ? value
+    : null;
+}
+
 export function validatedManualRearmReason(
   attempt: LatestReservationAttempt,
 ): ManualRearmReason | null {
@@ -218,6 +229,7 @@ export function validatedManualRearmReason(
     && attempt.paymentHoldEndedAt !== null
     && attempt.paymentHoldEndReason !== null
     && attempt.paymentHoldEndReason !== undefined
+    && validatedManualRearmRevision(attempt.manualRearmRevision) !== null
   ) return attempt.manualRearmReason;
   if (
     attempt.manualRearmReason === "unknown_result_unresolved"
@@ -519,18 +531,20 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
   const requestedManualRearmReason = typeof manualRearmReasonValue === "string"
     ? manualRearmReasonValue as ManualRearmReason
     : null;
+  const manualRearmRevision = validatedManualRearmRevision(value.manual_rearm_revision);
   const mappedAttempt: LatestReservationAttempt = {
     outcome: outcome as ReservationAttemptOutcome,
     resultReasonCode,
     startedAt,
     finishedAt,
-    retryable: value.retryable,
+    retryable: paymentHoldEndedAt === null && value.retryable,
     manualCheckRequired: normalizedReconciliation.manualCheckRequired,
-    retryCondition,
+    retryCondition: paymentHoldEndedAt === null ? retryCondition : null,
     paymentHoldEndedAt,
     manualRearmAvailable: value.manual_rearm_available === true
       && !normalizedReconciliation.invalidClosureEvidence,
     manualRearmReason: requestedManualRearmReason,
+    manualRearmRevision,
     confirmationOutcome,
     confirmationDiagnosticCode,
     confirmationObservedAt,
@@ -548,5 +562,6 @@ export function mapLatestReservationAttempt(value: unknown): LatestReservationAt
     ...mappedAttempt,
     manualRearmAvailable: manualRearmReason !== null,
     manualRearmReason,
+    manualRearmRevision: manualRearmReason === "payment_hold_ended" ? manualRearmRevision : null,
   };
 }

@@ -352,6 +352,7 @@ async def watches_reservation_rearm(
             official_reservation_state_confirmed=(
                 data.official_reservation_state_confirmed is True if data is not None else False
             ),
+            manual_rearm_revision=data.manual_rearm_revision if data is not None else None,
         )
     except ManualReservationRearmNotFound as error:
         raise HTTPException(404, str(error)) from None

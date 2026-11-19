@@ -1238,21 +1238,19 @@ async def test_exact_paid_confirmation_preserves_paused_state_but_closes_all_ret
 
 
 @pytest.mark.parametrize(
-    ("policy", "expected_status", "expected_state", "event_type", "retryable"),
+    ("policy", "expected_status", "expected_state", "event_type"),
     [
         (
             ReservationPolicy.NOTIFY_ONLY,
             WatchStatus.EXPIRED,
             "expired",
             "watch.payment_hold_ended_one_off_expired",
-            False,
         ),
         (
             ReservationPolicy.RESERVE_ONCE_BEFORE_PAYMENT,
             WatchStatus.WATCHING,
             "observed",
             "watch.payment_hold_ended_monitoring_resumed",
-            True,
         ),
     ],
 )
@@ -1261,7 +1259,6 @@ async def test_exact_not_found_ends_hold_for_one_off_or_resumed_monitoring(
     expected_status: WatchStatus,
     expected_state: str,
     event_type: str,
-    retryable: bool,
 ) -> None:
     transitions: list[tuple[WatchStatus, str | None]] = []
     events: list[dict[str, object]] = []
@@ -1308,8 +1305,9 @@ async def test_exact_not_found_ends_hold_for_one_off_or_resumed_monitoring(
     assert events[0]["event_type"] == event_type
     assert events[0]["dedupe_key"] == "payment-hold-ended:attempt-1"
     payload = cast(dict[str, object], events[0]["payload"])
-    assert payload["automatic_reservation_retry"] is retryable
-    assert payload["retry_condition"] == ("new_availability_episode" if retryable else None)
+    # Either policy waits for the user's manual rearm after an unpaid hold ends.
+    assert payload["automatic_reservation_retry"] is False
+    assert payload["retry_condition"] is None
     assert events[1]["event_type"] == "watch.reservation_reconciled"
     reconciled_payload = cast(dict[str, object], events[1]["payload"])
     assert reconciled_payload["outcome"] == "payment_required"

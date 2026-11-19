@@ -133,7 +133,7 @@ def test_services_keeps_watch_notification_application_identity() -> None:
             "payment_required:watching:1",
             "confirmed_payment_hold_no_longer_actionable_monitoring_resumed",
             None,
-            "좌석 감시를 다시 시작합니다.",
+            "좌석 감시는 계속하지만 자동 예매는 멈췄습니다.",
         ),
         (
             WatchStatus.EXPIRED,

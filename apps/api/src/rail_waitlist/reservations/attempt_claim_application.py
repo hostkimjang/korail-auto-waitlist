@@ -26,7 +26,6 @@ from .attempt_policy import (
 from .attempt_timing_application import latest_candidate_seat_detected_at
 from .payment_hold_retry_application import (
     active_watch_payment_hold_fence,
-    conclusive_unavailable_after_hold,
     watch_attempt_by_id,
 )
 from .progress_timing_policy import has_persisted_reservation_requested_progress
@@ -144,7 +143,6 @@ async def begin_reservation_attempt(
         .limit(1)
         .with_for_update()
     )
-    payment_hold_episode = parse_payment_hold_retry_episode_key(normalized_episode_key)
     payment_hold_fence = (
         await active_watch_payment_hold_fence(
             session,
@@ -154,35 +152,7 @@ async def begin_reservation_attempt(
         if retry_authorized
         else None
     )
-    payment_hold_retry_authorized = False
     manual_payment_hold_retry_authorized = False
-    referenced_payment_hold: ReservationAttempt | None = None
-    if payment_hold_episode is not None:
-        hold_attempt_id, unavailable_observation_id = payment_hold_episode
-        referenced_payment_hold = await watch_attempt_by_id(session, watch.id, hold_attempt_id)
-        if (
-            retry_authorized
-            and payment_hold_fence is not None
-            and payment_hold_fence.attempt.id == hold_attempt_id
-        ):
-            retry_edge = await conclusive_unavailable_after_hold(
-                session,
-                payment_hold_fence,
-                candidate.id,
-                observation_id=unavailable_observation_id,
-            )
-            if retry_edge is not None:
-                actionable_after_edge = await session.scalar(
-                    select(SeatObservation.id)
-                    .where(
-                        SeatObservation.candidate_id == candidate.id,
-                        SeatObservation.observed_at > retry_edge.observed_at,
-                        SeatObservation.status.in_(dependencies.actionable_seat_statuses),
-                    )
-                    .order_by(SeatObservation.observed_at, SeatObservation.id)
-                    .limit(1)
-                )
-                payment_hold_retry_authorized = actionable_after_edge is not None
     manual_payment_hold_episode = parse_manual_payment_hold_rearm_episode_key(
         normalized_episode_key
     )
@@ -212,15 +182,18 @@ async def begin_reservation_attempt(
                 .limit(1)
             )
             manual_payment_hold_retry_authorized = actionable_after_authorization is not None
-    if payment_hold_fence is not None and not (
-        payment_hold_retry_authorized or manual_payment_hold_retry_authorized
-    ):
+    if payment_hold_fence is not None and not manual_payment_hold_retry_authorized:
         # A watch-scoped hold may belong to another candidate. Returning that durable
         # blocker with created=False keeps the execution caller side-effect free even
         # when this candidate has no local attempt to replay.
         return latest_attempt or payment_hold_fence.attempt, False
-    if payment_hold_episode is not None and not payment_hold_retry_authorized:
-        blocking_attempt = latest_attempt or referenced_payment_hold
+    payment_hold_episode = parse_payment_hold_retry_episode_key(normalized_episode_key)
+    if payment_hold_episode is not None:
+        # Only a user's rearm reopens reservation after an ended payment hold. An
+        # automatic retry key from the former policy must not dispatch a provider command.
+        blocking_attempt = latest_attempt or await watch_attempt_by_id(
+            session, watch.id, payment_hold_episode[0]
+        )
         if blocking_attempt is not None:
             return blocking_attempt, False
         raise ValueError("payment-hold retry episode does not reference this watch")
@@ -356,7 +329,6 @@ async def begin_reservation_attempt(
             (
                 not_available_retry_authorized,
                 provider_auth_retry_authorized,
-                payment_hold_retry_authorized,
                 manual_payment_hold_retry_authorized,
                 manual_unknown_retry_authorized,
                 confirmed_absent_retry_authorized,

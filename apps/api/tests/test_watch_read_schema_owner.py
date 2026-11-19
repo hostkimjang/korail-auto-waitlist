@@ -169,6 +169,7 @@ def test_watch_read_contract_fields_and_defaults_are_unchanged() -> None:
         "manual_check_required",
         "manual_rearm_available",
         "manual_rearm_reason",
+        "manual_rearm_revision",
         "retry_condition",
     )
     assert tuple(canonical.WatchCandidateRead.model_fields) == (
@@ -316,11 +317,11 @@ def test_watch_read_normalizes_only_legacy_inconclusive_diagnostics() -> None:
     [
         (
             canonical.WatchCandidateLatestReservationAttemptRead,
-            "cb596262e1941ad44ba22b24c43cabd420a1d63f23adb23127256e4a8594094d",
+            "c98feae11c5cdadf5e4808dee35e1f17fcd9a4ee6a221a571d818a687d22968f",
         ),
         (
             canonical.WatchCandidateRead,
-            "5fef4b98623d66138d9dc63625d0ad2725b596a4c86704c99f50f13a04a5750b",
+            "b31fb72f57e9075416c5399bda4e7070a0186273f582203f23a4038eb0455fa1",
         ),
         (
             canonical.WatchCandidateLatestObservationRead,
@@ -328,7 +329,7 @@ def test_watch_read_normalizes_only_legacy_inconclusive_diagnostics() -> None:
         ),
         (
             canonical.WatchRead,
-            "ccab4af535751e39a6d8cd946e8180db6b417007f6c2ba5e6bcf05ab82350c16",
+            "69c0f172cba7fa06a40125710a33092fb0dd3052c1464f3b2a8f5d47d2b1dab5",
         ),
     ],
 )

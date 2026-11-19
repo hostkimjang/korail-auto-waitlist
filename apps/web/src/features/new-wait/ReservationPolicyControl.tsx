@@ -69,7 +69,7 @@ export function ReservationPolicyControl({
         {automaticSelected ? <CheckCircle weight="fill" aria-hidden="true" /> : null}
       </button>
       {canReserve ? (
-        <p id="reservation-policy-payment-help">자동 결제는 하지 않습니다. 결제 필요 알림을 받은 뒤 공식 플랫폼에서 직접 결제하세요.</p>
+        <p id="reservation-policy-payment-help">결제 필요 알림을 받은 뒤 공식 플랫폼에서 직접 결제하세요. 결제 없이 임시 예약이 끝나면 좌석 감시를 다시 시작하며, 자동 예매 재시도에는 사용자 확인이 필요합니다.</p>
       ) : (
         <p id="reservation-policy-account-help" className="reservation-policy-warning">
           {unavailableReason(selectedProviders, accounts, automaticReservation)}

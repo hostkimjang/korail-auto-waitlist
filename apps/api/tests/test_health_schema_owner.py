@@ -284,9 +284,9 @@ def test_health_owner_move_does_not_change_openapi() -> None:
         "anyOf": [{"minimum": 0.0, "type": "number"}, {"type": "null"}],
         "title": "Next Login Attempt Seconds",
     }
-    assert len(encoded) == 93860
+    assert len(encoded) == 94118
     assert hashlib.sha256(encoded).hexdigest() == (
-        "b8cec0c2d8d2f1ea75582d7de5d19ba1ac7001bd78f13ea362b3583f14aa65d0"
+        "358de4934b06f573f9c8694d39558fc0a242a358ceb919754e1cbbe3998f5079"
     )
 
 

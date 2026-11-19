@@ -15,6 +15,7 @@ from .attempt_policy import (
     exact_paid_reservation_attempt_id,
 )
 from .manual_rearm_contracts import ManualReservationRearmReason
+from .payment_hold_application import payment_hold_rearm_revision
 
 
 class ManualReservationRearmNotFound(LookupError):
@@ -86,6 +87,7 @@ async def authorize_manual_reservation_rearm(
     *,
     reason: ManualReservationRearmReason | None = None,
     official_reservation_state_confirmed: bool = False,
+    manual_rearm_revision: str | None = None,
     dependencies: ManualReservationRearmDependencies,
 ) -> ManualReservationRearmResult:
     """Persist one user-approved retry marker without calling the rail provider."""
@@ -153,9 +155,15 @@ async def authorize_manual_reservation_rearm(
 
     authorization_kind: ManualReservationRearmReason
     if dependencies.is_payment_hold_ended(latest_attempt):
-        if reason not in {None, ManualReservationRearmReason.PAYMENT_HOLD_ENDED}:
+        current_revision = payment_hold_rearm_revision(latest_attempt)
+        if (
+            reason is not ManualReservationRearmReason.PAYMENT_HOLD_ENDED
+            or not official_reservation_state_confirmed
+            or current_revision is None
+            or current_revision != manual_rearm_revision
+        ):
             raise ManualReservationRearmRejected(
-                "현재 예매 기록과 다시 확인하는 이유가 일치하지 않습니다."
+                "최신 대기 목록에서 이번 결제 보류의 종료를 확인한 뒤 다시 시도해 주세요."
             )
         authorization_kind = ManualReservationRearmReason.PAYMENT_HOLD_ENDED
     elif dependencies.is_unresolved_unknown_manual_rearm_source(latest_attempt):

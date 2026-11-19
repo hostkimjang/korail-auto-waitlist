@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import type { WatchReadModel } from "../../api/watches";
-import type { ManualRearmReason } from "../../domain/reservationAttempt";
+import type { ManualRearmRequest } from "../../domain/reservationAttempt";
 import type { ReservationPolicy } from "../../domain/reservationPolicy";
 
 export type WatchMutationRecord = WatchReadModel;
@@ -24,7 +24,7 @@ interface WatchMutationRequests {
   cancelWatchRequest: (id: string) => Promise<WatchMutationRecord>;
   rearmReservationRequest: (
     id: string,
-    reason: ManualRearmReason,
+    rearm: ManualRearmRequest,
   ) => Promise<WatchMutationRecord>;
   updateWatchRequest: (
     id: string,
@@ -48,7 +48,7 @@ export interface WatchMutationController {
   pauseWatch: (id: string) => Promise<void>;
   resumeWatch: (id: string) => Promise<void>;
   cancelWatch: (id: string) => Promise<WatchCancellationResult>;
-  rearmReservation: (id: string, reason: ManualRearmReason) => Promise<void>;
+  rearmReservation: (id: string, rearm: ManualRearmRequest) => Promise<void>;
   changeReservationPolicy: (id: string, policy: ReservationPolicy) => Promise<void>;
   deleteWatchRecord: (id: string) => Promise<void>;
   reservationPolicyUpdatingIds: ReadonlySet<string>;
@@ -261,7 +261,7 @@ export function useWatchMutations({
 
   const rearmReservation = useCallback(async (
     id: string,
-    reason: ManualRearmReason,
+    rearm: ManualRearmRequest,
   ): Promise<void> => {
     if (!beginMutation(id)) return;
     try {
@@ -275,7 +275,7 @@ export function useWatchMutations({
               : { ...watch.latestReservationAttempt, manualRearmAvailable: false },
           }));
       } else {
-        const updated = await rearmReservationRequest(id, reason);
+        const updated = await rearmReservationRequest(id, rearm);
         commitWatches((items) => replaceWatch(items, id, updated));
       }
       pushToast("자동 예매 재시작을 확인했습니다. 좌석을 다시 관측한 뒤 가능하면 한 번 시도합니다.");

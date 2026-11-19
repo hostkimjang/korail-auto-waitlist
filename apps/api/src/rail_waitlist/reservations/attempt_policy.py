@@ -48,14 +48,8 @@ def official_seat_observation_source(provider: Provider) -> str | None:
     return None
 
 
-def payment_hold_retry_episode_key(
-    hold_attempt_id: str,
-    unavailable_observation_id: str,
-) -> str:
-    return f"{PAYMENT_HOLD_RETRY_EPISODE_PREFIX}{hold_attempt_id}:{unavailable_observation_id}"
-
-
 def parse_payment_hold_retry_episode_key(episode_key: str) -> tuple[str, str] | None:
+    """Recognize automatic retry keys from the former payment-hold policy."""
     if not episode_key.startswith(PAYMENT_HOLD_RETRY_EPISODE_PREFIX):
         return None
     encoded_ids = episode_key.removeprefix(PAYMENT_HOLD_RETRY_EPISODE_PREFIX)

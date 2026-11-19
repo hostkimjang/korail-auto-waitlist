@@ -538,7 +538,7 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
         ],
       };
     case "payment_hold_ended": {
-      const monitoringResumed = transition.automaticReservationRetry === true;
+      const monitoringResumed = transition.monitoringResumed === true;
       const deadlineElapsed = transition.paymentHoldEndReason === "confirmed_payment_deadline_elapsed";
       const holdEvidence = deadlineElapsed
         ? "공식 확인에서 결제 가능 기한이 지난 것을 확인했습니다."
@@ -551,7 +551,7 @@ export function buildWatchActionToast(transition: WatchActionTransition): AppNot
           ? "결제 가능 기한이 지났습니다"
           : "공식 내역에서 대상 임시 예약을 더 이상 찾지 못했습니다",
         description: monitoringResumed
-          ? `${base.description} · ${holdEvidence} 감시는 다시 시작되며, 매진 뒤 좌석이 다시 열리면 자동 예매를 시도합니다.`
+          ? `${base.description} · ${holdEvidence} 좌석 감시를 재개했습니다. 자동 예매를 다시 시도하려면 앱에서 예약 상태를 확인해 주세요.`
           : `${base.description} · ${holdEvidence} 이 1회 알림 작업은 종료되었습니다.`,
         steps: [
           completed("좌석 발견", times.detected),

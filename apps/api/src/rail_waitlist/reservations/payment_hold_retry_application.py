@@ -7,8 +7,7 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..watch_management.models import ReservationAttempt, SeatObservation, WatchCandidate
-from .attempt_policy import RESERVATION_RETRY_EDGE_OBSERVATIONS
+from ..watch_management.models import ReservationAttempt, WatchCandidate
 
 
 class PaymentHoldEndedPredicate(Protocol):
@@ -69,32 +68,6 @@ async def active_watch_payment_hold_fence(
         .limit(1)
     )
     return None if post_hold_attempt_id is not None else fence
-
-
-async def conclusive_unavailable_after_hold(
-    session: AsyncSession,
-    fence: WatchPaymentHoldFence,
-    candidate_id: str,
-    *,
-    observation_id: str | None = None,
-    before: datetime | None = None,
-) -> SeatObservation | None:
-    conditions = [
-        SeatObservation.candidate_id == candidate_id,
-        SeatObservation.observed_at > fence.ended_at,
-        SeatObservation.status.in_(RESERVATION_RETRY_EDGE_OBSERVATIONS),
-    ]
-    if observation_id is not None:
-        conditions.append(SeatObservation.id == observation_id)
-    if before is not None:
-        conditions.append(SeatObservation.observed_at < before)
-    observation: SeatObservation | None = await session.scalar(
-        select(SeatObservation)
-        .where(*conditions)
-        .order_by(SeatObservation.observed_at, SeatObservation.id)
-        .limit(1)
-    )
-    return observation
 
 
 async def watch_attempt_by_id(

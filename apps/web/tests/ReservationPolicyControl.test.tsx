@@ -104,6 +104,7 @@ describe("reservation policy control", () => {
     expect(onChange).toHaveBeenCalledWith("reserve_once_before_payment");
     expect(screen.getByText(/새 좌석 가용성 에피소드마다 예매/)).toBeTruthy();
     expect(screen.getByText(/같은 에피소드에서는 중복 요청하지 않습니다/)).toBeTruthy();
-    expect(screen.getByText(/자동 결제는 하지 않습니다/)).toBeTruthy();
+    expect(screen.getByText(/공식 플랫폼에서 직접 결제하세요/)).toBeTruthy();
+    expect(screen.getByText(/자동 예매 재시도에는 사용자 확인이 필요합니다/)).toBeTruthy();
   });
 });

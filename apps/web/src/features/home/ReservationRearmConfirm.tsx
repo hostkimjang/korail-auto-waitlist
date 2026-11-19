@@ -10,18 +10,17 @@ import { createPortal } from "react-dom";
 
 import { useDocumentScrollLock } from "../../hooks/useDocumentScrollLock";
 import type {
-  ManualRearmReason,
+  ManualRearmRequest,
   PaymentHoldEndReason,
 } from "../../domain/reservationAttempt";
 
 export type ReservationRearmMode =
   | {
-    kind: "payment_hold";
     reason: "payment_hold_ended";
     paymentHoldEndReason: PaymentHoldEndReason;
+    revision: string;
   }
   | {
-    kind: "unknown";
     reason: "unknown_result_unresolved";
   };
 
@@ -33,7 +32,7 @@ export interface ReservationRearmConfirmProps {
   seatClassLabel: string;
   mode: ReservationRearmMode;
   mutationPending?: boolean;
-  onConfirm: (watchId: string, reason: ManualRearmReason) => void | Promise<void>;
+  onConfirm: (watchId: string, rearm: ManualRearmRequest) => void | Promise<void>;
 }
 
 function restoreFocus(
@@ -106,7 +105,9 @@ export function ReservationRearmConfirm({
     const fallbackRow = trigger?.closest<HTMLElement>(".watch-row") ?? null;
     setSubmitting(true);
     try {
-      await onConfirm(watchId, mode.reason);
+      await onConfirm(watchId, mode.reason === "payment_hold_ended"
+        ? { reason: mode.reason, revision: mode.revision }
+        : { reason: mode.reason });
       setOpen(false);
       setAbsenceConfirmed(false);
       restoreFocus(trigger, fallbackRow);
@@ -195,23 +196,23 @@ export function ReservationRearmConfirm({
               <WarningCircle size={23} weight="fill" aria-hidden="true" />
               <div>
                 <strong>
-                  {mode.kind === "unknown"
+                  {mode.reason === "unknown_result_unresolved"
                     ? "예약 결과를 자동으로 확인할 수 없습니다"
                     : mode.paymentHoldEndReason === "confirmed_payment_deadline_elapsed"
                       ? "공식 확인에서 결제 가능 기한이 종료됐습니다"
                       : "공식 내역에서 대상 임시 예약을 더 이상 찾지 못했습니다"}
                 </strong>
                 <span>
-                  {mode.kind === "unknown"
+                  {mode.reason === "unknown_result_unresolved"
                     ? "공식 앱/홈에서 해당 열차·좌석 등급의 예약이 없는지 직접 확인해 주세요."
                     : "공식 예약·승차권 내역에 결제할 예약이 남아 있는지 먼저 확인해 주세요."}
                 </span>
               </div>
             </div>
             <p id={descriptionId} className="official-handoff-description">
-              {mode.kind === "unknown"
+              {mode.reason === "unknown_result_unresolved"
                 ? "확인하면 좌석 감시를 즉시 실행하고, 이후 같은 좌석 등급이 공식 관측에서 다시 예매 가능해질 때 한 번 자동 예매를 시도합니다. 자동 재확인은 계속되며, 그 사이 예약이 확인되면 재시도를 중단합니다. 현재 좌석 확보나 예매 성공을 보장하지 않으며 결제는 공식 플랫폼에서 직접 완료해야 합니다."
-                : "확인하면 좌석 감시를 즉시 실행하고, 이후 같은 좌석 등급이 공식 관측에서 다시 예매 가능해질 때 한 번 자동 예매를 시도합니다. 현재 좌석 확보나 예매 성공을 보장하지 않으며 결제는 공식 플랫폼에서 직접 완료해야 합니다."}
+                : "확인하면 좌석 감시를 즉시 실행합니다. 승인 뒤 같은 열차와 좌석 등급의 예매 가능 상태가 공식 관측에서 확인되면 한 번 자동 예매를 시도합니다. 결제는 공식 플랫폼에서 직접 완료해 주세요."}
             </p>
             <label className="reservation-rearm-acknowledgement">
               <input
@@ -221,7 +222,7 @@ export function ReservationRearmConfirm({
                 onChange={(event) => setAbsenceConfirmed(event.currentTarget.checked)}
               />
               <span>
-                {mode.kind === "payment_hold"
+                {mode.reason === "payment_hold_ended"
                   && mode.paymentHoldEndReason === "confirmed_payment_deadline_elapsed"
                   ? "공식 앱/홈에서 이 예약을 더 이상 결제할 수 없음을 확인했습니다."
                   : "공식 앱/홈의 예약·승차권 내역에서 이 열차와 좌석 등급의 예약이 없음을 확인했습니다."}

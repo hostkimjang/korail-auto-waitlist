@@ -169,6 +169,9 @@ class WatchUpdate(ApiModel):
 class ManualReservationRearmRequest(ApiModel):
     reason: ManualReservationRearmReason | None = None
     official_reservation_state_confirmed: Literal[True] | None = None
+    manual_rearm_revision: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[a-f0-9]+$"
+    )
 
 
 class WatchCandidateLatestReservationAttemptRead(ApiModel):
@@ -209,6 +212,7 @@ class WatchCandidateLatestReservationAttemptRead(ApiModel):
     manual_check_required: bool
     manual_rearm_available: bool = False
     manual_rearm_reason: ManualReservationRearmReason | None = None
+    manual_rearm_revision: str | None = None
     retry_condition: (
         Literal[
             "new_availability_episode",

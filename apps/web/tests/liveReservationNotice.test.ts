@@ -1326,7 +1326,7 @@ describe("live reservation notices", () => {
         from: "payment_required",
         to: "watching",
         reason: "confirmed_payment_deadline_elapsed",
-        automatic_reservation_retry: true,
+        automatic_reservation_retry: false,
       },
     }, [endedPaymentWatch]);
     const nonActionableReconciliation = buildLiveReservationNotice({
@@ -1354,7 +1354,7 @@ describe("live reservation notices", () => {
     expect(nonActionableReconciliation).toBeNull();
   });
 
-  it("replaces payment progress with a terminal cancellation notice after confirmed hold expiry", () => {
+  it.each([false, true])("shows monitoring and user confirmation after hold expiry (retry field %s)", (automaticReservationRetry) => {
     const notice = buildLiveReservationNotice({
       id: "hold-ended-event",
       event_type: "watch.payment_hold_ended_monitoring_resumed",
@@ -1368,7 +1368,7 @@ describe("live reservation notices", () => {
         from: "payment_required",
         to: "watching",
         reason: "confirmed_payment_deadline_elapsed",
-        automatic_reservation_retry: true,
+        automatic_reservation_retry: automaticReservationRetry,
       },
     }, [{
       ...watch,
@@ -1392,7 +1392,8 @@ describe("live reservation notices", () => {
       meta: "KORAIL · 9248 · 일반실",
       description: expect.stringContaining("8월 4일 (화) · 대전 → 서울 · 17:50 → 18:58"),
     });
-    expect(notice?.description).toContain("감시는 다시 시작되며");
+    expect(notice?.description).toContain("좌석 감시를 재개했습니다");
+    expect(notice?.description).toContain("자동 예매를 다시 시도하려면 앱에서 예약 상태를 확인해 주세요");
     expect(notice?.steps?.map((step) => [step.label, step.state])).toEqual([
       ["좌석 발견", "completed"],
       ["자동 예매 요청 시작", "completed"],
@@ -1617,6 +1618,7 @@ describe("live reservation notices", () => {
       created_at: "2026-08-03T12:20:02Z",
       payload: {
         watch_id: watch.id,
+        candidate_id: "candidate",
         terminal: true,
         status: "expired",
         from: "payment_required",

@@ -383,6 +383,7 @@ export function mapWatch(value: unknown): ProjectedWatch {
             ...preferredAttemptOwner.attempt,
             manualRearmAvailable: false,
             manualRearmReason: null,
+            manualRearmRevision: null,
           },
         };
   const endedHoldCandidate = watch.status === "watching"

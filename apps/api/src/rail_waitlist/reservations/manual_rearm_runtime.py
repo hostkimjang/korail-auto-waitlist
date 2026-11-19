@@ -42,12 +42,14 @@ async def authorize_manual_reservation_rearm(
     *,
     reason: ManualReservationRearmReason | None = None,
     official_reservation_state_confirmed: bool = False,
+    manual_rearm_revision: str | None = None,
 ) -> ManualReservationRearmResult:
     return await authorize_manual_reservation_rearm_application(
         session,
         watch_id,
         reason=reason,
         official_reservation_state_confirmed=official_reservation_state_confirmed,
+        manual_rearm_revision=manual_rearm_revision,
         dependencies=ManualReservationRearmDependencies(
             reservation_dispatch_credential_version=(_reservation_dispatch_credential_version),
             is_payment_hold_ended=is_payment_hold_ended,

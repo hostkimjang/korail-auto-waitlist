@@ -3,7 +3,7 @@
 Windows, macOS, Linux의 `amd64`·`arm64`용 설치 CLI입니다. Docker의 Linux containers와
 Compose 2.24 이상이 필요합니다. Docker Desktop/VM에서 설치 경로의 파일 공유도 허용해야 합니다.
 사용자는 Go를 설치할 필요가 없습니다. `railwait install` 또는 `railwait setup`은 실행 환경 → 설치 계획 →
-앱·계정 → 자동 시작 → 접속 확인의 다섯 단계로 진행합니다. 대화형 터미널에서 인자 없이 실행해도 시작합니다.
+앱·계정 → 자동 시작 → 접속 확인의 다섯 단계로 진행합니다. 인자 없이 실행하면 명령 목록을 보여 줍니다.
 
 공식 릴리스는 한 줄 설치 스크립트로 시작할 수 있습니다(1.4.4부터). 스크립트 원본은
 [`scripts/install/`](../../scripts/install/)에 있고 Release 자산으로 `.sha256`과 함께 게시합니다.
@@ -87,11 +87,23 @@ railwait update --path <설치 경로> --package <새 로컬 패키지> --trust-
 railwait update --path <설치 경로> --package <새 로컬 패키지> --trust-key <직접 신뢰할 공개키 파일> --target <확인한 버전> --plan <계획 ID>
 railwait configure --path <설치 경로>
 railwait configure --path <설치 경로> --plan <계획 ID>
+railwait configure reservation on --path <설치 경로>
 railwait manager status --path <설치 경로>
 railwait manager upgrade --path <설치 경로>
+railwait restart --path <설치 경로>
+railwait open --path <설치 경로>
+railwait uninstall --path <설치 경로>
+railwait uninstall --path <설치 경로> --delete-data
+railwait help
+railwait help <명령>
 railwait version
 railwait preview --plain
 ```
+
+`railwait`, `railwait help`, `--help`, `-h`는 설치·업데이트/설정/관리 서비스·운영/진단/제거/기타로 묶은 명령
+목록과 자주 쓰는 예를 보여 줍니다. 대화형 터미널에서 인자 없이 실행해도 설치 마법사 대신 이 목록을 보여 주므로
+설치는 `railwait install`로 시작합니다. 명령별 목적·사용법·옵션과 하위 명령은 `railwait <명령> --help` 또는
+`railwait help <명령>`으로 봅니다. 알 수 없는 명령이나 잘못된 옵션은 그 이름과 함께 볼 도움말 명령을 알려 줍니다.
 
 ## 필수 프로그램 설치
 
@@ -342,6 +354,10 @@ heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌�
 버전이면 아무것도 바꾸지 않습니다. 버전을 비교할 수 없는 개발용 CLI로 바꿀 때만 `--force`를 붙입니다. 웹의
 **설정 → 서버 설정**은 1.4.8 이상 관리 서비스가 게시하는 설정 스냅숏(`status/settings.json`)과 설정 요청
 (`requests/<id>.settings.json`)을 사용하므로, 그보다 오래된 관리 서비스에서는 이 교체를 먼저 안내합니다.
+웹의 서비스 다시 시작은 `requests/<id>.restart.json` 요청을 씁니다. 이 요청을 처리하는 관리 서비스는 첫 heartbeat 뒤
+`status/capabilities.json`에 heartbeat와 같은 `manager_started_at`, CLI 버전, 지원 기능(`settings`, `restart`),
+설치 경로와 호스트 OS를 게시하고 파일이 없어지면 다시 씁니다. 이전 관리 서비스는 이 파일을 쓰지 않고 다시 시작
+요청도 읽지 않으므로, 웹은 이 파일이 살아 있는 heartbeat와 맞을 때만 다시 시작을 제공합니다.
 
 업데이트는 15분간 유효한 계획에서 확인한 버전만 적용합니다. CLI와 웹은 같은 호스트 관리 작업을
 사용하므로 진행 화면을 닫아도 제출한 작업은 유지됩니다. 현재 DB revision과 설정 schema가 같고,
@@ -365,6 +381,37 @@ heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌�
 이 적용은 로컬 패키지 업데이트처럼 CLI 프로세스가 직접 수행합니다. 적용이 끝날 때까지 창을 닫지 않고,
 결과는 `railwait status --path <설치 경로> --job <작업ID>`로 확인합니다. 계획과 다른 on·off로는 적용하지 않습니다.
 
+`restart`는 현재 `.env`로 앱 서비스를 다시 시작합니다. 먼저 다시 시작할 서비스, PostgreSQL·Redis 유지, 1~3분 동안의
+접속 끊김, KORAIL 로그인 세션이 끊겨 앱이 다시 로그인하며 KORAIL이 자동 로그인을 막으면 KORAIL 좌석 관측이 30분 이상
+멈출 수 있다는 점을 보여 주고 대화형 터미널에서 확인을 받습니다. 비대화형 실행은 `--yes`가 필요합니다. 확인 뒤 현재
+`.env`를 설정 변경 후보와 같은 Compose 검사(`config --quiet`)로 확인하고, 설치가 완료되어 관리 서비스가 실행 중이며
+모든 서비스가 정상이고 gate가 열려 있을 때만 `restart_services` 계획을 만듭니다. 적용은 설정 변경처럼 CLI 프로세스가
+설치 잠금을 잡고 직접 수행하므로 이전 버전 관리 서비스에서도 동작합니다. 새 작업 차단·종료 대기(`draining`) → 앱
+서비스와 원샷 서비스 재생성(`applying`) → health 확인(`verifying`) → 재개(`resuming`) 순서이며 백업과 `.env` 변경은
+없습니다. 실패하면 멈춘 서비스를 그대로 다시 시작해 모두 정상일 때만 gate를 열고 `failed`로 끝내며, 정상으로
+돌아오지 않으면 gate를 닫은 채 `recovery_required`로 남깁니다. 종료 대기가 제한 시간을 넘기면 아무것도 멈추지 않은
+`deferred`로 끝내고 gate를 다시 엽니다. 웹에서 보낸 다시 시작 요청도 관리 서비스가 같은 계획과 단계로 실행하며,
+Compose가 `.env`를 거부하면 `E_RESTART_ENV_INVALID`, 설치가 준비되지 않았으면 `E_RESTART_UNAVAILABLE`로 거절합니다.
+
+`open`은 설치의 `.env` 절대경로를 출력하고 macOS Finder(`open -R`)나 Windows 탐색기(`explorer.exe /select,`)에서
+그 파일을 선택해 보여 줍니다. Linux는 `xdg-open`으로 설치 폴더를 엽니다. SSH 세션이나 화면이 없는 Linux, 또는 열지
+못한 경우에는 경로와 직접 열 명령만 보여 줍니다. 직접 고친 설정은 `railwait restart`로 반영합니다.
+
+`uninstall`은 설치 기록을 확인하고 설치 잠금을 잡은 뒤(진행 중인 업데이트·설정 작업이 있으면 거절) 지울 항목과 남길
+항목을 보여 줍니다. 대화형 터미널에서는 설치 폴더 이름을 입력해야 하고 비대화형 실행은 `--yes`가 필요합니다. 기본
+동작은 관리 서비스를 멈추고 등록을 해제한 뒤(macOS `launchctl bootout`과 plist 삭제, Linux
+`systemctl --user disable --now`·unit 삭제·`daemon-reload`, Windows `schtasks /End`·`/Delete /F`와 작업 XML 삭제)
+이 설치의 Compose 프로젝트에서 컨테이너와 네트워크만 지웁니다(`down --remove-orphans`). DB·Redis·백업 볼륨과 설치
+폴더(`.env`, 복구키 `.railwait/backup.env`)는 남기고 위치와 나중에 지우는 명령을 보여 줍니다. `--delete-data`는
+볼륨까지 지우고(`down --volumes`) 설치 폴더를 삭제합니다. 이때는 `DELETE`를 한 번 더 입력해야 하며, 폴더가
+`.railwait/install.json`의 경로와 같은 설치 루트이고 파일 시스템·드라이브 최상위, 홈 폴더, 홈을 포함하는 폴더가 아닐
+때만 지웁니다. 컨테이너가 만든 로그 폴더는 Linux에서 사용자 권한으로 지울 수 없어, 설치의 `log-init` 이미지를
+네트워크 없이 root로 실행해 먼저 지웁니다. Docker 이미지는 남기고 지우는 명령을 보여 줍니다. Tailscale HTTPS 경로는
+설치 중 막 만든 경로만 되돌리는 기능이 있어 자동으로 지우지 않고, `tailscale serve status`로 이 앱만 쓰는 경로인지
+확인한 뒤 `tailscale serve --https=<포트> off`로 지우도록 안내합니다. 마지막으로 CLI 실행 파일 위치와 지우는 방법을
+보여 줍니다. Windows에서는 실행 중인 파일을 스스로 지울 수 없으므로 창을 닫은 뒤 지웁니다. 중간에 실패해도 설치
+폴더가 남아 있으면 같은 명령을 다시 실행해 이어갈 수 있습니다.
+
 설치 파일시스템에는 최소 4 GiB 여유 공간을 요구합니다. Docker 저장소·Docker Desktop VM 내부의
 여유 공간과 이미지 전체의 압축 해제 크기는 별도로 확인해야 합니다. DB schema·저장소 이미지 변경,
 기존 소스 설치의 `adopt`, 자동 복원과 앱 업데이트가 관리 서비스까지 자동으로 바꾸는 기능은 아직 제공하지 않습니다.
@@ -385,3 +432,5 @@ Windows CLI의 서명·전체 archive 검증을 통과했습니다. 이 패키�
 포함하며 기존 ARM 패키지와 별개입니다. Windows·macOS의 필수 프로그램 최초 설치, OS 승인·SSO,
 재부팅 후 복구는 별도 실기기 검증이 남아 있습니다. Windows 검증 VM은 관리자 실행 취소로 시작하지
 못했으며 패키지 제작 성공을 실제 신규 설치 성공으로 기록하지 않습니다.
+`restart`·`uninstall`·`open`과 관리 서비스의 다시 시작 요청·`capabilities.json`은 가짜 서비스 관리자·Docker runner와
+임시 디렉터리로만 검증했고, 실제 설치에서의 다시 시작·제거와 각 OS 파일 관리자 동작은 별도 확인이 필요합니다.

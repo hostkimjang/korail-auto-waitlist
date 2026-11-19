@@ -146,7 +146,12 @@ func TestUninstallKeepsDataByDefault(t *testing.T) {
 		}
 	}
 	output := test.out.String()
-	for _, part := range []string{"지울 항목", "남길 항목", test.state.Project + "_postgres_data", "--delete-data", "backup.env", "image", "rm", "ghcr.io/example/backup@sha256:", "serve", "--https=8443", "off", "127.0.0.1:8080", "rm -- '/opt/railwait/bin/railwait'"} {
+	// The CLI removal hint is written for the shell of the OS running the test.
+	removeCLI := "rm -- '/opt/railwait/bin/railwait'"
+	if runtime.GOOS == "windows" {
+		removeCLI = "Remove-Item -LiteralPath '/opt/railwait/bin/railwait'"
+	}
+	for _, part := range []string{"지울 항목", "남길 항목", test.state.Project + "_postgres_data", "--delete-data", "backup.env", "image", "rm", "ghcr.io/example/backup@sha256:", "serve", "--https=8443", "off", "127.0.0.1:8080", removeCLI} {
 		if !strings.Contains(output, part) {
 			t.Fatalf("output lacks %q:\n%s", part, output)
 		}

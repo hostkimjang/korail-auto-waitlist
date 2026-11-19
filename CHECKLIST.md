@@ -269,8 +269,13 @@
   `0042_protection_halt`, 공개키 `qeR7…5nM=`로 OpenSSL 서명 검증 통과, darwin-arm64 CLI SHA-256 일치·`railwait 1.5.2
   darwin/arm64`, 한국어 Release 노트. 운영 설치(8080)의 관리 서비스가 22:12에 1.5.2를 업데이트 가능으로 표시. 바뀐 것은
   CLI뿐이라 운영 설치는 앱·관리 서비스 1.5.0에 둠
-- [ ] Windows에서 공식 1.5.2 자산 확인(해시, `railwait 1.5.2 windows/amd64`, 받기·실행 때 Defender 탐지 여부). Windows
-  채팅에 요청함
+- [x] Windows에서 공식 1.5.2 자산 확인(Windows 채팅): `railwait-windows-amd64.exe`(13,443,072바이트)의 SHA-256이
+  `.sha256`과 일치하고 `latest/download`도 같은 파일. `version`이 `railwait 1.5.2 windows/amd64`, 인자 없는 실행은 명령
+  목록. 실시간 보호·동작 모니터링·클라우드 보호를 켠 상태에서 받고 실행해도 Defender 탐지 기록이 늘지 않았고, 직접 검사도
+  `found no threats`
+- [ ] 후속: Windows CLI에 Authenticode 서명이 없음. 브라우저로 받을 때의 SmartScreen 반응과, 공식 1.5.2로 예약 작업을
+  등록할 때 Defender 동작 탐지(11월 19일 1.4.10에서 `Behavior:Win32/Persistence.A!ml` 격리, `f4a0f6d` 확인용 빌드는 탐지
+  없음)는 확인하지 않음
 
 ## 2026년 11월 19일 서비스 다시 시작·설정 파일 위치와 CLI 운영 명령 (v1.5.0)
 

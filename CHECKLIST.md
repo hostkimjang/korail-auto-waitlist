@@ -231,9 +231,20 @@
 - [x] 검증: 릴리스 도구 테스트 36건(새 9건: 1.4.7과 같은 upstream 재빌드 거부, DB revision·설정 schema 차이, 게시되지
   않았거나 다른 버전을 적은 manifest, 소스 고정 확인, 태그만 있는 이미지 거부, 명령 종료 코드). 실제 게시 manifest로
   1.4.3~1.4.6 통과와 1.4.7·1.4.9 거부를 확인. 두 digest 모두 레지스트리에 linux/amd64·arm64가 있음
-- [ ] 검토 브랜치 dry run(워크플로 변경)과 CI 확인, 1.4.10 서명 릴리스 게시(`compatible_from` 1.4.3~1.4.6)
-- [ ] 운영 설치(포트 8080) 1.4.6→1.4.10 앱 업데이트와 PATH가 다른 셸에서 관리 서비스 교체
-- [ ] 1.4.7~1.4.9 Release 노트에 1.4.6 이하에서 올라올 수 없다는 안내 추가
+- [x] 검토 브랜치 dry run(run 44444779332): 새 검사 단계를 포함해 통과. 첫 시도는 amd64 smoke가 GHCR에서 browser
+  이미지를 받는 `docker create`에서 실패했고(같은 이미지의 arm64는 통과), 실패한 작업만 다시 실행해 통과. PR #10 CI는
+  실험 브라우저 검증과 푸시 쪽 저장소 검증이 통과했고, PR 쪽 저장소 검증은 실제 Chrome을 쓰는 브라우저 자동화 테스트
+  1건의 Playwright 30초 대기 초과(나머지 5,912건 통과)로 실패한 뒤 재실행에서 통과
+- [x] 1.4.10 서명 릴리스 게시(run 44447043176, 커밋 `c324143`, 2026-11-19 11:57 KST): preflight의 출발 버전 검사 통과,
+  자산 19개가 공개 주소에서 모두 200, 최신 Release `v1.4.10`, manifest `compatible_from` 1.4.3~1.4.6·PostgreSQL
+  `81e77a48…`·Redis `7f7d30b7…`·DB revision `0042_protection_halt`·최소 CLI 0.1.0, 공개키 `qeR7…5nM=`로 OpenSSL 서명
+  검증 통과, darwin-arm64 CLI SHA-256 일치. Release 노트 한국어
+- [x] 운영 설치(포트 8080) 1.4.6→1.4.10: 1.4.10 CLI로 계획 확인 뒤 적용, 기존 관리 서비스(CLI 0.1.0)가 78초 만에
+  `succeeded`. 작업 ID의 암호화 DB 덤프·설정 백업 생성, PostgreSQL·Redis 컨테이너 유지, 장기 서비스 12개 healthy,
+  `/runtime-config.js` 200, 화면 번들 버전 1.4.10. 이어서 설치 때와 PATH가 다른 Codex 셸에서 `manager upgrade`로
+  0.1.0→1.4.10을 1초 만에 교체. plist 해시 그대로, 새 pid `ready`, 설정 스냅숏의 `manager_started_at`이 heartbeat의
+  `started_at`과 같음(서버 설정 화면 사용 가능), 카탈로그 `up_to_date`
+- [x] 1.4.7~1.4.9 Release 노트의 "올리기"를 실제로 올라올 수 있는 버전만 적고, 1.4.6 이하는 1.4.10 이상으로 안내하도록 수정
 - [ ] 후속: 같은 PostgreSQL major 안의 저장소 이미지 교체를 지원하는 업데이트. 1.4.7~1.4.9로 새로 설치한 서버가
   1.4.10 이후로 올라오려면 필요
 
@@ -261,8 +272,8 @@
   교차 플랫폼·실험 브라우저 검증 통과 뒤 게시. 자산 19개가 공개 주소에서 모두 200, 최신 Release `v1.4.9`, manifest
   `compatible_from` 1.4.3~1.4.8·DB revision `0042_protection_halt`·최소 CLI 0.1.0, 공개키 `qeR7…5nM=`로 OpenSSL 서명
   검증 통과, darwin-arm64 CLI SHA-256 일치. Release 노트를 한국어로 바꾸고 1.4.8 노트의 주의 문단을 수정 완료로 갱신
-- [ ] 운영 설치(포트 8080) 업데이트와 관리 서비스 교체: 1.4.9 계획이 PostgreSQL 이미지 차이로 차단돼 v1.4.10 항목에서
-  이어감
+- [x] 운영 설치(포트 8080) 업데이트와 관리 서비스 교체: 1.4.9 계획은 PostgreSQL 이미지 차이로 차단돼 1.4.10으로 진행했고,
+  PATH가 다른 셸에서의 교체까지 v1.4.10 항목에서 확인
 - [ ] Windows·Linux 실제 서비스 관리자에서 `manager upgrade` 확인
 
 ## 2026년 11월 19일 웹 서버 설정 창과 앱 연결 실행 시점 설정 (v1.4.8)

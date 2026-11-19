@@ -333,7 +333,12 @@ Windows 작업 정의는 UTF-16으로 저장하고 `conhost.exe --headless`로 �
 관리 서비스 실행 파일은 앱 업데이트로 바뀌지 않습니다. 더 새 공식 CLI로 `railwait install`을 다시 실행하거나
 `railwait manager upgrade --path <설치 경로>`를 실행하면, 설치 잠금을 잡아 진행 중인 업데이트·설정 작업과 겹치지
 않게 기존 관리 서비스를 멈추고 `.railwait/bin`의 실행 파일을 이 CLI로 바꾼 뒤 다시 시작합니다. 새 관리 서비스의
-heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌립니다. 설치된 관리 서비스가 이 CLI와 같거나 더 새
+heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌립니다. macOS LaunchAgent와 Linux systemd 정의에는 처음
+설치한 터미널의 PATH가 들어가고, 관리 서비스는 이 PATH로 docker를 찾습니다. 교체와 `manager install`은 PATH만 다른
+정의를 다시 쓰지 않고 그대로 등록해 시작하므로, 설치 때와 다른 터미널에서 실행해도 됩니다. 1.4.8 CLI는 이 경우
+관리 서비스를 멈춘 채 남겼는데, 1.4.9 이상 CLI로 `manager upgrade`나 `manager install`을 실행하면 다시 시작합니다.
+손으로 고친 정의처럼 Railwait가 만든 형식과 다른 정의를 만나면 관리 서비스를 멈추기 전에 교체를 멈추고 확인할
+정의 파일 경로를 알려 줍니다. 설치된 관리 서비스가 이 CLI와 같거나 더 새
 버전이면 아무것도 바꾸지 않습니다. 버전을 비교할 수 없는 개발용 CLI로 바꿀 때만 `--force`를 붙입니다. 웹의
 **설정 → 서버 설정**은 1.4.8 이상 관리 서비스가 게시하는 설정 스냅숏(`status/settings.json`)과 설정 요청
 (`requests/<id>.settings.json`)을 사용하므로, 그보다 오래된 관리 서비스에서는 이 교체를 먼저 안내합니다.

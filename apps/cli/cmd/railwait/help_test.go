@@ -11,7 +11,7 @@ import (
 
 // topLevelCommands is every command run accepts. A new command must be added here, to
 // commandHandler and to commandDocs.
-var topLevelCommands = []string{"install", "setup", "update", "configure", "manager", "status", "doctor", "package", "preview", "version", "help"}
+var topLevelCommands = []string{"install", "setup", "update", "configure", "manager", "restart", "status", "doctor", "package", "preview", "version", "help"}
 
 func captureHelp(t *testing.T, args ...string) (string, error) {
 	t.Helper()

@@ -96,6 +96,8 @@ func commandHandler(name string) (func(context.Context, []string) error, bool) {
 		return doctorCommand, true
 	case "package":
 		return verifyPackageCommand, true
+	case "restart":
+		return restartCommand, true
 	}
 	return nil, false
 }
@@ -463,7 +465,7 @@ func configureReservationCommand(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return applySettingsPlanInProcess(ctx, &i, abs, state.Release, *planID, *jsonOutput)
+		return applyPlanInProcess(ctx, &i, abs, state.Release, *planID, *jsonOutput, inProcessJob{noun: "설정 변경"})
 	}
 	plan, err := i.PlanConfigureReservation(ctx, abs, enabled)
 	if err != nil {
@@ -487,10 +489,22 @@ func configureReservationCommand(ctx context.Context, args []string) error {
 	return nil
 }
 
-// applySettingsPlanInProcess applies a settings plan in this CLI process under the
+// inProcessJob names a job the CLI runs itself in its terminal messages.
+type inProcessJob struct {
+	// noun is the job's name, such as "설정 변경"; it takes the particle 이.
+	noun string
+	// stages optionally explains stage names next to them.
+	stages map[string]string
+}
+
+// errOperationRunning refuses a command while another update, settings change or restart
+// holds the installation lock.
+var errOperationRunning = errors.New("진행 중인 업데이트나 설정 변경이 끝난 뒤 다시 실행하세요")
+
+// applyPlanInProcess applies a settings or restart plan in this CLI process under the
 // installation lock, like a local package update. The host manager does not update
 // itself, and one from an earlier release rejects plan kinds it does not know.
-func applySettingsPlanInProcess(ctx context.Context, i *install.Installer, path, target, planID string, jsonOutput bool) error {
+func applyPlanInProcess(ctx context.Context, i *install.Installer, path, target, planID string, jsonOutput bool, job inProcessJob) error {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return err
@@ -501,21 +515,28 @@ func applySettingsPlanInProcess(ctx context.Context, i *install.Installer, path,
 	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM)
 	defer stop()
-	fmt.Fprintln(os.Stderr, "설정 변경 작업:", id)
+	fmt.Fprintf(os.Stderr, "%s 작업: %s\n", job.noun, id)
 	result, err := i.Update(ctx, install.UpdateOptions{Path: path, TargetReleaseID: target, PlanID: planID, JobID: id, Progress: func(stage string) error {
-		fmt.Fprintln(os.Stderr, "설정 변경 단계:", stage)
+		if label := job.stages[stage]; label != "" {
+			fmt.Fprintf(os.Stderr, "%s 단계: %s · %s\n", job.noun, stage, label)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s 단계: %s\n", job.noun, stage)
+		}
 		return nil
 	}})
 	for _, warning := range result.Warnings {
 		fmt.Fprintln(os.Stderr, "주의:", warning)
 	}
+	if errors.Is(err, platform.ErrLocked) {
+		return errOperationRunning
+	}
 	if err != nil {
-		return fmt.Errorf("설정 변경이 %s 상태입니다; %s 로 확인하세요: %w", result.State, pasteableCommand("status", "--path", path, "--job", id), err)
+		return fmt.Errorf("%s이 %s 상태입니다; %s 로 확인하세요: %w", job.noun, result.State, pasteableCommand("status", "--path", path, "--job", id), err)
 	}
 	if jsonOutput {
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
-	fmt.Printf("작업 %s: %s\n", id, result.State)
+	fmt.Printf("%s 작업 %s: %s\n", job.noun, id, result.State)
 	return nil
 }
 

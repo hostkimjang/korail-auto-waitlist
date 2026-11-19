@@ -76,6 +76,14 @@ var commandDocs = []commandDoc{
 		},
 	},
 	{
+		Name: "restart", Group: "관리 서비스·운영", Summary: "앱 서비스를 다시 시작합니다 (PostgreSQL·Redis 유지)",
+		Usage: []string{"restart [--path <설치 경로>] [--yes]"},
+		Details: []string{
+			"현재 .env를 Compose로 확인한 뒤 새 작업 차단 → 진행 중인 작업 종료 대기 → 앱 서비스 재생성 → 상태 확인 → 재개 순서로 진행합니다.",
+			"1~3분 동안 접속이 끊기고 KORAIL에 다시 로그인합니다. 대화형 터미널이 아니면 --yes가 필요합니다.",
+		},
+	},
+	{
 		Name: "status", Group: "진단", Summary: "설치·서비스 상태와 관리 작업 결과를 봅니다",
 		Usage:   []string{"status [--path <설치 경로>] [--json]", "status [--path <설치 경로>] --job <작업 ID> [--json]"},
 		Details: []string{"--job은 웹·관리 서비스·CLI가 실행한 업데이트와 설정 작업의 단계와 결과를 보여 줍니다."},
@@ -101,6 +109,7 @@ var commonExamples = [][2]string{
 	{"railwait status", "앱과 서비스 상태를 확인합니다"},
 	{"railwait update --dry-run", "업데이트할 수 있는지 계획을 확인합니다"},
 	{"railwait configure", "TAGO 키를 바꿀 계획을 만듭니다"},
+	{"railwait restart", "앱 서비스를 다시 시작합니다"},
 	{"railwait manager upgrade", "관리 서비스를 이 CLI로 바꿉니다"},
 }
 

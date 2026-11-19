@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -28,7 +29,11 @@ type ServicePlan struct {
 	// Legacy holds earlier Railwait renderings of this same service that the OS
 	// rejected. Only an exact match may be replaced; any other differing file
 	// still needs review.
-	Legacy       [][]byte         `json:"-"`
+	Legacy [][]byte `json:"-"`
+	// PathFree is Content without the PATH this process adds to it. A definition that
+	// differs from Content only in that PATH was written by Railwait from another shell,
+	// such as the terminal the installation was first set up from.
+	PathFree     []byte           `json:"-"`
 	Register     []ServiceCommand `json:"register"`
 	Start        ServiceCommand   `json:"start"`
 	Status       ServiceCommand   `json:"status"`
@@ -51,22 +56,50 @@ func CurrentServicePlan(executable, installation string) (ServicePlan, error) {
 	if err != nil {
 		return plan, err
 	}
+	plan.PathFree = plan.Content
 	path := os.Getenv("PATH")
 	if strings.ContainsAny(path, "\x00\r\n") {
 		return plan, fmt.Errorf("invalid service PATH")
 	}
 	if path != "" {
-		if runtime.GOOS == "linux" {
-			quoted := systemdQuote("PATH=" + path)
-			// Environment= performs specifier expansion, but no $ expansion.
-			quoted = strings.ReplaceAll(quoted, "$$", "$")
-			plan.Content = []byte(strings.Replace(string(plan.Content), "[Service]\n", "[Service]\nEnvironment="+quoted+"\n", 1))
-		}
-		if runtime.GOOS == "darwin" {
-			plan.Content = []byte(strings.Replace(string(plan.Content), "<key>RunAtLoad</key>", "<key>EnvironmentVariables</key><dict><key>PATH</key><string>"+xmlText(path)+"</string></dict><key>RunAtLoad</key>", 1))
-		}
+		plan.Content = WithServicePath(runtime.GOOS, plan.Content, path)
 	}
 	return plan, nil
+}
+
+// WithServicePath adds the PATH a systemd unit or launchd agent runs the manager with.
+// The manager finds docker through it, so it is the PATH of the shell that installs it.
+// Task Scheduler runs the manager with the user's own environment, so Windows has none.
+func WithServicePath(goos string, content []byte, path string) []byte {
+	switch goos {
+	case "linux":
+		quoted := systemdQuote("PATH=" + path)
+		// Environment= performs specifier expansion, but no $ expansion.
+		quoted = strings.ReplaceAll(quoted, "$$", "$")
+		return []byte(strings.Replace(string(content), "[Service]\n", "[Service]\nEnvironment="+quoted+"\n", 1))
+	case "darwin":
+		return []byte(strings.Replace(string(content), "<key>RunAtLoad</key>", "<key>EnvironmentVariables</key><dict><key>PATH</key><string>"+xmlText(path)+"</string></dict><key>RunAtLoad</key>", 1))
+	}
+	return content
+}
+
+var (
+	// Each matches only the entry WithServicePath inserts, at the place it inserts it, so a
+	// definition with any other variable added by hand still compares as different.
+	launchdPathEntry = regexp.MustCompile(`<key>EnvironmentVariables</key><dict><key>PATH</key><string>[^<]*</string></dict>(<key>RunAtLoad</key>)`)
+	systemdPathEntry = regexp.MustCompile(`(\[Service\]\n)Environment="PATH=[^\n]*\n`)
+)
+
+// WithoutServicePath removes what WithServicePath adds, so definitions written from
+// shells with different PATH values compare equal.
+func WithoutServicePath(goos string, content []byte) []byte {
+	switch goos {
+	case "linux":
+		return systemdPathEntry.ReplaceAll(content, []byte("$1"))
+	case "darwin":
+		return launchdPathEntry.ReplaceAll(content, []byte("$1"))
+	}
+	return content
 }
 
 func RenderService(goos, home, identity, executable, installation string) (ServicePlan, error) {

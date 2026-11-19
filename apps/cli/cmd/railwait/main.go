@@ -550,6 +550,11 @@ func installOrUpgradeManager(ctx context.Context, path string) (managerUpgradeRe
 		return managerUpgradeResult{}, err
 	}
 	result, err := newManagerUpgrader().upgrade(ctx, path, exe, version, false)
+	if errors.Is(err, errServiceDefinitionReview) && manager.Available(path, time.Now()) {
+		// The running manager keeps working; only its replacement needs the review.
+		fmt.Fprintln(os.Stderr, "주의:", err)
+		return managerUpgradeResult{}, nil
+	}
 	if err != nil || result.To != "" || manager.Available(path, time.Now()) {
 		return result, err
 	}

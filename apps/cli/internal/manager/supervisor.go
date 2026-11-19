@@ -74,8 +74,10 @@ func serviceOutputSummary(data []byte) string {
 }
 
 // InstallService writes only this installation's deterministic service definition.
-// Existing differing definitions require explicit review instead of silent replacement.
-// Success means registration/start commands succeeded; use Available to verify the daemon.
+// Existing differing definitions require explicit review instead of silent replacement,
+// except one that differs only in the PATH of the shell that wrote it: that one is
+// registered and started as written. Success means registration/start commands
+// succeeded; use Available to verify the daemon.
 func InstallService(ctx context.Context, installation, executable string, runner ServiceRunner) (platform.ServicePlan, error) {
 	if runner == nil {
 		runner = ExecServiceRunner{}
@@ -98,8 +100,17 @@ func InstallService(ctx context.Context, installation, executable string, runner
 	if err != nil {
 		return plan, err
 	}
-	if err := WriteServiceDefinition(plan); err != nil {
+	state, err := InspectServiceDefinition(plan)
+	if err != nil {
 		return plan, err
+	}
+	// A definition written from another shell is kept as written. Rewriting it would also
+	// replace the PATH the user's own terminal gave the manager, possibly with one that
+	// names this process's temporary tool folders.
+	if state != DefinitionOtherPath {
+		if err := WriteServiceDefinition(plan); err != nil {
+			return plan, err
+		}
 	}
 	// launchctl bootstrap rejects an already-loaded label. A loaded agent can
 	// still lack a live heartbeat, so kickstart remains a separate operation.
@@ -115,6 +126,45 @@ func InstallService(ctx context.Context, installation, executable string, runner
 		return plan, err
 	}
 	return plan, nil
+}
+
+// DefinitionState says how the service definition on disk relates to this CLI's rendering.
+type DefinitionState int
+
+const (
+	DefinitionMissing DefinitionState = iota
+	// DefinitionCurrent is identical to this CLI's rendering.
+	DefinitionCurrent
+	// DefinitionLegacy is an earlier Railwait rendering that the OS rejected.
+	DefinitionLegacy
+	// DefinitionOtherPath is this rendering with the PATH of another shell.
+	DefinitionOtherPath
+	// DefinitionUnknown was not written by this Railwait, for example after an edit by hand.
+	DefinitionUnknown
+)
+
+// InspectServiceDefinition classifies the definition at plan.Definition. An installer
+// replaces only missing and legacy definitions and never an unknown one.
+func InspectServiceDefinition(plan platform.ServicePlan) (DefinitionState, error) {
+	if plan.Definition == "" {
+		return DefinitionUnknown, errors.New("service definition is required")
+	}
+	data, err := readBounded(plan.Definition, 64<<10)
+	if errors.Is(err, os.ErrNotExist) {
+		return DefinitionMissing, nil
+	}
+	if err != nil {
+		return DefinitionUnknown, err
+	}
+	switch {
+	case bytes.Equal(data, plan.Content):
+		return DefinitionCurrent, nil
+	case matchesLegacyDefinition(data, plan.Legacy):
+		return DefinitionLegacy, nil
+	case len(plan.PathFree) > 0 && bytes.Equal(platform.WithoutServicePath(plan.OS, data), plan.PathFree):
+		return DefinitionOtherPath, nil
+	}
+	return DefinitionUnknown, nil
 }
 
 // WriteServiceDefinition is separate so installers can display/review a rendered

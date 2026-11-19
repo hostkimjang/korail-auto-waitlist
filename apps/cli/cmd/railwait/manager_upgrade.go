@@ -36,6 +36,11 @@ func newManagerUpgrader() managerUpgrader {
 
 var versionLine = regexp.MustCompile(`^railwait (\S+) `)
 
+// errServiceDefinitionReview stops an upgrade before the manager is touched when its service
+// definition is not one Railwait wrote, for example after it was edited by hand. Restarting
+// from such a definition might not run the replaced executable.
+var errServiceDefinitionReview = errors.New("관리 서비스 정의가 Railwait가 만든 형식과 달라 관리 서비스를 바꾸지 않았습니다; 정의를 확인한 뒤 다시 실행하세요")
+
 func executableVersion(ctx context.Context, executable string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -139,6 +144,15 @@ func (u managerUpgrader) upgrade(ctx context.Context, path, source, current stri
 	plan, err := platform.CurrentServicePlan(dest, path)
 	if err != nil {
 		return result, err
+	}
+	// A definition written from another shell is restarted as written; anything else
+	// unknown stops here, while the old manager still runs.
+	state, err := manager.InspectServiceDefinition(plan)
+	if err != nil {
+		return managerUpgradeResult{}, err
+	}
+	if state == manager.DefinitionUnknown {
+		return managerUpgradeResult{}, fmt.Errorf("%w: %s", errServiceDefinitionReview, plan.Definition)
 	}
 	before, _ := manager.ReadHeartbeat(path)
 	stopErr := u.runner.Run(ctx, plan.Stop)

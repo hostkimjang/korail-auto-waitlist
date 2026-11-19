@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +181,58 @@ func TestUpgradeWaitsWhileAnUpdateOrSettingsJobHoldsTheInstallLock(t *testing.T)
 	data, _ := os.ReadFile(managerExecutablePath(root))
 	if string(data) != "old manager" || len(runner.commands) != 0 {
 		t.Fatal("manager touched while a job held the install lock")
+	}
+}
+
+// The installation was set up from the user's terminal; the upgrade runs from another shell.
+func TestUpgradeRestartsADefinitionWrittenFromAnotherShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Task Scheduler definitions do not carry PATH")
+	}
+	root, source, runner, upgrader := upgradeFixture(t, "1.4.6")
+	t.Setenv("PATH", "/first/terminal/bin:/usr/bin")
+	first, err := platform.CurrentServicePlan(managerExecutablePath(root), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WriteServiceDefinition(first); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/codex/tmp/bin:/usr/bin")
+	result, err := upgrader.upgrade(context.Background(), root, source, "1.4.8", false)
+	if err != nil || result.To != "1.4.8" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if data, _ := os.ReadFile(first.Definition); !bytes.Equal(data, first.Content) {
+		t.Fatal("definition from the first terminal was rewritten")
+	}
+	if data, _ := os.ReadFile(managerExecutablePath(root)); string(data) != "new manager" {
+		t.Fatal("manager executable not replaced")
+	}
+	if runner.count(runner.stop) != 1 || runner.count(runner.start) != 1 {
+		t.Fatalf("commands: %v", runner.commands)
+	}
+}
+
+func TestUpgradeLeavesAManagerWhoseDefinitionWasEditedByHand(t *testing.T) {
+	root, source, runner, upgrader := upgradeFixture(t, "1.4.6")
+	plan, err := platform.CurrentServicePlan(managerExecutablePath(root), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(plan.Definition), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plan.Definition, []byte("edited by hand"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = upgrader.upgrade(context.Background(), root, source, "1.4.8", false); !errors.Is(err, errServiceDefinitionReview) {
+		t.Fatalf("error: %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("service commands ran: %v", runner.commands)
+	}
+	if data, _ := os.ReadFile(managerExecutablePath(root)); string(data) != "old manager" {
+		t.Fatal("manager replaced although its definition needs review")
 	}
 }

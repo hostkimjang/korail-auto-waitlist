@@ -152,3 +152,38 @@ func TestWindowsArgumentsHandleTrailingBackslash(t *testing.T) {
 		t.Fatalf("invalid quoting: %s", got)
 	}
 }
+
+func TestServicePathIsRemovedExactlyAsAdded(t *testing.T) {
+	cases := []struct{ os, home, user, exe, root string }{
+		{"linux", "/home/a", "1000", "/home/a/My Apps/railwait", "/home/a/App Data/50% $rail"},
+		{"darwin", "/Users/a", "501", "/Users/a/My Apps/railwait", "/Users/a/App Data/a & b"},
+	}
+	paths := []string{
+		"/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin",
+		"/Users/a/.codex/tmp/arg0 x:/Applications/A & B.app/Contents:/p/$HOME/%h/\"q\"/<t>",
+	}
+	for _, tt := range cases {
+		t.Run(tt.os, func(t *testing.T) {
+			plan, err := RenderService(tt.os, tt.home, tt.user, tt.exe, tt.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range paths {
+				withPath := WithServicePath(tt.os, plan.Content, path)
+				if bytes.Equal(withPath, plan.Content) {
+					t.Fatal("PATH was not added")
+				}
+				if !bytes.Equal(WithoutServicePath(tt.os, withPath), plan.Content) {
+					t.Fatalf("PATH %q was not removed exactly:\n%s", path, WithoutServicePath(tt.os, withPath))
+				}
+			}
+		})
+	}
+	windows, err := RenderService("windows", `C:\Users\a`, "S-1-5-21-123", `C:\Apps\railwait.exe`, `C:\Data`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(WithServicePath("windows", windows.Content, `C:\bin`), windows.Content) || !bytes.Equal(WithoutServicePath("windows", windows.Content), windows.Content) {
+		t.Fatal("a Windows task does not carry PATH")
+	}
+}

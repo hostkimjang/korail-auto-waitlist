@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -50,22 +51,55 @@ func (r *uninstallServices) Run(_ context.Context, command platform.ServiceComma
 	return nil
 }
 
-// uninstallDocker answers the read-only queries uninstall makes and records the rest.
+// uninstallDocker answers the read-only queries uninstall makes and records the rest. It
+// keeps the project's volumes the way Compose does: down --volumes removes the backups
+// volume of the on-demand backup profile only when every profile is enabled, and never the
+// volume named in survivesDown, which stands for a volume an earlier release declared.
 type uninstallDocker struct {
-	project string
-	events  *uninstallEvents
+	project      string
+	events       *uninstallEvents
+	volumes      map[string]bool
+	survivesDown string
 }
 
 func (d *uninstallDocker) Run(_ context.Context, c install.Command) ([]byte, error) {
 	args := strings.Join(c.Args, " ")
 	d.events.lines = append(d.events.lines, "docker: "+args)
+	if d.volumes == nil {
+		d.volumes = map[string]bool{d.project + "_postgres_data": true, d.project + "_backups": true}
+	}
 	switch {
 	case strings.Contains(args, "volume ls"):
-		return []byte(d.project + "_postgres_data\n" + d.project + "_backups\n"), nil
+		names := []string{}
+		for name := range d.volumes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return []byte(strings.Join(names, "\n")), nil
+	case strings.Contains(args, " down ") && strings.Contains(args, "--volumes"):
+		for name := range d.volumes {
+			if name == d.survivesDown || (strings.HasSuffix(name, "_backups") && !strings.Contains(args, "--profile * down")) {
+				continue
+			}
+			delete(d.volumes, name)
+		}
+	case strings.Contains(args, "volume rm "):
+		for _, name := range c.Args[slicesIndex(c.Args, "rm")+1:] {
+			delete(d.volumes, name)
+		}
 	case strings.Contains(args, "config --images"):
 		return []byte("ghcr.io/example/api@sha256:" + strings.Repeat("a", 64) + "\nghcr.io/example/backup@sha256:" + strings.Repeat("c", 64) + "\n"), nil
 	}
 	return nil, nil
+}
+
+func slicesIndex(values []string, want string) int {
+	for n, value := range values {
+		if value == want {
+			return n
+		}
+	}
+	return len(values) - 1
 }
 
 func (e *uninstallEvents) destructive() []string {
@@ -83,6 +117,7 @@ type uninstallTest struct {
 	state    install.State
 	plan     platform.ServicePlan
 	services *uninstallServices
+	docker   *uninstallDocker
 	events   *uninstallEvents
 	out      *bytes.Buffer
 	u        uninstaller
@@ -110,13 +145,14 @@ func newUninstallTest(t *testing.T, input string, interactive bool) *uninstallTe
 	}
 	events := &uninstallEvents{}
 	services := &uninstallServices{plan: plan, registered: true, events: events}
+	docker := &uninstallDocker{project: state.Project, events: events}
 	out := &bytes.Buffer{}
 	u := uninstaller{
-		installer: install.Installer{Runner: &uninstallDocker{project: state.Project, events: events}}, services: services,
+		installer: install.Installer{Runner: docker}, services: services,
 		confirm: testConfirmation(input, interactive, out), out: out, goos: runtime.GOOS, home: home,
 		executable: "/opt/railwait/bin/railwait", stopWait: time.Second,
 	}
-	return &uninstallTest{root: root, state: state, plan: plan, services: services, events: events, out: out, u: u}
+	return &uninstallTest{root: root, state: state, plan: plan, services: services, docker: docker, events: events, out: out, u: u}
 }
 
 func TestUninstallKeepsDataByDefault(t *testing.T) {
@@ -139,6 +175,9 @@ func TestUninstallKeepsDataByDefault(t *testing.T) {
 	}
 	if test.events.index("rm -rf") >= 0 {
 		t.Fatal("default uninstall removed files through a container")
+	}
+	if test.events.index("volume rm") >= 0 || len(test.docker.volumes) != 2 {
+		t.Fatalf("default uninstall removed volumes: %v", test.docker.volumes)
 	}
 	for _, path := range []string{test.root, filepath.Join(test.root, ".env"), filepath.Join(test.root, ".railwait", "install.json")} {
 		if _, err := os.Lstat(path); err != nil {
@@ -168,8 +207,11 @@ func TestUninstallDeleteDataRemovesVolumesAndTheFolder(t *testing.T) {
 		t.Fatalf("%v\n%s", err, test.out)
 	}
 	down := test.events.index(" down ")
-	if down < 0 || !strings.Contains(test.events.lines[down], "down --remove-orphans --timeout 120 --volumes") {
+	if down < 0 || !strings.Contains(test.events.lines[down], "--profile * down --remove-orphans --timeout 120 --volumes") {
 		t.Fatalf("compose down: %v", test.events.lines)
+	}
+	if len(test.docker.volumes) != 0 {
+		t.Fatalf("volumes left after --delete-data: %v", test.docker.volumes)
 	}
 	logs := test.events.index("rm -rf")
 	if logs < down || !strings.Contains(test.events.lines[logs], "-v "+filepath.Join(test.root, "releases")+":/releases") || !strings.Contains(test.events.lines[logs], test.state.ExpectedImages["log-init"]) || !strings.Contains(test.events.lines[logs], "--network none") {
@@ -180,6 +222,23 @@ func TestUninstallDeleteDataRemovesVolumesAndTheFolder(t *testing.T) {
 	}
 	if output := test.out.String(); !strings.Contains(output, "image") || strings.Contains(output, "--delete-data'") {
 		t.Fatalf("output:\n%s", output)
+	}
+}
+
+func TestUninstallDeleteDataRemovesVolumesComposeLeaves(t *testing.T) {
+	test := newUninstallTest(t, "", false)
+	leftover := test.state.Project + "_earlier_release_data"
+	test.docker.volumes = map[string]bool{test.state.Project + "_postgres_data": true, test.state.Project + "_backups": true, leftover: true}
+	test.docker.survivesDown = leftover
+	if err := test.u.run(context.Background(), uninstallOptions{Path: test.root, DeleteData: true, Yes: true}); err != nil {
+		t.Fatalf("%v\n%s", err, test.out)
+	}
+	remove := test.events.index("volume rm ")
+	if remove < 0 || remove < test.events.index(" down ") || !strings.Contains(test.events.lines[remove], leftover) {
+		t.Fatalf("volume left by compose down was not removed: %v", test.events.lines)
+	}
+	if len(test.docker.volumes) != 0 {
+		t.Fatalf("volumes left after --delete-data: %v", test.docker.volumes)
 	}
 }
 

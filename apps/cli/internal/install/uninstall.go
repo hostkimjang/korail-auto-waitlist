@@ -12,16 +12,30 @@ import (
 // name printed in a removal command is never a shell fragment.
 var dockerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,255}$`)
 
-// RemoveContainers runs docker compose down for this installation's project: its
-// containers and networks, and with volumes also its named volumes. Images stay. The
-// project name is unique to the installation, so --remove-orphans reaches only containers
-// this installation created, for example under an earlier release.
+// RemoveContainers runs docker compose down for this installation's project with every
+// profile enabled: its containers and networks, and with volumes also its named volumes.
+// Without every profile, Compose skips the services that only run on demand and their
+// volumes, such as the backups volume that updates write encrypted dumps to. Any volume of
+// the project that Compose still left, for example one an earlier release declared, is
+// removed by name, so deleting data never reports success while data remains. Images stay.
+// The project name is unique to the installation, so --remove-orphans and the label filter
+// reach only what this installation created.
 func (i *Installer) RemoveContainers(ctx context.Context, s State, volumes bool) error {
-	args := []string{"down", "--remove-orphans", "--timeout", "120"}
+	args := []string{"--profile", "*", "down", "--remove-orphans", "--timeout", "120"}
 	if volumes {
 		args = append(args, "--volumes")
 	}
-	_, err := i.compose(ctx, s, nil, args...)
+	if _, err := i.compose(ctx, s, nil, args...); err != nil {
+		return err
+	}
+	if !volumes {
+		return nil
+	}
+	left, err := i.ProjectVolumes(ctx, s)
+	if err != nil || len(left) == 0 {
+		return err
+	}
+	_, err = i.docker(ctx, s, nil, append([]string{"volume", "rm"}, left...)...)
 	return err
 }
 

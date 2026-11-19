@@ -217,6 +217,35 @@
 - [ ] 공식 인증 복구 뒤 필요한 과거 기록만 공식 예약·발권 내역과 대조. 인증 실패나 빈 목록으로 부재 확정 금지
 - [ ] 아직 출발하지 않은 새 검증 대상을 승인하고 fresh 공식 좌석 관측부터 결제 전 단회 예약까지 확인
 
+## 2026년 11월 19일 서비스 다시 시작·설정 파일 위치와 CLI 운영 명령 (v1.5.0)
+
+- [x] 원인 확인: 1.4.10 업데이트 뒤 **철도 계정**의 KORAIL 상주 세션이 `시작 전`으로 보인 것은 앱을 다시 만든 뒤의
+  재로그인(12:01:30 KST)을 KORAIL이 `macro_err1`로 막아 보호 대기(1800초)에 들어갔기 때문. 이어진 설정 적용이 adapter를
+  다시 시작해 상태가 `cold`였고 화면은 이를 `시작 전`으로 표시함. 12:33 KST 재시도에서 `authenticated`로 회복했고 이후
+  5분 간격 확인도 모두 성공. 로그인 간격 정책은 바꾸지 않음
+- [x] 보호 대기 표시: `/api/v1/provider-runtime-status`가 `protection_halted`와 `next_login_attempt_seconds`(세션 관리자
+  시계를 읽기만 함)를 내보내고, 화면은 `운영사 보호 대기`와 다음 로그인 시도 시각을 보여 줌. 필드가 없는 이전 API는
+  이전처럼 해석. 운영 가이드의 보호 재시도 간격을 코드와 같은 1800→3600→7200초로 바로잡음
+- [x] 서비스 다시 시작: `POST /api/v1/system/restart`가 `requests/<id>.restart.json`을 쓰고 1.5.0 관리 서비스가
+  `restart_services` 계획(`.env` Compose 검사, 종료 대기, PostgreSQL·Redis를 뺀 앱 서비스 재생성, 상태 확인, 재개. 백업과
+  `.env` 변경 없음)으로 처리. 화면은 `status/capabilities.json`이 살아 있는 heartbeat와 시작 시각이 같을 때만 버튼을 열고
+  이전 관리 서비스에는 교체 명령을 안내. 서비스가 비정상이어도 다시 시작할 수 있고, 실패해도 gate를 다시 열어 `failed`·
+  `deferred`로 끝냄(gate 파일을 쓰지 못한 경우만 `recovery_required`). CLI `railwait restart`도 같은 계획을 실행
+- [x] 설정 파일 위치: 기능 목록의 설치 경로, 없으면 스냅숏의 `RAILWAIT_INSTALL_DIR`로 `.env` 경로와 OS별 여는 명령을
+  보여 줌. Git 설치에는 저장소 폴더의 `.env`를 여는 명령과 반영 명령을 안내. CLI `railwait open`
+- [x] 알림 발신자 연락처 설명과 Android **개발자 확인 값 채우기**(문서의 보수적 활성 후보와 같은지 테스트로 비교, 누를
+  때만 채우고 기본값은 꺼짐 유지)
+- [x] CLI 도움말(용도별 명령 목록, `help <명령>`, 명령별 `--help`, 알 수 없는 명령 안내)과 `railwait uninstall`(관리 서비스
+  등록 해제 → 컨테이너·네트워크 제거, 데이터 기본 보존, `--delete-data`는 볼륨과 설치 폴더까지 지우며 최상위·홈 폴더와
+  심볼릭 링크를 거부). 인자 없는 `railwait`는 명령 목록을 보여 주고 Windows 탐색기에서 더블클릭하면 설치 마법사를 시작
+- [x] 자동 검증: API 전체 pytest 5,693건 통과(1건 건너뜀)와 Ruff·format·mypy, 웹 lint·typecheck·vitest 1,133건·build·
+  Sites 4건, Playwright E2E 40건(서버 설정의 새 카드를 320px·200% 상당 폭에서 넘침 없이, 행동 영역 44px 이상으로 확인),
+  CLI gofmt·vet(linux·darwin/arm64·windows/amd64)·Linux 전체 테스트·race, darwin 테스트 바이너리 4개를 macOS에서 실행
+- [ ] 실제 설치에서 `restart`·웹 다시 시작 요청·`uninstall` 확인
+- [ ] Windows·Linux 실제 서비스 관리자에서 `uninstall` 등록 해제, Windows 탐색기 `/select,`와 더블클릭 판정, Linux
+  `xdg-open` 확인
+- [ ] 1.5.0 서명 릴리스 게시와 운영 설치(포트 8080) 업데이트·관리 서비스 교체
+
 ## 2026년 11월 19일 1.4.6 이하에서 앱 업데이트를 막은 PostgreSQL 이미지 변경 (v1.4.10)
 
 - [x] 원인: `compose.yml`이 PostgreSQL·Redis를 태그로만 지정해 릴리스 도구가 게시 시점의 upstream digest로 고정함.

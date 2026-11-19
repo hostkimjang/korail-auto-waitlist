@@ -176,6 +176,8 @@ VITE_SRT_TICKET_VALIDATED_VERSION=2.0.41+150
 
 코레일 ticket은 `bookedTicket` 제품 버튼, SRT main은 웜 실행 목적 화면, 삼성 인터넷 행렬을 통과하기 전까지 보수적 활성 후보에서 꺼 둡니다. Git 설치에서 `.env`를 직접 고쳤다면 웹 서비스만 다시 만들고, 응답한 실행 시점 설정을 확인합니다. 이 응답에는 여덟 값만 들어 있습니다.
 
+1.5.0부터 웹의 **설정 → 서버 설정 → Android 공식 앱 연결**에 있는 **개발자 확인 값 채우기**가 이 블록의 값을 입력란에 채웁니다. 누를 때만 채우고 적용은 사용자가 따로 하므로, 설치 기본값은 그대로 네 경로 모두 꺼짐입니다. 화면의 값과 경로별 남은 확인 항목은 `apps/web/src/features/settings/androidAppLinkEvidence.ts`에 있고, 웹 테스트(`apps/web/tests/ServerSettingsOperations.test.tsx`)가 이 블록과 같은지 비교합니다. 이 블록을 바꾸면 같은 커밋에서 그 파일도 바꿔야 하며, 새 값은 다음 릴리스와 함께 화면에 반영됩니다.
+
 ```powershell
 docker compose config --quiet
 docker compose up -d --force-recreate web

@@ -148,6 +148,19 @@ HTTPS 접속 설정은 `install --path <기존 경로> --access tailscale` 마�
 사용한다. 암호화 백업·drain·서비스 재생성·health 확인을 거치며 외부 알림 채널과 브라우저 권한은 기존
 웹 설정에서 처리한다.
 
+운영 명령도 같은 설치 잠금 아래에서 실행한다. `railwait restart`는 아래 [웹 설정 창](#웹-설정-창)의 다시 시작과 같은
+`restart_services` 계획을 관리 서비스를 거치지 않고 CLI 프로세스에서 실행한다. `railwait open`은 `.env`의 절대경로를
+출력하고 macOS Finder·Windows 탐색기에서 그 파일을, Linux에서는 설치 폴더를 연다. 화면이 없는 세션(SSH, `DISPLAY`와
+`WAYLAND_DISPLAY`가 없는 Linux)이거나 열지 못하면 경로와 직접 열 명령만 보여 준다. `railwait uninstall`은 관리 서비스
+등록을 해제하고 관리 프로세스가 멈춘 것을 확인한 뒤 이 설치의 Compose 프로젝트를 `down --remove-orphans`로 지운다.
+볼륨(DB·Redis·백업)과 설치 폴더(`.env`·복구키)는 남기고, `--delete-data`일 때만 볼륨과 설치 폴더까지 지운다. 설치
+폴더를 지우기 전에 파일 시스템·드라이브 최상위, 사용자 홈과 그 상위 폴더, 심볼릭 링크를 거부하고, 컨테이너가 쓴 로그
+폴더는 설치한 릴리스의 log-init 이미지(네트워크 없음)로 먼저 지운다. 대화형 실행은 설치 폴더 이름을, `--delete-data`는
+`DELETE`까지 입력해야 하며 비대화형 실행은 `--yes`가 필요하다. 관리 서비스를 해제하지 못하면 아무것도 지우지 않는다.
+Docker 이미지, Tailscale Serve 경로와 CLI 실행 파일은 지우는 명령만 안내한다. 인자 없는 `railwait`와 `railwait help`는
+용도별 명령 목록을, `railwait help <명령>`과 `railwait <명령> --help`는 명령별 사용법을 보여 준다. Windows 탐색기에서
+`railwait.exe`를 더블클릭하면 예전처럼 설치 마법사를 시작한다.
+
 ## 최초 설치
 
 공식 릴리스는 `install.sh`(macOS·Linux)·`install.ps1`(Windows) 한 줄 스크립트로 시작할 수 있다. 스크립트는 같은
@@ -188,7 +201,7 @@ Release에서 OS·CPU에 맞는 설치 CLI와 `.sha256`을 받아 확인하고 �
 ```mermaid
 flowchart LR
   CLI[railwait CLI] --> Queue[인증된 요청 파일]
-  Web[웹 업데이트 · 서버 설정] --> API[관리자 인증 · Origin · CSRF]
+  Web[웹 업데이트 · 서버 설정 · 다시 시작] --> API[관리자 인증 · Origin · CSRF]
   API --> Queue
   Queue --> Manager[호스트 관리 프로세스]
   Manager --> Plan[계획 · 영속 작업 기록]
@@ -213,8 +226,9 @@ flowchart LR
 | `GET /api/v1/system/update` | 관리 상태·현재/최신 버전·적용 가능한 계획과 사유 |
 | `POST /api/v1/system/update` | 관리자·CSRF 검증 후 `202`와 작업 ID 반환 |
 | `GET /api/v1/system/update/jobs/{id}` | 비밀값 없는 작업 단계·결과 조회 |
-| `GET /api/v1/system/settings` | 관리 서비스가 게시한 비밀값 없는 `.env` 스냅숏과 사용 가능 여부 |
+| `GET /api/v1/system/settings` | 관리 서비스가 게시한 비밀값 없는 `.env` 스냅숏과 사용 가능 여부, 다시 시작 가능 여부(`restart_available`), 설치 위치(`install_location`) |
 | `POST /api/v1/system/settings` | 허용한 설정값 또는 가린 원문을 검증해 `202`와 작업 ID 반환 |
+| `POST /api/v1/system/restart` | 관리자·CSRF 검증 후 앱 서비스 다시 시작 요청을 쓰고 `202`와 작업 ID 반환 |
 
 ## 업데이트와 설정 변경
 
@@ -251,6 +265,24 @@ gate를 열어 `failed`·`rolled_back`으로 끝낸다. 이 되돌리기는 다�
 
 웹 컨테이너는 시작할 때 `.env`의 앱 연결 값 여덟 개를 `/runtime-config.js`로 내보내고 화면은 이 값을 빌드 값보다
 우선한다. 그래서 공식 이미지도 설치별 앱 연결 설정을 따른다.
+
+1.5.0 관리 서비스는 시작할 때 `status/capabilities.json`에 처리할 수 있는 요청 종류(`settings`, `restart`), 자기 버전,
+설치 폴더의 절대경로와 OS(`darwin`·`linux`·`windows`)를 쓰고, 이 파일이 사라지면 다시 쓴다. `manager_started_at`은
+자기 heartbeat의 `started_at`과 같으므로 API는 살아 있는 heartbeat와 시작 시각이 같을 때만 이 파일을 믿는다(16 KiB
+이하, 기다리지 않고 한 번만 읽음). 다른 관리 파일과 달리 모르는 필드는 무시해, 이후 관리 서비스가 기능을 더 알려도 이
+API가 아는 범위는 그대로 읽는다. 파일이 없거나 맞지 않으면 다시 시작은 쓸 수 없다고 표시하고, 설치 위치는 스냅숏의
+잠긴 키 `RAILWAIT_INSTALL_DIR`에서 찾아 경로 모양(`/Users/`, `/home/`, 드라이브 문자)으로 OS를 추정한다. 그래서
+1.4.8~1.4.10 관리 서비스에서도 설치 위치는 보인다.
+
+다시 시작은 `requests/<id>.restart.json`(8 KiB 이하, `scope`는 `app`만)으로 요청한다. 이전 관리 서비스는 이 이름을
+읽지 않으므로 건드리지 않고, API는 기능 목록에 `restart`가 없으면 `409 restart_manager_upgrade_required`, 관리 서비스가
+멈춰 있으면 `503 restart_manager_unavailable`로 요청을 쓰지 않는다. 관리 서비스는 설정 요청과 같은 token·멱등성·작업
+기록 절차로 처리한다. 설치가 완료 상태가 아니거나 계획이 막히면(다른 작업으로 gate가 닫힘, 번들 지문·DB revision
+불일치, 서비스 상태를 읽지 못함) `E_RESTART_UNAVAILABLE`, 현재 `.env`가 Compose 구성 검사를 통과하지 못하면
+`E_RESTART_ENV_INVALID`로 거부한다. 계획 종류는 `restart_services`이며 설치한 릴리스 그대로
+`checking → draining → applying → verifying → resuming`을 실행한다. 다운로드·`.env` 변경·백업은 없고, PostgreSQL·Redis를
+둔 채 앱 서비스를 멈춘 뒤 migration·log-init을 다시 실행하고 앱 서비스를 기록된 이미지로 다시 만든다. 다시 시작이
+멈추거나 비정상인 컨테이너를 되살리는 수단이므로 서비스가 정상이 아니어도, 여유 공간이 적어도 계획을 막지 않는다.
 
 로컬 패키지 설치는 공식 resolver 대신 운영자가 호스트 CLI에 직접 지정한 서명 로컬 패키지와 공개키로만
 업데이트한다. 계획은 서명 manifest 전체 지문과 공개키 지문에 묶이고, 적용은 관리 서비스를 거치지 않고 CLI
@@ -291,6 +323,9 @@ async waiter가 취소돼도 살아 있는 SRT 스레드·분리된 브라우저
 앱 교체 전후 실패를 같은 성공 상태로 합치지 않는다. gate를 닫은 뒤 문제가 생기면 `recovery_required` 또는
 `deferred`와 기존 기록을 보존한다. 자동 DB 복원·무조건 rollback·결과 불명 예약 재실행은 하지 않는다. 설정 변경만은
 새 `.env`를 쓴 뒤 실패하면 이전 `.env`로 서비스를 다시 만들고, 이것까지 실패할 때 `recovery_required`로 남긴다.
+다시 시작(`restart_services`)은 바꾸는 것이 없어 gate가 보호할 상태 전환도 없으므로, gate를 닫은 뒤 실패하면 멈춘 앱
+서비스를 다시 켜고 서비스 상태와 관계없이 gate를 다시 연다. 종료 대기 시간 초과는 `deferred`, 나머지는 `failed`로 끝나며
+gate 파일을 쓰지 못한 경우만 `recovery_required`로 남는다.
 로컬 패키지 업데이트에서 보존 패키지를 이전 패키지로 되돌리지 못하면 gate 상태나 종료 대기 연기와 관계없이
 `recovery_required`로 남긴다. `deferred`는 앱과 보존 패키지가 바뀌지 않은 상태로 끝난 경우에만 쓴다.
 `railwait status --job <id>`는 Docker가 중단돼도 호스트 작업 기록을 읽을 수 있다.

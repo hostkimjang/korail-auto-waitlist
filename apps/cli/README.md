@@ -406,7 +406,9 @@ gate를 다시 열어 `failed`로 끝내며 다시 켜지 못했거나 비정상
 항목을 보여 줍니다. 대화형 터미널에서는 설치 폴더 이름을 입력해야 하고 비대화형 실행은 `--yes`가 필요합니다. 기본
 동작은 관리 서비스를 멈추고 등록을 해제한 뒤(macOS `launchctl bootout`과 plist 삭제, Linux
 `systemctl --user disable --now`·unit 삭제·`daemon-reload`, Windows `schtasks /End`·`/Delete /F`와 작업 XML 삭제)
-이 설치의 Compose 프로젝트에서 컨테이너와 네트워크만 지웁니다(`down --remove-orphans`). DB·Redis·백업 볼륨과 설치
+이 설치의 Compose 프로젝트에서 컨테이너와 네트워크만 지웁니다(`down --remove-orphans`). `launchctl bootout`은 launchd가
+서비스를 다 내리기 전에 돌아오므로, 등록 해제 뒤 서비스 관리자가 서비스를 찾지 못할 때까지 최대 15초 다시 확인하고
+그래도 남아 있으면 아무것도 지우지 않고 멈춥니다. DB·Redis·백업 볼륨과 설치
 폴더(`.env`, 복구키 `.railwait/backup.env`)는 남기고 위치와 나중에 지우는 명령을 보여 줍니다. `--delete-data`는
 볼륨까지 지우고(`down --volumes`) 설치 폴더를 삭제합니다. 이때는 `DELETE`를 한 번 더 입력해야 하며, 폴더가
 `.railwait/install.json`의 경로와 같은 설치 루트이고 파일 시스템·드라이브 최상위, 홈 폴더, 홈을 포함하는 폴더가 아닐
@@ -438,4 +440,8 @@ Windows CLI의 서명·전체 archive 검증을 통과했습니다. 이 패키�
 재부팅 후 복구는 별도 실기기 검증이 남아 있습니다. Windows 검증 VM은 관리자 실행 취소로 시작하지
 못했으며 패키지 제작 성공을 실제 신규 설치 성공으로 기록하지 않습니다.
 `restart`·`uninstall`·`open`과 관리 서비스의 다시 시작 요청·`capabilities.json`은 가짜 서비스 관리자·Docker runner와
-임시 디렉터리로만 검증했고, 실제 설치에서의 다시 시작·제거와 각 OS 파일 관리자 동작은 별도 확인이 필요합니다.
+임시 디렉터리로 검증했고, macOS(Lima Docker)의 임시 설치에서 실제로 확인했습니다. `restart`는 31초, 웹과 같은 형식의
+다시 시작 요청은 관리 서비스가 30초 만에 `succeeded`로 처리했고 두 경우 모두 PostgreSQL·Redis 컨테이너는 그대로
+두었습니다. `uninstall --delete-data`는 LaunchAgent·컨테이너·볼륨·네트워크·설치 폴더를 모두 지웠습니다. 이 확인에서
+`launchctl bootout` 직후의 상태 확인 때문에 제거가 멈추는 문제를 찾아 위의 다시 확인으로 고쳤습니다. Windows·Linux
+서비스 관리자, Windows 탐색기 `/select,`와 더블클릭 판정, Linux `xdg-open`은 아직 실제로 확인하지 않았습니다.

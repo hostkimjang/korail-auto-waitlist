@@ -51,6 +51,8 @@ Git으로 설치해 둔 서버를 새 버전으로 올리는 순서는 다음과
   `railwait uninstall`(관리 서비스와 컨테이너 제거, 데이터는 기본으로 남김), `railwait open`(설정 파일 위치 열기),
   `railwait restart`를 추가했습니다. 인자 없이 `railwait`를 실행하면 설치 마법사 대신 명령 목록을 보여 주며,
   Windows에서 `railwait.exe`를 더블클릭하면 예전처럼 설치 마법사를 시작합니다.
+- Git으로 설치한 서버에서 macOS 기본 bash(3.2)로 `bash ./scripts/ops.sh experimental`을 실행하면 바로 실패하던 문제를
+  고쳤습니다. 이제 macOS 터미널에서도 Linux와 같은 명령으로 빌드·재가동합니다.
 
 **적용할 때:** 새 환경변수·DB migration은 없습니다. 1.4.3~1.4.6과 1.4.10 설치는 **앱 업데이트**로 올립니다. 1.4.7~1.4.9로
 새로 설치한 서버는 PostgreSQL 이미지가 달라 아직 앱 업데이트로 올릴 수 없습니다. 화면의

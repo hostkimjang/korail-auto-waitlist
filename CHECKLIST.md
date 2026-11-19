@@ -241,7 +241,18 @@
 - [x] 자동 검증: API 전체 pytest 5,693건 통과(1건 건너뜀)와 Ruff·format·mypy, 웹 lint·typecheck·vitest 1,133건·build·
   Sites 4건, Playwright E2E 40건(서버 설정의 새 카드를 320px·200% 상당 폭에서 넘침 없이, 행동 영역 44px 이상으로 확인),
   CLI gofmt·vet(linux·darwin/arm64·windows/amd64)·Linux 전체 테스트·race, darwin 테스트 바이너리 4개를 macOS에서 실행
-- [ ] 실제 설치에서 `restart`·웹 다시 시작 요청·`uninstall` 확인
+- [x] 실제 설치에서 확인(macOS·Lima Docker, 공식 1.4.10 CLI로 만든 임시 설치, 철도 계정 없음): 새 CLI의 `restart`가 31초
+  만에 `succeeded`, 앱 서비스 10개와 원샷 서비스만 다시 만들고 PostgreSQL·Redis 컨테이너는 그대로. `manager upgrade`
+  뒤 `capabilities.json`의 `manager_started_at`이 heartbeat와 같고 기능 목록이 `settings`·`restart`. API와 같은 형식의
+  `<id>.restart.json`을 관리 서비스가 인증·계획 뒤 30초 만에 `succeeded`로 처리하고 gate를 엶. `uninstall --delete-data`는
+  처음에 `launchctl bootout` 직후의 상태 확인이 서비스를 아직 찾아 아무것도 지우지 않고 멈췄음. 등록 해제 뒤 최대 15초
+  다시 확인하도록 고친 뒤 같은 명령으로 이어서 LaunchAgent·컨테이너·볼륨·네트워크·설치 폴더를 모두 지움(운영 설치
+  8080은 영향 없음)
+- [x] Git 설치의 `ops.sh`가 macOS 기본 bash 3.2에서 바로 실패하던 문제(이번 변경 전부터 있던 결함): `mapfile`과 `set -u`
+  아래 빈 배열 확장을 bash 3.2 호환으로 바꿈. `test-ops.sh` 계약 테스트가 bash 3.2·5.2 컨테이너에서 통과하고,
+  repository-verify가 bash 3.2 실행을 함께 확인
+- [ ] Git 설치 업데이트 확인: 임시 Git 설치(1.4.10, 포트 18096, 관리자·화면 설정 데이터 있음)를 `git pull --ff-only`와
+  `bash ./scripts/ops.sh experimental`로 1.5.0에 올리고 데이터 보존·화면 버전·서버 설정 안내 확인
 - [ ] Windows·Linux 실제 서비스 관리자에서 `uninstall` 등록 해제, Windows 탐색기 `/select,`와 더블클릭 판정, Linux
   `xdg-open` 확인
 - [ ] 1.5.0 서명 릴리스 게시와 운영 설치(포트 8080) 업데이트·관리 서비스 교체

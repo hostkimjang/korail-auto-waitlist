@@ -98,6 +98,8 @@ func commandHandler(name string) (func(context.Context, []string) error, bool) {
 		return verifyPackageCommand, true
 	case "restart":
 		return restartCommand, true
+	case "uninstall":
+		return uninstallCommand, true
 	}
 	return nil, false
 }

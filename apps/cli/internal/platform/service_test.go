@@ -187,3 +187,57 @@ func TestServicePathIsRemovedExactlyAsAdded(t *testing.T) {
 		t.Fatal("a Windows task does not carry PATH")
 	}
 }
+
+func commandLines(commands []ServiceCommand) string {
+	lines := []string{}
+	for _, command := range commands {
+		lines = append(lines, command.Program+" "+strings.Join(command.Args, " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestUnregisterStopsAndRemovesOnlyThisInstallationsService(t *testing.T) {
+	cases := []struct {
+		os, home, user, exe, root, other string
+		unregister, after                func(ServicePlan) string
+	}{
+		{
+			"linux", "/home/a", "1000", "/home/a/.local/bin/railwait", "/home/a/.local/share/railwait", "/srv/railwait",
+			func(p ServicePlan) string { return "systemctl --user disable --now " + p.Name + ".service" },
+			func(ServicePlan) string { return "systemctl --user daemon-reload" },
+		},
+		{
+			"darwin", "/Users/a", "501", "/Users/a/.local/bin/railwait", "/Users/a/Library/Application Support/Railwait", "/Users/a/Other",
+			func(p ServicePlan) string { return "launchctl bootout gui/501/" + p.Name },
+			func(ServicePlan) string { return "" },
+		},
+		{
+			"windows", `C:\Users\a`, "S-1-5-21-123", `C:\Users\a\AppData\Local\Programs\Railwait\railwait.exe`, `C:\Users\a\AppData\Local\Railwait`, `D:\Railwait`,
+			func(p ServicePlan) string {
+				return "schtasks.exe /End /TN " + p.Name + "\nschtasks.exe /Delete /TN " + p.Name + " /F"
+			},
+			func(ServicePlan) string { return "" },
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.os, func(t *testing.T) {
+			plan, err := RenderService(tt.os, tt.home, tt.user, tt.exe, tt.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := commandLines(plan.Unregister); got != tt.unregister(plan) {
+				t.Fatalf("unregister:\n%s", got)
+			}
+			if got := commandLines(plan.AfterRemoval); got != tt.after(plan) {
+				t.Fatalf("after removal:\n%s", got)
+			}
+			other, err := RenderService(tt.os, tt.home, tt.user, tt.exe, tt.other)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(commandLines(plan.Unregister), other.Name) || other.Definition == plan.Definition {
+				t.Fatal("unregister reaches another installation's service")
+			}
+		})
+	}
+}

@@ -238,6 +238,50 @@ func StopService(ctx context.Context, installation, executable string, runner Se
 	return runner.Run(ctx, plan.Stop)
 }
 
+// UnregisterService stops this installation's manager service and removes its registration
+// and definition file, for uninstall. A service that is already gone is left alone, so an
+// interrupted uninstall can run again. An unregister command may fail when part of the
+// service is already gone; the service manager's status afterwards decides the outcome.
+func UnregisterService(ctx context.Context, plan platform.ServicePlan, runner ServiceRunner) error {
+	if runner == nil {
+		runner = ExecServiceRunner{}
+	}
+	if plan.Definition == "" || len(plan.Unregister) == 0 {
+		return errors.New("service unregistration is required")
+	}
+	_, statErr := os.Lstat(plan.Definition)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	defined := statErr == nil
+	if !defined && runner.Run(ctx, plan.Status) != nil {
+		return nil
+	}
+	var failures []error
+	for _, command := range plan.Unregister {
+		if err := runner.Run(ctx, command); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if runner.Run(ctx, plan.Status) == nil {
+		return errors.Join(append([]error{errors.New("관리 서비스가 아직 등록되어 있거나 실행 중입니다")}, failures...)...)
+	}
+	if defined {
+		if err := ensureRegular(plan.Definition); err != nil {
+			return err
+		}
+		if err := os.Remove(plan.Definition); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	for _, command := range plan.AfterRemoval {
+		if err := runner.Run(ctx, command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // WaitAvailable checks the live heartbeat, not merely a registered OS job.
 func WaitAvailable(ctx context.Context, installation string) error {
 	ticker := time.NewTicker(200 * time.Millisecond)

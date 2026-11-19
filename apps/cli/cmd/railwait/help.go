@@ -99,6 +99,15 @@ var commandDocs = []commandDoc{
 		Subcommands: []string{"verify   서명·번들·이미지 archive를 검증합니다. Docker에 불러오지는 않습니다"},
 	},
 	{Name: "preview", Group: "기타", Summary: "설치 화면 예시를 봅니다 (아무것도 바꾸지 않음)", Usage: []string{"preview [--plain]"}},
+	{
+		Name: "uninstall", Group: "제거", Summary: "관리 서비스와 컨테이너를 지웁니다 (데이터는 기본 보존)",
+		Usage: []string{"uninstall [--path <설치 경로>] [--yes]", "uninstall [--path <설치 경로>] --delete-data [--yes]"},
+		Details: []string{
+			"관리 서비스 등록과 이 설치의 Docker 컨테이너·네트워크를 지웁니다. 볼륨(DB·Redis·백업)과 설치 폴더(.env·복구키)는 남깁니다.",
+			"--delete-data는 볼륨과 설치 폴더까지 영구 삭제합니다. Docker 이미지, Tailscale 경로와 CLI 실행 파일은 지우는 방법만 안내합니다.",
+			"대화형 터미널에서는 설치 폴더 이름을 입력해 확인하고, --delete-data는 DELETE도 입력합니다. 비대화형 실행은 --yes가 필요합니다.",
+		},
+	},
 	{Name: "version", Group: "기타", Summary: "CLI 버전과 OS/CPU를 표시합니다", Usage: []string{"version"}},
 	{Name: "help", Group: "기타", Summary: "명령 목록이나 명령별 도움말을 봅니다", Usage: []string{"help", "help <명령>"}, Details: []string{"railwait help <명령>은 railwait <명령> --help 와 같습니다."}},
 }

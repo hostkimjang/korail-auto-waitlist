@@ -33,11 +33,15 @@ type ServicePlan struct {
 	// PathFree is Content without the PATH this process adds to it. A definition that
 	// differs from Content only in that PATH was written by Railwait from another shell,
 	// such as the terminal the installation was first set up from.
-	PathFree     []byte           `json:"-"`
-	Register     []ServiceCommand `json:"register"`
-	Start        ServiceCommand   `json:"start"`
-	Status       ServiceCommand   `json:"status"`
-	Stop         ServiceCommand   `json:"stop"`
+	PathFree []byte           `json:"-"`
+	Register []ServiceCommand `json:"register"`
+	Start    ServiceCommand   `json:"start"`
+	Status   ServiceCommand   `json:"status"`
+	Stop     ServiceCommand   `json:"stop"`
+	// Unregister stops the service and removes its registration for uninstall. The
+	// definition file is removed after these commands, then AfterRemoval runs.
+	Unregister   []ServiceCommand `json:"unregister"`
+	AfterRemoval []ServiceCommand `json:"after_removal"`
 	Availability string           `json:"availability"`
 }
 
@@ -126,6 +130,8 @@ func RenderService(goos, home, identity, executable, installation string) (Servi
 		plan.Start = ServiceCommand{"systemctl", []string{"--user", "start", unit}}
 		plan.Status = ServiceCommand{"systemctl", []string{"--user", "is-active", "--quiet", unit}}
 		plan.Stop = ServiceCommand{"systemctl", []string{"--user", "stop", unit}}
+		plan.Unregister = []ServiceCommand{{"systemctl", []string{"--user", "disable", "--now", unit}}}
+		plan.AfterRemoval = []ServiceCommand{{"systemctl", []string{"--user", "daemon-reload"}}}
 		plan.Availability = "사용자 systemd 세션에서 시작합니다. 로그아웃 뒤 유지·부팅 자동 시작은 관리자가 user lingering을 별도로 허용해야 합니다."
 	case "darwin":
 		if _, err := strconv.ParseUint(identity, 10, 32); err != nil {
@@ -141,6 +147,7 @@ func RenderService(goos, home, identity, executable, installation string) (Servi
 		plan.Start = ServiceCommand{"launchctl", []string{"kickstart", target}}
 		plan.Status = ServiceCommand{"launchctl", []string{"print", target}}
 		plan.Stop = ServiceCommand{"launchctl", []string{"bootout", target}}
+		plan.Unregister = []ServiceCommand{{"launchctl", []string{"bootout", target}}}
 		plan.Availability = "현재 사용자의 GUI 로그인 세션에서 LaunchAgent로 실행합니다. Docker Desktop도 로그인 후 사용 가능해야 합니다."
 	case "windows":
 		if !strings.HasPrefix(identity, "S-1-") || strings.ContainsAny(identity, "<&\"'\r\n") {
@@ -160,6 +167,7 @@ func RenderService(goos, home, identity, executable, installation string) (Servi
 		plan.Start = ServiceCommand{"schtasks.exe", []string{"/Run", "/TN", name}}
 		plan.Status = ServiceCommand{"schtasks.exe", []string{"/Query", "/TN", name, "/XML"}}
 		plan.Stop = ServiceCommand{"schtasks.exe", []string{"/End", "/TN", name}}
+		plan.Unregister = []ServiceCommand{{"schtasks.exe", []string{"/End", "/TN", name}}, {"schtasks.exe", []string{"/Delete", "/TN", name, "/F"}}}
 		plan.Availability = "현재 사용자 로그인 시 최소 권한의 Task Scheduler 작업으로 창 없이 실행합니다. 로그아웃 상태에서는 실행하지 않습니다."
 	}
 	return plan, nil

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hostkimjang/korail-auto-waitlist/apps/cli/internal/platform"
 )
@@ -19,7 +20,10 @@ type registrationRunner struct {
 	registered bool
 	removes    platform.ServiceCommand
 	ignore     bool
-	commands   []string
+	// lingering is how many status checks still find the service after it was removed, as
+	// launchd does for a moment after launchctl bootout returns.
+	lingering int
+	commands  []string
 	// definitionAtAfterRemoval records whether the definition still existed when the
 	// after-removal command ran.
 	definitionAtAfterRemoval []bool
@@ -30,6 +34,10 @@ func (r *registrationRunner) Run(_ context.Context, command platform.ServiceComm
 	r.commands = append(r.commands, line)
 	if reflect.DeepEqual(command, r.plan.Status) {
 		if r.registered {
+			return nil
+		}
+		if r.lingering > 0 {
+			r.lingering--
 			return nil
 		}
 		return errors.New("not registered")
@@ -93,6 +101,8 @@ func TestUnregisterServiceRemovesTheRegistrationOnEachOS(t *testing.T) {
 }
 
 func TestUnregisterServiceKeepsTheDefinitionWhileTheServiceStaysRegistered(t *testing.T) {
+	defer func(wait, poll time.Duration) { unregisterWait, unregisterPoll = wait, poll }(unregisterWait, unregisterPoll)
+	unregisterWait, unregisterPoll = 20*time.Millisecond, time.Millisecond
 	plan, err := platform.RenderService("darwin", "/Users/a", "501", "/Users/a/.local/bin/railwait", "/Users/a/Railwait")
 	if err != nil {
 		t.Fatal(err)
@@ -107,5 +117,25 @@ func TestUnregisterServiceKeepsTheDefinitionWhileTheServiceStaysRegistered(t *te
 	}
 	if _, err := os.Lstat(plan.Definition); err != nil {
 		t.Fatal("definition removed while the service stayed registered")
+	}
+}
+
+func TestUnregisterServiceWaitsWhileTheServiceManagerIsStillRemovingIt(t *testing.T) {
+	defer func(poll time.Duration) { unregisterPoll = poll }(unregisterPoll)
+	unregisterPoll = time.Millisecond
+	plan, err := platform.RenderService("darwin", "/Users/a", "501", "/Users/a/.local/bin/railwait", "/Users/a/Railwait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Definition = filepath.Join(t.TempDir(), "agent.plist")
+	if err := os.WriteFile(plan.Definition, plan.Content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &registrationRunner{plan: plan, registered: true, removes: plan.Unregister[0], lingering: 3}
+	if err := UnregisterService(context.Background(), plan, runner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(plan.Definition); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("service definition kept after launchd dropped the service")
 	}
 }

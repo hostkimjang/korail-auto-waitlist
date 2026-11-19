@@ -263,7 +263,7 @@ func UnregisterService(ctx context.Context, plan platform.ServicePlan, runner Se
 			failures = append(failures, err)
 		}
 	}
-	if runner.Run(ctx, plan.Status) == nil {
+	if !waitUnregistered(ctx, runner, plan.Status, unregisterWait) {
 		return errors.Join(append([]error{errors.New("관리 서비스가 아직 등록되어 있거나 실행 중입니다")}, failures...)...)
 	}
 	if defined {
@@ -280,6 +280,34 @@ func UnregisterService(ctx context.Context, plan platform.ServicePlan, runner Se
 		}
 	}
 	return nil
+}
+
+// unregisterWait bounds how long a service manager may take to drop a service after the
+// unregister commands return. launchctl bootout returns while launchd is still removing the
+// job, so a status check right after it can still find the service.
+var unregisterWait = 15 * time.Second
+
+// unregisterPoll is how often the status is checked while waiting.
+var unregisterPoll = 200 * time.Millisecond
+
+// waitUnregistered reports whether the status command stops finding the service within wait.
+func waitUnregistered(ctx context.Context, runner ServiceRunner, status platform.ServiceCommand, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		if runner.Run(ctx, status) != nil {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		timer := time.NewTimer(unregisterPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
 }
 
 // WaitAvailable checks the live heartbeat, not merely a registered OS job.

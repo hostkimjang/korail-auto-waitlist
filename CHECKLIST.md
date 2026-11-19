@@ -263,7 +263,14 @@
   저장소 검증이 `main`·작업 브랜치에서 모두 통과
 - [ ] 후속: 출력이 콘솔이 아닐 때(파일 리디렉션) 설치 화면이 80칸에서 단어 중간을 끊어 `docker network ls` 같은 명령
   이름이 잘림(1.5.1부터 같은 동작, 콘솔 화면은 정상)
-- [ ] 1.5.2 서명 릴리스 게시
+- [x] 1.5.2 서명 릴리스 게시(run 44528879146, 커밋 `b8ba462`, 2026-11-19 22:08 KST): 30개 작업이 시작부터 게시까지 약
+  10분 만에 통과(스택 검증 포함, 이번에는 Ubuntu 미러 지연 없음). 최신 Release `v1.5.2`, 자산 19개와 `latest/download`의
+  `install.sh`·`install.ps1`·`release-manifest.json`이 200, `compatible_from` 1.4.3~1.4.6·1.4.10·1.5.0·1.5.1, DB revision
+  `0042_protection_halt`, 공개키 `qeR7…5nM=`로 OpenSSL 서명 검증 통과, darwin-arm64 CLI SHA-256 일치·`railwait 1.5.2
+  darwin/arm64`, 한국어 Release 노트. 운영 설치(8080)의 관리 서비스가 22:12에 1.5.2를 업데이트 가능으로 표시. 바뀐 것은
+  CLI뿐이라 운영 설치는 앱·관리 서비스 1.5.0에 둠
+- [ ] Windows에서 공식 1.5.2 자산 확인(해시, `railwait 1.5.2 windows/amd64`, 받기·실행 때 Defender 탐지 여부). Windows
+  채팅에 요청함
 
 ## 2026년 11월 19일 서비스 다시 시작·설정 파일 위치와 CLI 운영 명령 (v1.5.0)
 

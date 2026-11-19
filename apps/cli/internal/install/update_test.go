@@ -35,6 +35,10 @@ type updateRunner struct {
 	commands      []Command
 	inputs        []string
 	drainFailures int
+	// unhealthy names a service that ps reports unhealthy until a command containing healedBy
+	// succeeds.
+	unhealthy string
+	healedBy  string
 }
 
 func (r *updateRunner) Run(ctx context.Context, c Command) ([]byte, error) {
@@ -68,6 +72,8 @@ func (r *updateRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 			if name == "migration" || name == "log-init" {
 				state = "exited"
 				health = ""
+			} else if name == r.unhealthy {
+				health = "unhealthy"
 			}
 			services = append(services, map[string]any{"Service": name, "State": state, "Health": health, "ExitCode": 0})
 		}
@@ -100,6 +106,9 @@ func (r *updateRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 		}
 		r.inputs = append(r.inputs, string(data))
 		return []byte(`{"status":"verified"}`), nil
+	}
+	if r.healedBy != "" && strings.Contains(args, r.healedBy) {
+		r.unhealthy = ""
 	}
 	return r.base.Run(ctx, c)
 }

@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,6 +115,43 @@ func TestRestartIsUnavailableForAnIncompleteOrBlockedInstallation(t *testing.T) 
 	}
 }
 
+func TestRestartRecreatesAnUnhealthyServiceThatBlocksUpdates(t *testing.T) {
+	i, runner, _, state := updateFixture(t)
+	runner.unhealthy, runner.healedBy = "api", "up -d --force-recreate"
+	update, err := i.PlanUpdate(context.Background(), state.Path)
+	if err != nil || update.Allowed || !strings.Contains(strings.Join(update.BlockedReasons, ";"), "정상 상태가 아닙니다") {
+		t.Fatalf("update plan with an unhealthy service: %+v %v", update, err)
+	}
+	plan, err := i.PlanRestart(context.Background(), state.Path)
+	if err != nil || !plan.Allowed {
+		t.Fatalf("restart refused for an unhealthy service: %+v %v", plan, err)
+	}
+	result, err := i.Update(context.Background(), UpdateOptions{Path: state.Path, TargetReleaseID: state.Release, PlanID: plan.PlanID})
+	if err != nil || result.State != "succeeded" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if runner.unhealthy != "" || gateClosed(t, state) {
+		t.Fatal("restart did not recreate the unhealthy service or left the gate closed")
+	}
+}
+
+func TestRestartPlanNeedsNoFreeSpaceButAReadableStatus(t *testing.T) {
+	i, runner, _, state := updateFixture(t)
+	i.CheckSpace = func(string) error { return errors.New("insufficient space") }
+	if plan, err := i.PlanRestart(context.Background(), state.Path); err != nil || !plan.Allowed {
+		t.Fatalf("restart refused for low free space: %+v %v", plan, err)
+	}
+	runner.failure = "ps --all --format"
+	plan, err := i.PlanRestart(context.Background(), state.Path)
+	if err != nil || plan.Allowed || !strings.Contains(strings.Join(plan.BlockedReasons, ";"), "상태를 확인하지 못했습니다") {
+		t.Fatalf("restart allowed without a readable service status: %+v %v", plan, err)
+	}
+	request := manager.RestartRequest{Schema: 1, ID: strings.Repeat("2", 32), IdempotencyKey: strings.Repeat("b", 32), Scope: "app"}
+	if _, err := i.PlanRestartRequest(context.Background(), state.Path, request); rejectedCode(err) != "E_RESTART_UNAVAILABLE" {
+		t.Fatalf("manager restart without a readable status: %v", err)
+	}
+}
+
 func TestFailedRestartStartsTheServicesAgainAndReopensTheGate(t *testing.T) {
 	i, runner, _, state := updateFixture(t)
 	plan, err := i.PlanRestart(context.Background(), state.Path)
@@ -133,7 +171,7 @@ func TestFailedRestartStartsTheServicesAgainAndReopensTheGate(t *testing.T) {
 	}
 }
 
-func TestFailedRestartKeepsTheGateClosedWhileServicesStayDown(t *testing.T) {
+func TestFailedRestartReopensTheGateEvenWhileServicesStayDown(t *testing.T) {
 	i, runner, _, state := updateFixture(t)
 	plan, err := i.PlanRestart(context.Background(), state.Path)
 	if err != nil || !plan.Allowed {
@@ -141,15 +179,40 @@ func TestFailedRestartKeepsTheGateClosedWhileServicesStayDown(t *testing.T) {
 	}
 	runner.failure = "--wait-timeout 180 api"
 	result, err := i.Update(context.Background(), UpdateOptions{Path: state.Path, TargetReleaseID: state.Release, PlanID: plan.PlanID})
-	if err == nil || result.State != "recovery_required" || result.Stage != "applying" {
+	if err == nil || result.State != "failed" || result.Stage != "applying" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if !gateClosed(t, state) {
-		t.Fatal("gate opened while the services could not start")
+	if !strings.Contains(err.Error(), "멈춘 앱 서비스를 다시 시작하지 못했습니다") {
+		t.Fatalf("start failure not reported: %v", err)
+	}
+	if commandsContaining(runner, "up -d --no-deps --wait --wait-timeout 180 api") != 1 {
+		t.Fatal("stopped services were not started again")
+	}
+	if gateClosed(t, state) {
+		t.Fatal("a failed restart left new work blocked behind a closed gate")
 	}
 	record, readErr := ReadUpdateJob(state.Path, result.JobID)
-	if readErr != nil || record.State != "recovery_required" {
+	if readErr != nil || record.State != "failed" {
 		t.Fatalf("job record: %+v %v", record, readErr)
+	}
+}
+
+func TestDeferredRestartReopensTheGateWhileAServiceIsUnhealthy(t *testing.T) {
+	i, runner, _, state := updateFixture(t)
+	runner.unhealthy = "api"
+	plan, err := i.PlanRestart(context.Background(), state.Path)
+	if err != nil || !plan.Allowed {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+	runner.drainFailures = 1 << 30
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	result, err := i.Update(ctx, UpdateOptions{Path: state.Path, TargetReleaseID: state.Release, PlanID: plan.PlanID})
+	if err == nil || result.State != "deferred" || !strings.Contains(err.Error(), "정상 상태가 아닙니다") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if gateClosed(t, state) {
+		t.Fatal("a deferred restart left new work blocked behind a closed gate")
 	}
 }
 

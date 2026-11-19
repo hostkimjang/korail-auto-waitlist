@@ -421,7 +421,7 @@ func (i *Installer) PlanSettingsChange(ctx context.Context, path string, change 
 		return blank, errSettingsInvalid
 	}
 	r := installedRelease(s)
-	plan, err := i.makePlanMode(ctx, s, r, true)
+	plan, err := i.makePlanMode(ctx, s, r, planConfigure)
 	if err != nil {
 		return plan, err
 	}

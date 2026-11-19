@@ -195,10 +195,25 @@ func cleanupExpiredPlans(dir string) error {
 }
 
 func (i *Installer) makePlan(ctx context.Context, s State, r release.Release) (UpdatePlan, error) {
-	return i.makePlanMode(ctx, s, r, false)
+	return i.makePlanMode(ctx, s, r, planUpdate)
 }
 
-func (i *Installer) makePlanMode(ctx context.Context, s State, r release.Release, configure bool) (UpdatePlan, error) {
+// planMode selects the preflight rules of a plan.
+type planMode int
+
+const (
+	// planUpdate moves the installation to a newer release.
+	planUpdate planMode = iota
+	// planConfigure keeps the installed release and changes .env.
+	planConfigure
+	// planRestart keeps the installed release and .env and only recreates the app services.
+	// Restarting is the remedy for an unhealthy or stuck service, so unhealthy services do not
+	// block it, and it downloads and backs up nothing, so it needs no free space.
+	planRestart
+)
+
+func (i *Installer) makePlanMode(ctx context.Context, s State, r release.Release, mode planMode) (UpdatePlan, error) {
+	configure := mode != planUpdate
 	p := UpdatePlan{Schema: 1, InstallationID: s.ID, CurrentReleaseID: s.Release, TargetReleaseID: r.Version, BlockedReasons: []string{}, Steps: []string{"checking", "downloading", "draining", "backing_up", "applying", "verifying", "resuming"}, ExpiresAt: time.Now().UTC().Add(15 * time.Minute).Format(time.RFC3339)}
 	p.Reason = "update_blocked"
 	block := func(reason string) { p.BlockedReasons = append(p.BlockedReasons, reason) }
@@ -275,15 +290,17 @@ func (i *Installer) makePlanMode(ctx context.Context, s State, r release.Release
 	status, err := i.Status(ctx, s.Path)
 	if err != nil {
 		block("현재 서비스 상태를 확인하지 못했습니다")
-	} else if !status.Healthy {
+	} else if !status.Healthy && mode != planRestart {
 		block("현재 서비스와 이미지가 정상 상태가 아닙니다")
 	}
-	spaceCheck := i.CheckSpace
-	if spaceCheck == nil {
-		spaceCheck = checkSpace
-	}
-	if err := spaceCheck(s.Path); err != nil {
-		block("설치 파일시스템의 여유 공간을 확인하세요")
+	if mode != planRestart {
+		spaceCheck := i.CheckSpace
+		if spaceCheck == nil {
+			spaceCheck = checkSpace
+		}
+		if err := spaceCheck(s.Path); err != nil {
+			block("설치 파일시스템의 여유 공간을 확인하세요")
+		}
 	}
 	p.Allowed = len(p.BlockedReasons) == 0
 	if p.Allowed {
@@ -419,7 +436,13 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	if r.Version != o.TargetReleaseID || target != saved.TargetSHA256 {
 		return result, fmt.Errorf("확인한 릴리스가 변경되었습니다; 새 계획이 필요합니다")
 	}
-	currentPlan, err := i.makePlanMode(ctx, s, r, sameRelease)
+	mode := planUpdate
+	if restart {
+		mode = planRestart
+	} else if configure {
+		mode = planConfigure
+	}
+	currentPlan, err := i.makePlanMode(ctx, s, r, mode)
 	if err != nil {
 		return result, err
 	}
@@ -624,13 +647,13 @@ func (i *Installer) Update(ctx context.Context, o UpdateOptions) (result UpdateR
 	closed = true
 	stopping := false
 	if restart {
-		// Nothing changed that could be rolled back. A restart that fails while the app
-		// services can still run healthy must not leave the app behind a closed gate.
+		// A restart changes nothing the gate protects, so a failure must not leave new work
+		// blocked: the stopped services start again and the gate opens whatever their health.
 		defer func() {
 			if err != nil && closed {
-				if reopenErr := i.reopenAfterRestart(ctx, s, controlDir, generation, services, stopping); reopenErr != nil {
-					err = errors.Join(err, reopenErr)
-				} else {
+				reopened, problem := i.reopenAfterRestart(ctx, s, controlDir, generation, services, stopping)
+				err = errors.Join(err, problem)
+				if reopened {
 					closed = false
 				}
 			}

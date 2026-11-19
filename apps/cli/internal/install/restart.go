@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -38,8 +39,9 @@ func RestartServices(s State) []string { return appServices(s.ExpectedImages) }
 // PlanRestart checks the current .env with the same Compose check a settings change gives
 // its candidate, then saves a restart_services plan for the installed release. It returns
 // manager.RejectedError E_RESTART_UNAVAILABLE for an installation that is not complete and
-// E_RESTART_ENV_INVALID when Compose refuses .env. A plan the update preflight blocks, for
-// example while a service is unhealthy or the gate is closed, has Allowed false.
+// E_RESTART_ENV_INVALID when Compose refuses .env. Unhealthy services and low free space do
+// not block a restart; a plan the rest of the preflight blocks, for example while another
+// job holds the gate closed or the service status cannot be read, has Allowed false.
 func (i *Installer) PlanRestart(ctx context.Context, path string) (UpdatePlan, error) {
 	s, err := ReadState(path)
 	if err != nil {
@@ -57,7 +59,7 @@ func (i *Installer) PlanRestart(ctx context.Context, path string) (UpdatePlan, e
 		return blank, errRestartEnvInvalid
 	}
 	r := installedRelease(s)
-	plan, err := i.makePlanMode(ctx, s, r, true)
+	plan, err := i.makePlanMode(ctx, s, r, planRestart)
 	if err != nil {
 		return plan, err
 	}
@@ -80,23 +82,29 @@ func (i *Installer) PlanRestartRequest(ctx context.Context, path string, request
 	return planned, nil
 }
 
-// reopenAfterRestart ends a failed restart. Services it had begun to stop are started again
-// as they are, and the gate opens only when every service is healthy; otherwise the gate
-// stays closed and the job is left for recovery.
-func (i *Installer) reopenAfterRestart(ctx context.Context, s State, controlDir, generation string, services []string, stopped bool) error {
+// reopenAfterRestart ends a failed restart. A restart changes no release, setting or data, so
+// the gate it closed protects nothing and always opens again: services it had begun to stop
+// are started once more, and a start or health problem is returned for the job record rather
+// than kept behind a closed gate. It reports false only when the gate itself could not be
+// written, which leaves the job for recovery.
+func (i *Installer) reopenAfterRestart(ctx context.Context, s State, controlDir, generation string, services []string, stopped bool) (bool, error) {
 	recoverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	defer cancel()
+	var problems []error
 	if stopped {
 		if _, err := i.compose(recoverCtx, s, nil, append([]string{"up", "-d", "--no-deps", "--wait", "--wait-timeout", "180"}, services...)...); err != nil {
-			return fmt.Errorf("멈춘 서비스를 다시 시작하지 못해 유지보수 상태를 보존합니다: %w", err)
+			problems = append(problems, fmt.Errorf("멈춘 앱 서비스를 다시 시작하지 못했습니다: %w", err))
 		}
 	}
-	status, err := i.statusState(recoverCtx, s)
-	if err != nil {
-		return fmt.Errorf("서비스 상태를 확인하지 못해 유지보수 상태를 보존합니다: %w", err)
+	if len(problems) == 0 {
+		if status, err := i.statusState(recoverCtx, s); err != nil {
+			problems = append(problems, fmt.Errorf("서비스 상태를 확인하지 못했습니다: %w", err))
+		} else if !status.Healthy {
+			problems = append(problems, errors.New("서비스가 아직 정상 상태가 아닙니다"))
+		}
 	}
-	if !status.Healthy {
-		return fmt.Errorf("서비스가 정상 상태가 아니어서 유지보수 상태를 보존합니다")
+	if err := writeGate(controlDir, false, generation); err != nil {
+		return false, errors.Join(append(problems, fmt.Errorf("새 작업 차단을 풀지 못해 유지보수 상태가 남았습니다: %w", err))...)
 	}
-	return writeGate(controlDir, false, generation)
+	return true, errors.Join(problems...)
 }

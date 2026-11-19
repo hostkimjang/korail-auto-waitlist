@@ -101,7 +101,7 @@ func (i *Installer) PlanConfigureReservation(ctx context.Context, path string, e
 		return UpdatePlan{}, err
 	}
 	r := installedRelease(s)
-	plan, err := i.makePlanMode(ctx, s, r, true)
+	plan, err := i.makePlanMode(ctx, s, r, planConfigure)
 	if err != nil {
 		return plan, err
 	}

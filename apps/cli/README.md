@@ -385,13 +385,15 @@ heartbeat를 30초 안에 확인하지 못하면 이전 실행 파일로 되돌�
 접속 끊김, KORAIL 로그인 세션이 끊겨 앱이 다시 로그인하며 KORAIL이 자동 로그인을 막으면 KORAIL 좌석 관측이 30분 이상
 멈출 수 있다는 점을 보여 주고 대화형 터미널에서 확인을 받습니다. 비대화형 실행은 `--yes`가 필요합니다. 확인 뒤 현재
 `.env`를 설정 변경 후보와 같은 Compose 검사(`config --quiet`)로 확인하고, 설치가 완료되어 관리 서비스가 실행 중이며
-모든 서비스가 정상이고 gate가 열려 있을 때만 `restart_services` 계획을 만듭니다. 적용은 설정 변경처럼 CLI 프로세스가
+서비스 상태를 읽을 수 있고 gate가 열려 있을 때 `restart_services` 계획을 만듭니다. 다시 시작은 멈추거나 비정상인
+컨테이너를 되살리는 수단이므로 서비스가 정상이 아니어도, 여유 공간이 적어도 막지 않습니다. 적용은 설정 변경처럼 CLI 프로세스가
 설치 잠금을 잡고 직접 수행하므로 이전 버전 관리 서비스에서도 동작합니다. 새 작업 차단·종료 대기(`draining`) → 앱
 서비스와 원샷 서비스 재생성(`applying`) → health 확인(`verifying`) → 재개(`resuming`) 순서이며 백업과 `.env` 변경은
-없습니다. 실패하면 멈춘 서비스를 그대로 다시 시작해 모두 정상일 때만 gate를 열고 `failed`로 끝내며, 정상으로
-돌아오지 않으면 gate를 닫은 채 `recovery_required`로 남깁니다. 종료 대기가 제한 시간을 넘기면 아무것도 멈추지 않은
-`deferred`로 끝내고 gate를 다시 엽니다. 웹에서 보낸 다시 시작 요청도 관리 서비스가 같은 계획과 단계로 실행하며,
-Compose가 `.env`를 거부하면 `E_RESTART_ENV_INVALID`, 설치가 준비되지 않았으면 `E_RESTART_UNAVAILABLE`로 거절합니다.
+없습니다. 바꾸는 것이 없어 gate가 지킬 상태 전환도 없으므로, 실패하면 멈춘 서비스를 다시 켜고 서비스 상태와 관계없이
+gate를 다시 열어 `failed`로 끝내며 다시 켜지 못했거나 비정상인 서비스는 작업 오류에 남깁니다. 종료 대기가 제한 시간을
+넘기면 아무것도 멈추지 않은 `deferred`로 끝내고 gate를 다시 엽니다. gate 파일을 쓰지 못한 경우만 `recovery_required`로
+남습니다. 웹에서 보낸 다시 시작 요청도 관리 서비스가 같은 계획과 단계로 실행하며, Compose가 `.env`를 거부하면
+`E_RESTART_ENV_INVALID`, 설치가 완료되지 않았거나 계획이 막히면 `E_RESTART_UNAVAILABLE`로 거절합니다.
 
 `open`은 설치의 `.env` 절대경로를 출력하고 macOS Finder(`open -R`)나 Windows 탐색기(`explorer.exe /select,`)에서
 그 파일을 선택해 보여 줍니다. Linux는 `xdg-open`으로 설치 폴더를 엽니다. SSH 세션이나 화면이 없는 Linux, 또는 열지

@@ -184,7 +184,7 @@ func (i *Installer) PlanConfigurePush(ctx context.Context, path string, o PushOp
 		return UpdatePlan{}, err
 	}
 	r := installedRelease(s)
-	plan, err := i.makePlanMode(ctx, s, r, true)
+	plan, err := i.makePlanMode(ctx, s, r, planConfigure)
 	if err != nil {
 		return plan, err
 	}

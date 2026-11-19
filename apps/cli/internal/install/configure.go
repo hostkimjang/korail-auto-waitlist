@@ -52,7 +52,7 @@ func (i *Installer) PlanConfigureTAGO(ctx context.Context, path, key string) (Up
 	}
 	candidate := []byte(strings.Join(lines, "\n"))
 	r := installedRelease(s)
-	plan, err := i.makePlanMode(ctx, s, r, true)
+	plan, err := i.makePlanMode(ctx, s, r, planConfigure)
 	if err != nil {
 		return plan, err
 	}

@@ -16,9 +16,9 @@ var topLevelCommands = []string{"install", "setup", "update", "configure", "mana
 func captureHelp(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var buffer bytes.Buffer
-	previous := helpOutput
-	helpOutput = &buffer
-	defer func() { helpOutput = previous }()
+	previous, previousDoubleClicked := helpOutput, doubleClicked
+	helpOutput, doubleClicked = &buffer, func() bool { return false }
+	defer func() { helpOutput, doubleClicked = previous, previousDoubleClicked }()
 	err := run(context.Background(), args)
 	if errors.Is(err, flag.ErrHelp) {
 		err = nil

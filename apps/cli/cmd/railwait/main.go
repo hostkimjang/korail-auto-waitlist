@@ -54,8 +54,7 @@ func run(ctx context.Context, args []string) error {
 		args = resumedArgs
 	}
 	if len(args) == 0 {
-		printTopHelp(helpOutput)
-		return nil
+		return bareInvocation(ctx)
 	}
 	name, rest := args[0], args[1:]
 	if isHelpArg(name) {

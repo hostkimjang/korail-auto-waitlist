@@ -3,7 +3,8 @@
 Windows, macOS, Linux의 `amd64`·`arm64`용 설치 CLI입니다. Docker의 Linux containers와
 Compose 2.24 이상이 필요합니다. Docker Desktop/VM에서 설치 경로의 파일 공유도 허용해야 합니다.
 사용자는 Go를 설치할 필요가 없습니다. `railwait install` 또는 `railwait setup`은 실행 환경 → 설치 계획 →
-앱·계정 → 자동 시작 → 접속 확인의 다섯 단계로 진행합니다. 인자 없이 실행하면 명령 목록을 보여 줍니다.
+앱·계정 → 자동 시작 → 접속 확인의 다섯 단계로 진행합니다. 인자 없이 실행하면 명령 목록을 보여 주고, Windows
+탐색기에서 `railwait.exe`를 더블클릭하면 예전처럼 설치 마법사를 시작합니다.
 
 공식 릴리스는 한 줄 설치 스크립트로 시작할 수 있습니다(1.4.4부터). 스크립트 원본은
 [`scripts/install/`](../../scripts/install/)에 있고 Release 자산으로 `.sha256`과 함께 게시합니다.
@@ -102,8 +103,10 @@ railwait preview --plain
 
 `railwait`, `railwait help`, `--help`, `-h`는 설치·업데이트/설정/관리 서비스·운영/진단/제거/기타로 묶은 명령
 목록과 자주 쓰는 예를 보여 줍니다. 대화형 터미널에서 인자 없이 실행해도 설치 마법사 대신 이 목록을 보여 주므로
-설치는 `railwait install`로 시작합니다. 명령별 목적·사용법·옵션과 하위 명령은 `railwait <명령> --help` 또는
-`railwait help <명령>`으로 봅니다. 알 수 없는 명령이나 잘못된 옵션은 그 이름과 함께 볼 도움말 명령을 알려 줍니다.
+설치는 `railwait install`로 시작합니다. 다만 Windows 탐색기에서 더블클릭한 `railwait.exe`는 콘솔 창이 끝나자마자
+닫혀 목록을 읽을 수 없으므로, 콘솔에 railwait만 연결되어 있으면 설치 마법사를 시작합니다. 명령별 목적·사용법·옵션과
+하위 명령은 `railwait <명령> --help` 또는 `railwait help <명령>`으로 봅니다. 알 수 없는 명령이나 잘못된 옵션은 그
+이름과 함께 볼 도움말 명령을 알려 줍니다.
 
 ## 필수 프로그램 설치
 

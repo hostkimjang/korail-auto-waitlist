@@ -212,7 +212,8 @@ func runInstallWizard(ctx context.Context, args []string, launch wizardLaunch) (
 			return nil
 		}
 	}
-	if !o.Custom {
+	// A finished installation is only checked again, so the new-install guidance stays out.
+	if !o.Custom && (existing == nil || existing.Stage != "complete") {
 		ui.Info("간편 설치 · 프로그램 준비와 보안키 생성은 자동으로 진행합니다.")
 		ui.Hint("열린 창의 권한·약관 승인과 로그인을 진행해 주세요. 직접 설정하려면 --custom을 사용하세요.")
 	}

@@ -79,15 +79,26 @@ Playwright의 `--with-deps`가 받는 Ubuntu 패키지는 공용 액션 `.github
 다르면 다시 받으므로, 캐시는 내려받는 시간만 줄인다. 2026-11-19 밤에는 Ubuntu 미러가 54.8kB/s까지 느려져 이
 패키지(32.1MB)를 받는 데 9분 45초가 걸렸고, 캐시가 있으면 0B를 받는다. 패키지 목록 조회(약 13MB)는 그대로 남는다.
 
-`--compatible-from`을 반복 지정하거나 workflow의 `compatible_from`에 쉼표로 구분한 버전을 입력한다.
-비워 두면 새 설치만 허용하고 기존 설치의 자동 업데이트는 차단한다. DB revision은 소스 migration의
-단일 head에서 계산한다. 현재 updater는 다른 DB revision이나 PostgreSQL·Redis digest 변경을 차단하므로,
-해당 변경은 별도의 검토·이전 절차가 필요하다. 배포 검증키가 바뀌면 기존 CLI가 새 서명을 거절하며
-CLI 자체 자동 교체는 제공하지 않는다.
-
 API·browser 이미지는 `uv.lock`을 `uv sync --locked`로 설치하고 uv 도구 이미지도 digest로 고정한다.
 Python base·OS apt package·Chrome `stable_current` 다운로드까지 빌드 재현성이 완성된 것은 아니다.
 릴리스 실행 시에는 검증 완료한 최종 이미지 digest를 고정하며 이 둘을 구분한다.
+
+## 저장소 이미지와 업데이트 출발 버전
+
+`--compatible-from`을 반복 지정하거나 workflow의 `compatible_from`에 쉼표로 구분한 버전을 입력한다.
+비워 두면 새 설치만 허용하고 기존 설치의 자동 업데이트는 차단한다. DB revision은 소스 migration의
+단일 head에서 계산한다. 설치한 서버의 updater는 DB revision·설정 schema·PostgreSQL 이미지·Redis 이미지가 모두
+같은 릴리스로만 올리므로(`apps/cli/internal/install/update.go`), 출발 버전으로 적는 릴리스도 이 네 값이 같아야
+한다. `check_update_sources.py`가 출발 버전마다 게시된 manifest를 받아 네 값을 비교하고, 하나라도 다르면
+실패한다. 워크플로는 `preflight`에서 `compose.yml`의 고정값으로 이미지를 빌드하기 전에 한 번, `bundle`에서
+실제로 해석한 이미지로 서명 직전에 한 번 더 확인한다.
+
+PostgreSQL·Redis는 `compose.yml`에서 digest까지 고정한다. 태그만 두면 릴리스마다 그 시점의 upstream 빌드로
+고정되므로, upstream이 같은 태그를 다시 빌드하면 새 릴리스가 이전 릴리스에서 올라올 수 없게 된다. 1.4.7~1.4.9가
+그랬다. `postgres:16-alpine`이 같은 PostgreSQL 16.16의 새 빌드로 바뀌어 `compatible_from`에 적은 1.4.3~1.4.6에서
+올라올 수 없었고, 1.4.10에서 1.4.6까지의 digest로 되돌렸다. 그 대신 1.4.7~1.4.9로 새로 설치한 서버는 1.4.10으로
+올라올 수 없다. 저장소 이미지를 바꾸려면 이미지 교체를 지원하는 업데이트 절차를 먼저 만들거나, 출발 버전 없이 새
+설치 전용으로 게시한다. 배포 검증키가 바뀌면 기존 CLI가 새 서명을 거절하며 CLI 자체 자동 교체는 제공하지 않는다.
 
 ## 로컬 오프라인 설치 패키지
 

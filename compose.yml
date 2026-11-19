@@ -321,7 +321,10 @@ services:
       start_period: 30s
 
   postgres:
-    image: postgres:16-alpine
+    # 설치한 서버는 PostgreSQL·Redis 이미지가 같은 릴리스로만 업데이트하므로 digest까지 고정합니다.
+    # 태그만 두면 릴리스가 그때의 upstream 빌드를 받아, 이전 릴리스에서 올라올 수 없는 릴리스가 됩니다.
+    # 바꾸기 전에 scripts/releases/README.md의 "저장소 이미지와 업데이트 출발 버전"을 확인합니다.
+    image: postgres:16-alpine@sha256:81e77a4833487b8132fe4b00bedd39dc3f74b8641e387f19312a48f7de218c2e
     restart: unless-stopped
     init: true
     environment:
@@ -342,7 +345,8 @@ services:
     logging: *rotated-logging
 
   redis:
-    image: redis:7.4-alpine
+    # postgres와 같은 이유로 digest까지 고정합니다.
+    image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
     restart: unless-stopped
     init: true
     user: redis

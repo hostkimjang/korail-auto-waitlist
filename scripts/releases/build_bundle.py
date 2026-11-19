@@ -23,6 +23,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 PLATFORMS = ["linux/amd64", "linux/arm64"]
 PINNED_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+# An installation updates only to a release with its own settings schema (and database revision
+# and storage images); check_update_sources.py compares the same values.
+SETTINGS_SCHEMA = 1
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_FILES = 256
@@ -200,7 +203,7 @@ def build_release(
         "platforms": PLATFORMS,
         "minimum_cli_version": minimum_cli_version,
         "database_revision": database_head(root),
-        "settings_schema": 1,
+        "settings_schema": SETTINGS_SCHEMA,
         "compatible_from": list(compatible_from),
         "bundle": {
             "url": f"https://github.com/{repository}/releases/download/v{version}/railwait-bundle.tar.gz",

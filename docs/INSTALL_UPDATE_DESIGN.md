@@ -307,6 +307,9 @@ async waiter가 취소돼도 살아 있는 SRT 스레드·분리된 브라우저
 index digest와 두 Linux CPU 지원을 검사한다. infra 파일·환경변수 예제를 묶고 Ed25519 manifest에 서명한다.
 CI는 API·웹·브라우저와 3개 OS의 CLI를 검사한 뒤 앱 이미지를 게시하고, 같은 digest의 두 CPU smoke를 거친다.
 CLI 6종과 서명된 자산이 모두 준비된 뒤 안정 Release로 공개한다. 자동 공개 workflow가 아니라 수동 실행이다.
+PostgreSQL·Redis는 소스 Compose에서 digest로 고정하고, 승인한 출발 버전의 게시 manifest와 DB revision·설정
+schema·저장소 이미지가 같은지 이미지 빌드 전과 서명 직전에 확인한다. 다르면 그 버전에서는 올라올 수 없으므로
+게시하지 않는다.
 
 API·browser runtime은 `uv.lock`으로 설치하고 uv 도구도 digest를 고정한다. Python base·OS package·Chrome
 `stable_current`까지 완전한 빌드 재현성을 보장하지는 않는다. 공통 웹 이미지는 검증 전 공식 앱 딥링크를 기본
